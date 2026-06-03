@@ -10,6 +10,7 @@ const {
   changeLeverage,
   changeMarginType,
   placeOrder,
+  closePosition,
   cancelOrder,
   getKlines,
 } = require('../controllers/trade.controller')
@@ -26,6 +27,7 @@ router.post('/leverage', changeLeverage)
 router.post('/margin-type', changeMarginType)
 
 router.post('/order', placeOrder)
+router.post('/order/close', closePosition)
 router.delete('/order', cancelOrder)
 
 router.get('/klines', getKlines)

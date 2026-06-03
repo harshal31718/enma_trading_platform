@@ -1,19 +1,23 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import binanceWS from '@/lib/binanceWS'
 
 /**
- * Subscribe to a Binance combined-stream channel.
- * callback must be stable (useCallback or defined outside render) to avoid
- * re-subscribing on every render — callers are responsible for stability.
+ * Subscribe to a Binance individual stream.
+ * callback must be stable (useCallback or defined outside render).
  *
- * @param {string} streamName  e.g. "btcusdt@ticker"
- * @param {function} callback  called with the `data` payload on each message
+ * Uses a deferred unsubscribe (via ref swap) so React Strict Mode's
+ * immediate unmount→remount cycle does not tear down and re-open the
+ * WebSocket on every mount in development.
  */
 export default function useBinanceWS(streamName, callback) {
+  const unsubRef = useRef(null)
+
   useEffect(() => {
-    const unsubscribe = binanceWS.subscribe(streamName, callback)
-    return unsubscribe
+    unsubRef.current = binanceWS.subscribe(streamName, callback)
+    return () => {
+      const fn = unsubRef.current
+      unsubRef.current = null
+      if (fn) fn()
+    }
   }, [streamName]) // eslint-disable-line react-hooks/exhaustive-deps
-  // callback intentionally omitted — callers must pass a stable reference;
-  // re-subscribing on every callback identity change would flood the WS.
 }

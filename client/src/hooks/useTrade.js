@@ -92,6 +92,19 @@ export function usePlaceOrder() {
   })
 }
 
+export function useClosePosition() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ symbol }) =>
+      api.post('/api/v1/trade/order/close', { symbol }).then((r) => r.data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['trade', 'positions'] })
+      queryClient.invalidateQueries({ queryKey: ['trade', 'open-orders'] })
+      queryClient.invalidateQueries({ queryKey: ['trade', 'account'] })
+    },
+  })
+}
+
 export function useCancelOrder() {
   const queryClient = useQueryClient()
   return useMutation({

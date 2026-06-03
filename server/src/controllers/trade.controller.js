@@ -184,6 +184,23 @@ async function placeOrder(req, res, next) {
   }
 }
 
+async function closePosition(req, res, next) {
+  try {
+    const { symbol } = req.body
+    if (!symbol) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'symbol is required')
+    }
+    const credHeaders = await loadCredentialHeaders()
+    const { data } = await engineClient.post('/trade/close-position', { symbol }, { headers: credHeaders })
+    res.json(ApiResponse.success(data.data))
+  } catch (err) {
+    if (err instanceof ApiError) return next(err)
+    const detail = err.response?.data?.detail
+    const message = typeof detail === 'string' ? detail : detail?.message || 'Failed to close position'
+    next(new ApiError(err.response?.status || 500, 'ENGINE_ERROR', message))
+  }
+}
+
 async function verifySettings(req, res, next) {
   try {
     const settings = await Settings.findById('global').lean()
@@ -254,6 +271,7 @@ module.exports = {
   changeLeverage,
   changeMarginType,
   placeOrder,
+  closePosition,
   cancelOrder,
   getKlines,
 }

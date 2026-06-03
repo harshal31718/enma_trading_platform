@@ -22,7 +22,7 @@ const BOTTOM_TABS = ['Positions', 'Open Orders', 'Order History', 'Assets']
 // ─── Formatters ──────────────────────────────────────────────────────────────
 
 function fmtPrice(n) {
-  return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 function fmtQty(n, dp = 4) {
@@ -46,6 +46,7 @@ function TickerBar() {
       high: parseFloat(data.h),
       low: parseFloat(data.l),
       volume: parseFloat(data.v),
+      quoteVolume: parseFloat(data.q),
     })
   }, [])
 
@@ -55,35 +56,35 @@ function TickerBar() {
   const isPositive = changePct >= 0
 
   return (
-    <div className="h-14 bg-gray-900 border border-gray-800 rounded flex items-center px-4 gap-8 shrink-0">
-      <span className="text-emerald-400 font-bold text-sm tracking-wide">{SYMBOL}</span>
-      <div className="flex items-center gap-6 text-xs">
-        <div className="flex flex-col">
-          <span className="text-gray-500">Last Price</span>
-          <span className="text-gray-100 font-semibold">
-            {ticker ? fmtPrice(ticker.price) : '$—'}
-          </span>
-        </div>
-        <div className="flex flex-col">
-          <span className="text-gray-500">24h Change</span>
-          <span className={isPositive ? 'text-emerald-400 font-semibold' : 'text-red-400 font-semibold'}>
-            {ticker ? fmtPct(ticker.changePct) : '—'}
-          </span>
-        </div>
-        <div className="flex flex-col">
-          <span className="text-gray-500">24h High</span>
-          <span className="text-gray-100">{ticker ? fmtPrice(ticker.high) : '$—'}</span>
-        </div>
-        <div className="flex flex-col">
-          <span className="text-gray-500">24h Low</span>
-          <span className="text-gray-100">{ticker ? fmtPrice(ticker.low) : '$—'}</span>
-        </div>
-        <div className="flex flex-col">
-          <span className="text-gray-500">24h Volume</span>
-          <span className="text-gray-100">
-            {ticker ? fmtQty(ticker.volume, 0) + ' BTC' : '—'}
-          </span>
-        </div>
+    <div className="h-12 bg-gray-900 border-b border-gray-800 flex items-center px-4 gap-6 shrink-0">
+      <div className="flex items-center gap-3 shrink-0">
+        <span className="text-gray-100 font-bold text-sm">{SYMBOL}</span>
+        <span className="text-[10px] text-gray-500 border border-gray-700 px-1.5 py-0.5 rounded">Perp</span>
+      </div>
+
+      <div className="flex items-center gap-1 shrink-0">
+        <span className={`text-xl font-bold tabular-nums ${isPositive ? 'text-emerald-400' : 'text-red-400'}`}>
+          {ticker ? fmtPrice(ticker.price) : '—'}
+        </span>
+        <span className={`text-xs ml-1 ${isPositive ? 'text-emerald-400' : 'text-red-400'}`}>
+          {ticker ? fmtPct(ticker.changePct) : ''}
+        </span>
+      </div>
+
+      <div className="h-6 w-px bg-gray-800 shrink-0" />
+
+      <div className="flex items-center gap-6 text-xs overflow-x-auto">
+        {[
+          { label: '24h High', value: ticker ? fmtPrice(ticker.high) : '—' },
+          { label: '24h Low', value: ticker ? fmtPrice(ticker.low) : '—' },
+          { label: '24h Vol(BTC)', value: ticker ? fmtQty(ticker.volume, 0) : '—' },
+          { label: '24h Vol(USDT)', value: ticker ? fmtQty(ticker.quoteVolume, 0) : '—' },
+        ].map(({ label, value }) => (
+          <div key={label} className="flex flex-col shrink-0">
+            <span className="text-gray-500 text-[10px]">{label}</span>
+            <span className="text-gray-200 tabular-nums">{value}</span>
+          </div>
+        ))}
       </div>
     </div>
   )
@@ -128,30 +129,31 @@ function ChartContainer() {
   const containerRef = useRef(null)
   const chartRef = useRef(null)
   const seriesRef = useRef(null)
-  // Gate: while true, live WS updates are held until setData() finishes
   const fetchingRef = useRef(false)
   const [chartError, setChartError] = useState(null)
   const [timeframe, setTimeframe] = useState('1m')
   const [loading, setLoading] = useState(false)
 
-  // Chart init — runs once
   useEffect(() => {
     if (!containerRef.current) return
 
     const chart = createChart(containerRef.current, {
-      width: containerRef.current.clientWidth,
-      height: containerRef.current.clientHeight,
+      autoSize: true,
       layout: {
         background: { color: 'rgb(17, 24, 39)' },
         textColor: 'rgb(156, 163, 175)',
       },
       grid: {
-        vertLines: { color: 'rgba(31, 41, 55, 0.5)' },
-        horzLines: { color: 'rgba(31, 41, 55, 0.5)' },
+        vertLines: { color: 'rgba(31, 41, 55, 0.4)' },
+        horzLines: { color: 'rgba(31, 41, 55, 0.4)' },
       },
-      crosshair: { mode: 0 },
-      rightPriceScale: { borderVisible: false },
-      timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false },
+      crosshair: { mode: 1 },
+      rightPriceScale: { borderColor: 'rgba(31, 41, 55, 0.8)' },
+      timeScale: {
+        borderColor: 'rgba(31, 41, 55, 0.8)',
+        timeVisible: true,
+        secondsVisible: false,
+      },
     })
 
     const candleSeries = chart.addSeries(CandlestickSeries, {
@@ -166,36 +168,24 @@ function ChartContainer() {
     chartRef.current = chart
     seriesRef.current = candleSeries
 
-    const ro = new ResizeObserver(() => {
-      if (containerRef.current && chartRef.current) {
-        chartRef.current.resize(
-          containerRef.current.clientWidth,
-          containerRef.current.clientHeight
-        )
-      }
-    })
-    ro.observe(containerRef.current)
-
     return () => {
-      ro.disconnect()
       chart.remove()
       chartRef.current = null
       seriesRef.current = null
     }
   }, [])
 
-  // Re-fetch historical candles on timeframe change
   useEffect(() => {
     if (!seriesRef.current) return
     const ac = new AbortController()
     setChartError(null)
     setLoading(true)
-    fetchingRef.current = true  // block live updates during fetch
+    fetchingRef.current = true
 
     fetchKlines(SYMBOL, timeframe, seriesRef.current, chartRef.current, ac.signal)
       .catch((err) => { if (err.name !== 'AbortError') setChartError(err.message) })
       .finally(() => {
-        fetchingRef.current = false  // re-enable live updates
+        fetchingRef.current = false
         setLoading(false)
       })
 
@@ -205,8 +195,6 @@ function ChartContainer() {
     }
   }, [timeframe])
 
-  // Live candle updates — imperative, no React re-render
-  // Uses a stable ref-based callback so useBinanceWS never needs to resubscribe
   const onKline = useCallback((data) => {
     if (fetchingRef.current) return
     const k = data.k
@@ -223,39 +211,42 @@ function ChartContainer() {
   useBinanceWS(`${STREAM_PREFIX}@kline_${timeframe}`, onKline)
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded relative flex-1 min-h-0 overflow-hidden">
+    <div className="bg-gray-900 relative flex-1 min-h-0 overflow-hidden flex flex-col">
       {/* Timeframe toolbar */}
-      <div className="absolute top-2 left-2 z-10 flex items-center gap-0.5 bg-gray-950/80 backdrop-blur-sm rounded px-1 py-1">
+      <div className="flex items-center gap-0.5 px-3 py-1.5 border-b border-gray-800 shrink-0">
         {TIMEFRAMES.map((tf) => (
           <button
             key={tf.interval}
             onClick={() => setTimeframe(tf.interval)}
             className={[
-              'px-2.5 py-0.5 text-xs rounded transition-colors font-medium',
+              'px-3 py-1 text-xs rounded transition-colors font-medium',
               timeframe === tf.interval
-                ? 'bg-emerald-600/30 text-emerald-400'
-                : 'text-gray-500 hover:text-gray-300',
+                ? 'bg-gray-700 text-gray-100'
+                : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800',
             ].join(' ')}
           >
             {tf.label}
           </button>
         ))}
         {loading && (
-          <span className="ml-1 inline-block w-3 h-3 border-2 border-gray-600 border-t-emerald-400 rounded-full animate-spin" />
+          <span className="ml-2 inline-block w-3 h-3 border-2 border-gray-600 border-t-emerald-400 rounded-full animate-spin" />
         )}
       </div>
 
       {chartError && (
-        <div className="absolute top-10 left-2 right-2 z-10 bg-red-900/20 text-red-400 p-2 rounded text-sm">
+        <div className="absolute top-12 left-2 right-2 z-10 bg-red-900/20 text-red-400 p-2 rounded text-xs">
           {chartError}
         </div>
       )}
-      <div ref={containerRef} className="w-full h-full" />
+
+      <div ref={containerRef} className="flex-1 min-h-0" />
     </div>
   )
 }
 
 // ─── OrderBook ────────────────────────────────────────────────────────────────
+
+const BOOK_ROWS = 14
 
 function OrderBook() {
   const [book, setBook] = useState({ asks: [], bids: [] })
@@ -264,13 +255,11 @@ function OrderBook() {
     const rawAsks = data.asks || data.a || []
     const rawBids = data.bids || data.b || []
 
-    // Top 10 asks ascending (lowest ask first, displayed top-to-bottom reversed)
-    const asks = rawAsks.slice(0, 10).map(([price, qty]) => ({
+    const asks = rawAsks.slice(0, BOOK_ROWS).map(([price, qty]) => ({
       price: parseFloat(price),
       qty: parseFloat(qty),
     }))
-    // Top 10 bids descending (highest bid first)
-    const bids = rawBids.slice(0, 10).map(([price, qty]) => ({
+    const bids = rawBids.slice(0, BOOK_ROWS).map(([price, qty]) => ({
       price: parseFloat(price),
       qty: parseFloat(qty),
     }))
@@ -285,61 +274,67 @@ function OrderBook() {
     1
   )
 
-  function BookRow({ price, qty, side }) {
-    const barPct = Math.min((qty / maxQty) * 100, 100)
-    const isAsk = side === 'ask'
-    return (
-      <div className="relative flex items-center justify-between text-xs py-[2px] px-1">
-        <div
-          className={`absolute inset-y-0 right-0 opacity-10 ${isAsk ? 'bg-red-500' : 'bg-emerald-500'}`}
-          style={{ width: `${barPct}%` }}
-        />
-        <span className={isAsk ? 'text-red-400 z-10' : 'text-emerald-400 z-10'}>
-          {price.toFixed(1)}
-        </span>
-        <span className="text-gray-400 z-10">{fmtQty(qty, 3)}</span>
-      </div>
-    )
-  }
-
   const spread =
     book.asks.length && book.bids.length
       ? (book.asks[0].price - book.bids[0].price).toFixed(1)
       : '—'
 
+  const bestAsk = book.asks[0]?.price ?? 0
+  const bestBid = book.bids[0]?.price ?? 0
+  const midPrice = bestAsk && bestBid ? ((bestAsk + bestBid) / 2).toFixed(1) : '—'
+
+  function BookRow({ price, qty, side }) {
+    const barPct = Math.min((qty / maxQty) * 100, 100)
+    const isAsk = side === 'ask'
+    return (
+      <div className="relative flex items-center justify-between text-[11px] py-[3px] px-2 hover:bg-gray-800/60 cursor-default">
+        <div
+          className={`absolute inset-y-0 right-0 opacity-[0.12] ${isAsk ? 'bg-red-500' : 'bg-emerald-500'}`}
+          style={{ width: `${barPct}%` }}
+        />
+        <span className={`tabular-nums z-10 ${isAsk ? 'text-red-400' : 'text-emerald-400'}`}>
+          {price.toFixed(1)}
+        </span>
+        <span className="text-gray-400 tabular-nums z-10">{qty.toFixed(3)}</span>
+      </div>
+    )
+  }
+
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded flex flex-col min-h-0 flex-1">
-      <div className="px-2 py-1.5 border-b border-gray-800 shrink-0">
-        <span className="text-xs font-medium text-gray-300">Order Book</span>
+    <div className="bg-gray-900 border-r border-gray-800 flex flex-col min-h-0 flex-1">
+      <div className="px-3 py-2 border-b border-gray-800 shrink-0">
+        <span className="text-xs font-semibold text-gray-200">Order Book</span>
       </div>
 
-      <div className="flex justify-between px-2 py-0.5 shrink-0">
-        <span className="text-[10px] text-gray-600">Price</span>
-        <span className="text-[10px] text-gray-600">Qty</span>
+      <div className="flex justify-between px-2 py-1 shrink-0">
+        <span className="text-[10px] text-gray-600">Price (USDT)</span>
+        <span className="text-[10px] text-gray-600">Size (BTC)</span>
       </div>
 
-      {/* Asks — reversed so lowest ask is closest to spread */}
-      <div className="flex flex-col-reverse overflow-hidden shrink-0">
+      {/* Asks reversed — lowest ask closest to spread */}
+      <div className="flex flex-col-reverse flex-1 min-h-0 overflow-hidden">
         {book.asks.length === 0
-          ? Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className="h-4 mx-1 my-px bg-gray-800 rounded animate-pulse" />
+          ? Array.from({ length: BOOK_ROWS }).map((_, i) => (
+              <div key={i} className="h-[22px] mx-2 my-px bg-gray-800/60 rounded animate-pulse" />
             ))
-          : book.asks.slice(0, 8).map((row, i) => (
+          : book.asks.slice(0, BOOK_ROWS).map((row, i) => (
               <BookRow key={i} price={row.price} qty={row.qty} side="ask" />
             ))}
       </div>
 
-      <div className="flex items-center justify-center py-1 shrink-0">
-        <span className="text-xs text-gray-500">Spread: {spread}</span>
+      {/* Mid price / spread row */}
+      <div className="flex items-center justify-between px-2 py-1.5 border-y border-gray-800 shrink-0">
+        <span className="text-sm font-bold text-gray-100 tabular-nums">{midPrice}</span>
+        <span className="text-[10px] text-gray-500">Spread: {spread}</span>
       </div>
 
       {/* Bids */}
-      <div className="flex flex-col overflow-hidden shrink-0">
+      <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
         {book.bids.length === 0
-          ? Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className="h-4 mx-1 my-px bg-gray-800 rounded animate-pulse" />
+          ? Array.from({ length: BOOK_ROWS }).map((_, i) => (
+              <div key={i} className="h-[22px] mx-2 my-px bg-gray-800/60 rounded animate-pulse" />
             ))
-          : book.bids.slice(0, 8).map((row, i) => (
+          : book.bids.slice(0, BOOK_ROWS).map((row, i) => (
               <BookRow key={i} price={row.price} qty={row.qty} side="bid" />
             ))}
       </div>
@@ -349,7 +344,7 @@ function OrderBook() {
 
 // ─── RecentTrades ─────────────────────────────────────────────────────────────
 
-const MAX_TRADES = 50
+const MAX_TRADES = 60
 
 function RecentTrades() {
   const [trades, setTrades] = useState([])
@@ -360,7 +355,7 @@ function RecentTrades() {
         id: data.a,
         price: parseFloat(data.p),
         qty: parseFloat(data.q),
-        time: new Date(data.T).toLocaleTimeString(),
+        time: new Date(data.T).toLocaleTimeString('en-US', { hour12: false }),
         isBuyerMaker: data.m,
       }
       const next = [entry, ...prev]
@@ -372,33 +367,33 @@ function RecentTrades() {
   useBinanceWS(`${STREAM_PREFIX}@aggTrade`, onTrade)
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded flex flex-col overflow-hidden" style={{ height: '220px' }}>
-      <div className="px-2 py-1.5 border-b border-gray-800 shrink-0">
-        <span className="text-xs font-medium text-gray-300">Recent Trades</span>
+    <div className="bg-gray-900 border-r border-gray-800 flex flex-col min-h-0" style={{ height: '240px' }}>
+      <div className="px-3 py-2 border-b border-gray-800 shrink-0">
+        <span className="text-xs font-semibold text-gray-200">Trades</span>
       </div>
-      <div className="flex justify-between px-2 py-0.5 shrink-0">
-        <span className="text-[10px] text-gray-600">Price</span>
-        <span className="text-[10px] text-gray-600">Qty</span>
+      <div className="flex justify-between px-2 py-1 shrink-0">
+        <span className="text-[10px] text-gray-600">Price (USDT)</span>
+        <span className="text-[10px] text-gray-600">Amount (BTC)</span>
         <span className="text-[10px] text-gray-600">Time</span>
       </div>
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto overflow-x-hidden min-h-0">
         {trades.length === 0 ? (
-          <div className="flex flex-col gap-1 p-1">
-            {Array.from({ length: 8 }).map((_, i) => (
-              <div key={i} className="h-3 bg-gray-800 rounded animate-pulse mx-1" />
+          <div className="flex flex-col gap-1 p-2">
+            {Array.from({ length: 10 }).map((_, i) => (
+              <div key={i} className="h-3 bg-gray-800/60 rounded animate-pulse" />
             ))}
           </div>
         ) : (
           trades.map((t) => (
             <div
               key={t.id}
-              className="flex justify-between px-2 py-[2px] text-[10px] hover:bg-gray-800/50"
+              className="flex justify-between px-2 py-[2px] text-[11px] hover:bg-gray-800/40"
             >
-              <span className={t.isBuyerMaker ? 'text-red-400' : 'text-emerald-400'}>
+              <span className={`tabular-nums ${t.isBuyerMaker ? 'text-red-400' : 'text-emerald-400'}`}>
                 {t.price.toFixed(1)}
               </span>
-              <span className="text-gray-400">{fmtQty(t.qty, 3)}</span>
-              <span className="text-gray-600">{t.time}</span>
+              <span className="text-gray-400 tabular-nums">{t.qty.toFixed(3)}</span>
+              <span className="text-gray-600 tabular-nums">{t.time}</span>
             </div>
           ))
         )}
@@ -424,7 +419,7 @@ function SkeletonRow({ cols }) {
 function EmptyRow({ message }) {
   return (
     <tr>
-      <td colSpan={99} className="py-6 text-center text-gray-600 text-xs">
+      <td colSpan={99} className="py-8 text-center text-gray-600 text-xs">
         {message}
       </td>
     </tr>
@@ -432,7 +427,7 @@ function EmptyRow({ message }) {
 }
 
 function PositionsTable({ data, isLoading }) {
-  const cols = ['Symbol', 'Side', 'Size', 'Entry Price', 'Mark Price', 'Liq Price', 'Unrealized PnL', '']
+  const cols = ['Symbol', 'Size', 'Entry Price', 'Mark Price', 'Liq Price', 'Margin Ratio', 'Unrealized PnL', '']
   const [closeError, setCloseError] = useState(null)
   const { mutate: execClose, isPending: closePending, variables: closeVars } = useClosePosition()
 
@@ -457,7 +452,7 @@ function PositionsTable({ data, isLoading }) {
     <table className="w-full text-xs">
       <thead>
         <tr className="text-gray-500 border-b border-gray-800">
-          {cols.map((c) => <th key={c} className="text-left py-2 pr-4 font-medium">{c}</th>)}
+          {cols.map((c) => <th key={c} className="text-left py-2 pr-6 font-medium whitespace-nowrap">{c}</th>)}
         </tr>
       </thead>
       <tbody className="text-gray-400">
@@ -472,8 +467,8 @@ function PositionsTable({ data, isLoading }) {
           <>
             {closeError && (
               <tr>
-                <td colSpan={cols.length} className="py-1.5">
-                  <div className="bg-red-950/20 border border-red-800/40 rounded p-2 text-[10px] text-red-400 leading-snug">
+                <td colSpan={cols.length} className="py-1">
+                  <div className="bg-red-950/20 border border-red-800/40 rounded px-3 py-1.5 text-[10px] text-red-400">
                     {closeError}
                   </div>
                 </td>
@@ -485,29 +480,35 @@ function PositionsTable({ data, isLoading }) {
               const pnl = parseFloat(p.unRealizedProfit)
               const isPnlPos = pnl >= 0
               const isClosing = closePending && closeVars?.symbol === p.symbol
+              const marginRatio = p.marginRatio ? (parseFloat(p.marginRatio) * 100).toFixed(2) + '%' : '—'
               return (
-                <tr key={p.symbol} className="border-b border-gray-800/40 hover:bg-gray-800/30">
-                  <td className="py-1.5 pr-4 text-gray-100">{p.symbol.replace('USDT', '-USDT')}</td>
-                  <td className={`py-1.5 pr-4 font-medium ${side === 'Long' ? 'text-emerald-400' : 'text-red-400'}`}>{side}</td>
-                  <td className="py-1.5 pr-4">{Math.abs(size).toFixed(4)}</td>
-                  <td className="py-1.5 pr-4">{fmtPrice(p.entryPrice)}</td>
-                  <td className="py-1.5 pr-4">{fmtPrice(p.markPrice)}</td>
-                  <td className="py-1.5 pr-4">{fmtPrice(p.liquidationPrice)}</td>
-                  <td className={`py-1.5 pr-4 ${isPnlPos ? 'text-emerald-400' : 'text-red-400'}`}>
+                <tr key={p.symbol} className="border-b border-gray-800/30 hover:bg-gray-800/20">
+                  <td className="py-2 pr-6 whitespace-nowrap">
+                    <div className="flex items-center gap-2">
+                      <span className="text-gray-100">{p.symbol.replace('USDT', '-USDT')}</span>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${side === 'Long' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>{side}</span>
+                    </div>
+                  </td>
+                  <td className="py-2 pr-6 tabular-nums">{Math.abs(size).toFixed(4)}</td>
+                  <td className="py-2 pr-6 tabular-nums">{fmtPrice(p.entryPrice)}</td>
+                  <td className="py-2 pr-6 tabular-nums">{fmtPrice(p.markPrice)}</td>
+                  <td className="py-2 pr-6 tabular-nums">{fmtPrice(p.liquidationPrice)}</td>
+                  <td className="py-2 pr-6 tabular-nums">{marginRatio}</td>
+                  <td className={`py-2 pr-6 tabular-nums font-medium ${isPnlPos ? 'text-emerald-400' : 'text-red-400'}`}>
                     {isPnlPos ? '+' : ''}{pnl.toFixed(4)} USDT
                   </td>
-                  <td className="py-1.5">
+                  <td className="py-2">
                     <button
                       disabled={isClosing}
                       onClick={() => handleClose(p.symbol)}
                       className={[
-                        'px-2 py-0.5 text-[10px] rounded border transition-colors',
+                        'px-3 py-1 text-[10px] rounded border transition-colors whitespace-nowrap',
                         isClosing
                           ? 'border-gray-700 text-gray-600 cursor-not-allowed'
-                          : 'border-gray-600 text-gray-300 hover:bg-gray-700/40 cursor-pointer',
+                          : 'border-gray-600 text-gray-300 hover:bg-gray-700/50 cursor-pointer',
                       ].join(' ')}
                     >
-                      {isClosing ? 'Closing…' : 'Close'}
+                      {isClosing ? 'Closing…' : 'Close Position'}
                     </button>
                   </td>
                 </tr>
@@ -521,14 +522,14 @@ function PositionsTable({ data, isLoading }) {
 }
 
 function OpenOrdersTable({ data, isLoading }) {
-  const cols = ['Symbol', 'Type', 'Side', 'Price', 'Qty', 'Filled', 'Status', '']
+  const cols = ['Symbol', 'Type', 'Side', 'Price', 'Amount', 'Filled', 'Status', '']
   const { mutate: execCancel, isPending: cancelPending, variables: cancelVars } = useCancelOrder()
 
   return (
     <table className="w-full text-xs">
       <thead>
         <tr className="text-gray-500 border-b border-gray-800">
-          {cols.map((c) => <th key={c} className="text-left py-2 pr-4 font-medium">{c}</th>)}
+          {cols.map((c) => <th key={c} className="text-left py-2 pr-6 font-medium whitespace-nowrap">{c}</th>)}
         </tr>
       </thead>
       <tbody className="text-gray-400">
@@ -543,23 +544,23 @@ function OpenOrdersTable({ data, isLoading }) {
           data.map((o) => {
             const isCancelling = cancelPending && cancelVars?.orderId === o.orderId
             return (
-              <tr key={o.orderId} className="border-b border-gray-800/40 hover:bg-gray-800/30">
-                <td className="py-1.5 pr-4 text-gray-100">{o.symbol.replace('USDT', '-USDT')}</td>
-                <td className="py-1.5 pr-4">{o.type}</td>
-                <td className={`py-1.5 pr-4 font-medium ${o.side === 'BUY' ? 'text-emerald-400' : 'text-red-400'}`}>{o.side}</td>
-                <td className="py-1.5 pr-4">{fmtPrice(o.price)}</td>
-                <td className="py-1.5 pr-4">{fmtQty(o.origQty)}</td>
-                <td className="py-1.5 pr-4">{fmtQty(o.executedQty)}</td>
-                <td className="py-1.5 pr-4">{o.status}</td>
-                <td className="py-1.5">
+              <tr key={o.orderId} className="border-b border-gray-800/30 hover:bg-gray-800/20">
+                <td className="py-2 pr-6 text-gray-100 whitespace-nowrap">{o.symbol.replace('USDT', '-USDT')}</td>
+                <td className="py-2 pr-6">{o.type}</td>
+                <td className={`py-2 pr-6 font-medium ${o.side === 'BUY' ? 'text-emerald-400' : 'text-red-400'}`}>{o.side}</td>
+                <td className="py-2 pr-6 tabular-nums">{fmtPrice(o.price)}</td>
+                <td className="py-2 pr-6 tabular-nums">{fmtQty(o.origQty)}</td>
+                <td className="py-2 pr-6 tabular-nums">{fmtQty(o.executedQty)}</td>
+                <td className="py-2 pr-6">{o.status}</td>
+                <td className="py-2">
                   <button
                     disabled={isCancelling}
                     onClick={() => execCancel({ symbol: SYMBOL, orderId: o.orderId })}
                     className={[
-                      'px-2 py-0.5 text-[10px] rounded border transition-colors',
+                      'px-3 py-1 text-[10px] rounded border transition-colors',
                       isCancelling
                         ? 'border-gray-700 text-gray-600 cursor-not-allowed'
-                        : 'border-red-700/60 text-red-400 hover:bg-red-500/10 cursor-pointer',
+                        : 'border-gray-600 text-gray-400 hover:bg-gray-700/50 cursor-pointer',
                     ].join(' ')}
                   >
                     {isCancelling ? 'Cancelling…' : 'Cancel'}
@@ -581,7 +582,7 @@ function AssetsTable({ data, isLoading }) {
     <table className="w-full text-xs">
       <thead>
         <tr className="text-gray-500 border-b border-gray-800">
-          {cols.map((c) => <th key={c} className="text-left py-2 pr-4 font-medium">{c}</th>)}
+          {cols.map((c) => <th key={c} className="text-left py-2 pr-6 font-medium">{c}</th>)}
         </tr>
       </thead>
       <tbody className="text-gray-400">
@@ -596,11 +597,11 @@ function AssetsTable({ data, isLoading }) {
           assets.map((a) => {
             const pnl = parseFloat(a.unrealizedProfit)
             return (
-              <tr key={a.asset} className="border-b border-gray-800/40 hover:bg-gray-800/30">
-                <td className="py-1.5 pr-4 text-gray-100 font-medium">{a.asset}</td>
-                <td className="py-1.5 pr-4">{parseFloat(a.walletBalance).toFixed(4)}</td>
-                <td className="py-1.5 pr-4">{parseFloat(a.availableBalance).toFixed(4)}</td>
-                <td className={`py-1.5 pr-4 ${pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+              <tr key={a.asset} className="border-b border-gray-800/30 hover:bg-gray-800/20">
+                <td className="py-2 pr-6 text-gray-100 font-medium">{a.asset}</td>
+                <td className="py-2 pr-6 tabular-nums">{parseFloat(a.walletBalance).toFixed(4)}</td>
+                <td className="py-2 pr-6 tabular-nums">{parseFloat(a.availableBalance).toFixed(4)}</td>
+                <td className={`py-2 pr-6 tabular-nums ${pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                   {pnl >= 0 ? '+' : ''}{pnl.toFixed(4)}
                 </td>
               </tr>
@@ -619,25 +620,33 @@ function BottomPanel() {
   const { data: openOrders, isLoading: ordLoading } = useTradeOpenOrders()
   const { data: account, isLoading: accLoading } = useTradeAccount()
 
+  const posCount = positions?.length ?? 0
+  const ordCount = openOrders?.length ?? 0
+
   return (
-    <div className="h-[220px] bg-gray-900 border border-gray-800 rounded flex flex-col shrink-0">
+    <div className="bg-gray-900 border-t border-gray-800 flex flex-col shrink-0" style={{ height: '200px' }}>
       <div className="flex border-b border-gray-800 shrink-0">
-        {BOTTOM_TABS.map((tab) => (
+        {[
+          { key: 'Positions', label: `Positions(${posCount})` },
+          { key: 'Open Orders', label: `Open Orders(${ordCount})` },
+          { key: 'Order History', label: 'Order History' },
+          { key: 'Assets', label: 'Assets' },
+        ].map(({ key, label }) => (
           <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
+            key={key}
+            onClick={() => setActiveTab(key)}
             className={[
-              'px-4 py-2 text-xs font-medium transition-colors',
-              activeTab === tab
-                ? 'text-emerald-400 border-b-2 border-emerald-500 -mb-px'
+              'px-4 py-2 text-xs font-medium transition-colors whitespace-nowrap',
+              activeTab === key
+                ? 'text-gray-100 border-b-2 border-emerald-500 -mb-px'
                 : 'text-gray-500 hover:text-gray-300',
             ].join(' ')}
           >
-            {tab}
+            {label}
           </button>
         ))}
       </div>
-      <div className="flex-1 overflow-y-auto p-2 min-h-0">
+      <div className="flex-1 overflow-y-auto px-2 min-h-0">
         {activeTab === 'Positions' && (
           <PositionsTable data={positions} isLoading={posLoading} />
         )}
@@ -645,7 +654,7 @@ function BottomPanel() {
           <OpenOrdersTable data={openOrders} isLoading={ordLoading} />
         )}
         {activeTab === 'Order History' && (
-          <p className="text-center text-gray-600 text-xs mt-6">Order history coming soon</p>
+          <p className="text-center text-gray-600 text-xs mt-8">Order history coming soon</p>
         )}
         {activeTab === 'Assets' && (
           <AssetsTable data={account} isLoading={accLoading} />
@@ -662,14 +671,14 @@ function LeverageModal({ current, onConfirm, onClose, isLoading }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="bg-gray-900 border border-gray-700 rounded-lg p-5 w-64 flex flex-col gap-4">
+      <div className="bg-gray-900 border border-gray-700 rounded-lg p-5 w-72 flex flex-col gap-4">
         <div className="flex items-center justify-between">
-          <span className="text-sm font-medium text-gray-100">Adjust Leverage</span>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-xs">✕</button>
+          <span className="text-sm font-semibold text-gray-100">Adjust Leverage</span>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-sm leading-none">✕</button>
         </div>
 
         <div className="flex items-center justify-center">
-          <span className="text-3xl font-bold text-yellow-400">{draft}x</span>
+          <span className="text-4xl font-bold text-yellow-400">{draft}x</span>
         </div>
 
         <input
@@ -693,7 +702,7 @@ function LeverageModal({ current, onConfirm, onClose, isLoading }) {
         <button
           onClick={() => onConfirm(draft)}
           disabled={isLoading}
-          className="w-full py-2 rounded text-xs font-semibold bg-yellow-500 hover:bg-yellow-400 text-gray-950 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          className="w-full py-2.5 rounded text-xs font-semibold bg-yellow-500 hover:bg-yellow-400 text-gray-950 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {isLoading ? 'Updating…' : 'Confirm'}
         </button>
@@ -713,7 +722,6 @@ function OrderForm() {
   const [showLeverageModal, setShowLeverageModal] = useState(false)
   const [formError, setFormError] = useState(null)
 
-  // Live mid-price kept in a ref to avoid re-renders on every tick
   const currentPriceRef = useRef(0)
   const onTicker = useCallback((data) => {
     currentPriceRef.current = parseFloat(data.c) || 0
@@ -725,7 +733,6 @@ function OrderForm() {
 
   const activeLeverage = config?.leverage ?? '—'
 
-  // Available USDT balance from the account assets array
   const availableBalance = parseFloat(
     account?.assets?.find((a) => a.asset === 'USDT')?.availableBalance ?? 0
   )
@@ -738,10 +745,6 @@ function OrderForm() {
 
   const PCT_OPTIONS = [25, 50, 75, 100]
 
-  // Isolated margin only — cross margin is removed platform-wide. If the exchange reports
-  // a non-isolated margin type for this symbol, enforce ISOLATED once (idempotent: the
-  // engine swallows Binance -4046 "already isolated"). See DECISIONS.md
-  // "Isolated margin only (cross margin removed)".
   useEffect(() => {
     if (config?.marginType && config.marginType !== 'isolated' && !marginPending) {
       execChangeMarginType({ symbol: SYMBOL, marginType: 'ISOLATED' })
@@ -755,7 +758,11 @@ function OrderForm() {
       {
         onSuccess: () => setShowLeverageModal(false),
         onError: (err) => {
-          const detail = err.response?.data?.message || err.response?.data?.detail || err.message
+          const detail =
+            err.response?.data?.error?.message ||
+            err.response?.data?.message ||
+            err.response?.data?.detail ||
+            err.message
           setFormError(typeof detail === 'string' ? detail : 'Failed to change leverage')
           setShowLeverageModal(false)
         },
@@ -780,7 +787,6 @@ function OrderForm() {
     let quantity = parseFloat(qty)
     if (isNaN(quantity) || quantity <= 0) return null
 
-    // Convert USDT-denominated input to BTC size
     if (qtyUnit === 'USDT') {
       if (cp <= 0) return null
       quantity = quantity / cp
@@ -809,7 +815,11 @@ function OrderForm() {
         setPct(null)
       },
       onError: (err) => {
-        const detail = err.response?.data?.message || err.response?.data?.detail || err.message
+        const detail =
+          err.response?.data?.error?.message ||
+          err.response?.data?.message ||
+          err.response?.data?.detail ||
+          err.message
         setFormError(typeof detail === 'string' ? detail : 'Order failed')
       },
     })
@@ -826,38 +836,33 @@ function OrderForm() {
         />
       )}
 
-      <div className="bg-gray-900 border border-gray-800 rounded p-4 flex flex-col gap-3 overflow-y-auto flex-1 min-h-0">
-        {formError && (
-          <div className="bg-red-950/20 border border-red-800/40 rounded p-2 text-[10px] text-red-400 leading-snug">
-            {formError}
-          </div>
-        )}
-
-        <div className="flex items-center justify-between">
-          <div className={`flex rounded overflow-hidden border text-xs transition-opacity ${isConfigBusy ? 'opacity-50' : 'border-gray-700'}`}>
-            <span className="px-3 py-1.5 bg-gray-700 text-gray-100">
+      <div className="flex flex-col min-h-0 flex-1 bg-gray-900">
+        {/* Margin type + Leverage row */}
+        <div className="flex items-center justify-between px-3 py-2 border-b border-gray-800">
+          <div className={`flex rounded overflow-hidden border text-xs ${isConfigBusy ? 'opacity-50' : 'border-gray-700'}`}>
+            <span className="px-3 py-1.5 bg-gray-800 text-gray-300 text-xs font-medium">
               {marginPending ? '…' : 'Isolated'}
             </span>
           </div>
-
           <button
             onClick={() => { setFormError(null); setShowLeverageModal(true) }}
             disabled={isConfigBusy}
-            className="text-xs text-yellow-400 border border-yellow-600/40 rounded px-2 py-1 hover:bg-yellow-500/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="text-xs text-yellow-400 border border-yellow-600/40 rounded px-2.5 py-1.5 hover:bg-yellow-500/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
           >
             {leveragePending ? '…' : `${activeLeverage}x`}
           </button>
         </div>
 
-        <div className="flex gap-2 border-b border-gray-800 pb-1">
+        {/* Order type tabs */}
+        <div className="flex border-b border-gray-800 px-3">
           {['Limit', 'Market'].map((type) => (
             <button
               key={type}
               onClick={() => { setOrderType(type); setPrice('') }}
               className={[
-                'text-xs pb-1 transition-colors',
+                'py-2 px-2 mr-2 text-xs font-medium transition-colors',
                 orderType === type
-                  ? 'text-gray-100 border-b-2 border-emerald-500 -mb-[5px]'
+                  ? 'text-gray-100 border-b-2 border-emerald-500 -mb-px'
                   : 'text-gray-500 hover:text-gray-300',
               ].join(' ')}
             >
@@ -866,97 +871,109 @@ function OrderForm() {
           ))}
         </div>
 
-        {orderType === 'Limit' && (
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-gray-500">Price (USDT)</label>
-            <input
-              type="number"
-              value={price}
-              onChange={(e) => setPrice(e.target.value)}
-              placeholder="0.00"
-              disabled={orderPending}
-              className="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-xs text-gray-100 placeholder-gray-600 focus:outline-none focus:border-emerald-600 disabled:opacity-50"
-            />
-          </div>
-        )}
+        <div className="flex flex-col gap-3 p-3 overflow-y-auto flex-1 min-h-0">
+          {formError && (
+            <div className="bg-red-950/20 border border-red-800/40 rounded px-3 py-2 text-[10px] text-red-400 leading-snug">
+              {formError}
+            </div>
+          )}
 
-        <div className="flex flex-col gap-1">
-          <label className="text-xs text-gray-500">Quantity</label>
-          <div className="flex border border-gray-700 rounded overflow-hidden">
-            <input
-              type="number"
-              value={qty}
-              onChange={(e) => { setQty(e.target.value); setPct(null) }}
-              placeholder="0.000"
-              disabled={orderPending}
-              className="flex-1 bg-gray-800 px-3 py-2 text-xs text-gray-100 placeholder-gray-600 focus:outline-none min-w-0 disabled:opacity-50"
-            />
-            <div className="flex shrink-0">
-              {['BTC', 'USDT'].map((unit) => (
-                <button
-                  key={unit}
-                  onClick={() => { setQtyUnit(unit); setQty(''); setPct(null) }}
-                  disabled={orderPending}
-                  className={[
-                    'px-2 text-xs transition-colors',
-                    qtyUnit === unit
-                      ? 'bg-gray-700 text-gray-100'
-                      : 'bg-gray-800 text-gray-500 hover:text-gray-300',
-                  ].join(' ')}
-                >
-                  {unit}
-                </button>
-              ))}
+          {/* Available */}
+          <div className="flex justify-between text-[11px]">
+            <span className="text-gray-500">Available</span>
+            <span className="text-gray-300 tabular-nums">
+              {availableBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT
+            </span>
+          </div>
+
+          {/* Price — only for Limit */}
+          {orderType === 'Limit' && (
+            <div className="flex flex-col gap-1">
+              <label className="text-[11px] text-gray-500">Price (USDT)</label>
+              <input
+                type="number"
+                value={price}
+                onChange={(e) => setPrice(e.target.value)}
+                placeholder="0.00"
+                disabled={orderPending}
+                className="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-xs text-gray-100 placeholder-gray-600 focus:outline-none focus:border-gray-600 disabled:opacity-50 tabular-nums"
+              />
+            </div>
+          )}
+
+          {/* Quantity */}
+          <div className="flex flex-col gap-1">
+            <label className="text-[11px] text-gray-500">Size</label>
+            <div className="flex border border-gray-700 rounded overflow-hidden">
+              <input
+                type="number"
+                value={qty}
+                onChange={(e) => { setQty(e.target.value); setPct(null) }}
+                placeholder="0.000"
+                disabled={orderPending}
+                className="flex-1 bg-gray-800 px-3 py-2 text-xs text-gray-100 placeholder-gray-600 focus:outline-none min-w-0 disabled:opacity-50 tabular-nums"
+              />
+              <div className="flex shrink-0 border-l border-gray-700">
+                {['BTC', 'USDT'].map((unit) => (
+                  <button
+                    key={unit}
+                    onClick={() => { setQtyUnit(unit); setQty(''); setPct(null) }}
+                    disabled={orderPending}
+                    className={[
+                      'px-2.5 text-xs transition-colors font-medium',
+                      qtyUnit === unit
+                        ? 'bg-gray-700 text-gray-100'
+                        : 'bg-gray-800 text-gray-500 hover:text-gray-300',
+                    ].join(' ')}
+                  >
+                    {unit}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
-        </div>
 
-        <div className="flex gap-1">
-          {PCT_OPTIONS.map((p) => (
+          {/* Pct buttons */}
+          <div className="flex gap-1">
+            {PCT_OPTIONS.map((p) => (
+              <button
+                key={p}
+                onClick={() => handlePctClick(p)}
+                disabled={orderPending}
+                className={[
+                  'flex-1 py-1.5 text-xs rounded transition-colors border',
+                  pct === p
+                    ? 'bg-gray-700 border-gray-600 text-gray-100'
+                    : 'border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600',
+                ].join(' ')}
+              >
+                {p}%
+              </button>
+            ))}
+          </div>
+
+          {/* Buy / Sell buttons side by side */}
+          <div className="flex gap-2 mt-1">
             <button
-              key={p}
-              onClick={() => handlePctClick(p)}
+              onClick={() => handleSubmit('BUY')}
               disabled={orderPending}
-              className={[
-                'flex-1 py-1 text-xs rounded transition-colors border',
-                pct === p
-                  ? 'bg-emerald-600/20 border-emerald-600 text-emerald-400'
-                  : 'border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600',
-              ].join(' ')}
+              className="flex-1 py-3 rounded text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
             >
-              {p}%
+              {orderPending ? (
+                <span className="inline-block w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              ) : 'Buy/Long'}
             </button>
-          ))}
+            <button
+              onClick={() => handleSubmit('SELL')}
+              disabled={orderPending}
+              className="flex-1 py-3 rounded text-xs font-semibold bg-red-600 hover:bg-red-500 text-white transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
+            >
+              {orderPending ? (
+                <span className="inline-block w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              ) : 'Sell/Short'}
+            </button>
+          </div>
         </div>
-
-        <p className="text-xs text-gray-600">
-          Available: ${availableBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT
-        </p>
-
-        <button
-          onClick={() => handleSubmit('BUY')}
-          disabled={orderPending}
-          className="w-full py-2.5 rounded text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
-        >
-          {orderPending ? (
-            <>
-              <span className="inline-block w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              Placing…
-            </>
-          ) : 'Buy / Long'}
-        </button>
-        <button
-          onClick={() => handleSubmit('SELL')}
-          disabled={orderPending}
-          className="w-full py-2.5 rounded text-xs font-semibold bg-red-600 hover:bg-red-500 text-white transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
-        >
-          {orderPending ? (
-            <>
-              <span className="inline-block w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              Placing…
-            </>
-          ) : 'Sell / Short'}
-        </button>
       </div>
     </>
   )
@@ -966,26 +983,29 @@ function OrderForm() {
 
 export default function Trade() {
   return (
-    <div className="bg-gray-950 text-gray-100 flex flex-col p-2 gap-2 h-[calc(100vh-56px)] overflow-hidden mt-14">
+    <div className="bg-gray-950 text-gray-100 flex flex-col h-[calc(100vh-56px)] overflow-hidden mt-14">
       <TickerBar />
 
-      <div className="grid grid-cols-12 gap-2 flex-1 min-h-0">
-        {/* Left — chart + bottom panel */}
-        <div className="col-span-8 flex flex-col gap-2 min-h-0">
+      {/* Main content — fills remaining height */}
+      <div className="flex flex-1 min-h-0">
+
+        {/* Left col — chart + bottom panel (fills remaining width) */}
+        <div className="flex flex-col flex-1 min-w-0 min-h-0 border-r border-gray-800">
           <ChartContainer />
           <BottomPanel />
         </div>
 
-        {/* Middle — order book + recent trades */}
-        <div className="col-span-2 flex flex-col gap-2 min-h-0">
+        {/* Middle col — order book + recent trades, fixed width */}
+        <div className="flex flex-col min-h-0 shrink-0" style={{ width: '200px' }}>
           <OrderBook />
           <RecentTrades />
         </div>
 
-        {/* Right — order form */}
-        <div className="col-span-2 flex flex-col gap-2 min-h-0">
+        {/* Right col — order form, fixed width */}
+        <div className="flex flex-col min-h-0 shrink-0" style={{ width: '260px' }}>
           <OrderForm />
         </div>
+
       </div>
     </div>
   )

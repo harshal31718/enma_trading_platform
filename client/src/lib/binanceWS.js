@@ -1,92 +1,91 @@
-const WS_URL = 'wss://fstream.binance.com/stream'
-const INITIAL_RECONNECT_DELAY = 1000
-const MAX_RECONNECT_DELAY = 30000
+// Binance USD-M Futures WebSocket manager.
+//
+// Official docs: https://developers.binance.com/docs/derivatives/usds-margined-futures/websocket-market-streams
+//
+// Different stream types route to different base paths:
+//   /public/ws/  — high-frequency depth streams (@depth*)
+//   /market/ws/  — everything else (kline, aggTrade, ticker, trade)
+
+const RECONNECT_DELAY_MS = 3000
+
+function baseUrl(streamName) {
+  if (streamName.includes('@depth')) {
+    return 'wss://fstream.binance.com/public/ws'
+  }
+  return 'wss://fstream.binance.com/market/ws'
+}
 
 class BinanceWSManager {
   constructor() {
-    this.ws = null
-    this.listeners = new Map()   // streamName → Set<callback>
-    this.idCounter = 1
-    this.reconnectDelay = INITIAL_RECONNECT_DELAY
-    this.intentionalClose = false
-    this._connect()
+    // streamName → { ws: WebSocket|null, callbacks: Set, timer: TimeoutId|null }
+    this.streams = new Map()
   }
 
-  _connect() {
-    this.intentionalClose = false
-    this.ws = new WebSocket(WS_URL)
+  _open(streamName) {
+    const entry = this.streams.get(streamName)
+    if (!entry) return
 
-    this.ws.onopen = () => {
-      this.reconnectDelay = INITIAL_RECONNECT_DELAY
-      // Re-subscribe all active streams after reconnect
-      const streams = [...this.listeners.keys()].filter(
-        (s) => this.listeners.get(s).size > 0
-      )
-      if (streams.length > 0) {
-        this._send({ method: 'SUBSCRIBE', params: streams, id: this.idCounter++ })
-      }
-    }
+    const ws = new WebSocket(`${baseUrl(streamName)}/${streamName}`)
+    entry.ws = ws
 
-    this.ws.onmessage = (evt) => {
+    ws.onmessage = (evt) => {
+      const e = this.streams.get(streamName)
+      if (!e) return
       let msg
       try { msg = JSON.parse(evt.data) } catch { return }
-
-      // Combined stream envelope: { stream, data }
-      if (!msg.stream) return
-      const callbacks = this.listeners.get(msg.stream)
-      if (!callbacks) return
-      callbacks.forEach((cb) => {
-        try { cb(msg.data) } catch {}
-      })
+      e.callbacks.forEach((cb) => { try { cb(msg) } catch {} })
     }
 
-    this.ws.onclose = () => {
-      if (this.intentionalClose) return
-      setTimeout(() => {
-        this.reconnectDelay = Math.min(this.reconnectDelay * 2, MAX_RECONNECT_DELAY)
-        this._connect()
-      }, this.reconnectDelay)
+    ws.onclose = () => {
+      const e = this.streams.get(streamName)
+      if (!e) return
+      e.ws = null
+      e.timer = setTimeout(() => this._open(streamName), RECONNECT_DELAY_MS)
     }
 
-    this.ws.onerror = () => {
-      // onclose fires after onerror; reconnect handled there
-      this.ws.close()
-    }
-  }
-
-  _send(payload) {
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(payload))
+    ws.onerror = () => {
+      // onclose fires immediately after
     }
   }
 
   subscribe(streamName, callback) {
-    if (!this.listeners.has(streamName)) {
-      this.listeners.set(streamName, new Set())
+    if (!this.streams.has(streamName)) {
+      // Defer open by one microtask so React Strict Mode's immediate
+      // unmount→remount cycle cancels the open before the socket is created.
+      const entry = { ws: null, callbacks: new Set(), timer: null, openTimer: null }
+      this.streams.set(streamName, entry)
+      entry.openTimer = setTimeout(() => {
+        entry.openTimer = null
+        if (this.streams.has(streamName)) this._open(streamName)
+      }, 0)
     }
-    const set = this.listeners.get(streamName)
-    const isFirst = set.size === 0
-    set.add(callback)
 
-    if (isFirst) {
-      this._send({ method: 'SUBSCRIBE', params: [streamName], id: this.idCounter++ })
-    }
+    const entry = this.streams.get(streamName)
+    entry.callbacks.add(callback)
 
     return () => {
-      set.delete(callback)
-      if (set.size === 0) {
-        this.listeners.delete(streamName)
-        this._send({ method: 'UNSUBSCRIBE', params: [streamName], id: this.idCounter++ })
-      }
-    }
-  }
+      const e = this.streams.get(streamName)
+      if (!e) return
+      e.callbacks.delete(callback)
 
-  destroy() {
-    this.intentionalClose = true
-    this.ws?.close()
+      if (e.callbacks.size > 0) return
+
+      // Cancel deferred open if it hasn't fired yet
+      if (e.openTimer !== null) {
+        clearTimeout(e.openTimer)
+        e.openTimer = null
+      }
+      clearTimeout(e.timer)
+      if (e.ws) {
+        e.ws.onclose = null
+        e.ws.onerror = null
+        e.ws.close()
+        e.ws = null
+      }
+      this.streams.delete(streamName)
+    }
   }
 }
 
-// Singleton — one connection for the entire app lifetime
 const binanceWS = new BinanceWSManager()
 export default binanceWS
