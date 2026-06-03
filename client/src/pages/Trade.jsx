@@ -10,6 +10,7 @@ import {
   useChangeMarginType,
   usePlaceOrder,
   useCancelOrder,
+  useClosePosition,
 } from '@/hooks/useTrade'
 
 const SYMBOL = 'BTC-USDT'
@@ -90,13 +91,50 @@ function TickerBar() {
 
 // ─── ChartContainer ───────────────────────────────────────────────────────────
 
+const TIMEFRAMES = [
+  { label: '1m', interval: '1m' },
+  { label: '5m', interval: '5m' },
+  { label: '15m', interval: '15m' },
+  { label: '1h', interval: '1h' },
+  { label: '4h', interval: '4h' },
+  { label: '1d', interval: '1d' },
+]
+
+const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:5000'
+
+function fetchKlines(symbol, timeframe, series, chart, signal) {
+  return fetch(
+    `${API_BASE}/api/v1/trade/klines?symbol=${symbol}&interval=${timeframe}&limit=500`,
+    { signal }
+  )
+    .then((r) => r.json())
+    .then((res) => {
+      if (!res.success) throw new Error(res.error || 'Failed to load candles')
+      const raw = res.data
+      if (!Array.isArray(raw)) return
+      const data = raw.map((k) => ({
+        time: Math.floor(k[0] / 1000),
+        open: parseFloat(k[1]),
+        high: parseFloat(k[2]),
+        low: parseFloat(k[3]),
+        close: parseFloat(k[4]),
+      }))
+      series.setData(data)
+      chart.timeScale().fitContent()
+    })
+}
+
 function ChartContainer() {
   const containerRef = useRef(null)
   const chartRef = useRef(null)
   const seriesRef = useRef(null)
+  // Gate: while true, live WS updates are held until setData() finishes
+  const fetchingRef = useRef(false)
   const [chartError, setChartError] = useState(null)
+  const [timeframe, setTimeframe] = useState('1m')
+  const [loading, setLoading] = useState(false)
 
-  // Chart init + historical data
+  // Chart init — runs once
   useEffect(() => {
     if (!containerRef.current) return
 
@@ -128,27 +166,6 @@ function ChartContainer() {
     chartRef.current = chart
     seriesRef.current = candleSeries
 
-    fetch(`/api/v1/trade/klines?symbol=${SYMBOL}&interval=1m&limit=200`)
-      .then((r) => r.json())
-      .then((res) => {
-        if (!res.success) {
-          setChartError(res.error || 'Failed to load candles')
-          return
-        }
-        const raw = res.data
-        if (!Array.isArray(raw)) return
-        const data = raw.map((k) => ({
-          time: Math.floor(k[0] / 1000),
-          open: parseFloat(k[1]),
-          high: parseFloat(k[2]),
-          low: parseFloat(k[3]),
-          close: parseFloat(k[4]),
-        }))
-        candleSeries.setData(data)
-        chart.timeScale().fitContent()
-      })
-      .catch((err) => setChartError(err.message))
-
     const ro = new ResizeObserver(() => {
       if (containerRef.current && chartRef.current) {
         chartRef.current.resize(
@@ -162,29 +179,74 @@ function ChartContainer() {
     return () => {
       ro.disconnect()
       chart.remove()
+      chartRef.current = null
+      seriesRef.current = null
     }
   }, [])
 
-  // Imperative live candle update — bypasses React re-render
-  const onKline = useCallback((data) => {
-    const k = data.k
-    if (seriesRef.current) {
-      seriesRef.current.update({
-        time: Math.floor(k.t / 1000),
-        open: parseFloat(k.o),
-        high: parseFloat(k.h),
-        low: parseFloat(k.l),
-        close: parseFloat(k.c),
+  // Re-fetch historical candles on timeframe change
+  useEffect(() => {
+    if (!seriesRef.current) return
+    const ac = new AbortController()
+    setChartError(null)
+    setLoading(true)
+    fetchingRef.current = true  // block live updates during fetch
+
+    fetchKlines(SYMBOL, timeframe, seriesRef.current, chartRef.current, ac.signal)
+      .catch((err) => { if (err.name !== 'AbortError') setChartError(err.message) })
+      .finally(() => {
+        fetchingRef.current = false  // re-enable live updates
+        setLoading(false)
       })
+
+    return () => {
+      ac.abort()
+      fetchingRef.current = false
     }
+  }, [timeframe])
+
+  // Live candle updates — imperative, no React re-render
+  // Uses a stable ref-based callback so useBinanceWS never needs to resubscribe
+  const onKline = useCallback((data) => {
+    if (fetchingRef.current) return
+    const k = data.k
+    if (!seriesRef.current || !k) return
+    seriesRef.current.update({
+      time: Math.floor(k.t / 1000),
+      open: parseFloat(k.o),
+      high: parseFloat(k.h),
+      low: parseFloat(k.l),
+      close: parseFloat(k.c),
+    })
   }, [])
 
-  useBinanceWS(`${STREAM_PREFIX}@kline_1m`, onKline)
+  useBinanceWS(`${STREAM_PREFIX}@kline_${timeframe}`, onKline)
 
   return (
     <div className="bg-gray-900 border border-gray-800 rounded relative flex-1 min-h-0 overflow-hidden">
+      {/* Timeframe toolbar */}
+      <div className="absolute top-2 left-2 z-10 flex items-center gap-0.5 bg-gray-950/80 backdrop-blur-sm rounded px-1 py-1">
+        {TIMEFRAMES.map((tf) => (
+          <button
+            key={tf.interval}
+            onClick={() => setTimeframe(tf.interval)}
+            className={[
+              'px-2.5 py-0.5 text-xs rounded transition-colors font-medium',
+              timeframe === tf.interval
+                ? 'bg-emerald-600/30 text-emerald-400'
+                : 'text-gray-500 hover:text-gray-300',
+            ].join(' ')}
+          >
+            {tf.label}
+          </button>
+        ))}
+        {loading && (
+          <span className="ml-1 inline-block w-3 h-3 border-2 border-gray-600 border-t-emerald-400 rounded-full animate-spin" />
+        )}
+      </div>
+
       {chartError && (
-        <div className="absolute top-2 left-2 right-2 z-10 bg-red-900/20 text-red-400 p-2 rounded text-sm">
+        <div className="absolute top-10 left-2 right-2 z-10 bg-red-900/20 text-red-400 p-2 rounded text-sm">
           {chartError}
         </div>
       )}
@@ -295,11 +357,11 @@ function RecentTrades() {
   const onTrade = useCallback((data) => {
     setTrades((prev) => {
       const entry = {
-        id: data.t,
+        id: data.a,
         price: parseFloat(data.p),
         qty: parseFloat(data.q),
         time: new Date(data.T).toLocaleTimeString(),
-        isBuyerMaker: data.m, // true = seller aggressor (red), false = buyer aggressor (green)
+        isBuyerMaker: data.m,
       }
       const next = [entry, ...prev]
       if (next.length > MAX_TRADES) next.length = MAX_TRADES
@@ -307,7 +369,7 @@ function RecentTrades() {
     })
   }, [])
 
-  useBinanceWS(`${STREAM_PREFIX}@trade`, onTrade)
+  useBinanceWS(`${STREAM_PREFIX}@aggTrade`, onTrade)
 
   return (
     <div className="bg-gray-900 border border-gray-800 rounded flex flex-col overflow-hidden" style={{ height: '220px' }}>
@@ -371,6 +433,26 @@ function EmptyRow({ message }) {
 
 function PositionsTable({ data, isLoading }) {
   const cols = ['Symbol', 'Side', 'Size', 'Entry Price', 'Mark Price', 'Liq Price', 'Unrealized PnL', '']
+  const [closeError, setCloseError] = useState(null)
+  const { mutate: execClose, isPending: closePending, variables: closeVars } = useClosePosition()
+
+  function handleClose(symbol) {
+    setCloseError(null)
+    execClose(
+      { symbol },
+      {
+        onError: (err) => {
+          const detail =
+            err.response?.data?.error?.message ||
+            err.response?.data?.message ||
+            err.response?.data?.detail ||
+            err.message
+          setCloseError(typeof detail === 'string' ? detail : 'Failed to close position')
+        },
+      }
+    )
+  }
+
   return (
     <table className="w-full text-xs">
       <thead>
@@ -387,30 +469,51 @@ function PositionsTable({ data, isLoading }) {
         ) : !data?.length ? (
           <EmptyRow message="No open positions" />
         ) : (
-          data.map((p) => {
-            const size = parseFloat(p.positionAmt)
-            const side = size > 0 ? 'Long' : 'Short'
-            const pnl = parseFloat(p.unRealizedProfit)
-            const isPnlPos = pnl >= 0
-            return (
-              <tr key={p.symbol} className="border-b border-gray-800/40 hover:bg-gray-800/30">
-                <td className="py-1.5 pr-4 text-gray-100">{p.symbol.replace('USDT', '-USDT')}</td>
-                <td className={`py-1.5 pr-4 font-medium ${side === 'Long' ? 'text-emerald-400' : 'text-red-400'}`}>{side}</td>
-                <td className="py-1.5 pr-4">{Math.abs(size).toFixed(4)}</td>
-                <td className="py-1.5 pr-4">{fmtPrice(p.entryPrice)}</td>
-                <td className="py-1.5 pr-4">{fmtPrice(p.markPrice)}</td>
-                <td className="py-1.5 pr-4">{fmtPrice(p.liquidationPrice)}</td>
-                <td className={`py-1.5 pr-4 ${isPnlPos ? 'text-emerald-400' : 'text-red-400'}`}>
-                  {isPnlPos ? '+' : ''}{pnl.toFixed(4)} USDT
-                </td>
-                <td className="py-1.5">
-                  <button disabled className="px-2 py-0.5 text-[10px] rounded border border-gray-700 text-gray-600 cursor-not-allowed">
-                    Close
-                  </button>
+          <>
+            {closeError && (
+              <tr>
+                <td colSpan={cols.length} className="py-1.5">
+                  <div className="bg-red-950/20 border border-red-800/40 rounded p-2 text-[10px] text-red-400 leading-snug">
+                    {closeError}
+                  </div>
                 </td>
               </tr>
-            )
-          })
+            )}
+            {data.map((p) => {
+              const size = parseFloat(p.positionAmt)
+              const side = size > 0 ? 'Long' : 'Short'
+              const pnl = parseFloat(p.unRealizedProfit)
+              const isPnlPos = pnl >= 0
+              const isClosing = closePending && closeVars?.symbol === p.symbol
+              return (
+                <tr key={p.symbol} className="border-b border-gray-800/40 hover:bg-gray-800/30">
+                  <td className="py-1.5 pr-4 text-gray-100">{p.symbol.replace('USDT', '-USDT')}</td>
+                  <td className={`py-1.5 pr-4 font-medium ${side === 'Long' ? 'text-emerald-400' : 'text-red-400'}`}>{side}</td>
+                  <td className="py-1.5 pr-4">{Math.abs(size).toFixed(4)}</td>
+                  <td className="py-1.5 pr-4">{fmtPrice(p.entryPrice)}</td>
+                  <td className="py-1.5 pr-4">{fmtPrice(p.markPrice)}</td>
+                  <td className="py-1.5 pr-4">{fmtPrice(p.liquidationPrice)}</td>
+                  <td className={`py-1.5 pr-4 ${isPnlPos ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {isPnlPos ? '+' : ''}{pnl.toFixed(4)} USDT
+                  </td>
+                  <td className="py-1.5">
+                    <button
+                      disabled={isClosing}
+                      onClick={() => handleClose(p.symbol)}
+                      className={[
+                        'px-2 py-0.5 text-[10px] rounded border transition-colors',
+                        isClosing
+                          ? 'border-gray-700 text-gray-600 cursor-not-allowed'
+                          : 'border-gray-600 text-gray-300 hover:bg-gray-700/40 cursor-pointer',
+                      ].join(' ')}
+                    >
+                      {isClosing ? 'Closing…' : 'Close'}
+                    </button>
+                  </td>
+                </tr>
+              )
+            })}
+          </>
         )}
       </tbody>
     </table>
@@ -621,7 +724,6 @@ function OrderForm() {
   const { data: account } = useTradeAccount()
 
   const activeLeverage = config?.leverage ?? '—'
-  const activeMarginType = config?.marginType === 'isolated' ? 'Isolated' : 'Cross'
 
   // Available USDT balance from the account assets array
   const availableBalance = parseFloat(
@@ -636,19 +738,15 @@ function OrderForm() {
 
   const PCT_OPTIONS = [25, 50, 75, 100]
 
-  function handleMarginMode(mode) {
-    if (isConfigBusy) return
-    setFormError(null)
-    execChangeMarginType(
-      { symbol: SYMBOL, marginType: mode },
-      {
-        onError: (err) => {
-          const detail = err.response?.data?.message || err.response?.data?.detail || err.message
-          setFormError(typeof detail === 'string' ? detail : 'Failed to change margin type')
-        },
-      }
-    )
-  }
+  // Isolated margin only — cross margin is removed platform-wide. If the exchange reports
+  // a non-isolated margin type for this symbol, enforce ISOLATED once (idempotent: the
+  // engine swallows Binance -4046 "already isolated"). See DECISIONS.md
+  // "Isolated margin only (cross margin removed)".
+  useEffect(() => {
+    if (config?.marginType && config.marginType !== 'isolated' && !marginPending) {
+      execChangeMarginType({ symbol: SYMBOL, marginType: 'ISOLATED' })
+    }
+  }, [config?.marginType, marginPending, execChangeMarginType])
 
   function handleLeverageConfirm(newLeverage) {
     setFormError(null)
@@ -736,22 +834,10 @@ function OrderForm() {
         )}
 
         <div className="flex items-center justify-between">
-          <div className={`flex rounded overflow-hidden border text-xs transition-opacity ${isConfigBusy ? 'opacity-50 pointer-events-none' : 'border-gray-700'}`}>
-            {['Cross', 'Isolated'].map((mode) => (
-              <button
-                key={mode}
-                onClick={() => handleMarginMode(mode)}
-                disabled={marginPending}
-                className={[
-                  'px-3 py-1.5 transition-colors',
-                  activeMarginType === mode
-                    ? 'bg-gray-700 text-gray-100'
-                    : 'text-gray-500 hover:text-gray-300',
-                ].join(' ')}
-              >
-                {marginPending && activeMarginType !== mode ? '…' : mode}
-              </button>
-            ))}
+          <div className={`flex rounded overflow-hidden border text-xs transition-opacity ${isConfigBusy ? 'opacity-50' : 'border-gray-700'}`}>
+            <span className="px-3 py-1.5 bg-gray-700 text-gray-100">
+              {marginPending ? '…' : 'Isolated'}
+            </span>
           </div>
 
           <button

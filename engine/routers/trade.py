@@ -36,6 +36,10 @@ class OrderRequest(BaseModel):
     price: float | None = None
 
 
+class ClosePositionRequest(BaseModel):
+    symbol: str
+
+
 @router.post("/verify")
 async def verify_keys(payload: VerifyKeysRequest):
     try:
@@ -191,6 +195,55 @@ async def place_order(
         raise HTTPException(status_code=500, detail=f"Engine could not reach Binance: {exc}")
 
 
+@router.post("/close-position")
+async def close_position(
+    payload: ClosePositionRequest,
+    x_binance_api_key: str = Header(..., alias="X-Binance-API-Key"),
+    x_binance_api_secret: str = Header(..., alias="X-Binance-API-Secret"),
+):
+    try:
+        binance_symbol = payload.symbol.replace("-", "")
+
+        # Read the current position size to know which side/qty flattens it.
+        positions = await send_signed_request(
+            "GET", "/fapi/v2/positionRisk", x_binance_api_key, x_binance_api_secret,
+            params={"symbol": binance_symbol},
+        )
+        position_amt = 0.0
+        for p in positions:
+            if p.get("symbol") == binance_symbol:
+                position_amt = float(p.get("positionAmt", 0))
+                break
+
+        if position_amt == 0:
+            raise HTTPException(status_code=400, detail="No open position to close for this symbol")
+
+        # Opposite side, full absolute size, reduceOnly so it can only flatten.
+        close_side = "SELL" if position_amt > 0 else "BUY"
+        params = {
+            "symbol": binance_symbol,
+            "side": close_side,
+            "type": "MARKET",
+            "quantity": f"{abs(position_amt):.3f}",
+            "reduceOnly": "true",
+        }
+        data = await send_signed_request(
+            "POST", "/fapi/v1/order", x_binance_api_key, x_binance_api_secret, params=params
+        )
+        return {"success": True, "data": data}
+    except HTTPException:
+        raise
+    except httpx.HTTPStatusError as exc:
+        try:
+            body = exc.response.json()
+            msg = body.get("msg", str(exc))
+        except Exception:
+            msg = str(exc)
+        raise HTTPException(status_code=400, detail=msg)
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=500, detail=f"Engine could not reach Binance: {exc}")
+
+
 @router.delete("/order")
 async def cancel_order(
     symbol: str,
@@ -232,21 +285,28 @@ async def set_margin_type(
     x_binance_api_key: str = Header(..., alias="X-Binance-API-Key"),
     x_binance_api_secret: str = Header(..., alias="X-Binance-API-Secret"),
 ):
-    raw = payload.marginType.upper()
-    margin_type = "CROSSED" if raw in ("CROSS", "CROSSED") else "ISOLATED"
+    # Isolated margin only — cross margin is removed platform-wide. The incoming
+    # marginType is ignored; ISOLATED is always applied. See DECISIONS.md
+    # "Isolated margin only (cross margin removed)".
     try:
         binance_symbol = payload.symbol.replace("-", "")
         data = await send_signed_request(
             "POST", "/fapi/v1/marginType", x_binance_api_key, x_binance_api_secret,
-            params={"symbol": binance_symbol, "marginType": margin_type},
+            params={"symbol": binance_symbol, "marginType": "ISOLATED"},
         )
         return {"success": True, "data": data}
     except httpx.HTTPStatusError as exc:
         try:
             body = exc.response.json()
             msg = body.get("msg", str(exc))
+            code = body.get("code")
         except Exception:
             msg = str(exc)
+            code = None
+        # -4046: "No need to change margin type" — symbol is already ISOLATED.
+        # This is the desired end state, so treat it as success.
+        if code == -4046:
+            return {"success": True, "data": {"code": 200, "msg": "success"}}
         raise HTTPException(status_code=400, detail=msg)
     except httpx.RequestError as exc:
         raise HTTPException(status_code=500, detail=f"Engine could not reach Binance: {exc}")
