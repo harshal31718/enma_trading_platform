@@ -63,6 +63,9 @@ export function useChangeLeverage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['trade', 'positions'] })
       queryClient.invalidateQueries({ queryKey: ['trade', 'account'] })
+      queryClient.invalidateQueries({ queryKey: ['trade', 'orders'] })
+      queryClient.invalidateQueries({ queryKey: ['trade', 'executions'] })
+      queryClient.invalidateQueries({ queryKey: ['trade', 'transactions'] })
     },
   })
 }
@@ -75,6 +78,9 @@ export function useChangeMarginType() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['trade', 'positions'] })
       queryClient.invalidateQueries({ queryKey: ['trade', 'account'] })
+      queryClient.invalidateQueries({ queryKey: ['trade', 'orders'] })
+      queryClient.invalidateQueries({ queryKey: ['trade', 'executions'] })
+      queryClient.invalidateQueries({ queryKey: ['trade', 'transactions'] })
     },
   })
 }
@@ -88,6 +94,9 @@ export function usePlaceOrder() {
       queryClient.invalidateQueries({ queryKey: ['trade', 'positions'] })
       queryClient.invalidateQueries({ queryKey: ['trade', 'open-orders'] })
       queryClient.invalidateQueries({ queryKey: ['trade', 'account'] })
+      queryClient.invalidateQueries({ queryKey: ['trade', 'orders'] })
+      queryClient.invalidateQueries({ queryKey: ['trade', 'executions'] })
+      queryClient.invalidateQueries({ queryKey: ['trade', 'transactions'] })
     },
   })
 }
@@ -101,6 +110,9 @@ export function useClosePosition() {
       queryClient.invalidateQueries({ queryKey: ['trade', 'positions'] })
       queryClient.invalidateQueries({ queryKey: ['trade', 'open-orders'] })
       queryClient.invalidateQueries({ queryKey: ['trade', 'account'] })
+      queryClient.invalidateQueries({ queryKey: ['trade', 'orders'] })
+      queryClient.invalidateQueries({ queryKey: ['trade', 'executions'] })
+      queryClient.invalidateQueries({ queryKey: ['trade', 'transactions'] })
     },
   })
 }
@@ -113,6 +125,9 @@ export function useCancelOrder() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['trade', 'open-orders'] })
       queryClient.invalidateQueries({ queryKey: ['trade', 'account'] })
+      queryClient.invalidateQueries({ queryKey: ['trade', 'orders'] })
+      queryClient.invalidateQueries({ queryKey: ['trade', 'executions'] })
+      queryClient.invalidateQueries({ queryKey: ['trade', 'transactions'] })
     },
   })
 }
@@ -128,6 +143,9 @@ export function usePlaceOCOOrder() {
       queryClient.invalidateQueries({ queryKey: ['trade', 'open-orders'] })
       queryClient.invalidateQueries({ queryKey: ['trade', 'positions'] })
       queryClient.invalidateQueries({ queryKey: ['trade', 'account'] })
+      queryClient.invalidateQueries({ queryKey: ['trade', 'orders'] })
+      queryClient.invalidateQueries({ queryKey: ['trade', 'executions'] })
+      queryClient.invalidateQueries({ queryKey: ['trade', 'transactions'] })
     },
   })
 }
@@ -143,6 +161,9 @@ export function usePlaceOrderWithTpSl() {
       queryClient.invalidateQueries({ queryKey: ['trade', 'open-orders'] })
       queryClient.invalidateQueries({ queryKey: ['trade', 'positions'] })
       queryClient.invalidateQueries({ queryKey: ['trade', 'account'] })
+      queryClient.invalidateQueries({ queryKey: ['trade', 'orders'] })
+      queryClient.invalidateQueries({ queryKey: ['trade', 'executions'] })
+      queryClient.invalidateQueries({ queryKey: ['trade', 'transactions'] })
     },
   })
 }
@@ -168,6 +189,48 @@ export function useCancelAllOrders() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['trade', 'open-orders'] })
       queryClient.invalidateQueries({ queryKey: ['trade', 'account'] })
+      queryClient.invalidateQueries({ queryKey: ['trade', 'orders'] })
+      queryClient.invalidateQueries({ queryKey: ['trade', 'executions'] })
+      queryClient.invalidateQueries({ queryKey: ['trade', 'transactions'] })
     },
+  })
+}
+
+export function useTradeOrders(symbol, options = {}) {
+  return useQuery({
+    queryKey: ['trade', 'orders', symbol],
+    queryFn: async () => {
+      const { data } = await api.get('/api/v1/trade/order/history', { params: { symbol } })
+      return data.data
+    },
+    enabled: !!symbol,
+    retry: false,
+    ...options,
+  })
+}
+
+export function useTradeExecutions(symbol, options = {}) {
+  return useQuery({
+    queryKey: ['trade', 'executions', symbol],
+    queryFn: async () => {
+      const { data } = await api.get('/api/v1/trade/executions/history', { params: { symbol } })
+      return data.data
+    },
+    enabled: !!symbol,
+    retry: false,
+    ...options,
+  })
+}
+
+export function useTradeTransactions(symbol, options = {}) {
+  return useQuery({
+    queryKey: ['trade', 'transactions', symbol],
+    queryFn: async () => {
+      const params = symbol ? { symbol } : {}
+      const { data } = await api.get('/api/v1/trade/transactions/history', { params })
+      return data.data
+    },
+    retry: false,
+    ...options,
   })
 }

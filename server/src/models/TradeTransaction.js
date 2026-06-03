@@ -1,0 +1,15 @@
+const mongoose = require('mongoose')
+
+const TradeTransactionSchema = new mongoose.Schema(
+  {
+    tranId:     { type: String, required: true, unique: true, index: true },
+    symbol:     { type: String, index: true },
+    incomeType: { type: String, required: true, index: true },
+    income:     { type: String, required: true },
+    asset:      { type: String, required: true },
+    time:       { type: Date, required: true, index: true },
+  },
+  { timestamps: false, collection: 'tradeTransactions' }
+)
+
+module.exports = mongoose.model('TradeTransaction', TradeTransactionSchema)

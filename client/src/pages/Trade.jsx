@@ -13,14 +13,15 @@ import {
   useClosePosition,
   usePlaceOCOOrder,
   useCancelAllOrders,
+  useTradeOrders,
+  useTradeExecutions,
+  useTradeTransactions,
 } from '@/hooks/useTrade'
 import useOcoMonitor from '@/hooks/useOcoMonitor'
+import { SymbolProvider, useCurrentSymbol } from '@/context/SymbolContext'
+import SymbolSearchBar from '@/components/SymbolSearchBar'
 
-const SYMBOL = 'BTC-USDT'
-const BINANCE_SYMBOL = 'BTCUSDT'
-const STREAM_PREFIX = BINANCE_SYMBOL.toLowerCase()
-
-const BOTTOM_TABS = ['Positions', 'Open Orders', 'Order History', 'Assets']
+const BOTTOM_TABS = ['Positions', 'Open Orders', 'Order History', 'Trade History', 'Transaction History', 'Assets']
 
 // ─── Formatters ──────────────────────────────────────────────────────────────
 
@@ -40,6 +41,7 @@ function fmtPct(n) {
 // ─── TickerBar ────────────────────────────────────────────────────────────────
 
 function TickerBar() {
+  const { streamPrefix, base, quote } = useCurrentSymbol()
   const [ticker, setTicker] = useState(null)
 
   const onTicker = useCallback((data) => {
@@ -53,15 +55,15 @@ function TickerBar() {
     })
   }, [])
 
-  useBinanceWS(`${STREAM_PREFIX}@ticker`, onTicker)
+  useBinanceWS(`${streamPrefix}@ticker`, onTicker)
 
   const changePct = ticker?.changePct ?? 0
   const isPositive = changePct >= 0
 
   return (
     <div className="h-12 bg-gray-900 border-b border-gray-800 flex items-center px-4 gap-6 shrink-0">
-      <div className="flex items-center gap-3 shrink-0">
-        <span className="text-gray-100 font-bold text-sm">{SYMBOL}</span>
+      <div className="flex items-center gap-2 shrink-0">
+        <SymbolSearchBar />
         <span className="text-[10px] text-gray-500 border border-gray-700 px-1.5 py-0.5 rounded">Perp</span>
       </div>
 
@@ -80,8 +82,8 @@ function TickerBar() {
         {[
           { label: '24h High', value: ticker ? fmtPrice(ticker.high) : '—' },
           { label: '24h Low', value: ticker ? fmtPrice(ticker.low) : '—' },
-          { label: '24h Vol(BTC)', value: ticker ? fmtQty(ticker.volume, 0) : '—' },
-          { label: '24h Vol(USDT)', value: ticker ? fmtQty(ticker.quoteVolume, 0) : '—' },
+          { label: `24h Vol(${base})`, value: ticker ? fmtQty(ticker.volume, 0) : '—' },
+          { label: `24h Vol(${quote})`, value: ticker ? fmtQty(ticker.quoteVolume, 0) : '—' },
         ].map(({ label, value }) => (
           <div key={label} className="flex flex-col shrink-0">
             <span className="text-gray-500 text-[10px]">{label}</span>
@@ -129,6 +131,7 @@ function fetchKlines(symbol, timeframe, series, chart, signal) {
 }
 
 function ChartContainer() {
+  const { symbol, streamPrefix } = useCurrentSymbol()
   const containerRef = useRef(null)
   const chartRef = useRef(null)
   const seriesRef = useRef(null)
@@ -185,7 +188,8 @@ function ChartContainer() {
     setLoading(true)
     fetchingRef.current = true
 
-    fetchKlines(SYMBOL, timeframe, seriesRef.current, chartRef.current, ac.signal)
+    if (seriesRef.current) seriesRef.current.setData([])
+    fetchKlines(symbol, timeframe, seriesRef.current, chartRef.current, ac.signal)
       .catch((err) => { if (err.name !== 'AbortError') setChartError(err.message) })
       .finally(() => {
         fetchingRef.current = false
@@ -196,7 +200,7 @@ function ChartContainer() {
       ac.abort()
       fetchingRef.current = false
     }
-  }, [timeframe])
+  }, [timeframe, symbol])
 
   const onKline = useCallback((data) => {
     if (fetchingRef.current) return
@@ -211,7 +215,7 @@ function ChartContainer() {
     })
   }, [])
 
-  useBinanceWS(`${STREAM_PREFIX}@kline_${timeframe}`, onKline)
+  useBinanceWS(`${streamPrefix}@kline_${timeframe}`, onKline)
 
   return (
     <div className="bg-gray-900 relative flex-1 min-h-0 overflow-hidden flex flex-col">
@@ -252,6 +256,7 @@ function ChartContainer() {
 const BOOK_ROWS = 14
 
 function OrderBook() {
+  const { streamPrefix } = useCurrentSymbol()
   const [book, setBook] = useState({ asks: [], bids: [] })
 
   const onDepth = useCallback((data) => {
@@ -269,7 +274,7 @@ function OrderBook() {
     setBook({ asks, bids })
   }, [])
 
-  useBinanceWS(`${STREAM_PREFIX}@depth20@100ms`, onDepth)
+  useBinanceWS(`${streamPrefix}@depth20@100ms`, onDepth)
 
   const maxQty = Math.max(
     ...book.asks.map((r) => r.qty),
@@ -350,6 +355,7 @@ function OrderBook() {
 const MAX_TRADES = 60
 
 function RecentTrades() {
+  const { streamPrefix } = useCurrentSymbol()
   const [trades, setTrades] = useState([])
 
   const onTrade = useCallback((data) => {
@@ -367,7 +373,7 @@ function RecentTrades() {
     })
   }, [])
 
-  useBinanceWS(`${STREAM_PREFIX}@aggTrade`, onTrade)
+  useBinanceWS(`${streamPrefix}@aggTrade`, onTrade)
 
   return (
     <div className="bg-gray-900 border-r border-gray-800 flex flex-col min-h-0" style={{ height: '240px' }}>
@@ -750,6 +756,7 @@ function extractOcoId(clientOrderId) {
 }
 
 function OpenOrdersTable({ data, isLoading, onOcoBannerEvent }) {
+  const { symbol } = useCurrentSymbol()
   const cols = ['Symbol', 'Type', 'Side', 'Price', 'Amount', 'Filled', 'Status', 'OCO Group', '']
   const { mutate: execCancel, isPending: cancelPending, variables: cancelVars } = useCancelOrder()
   const { mutate: execCancelAll, isPending: cancelAllPending } = useCancelAllOrders()
@@ -758,7 +765,7 @@ function OpenOrdersTable({ data, isLoading, onOcoBannerEvent }) {
     // Cancel both legs by cancelling all orders for the symbol — the cleanest
     // approach since Binance Futures has no group-cancel endpoint.
     execCancelAll(
-      { symbol: SYMBOL },
+      { symbol },
       {
         onSuccess: () => onOcoBannerEvent?.('OCO group cancelled.'),
         onError: () => onOcoBannerEvent?.('Failed to cancel OCO group.'),
@@ -772,7 +779,7 @@ function OpenOrdersTable({ data, isLoading, onOcoBannerEvent }) {
       <div className="flex items-center justify-end px-2 py-1 border-b border-gray-800/40">
         <button
           disabled={cancelAllPending || !data?.length}
-          onClick={() => execCancelAll({ symbol: SYMBOL }, { onSuccess: () => onOcoBannerEvent?.('All orders cancelled.') })}
+          onClick={() => execCancelAll({ symbol }, { onSuccess: () => onOcoBannerEvent?.('All orders cancelled.') })}
           className="px-3 py-1 text-[10px] rounded border border-gray-600 text-gray-400 hover:bg-gray-700/50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
           {cancelAllPending ? 'Cancelling…' : 'Cancel All'}
@@ -818,7 +825,7 @@ function OpenOrdersTable({ data, isLoading, onOcoBannerEvent }) {
                     <div className="flex items-center gap-1">
                       <button
                         disabled={isCancelling}
-                        onClick={() => execCancel({ symbol: SYMBOL, orderId: o.orderId })}
+                        onClick={() => execCancel({ symbol, orderId: o.orderId })}
                         className={[
                           'px-3 py-1 text-[10px] rounded border transition-colors',
                           isCancelling
@@ -887,12 +894,143 @@ function AssetsTable({ data, isLoading }) {
   )
 }
 
+function OrderHistoryTable({ data, isLoading }) {
+  const cols = ['Time', 'Symbol', 'Type', 'Side', 'Average', 'Price', 'Executed', 'Amount', 'Reduce Only', 'Post Only', 'Trigger Conditions', 'Status']
+  return (
+    <table className="w-full text-xs">
+      <thead>
+        <tr className="text-gray-500 border-b border-gray-800">
+          {cols.map((c) => <th key={c} className="text-left py-2 pr-6 font-medium whitespace-nowrap">{c}</th>)}
+        </tr>
+      </thead>
+      <tbody className="text-gray-400">
+        {isLoading ? (
+          <>
+            <SkeletonRow cols={cols} />
+            <SkeletonRow cols={cols} />
+          </>
+        ) : !data?.length ? (
+          <EmptyRow message="No order history" />
+        ) : (
+          data.map((o) => {
+            const side = o.side.toUpperCase()
+            const isFilled = o.status === 'FILLED'
+            const isCanceled = o.status === 'CANCELED'
+            const isNew = o.status === 'NEW'
+            return (
+              <tr key={o.orderId} className="border-b border-gray-800/30 hover:bg-gray-800/20">
+                <td className="py-2 pr-6 whitespace-nowrap text-gray-500">{new Date(o.time).toLocaleString()}</td>
+                <td className="py-2 pr-6 whitespace-nowrap text-gray-100">{o.symbol.replace('USDT', '-USDT')}</td>
+                <td className="py-2 pr-6 whitespace-nowrap">{o.type}</td>
+                <td className={`py-2 pr-6 whitespace-nowrap font-medium ${side === 'BUY' ? 'text-emerald-400' : 'text-red-400'}`}>{side}</td>
+                <td className="py-2 pr-6 whitespace-nowrap tabular-nums">{o.avgPrice && parseFloat(o.avgPrice) > 0 ? fmtPrice(o.avgPrice) : '—'}</td>
+                <td className="py-2 pr-6 whitespace-nowrap tabular-nums">{fmtPrice(o.price)}</td>
+                <td className="py-2 pr-6 whitespace-nowrap tabular-nums">{fmtQty(o.executedQty)}</td>
+                <td className="py-2 pr-6 whitespace-nowrap tabular-nums">{fmtQty(o.origQty)}</td>
+                <td className="py-2 pr-6 whitespace-nowrap">{o.reduceOnly ? 'Yes' : 'No'}</td>
+                <td className="py-2 pr-6 whitespace-nowrap">{o.postOnly ? 'Yes' : 'No'}</td>
+                <td className="py-2 pr-6 whitespace-nowrap tabular-nums">{o.stopPrice && parseFloat(o.stopPrice) > 0 ? fmtPrice(o.stopPrice) : '—'}</td>
+                <td className={`py-2 pr-6 whitespace-nowrap font-medium ${isFilled ? 'text-emerald-400' : isCanceled ? 'text-gray-500' : isNew ? 'text-yellow-400' : 'text-gray-300'}`}>{o.status}</td>
+              </tr>
+            )
+          })
+        )}
+      </tbody>
+    </table>
+  )
+}
+
+function TradeHistoryTable({ data, isLoading }) {
+  const cols = ['Order No.', 'Time', 'Symbol', 'Side', 'Price', 'Quantity', 'Fee', 'Role', 'Realized Profit']
+  return (
+    <table className="w-full text-xs">
+      <thead>
+        <tr className="text-gray-500 border-b border-gray-800">
+          {cols.map((c) => <th key={c} className="text-left py-2 pr-6 font-medium whitespace-nowrap">{c}</th>)}
+        </tr>
+      </thead>
+      <tbody className="text-gray-400">
+        {isLoading ? (
+          <>
+            <SkeletonRow cols={cols} />
+            <SkeletonRow cols={cols} />
+          </>
+        ) : !data?.length ? (
+          <EmptyRow message="No trade history" />
+        ) : (
+          data.map((t) => {
+            const side = t.side.toUpperCase()
+            const pnl = parseFloat(t.realizedPnl || '0')
+            return (
+              <tr key={t.id} className="border-b border-gray-800/30 hover:bg-gray-800/20">
+                <td className="py-2 pr-6 whitespace-nowrap text-gray-500 tabular-nums">{t.orderId}</td>
+                <td className="py-2 pr-6 whitespace-nowrap text-gray-500">{new Date(t.time).toLocaleString()}</td>
+                <td className="py-2 pr-6 whitespace-nowrap text-gray-100">{t.symbol.replace('USDT', '-USDT')}</td>
+                <td className={`py-2 pr-6 whitespace-nowrap font-medium ${side === 'BUY' ? 'text-emerald-400' : 'text-red-400'}`}>{side}</td>
+                <td className="py-2 pr-6 whitespace-nowrap tabular-nums">{fmtPrice(t.price)}</td>
+                <td className="py-2 pr-6 whitespace-nowrap tabular-nums">{fmtQty(t.qty)}</td>
+                <td className="py-2 pr-6 whitespace-nowrap text-gray-500 tabular-nums">{t.commission ? `${fmtQty(t.commission)} ${t.commissionAsset || 'USDT'}` : '—'}</td>
+                <td className="py-2 pr-6 whitespace-nowrap">{t.maker ? 'Maker' : 'Taker'}</td>
+                <td className={`py-2 pr-6 whitespace-nowrap font-medium tabular-nums ${pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {pnl >= 0 ? '+' : ''}{pnl.toFixed(4)} USDT
+                </td>
+              </tr>
+            )
+          })
+        )}
+      </tbody>
+    </table>
+  )
+}
+
+function TransactionHistoryTable({ data, isLoading }) {
+  const cols = ['Time', 'Type', 'Amount', 'Asset', 'Symbol']
+  return (
+    <table className="w-full text-xs">
+      <thead>
+        <tr className="text-gray-500 border-b border-gray-800">
+          {cols.map((c) => <th key={c} className="text-left py-2 pr-6 font-medium whitespace-nowrap">{c}</th>)}
+        </tr>
+      </thead>
+      <tbody className="text-gray-400">
+        {isLoading ? (
+          <>
+            <SkeletonRow cols={cols} />
+            <SkeletonRow cols={cols} />
+          </>
+        ) : !data?.length ? (
+          <EmptyRow message="No transaction history" />
+        ) : (
+          data.map((tx) => {
+            const income = parseFloat(tx.income || '0')
+            return (
+              <tr key={tx.tranId} className="border-b border-gray-800/30 hover:bg-gray-800/20">
+                <td className="py-2 pr-6 whitespace-nowrap text-gray-500">{new Date(tx.time).toLocaleString()}</td>
+                <td className="py-2 pr-6 whitespace-nowrap">{tx.incomeType}</td>
+                <td className={`py-2 pr-6 whitespace-nowrap font-medium tabular-nums ${income >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {income >= 0 ? '+' : ''}{parseFloat(tx.income).toFixed(4)}
+                </td>
+                <td className="py-2 pr-6 whitespace-nowrap">{tx.asset}</td>
+                <td className="py-2 pr-6 whitespace-nowrap text-gray-100">{tx.symbol ? tx.symbol.replace('USDT', '-USDT') : '—'}</td>
+              </tr>
+            )
+          })
+        )}
+      </tbody>
+    </table>
+  )
+}
+
 function BottomPanel({ ocoToast, ocoBanner, onDismissBanner }) {
   const [activeTab, setActiveTab] = useState('Positions')
 
+  const { symbol } = useCurrentSymbol()
   const { data: positions, isLoading: posLoading } = useTradePositions()
   const { data: openOrders, isLoading: ordLoading } = useTradeOpenOrders()
   const { data: account, isLoading: accLoading } = useTradeAccount()
+  const { data: ordersHistory, isLoading: ordHistoryLoading } = useTradeOrders(symbol, { refetchInterval: 4000 })
+  const { data: executions, isLoading: execLoading } = useTradeExecutions(symbol, { refetchInterval: 4000 })
+  const { data: transactions, isLoading: txLoading } = useTradeTransactions(symbol, { refetchInterval: 4000 })
 
   const [localBanner, setLocalBanner] = useState(null)
 
@@ -913,6 +1051,8 @@ function BottomPanel({ ocoToast, ocoBanner, onDismissBanner }) {
           { key: 'Positions', label: `Positions(${posCount})` },
           { key: 'Open Orders', label: `Open Orders(${ordCount})` },
           { key: 'Order History', label: 'Order History' },
+          { key: 'Trade History', label: 'Trade History' },
+          { key: 'Transaction History', label: 'Transaction History' },
           { key: 'Assets', label: 'Assets' },
         ].map(({ key, label }) => (
           <button
@@ -955,7 +1095,13 @@ function BottomPanel({ ocoToast, ocoBanner, onDismissBanner }) {
           />
         )}
         {activeTab === 'Order History' && (
-          <p className="text-center text-gray-600 text-xs mt-8">Order history coming soon</p>
+          <OrderHistoryTable data={ordersHistory} isLoading={ordHistoryLoading} />
+        )}
+        {activeTab === 'Trade History' && (
+          <TradeHistoryTable data={executions} isLoading={execLoading} />
+        )}
+        {activeTab === 'Transaction History' && (
+          <TransactionHistoryTable data={transactions} isLoading={txLoading} />
         )}
         {activeTab === 'Assets' && (
           <AssetsTable data={account} isLoading={accLoading} />
@@ -1015,21 +1161,31 @@ function LeverageModal({ current, onConfirm, onClose, isLoading }) {
 // ─── OrderForm ────────────────────────────────────────────────────────────────
 
 function OrderForm() {
+  const { symbol, streamPrefix, base, quote } = useCurrentSymbol()
   const [orderType, setOrderType] = useState('Limit')
-  const [qtyUnit, setQtyUnit] = useState('BTC')
+  const [qtyUnit, setQtyUnit] = useState(base)
   const [price, setPrice] = useState('')
   const [qty, setQty] = useState('')
   const [pct, setPct] = useState(null)
   const [showLeverageModal, setShowLeverageModal] = useState(false)
   const [formError, setFormError] = useState(null)
 
+  // Reset form fields whenever the traded symbol changes
+  useEffect(() => {
+    setQtyUnit(base)
+    setQty('')
+    setPrice('')
+    setPct(null)
+    setFormError(null)
+  }, [base])
+
   const currentPriceRef = useRef(0)
   const onTicker = useCallback((data) => {
     currentPriceRef.current = parseFloat(data.c) || 0
   }, [])
-  useBinanceWS(`${STREAM_PREFIX}@ticker`, onTicker)
+  useBinanceWS(`${streamPrefix}@ticker`, onTicker)
 
-  const { data: config, isLoading: configLoading } = useTradeSymbolConfig(SYMBOL)
+  const { data: config, isLoading: configLoading } = useTradeSymbolConfig(symbol)
   const { data: account } = useTradeAccount()
 
   const activeLeverage = config?.leverage ?? '—'
@@ -1048,14 +1204,14 @@ function OrderForm() {
 
   useEffect(() => {
     if (config?.marginType && config.marginType !== 'isolated' && !marginPending) {
-      execChangeMarginType({ symbol: SYMBOL, marginType: 'ISOLATED' })
+      execChangeMarginType({ symbol, marginType: 'ISOLATED' })
     }
-  }, [config?.marginType, marginPending, execChangeMarginType])
+  }, [config?.marginType, marginPending, execChangeMarginType, symbol])
 
   function handleLeverageConfirm(newLeverage) {
     setFormError(null)
     execChangeLeverage(
-      { symbol: SYMBOL, leverage: newLeverage },
+      { symbol, leverage: newLeverage },
       {
         onSuccess: () => setShowLeverageModal(false),
         onError: (err) => {
@@ -1095,7 +1251,7 @@ function OrderForm() {
       if (cp <= 0) { setFormError('Market price unavailable'); return }
       quantity = quantity / cp
     }
-    const payload = { symbol: SYMBOL, side, type: orderType.toUpperCase(), quantity }
+    const payload = { symbol, side, type: orderType.toUpperCase(), quantity }
     if (orderType === 'Limit') {
       const p = parseFloat(price)
       if (isNaN(p) || p <= 0) { setFormError('Enter a valid limit price'); return }
@@ -1203,7 +1359,7 @@ function OrderForm() {
                 className="flex-1 bg-gray-800 px-3 py-2 text-xs text-gray-100 placeholder-gray-600 focus:outline-none min-w-0 disabled:opacity-50 tabular-nums"
               />
               <div className="flex shrink-0 border-l border-gray-700">
-                {['BTC', 'USDT'].map((unit) => (
+                {[base, quote].map((unit) => (
                   <button
                     key={unit}
                     onClick={() => { setQtyUnit(unit); setQty(''); setPct(null) }}
@@ -1274,7 +1430,8 @@ function OrderForm() {
 
 // ─── Trade (root) ─────────────────────────────────────────────────────────────
 
-export default function Trade() {
+function TradeInner() {
+  const { symbol } = useCurrentSymbol()
   const [ocoToast, setOcoToast] = useState(null)
   const [ocoBanner, setOcoBanner] = useState(null)
   const toastTimerRef = useRef(null)
@@ -1291,7 +1448,7 @@ export default function Trade() {
   }
 
   // Monitor open orders for TP/SL fills and auto-cancel the sibling leg
-  useOcoMonitor({ symbol: SYMBOL, onEvent: handleTpSlEvent })
+  useOcoMonitor({ symbol, onEvent: handleTpSlEvent })
 
   return (
     <div className="bg-gray-950 text-gray-100 flex flex-col h-[calc(100vh-56px)] overflow-hidden mt-14">
@@ -1329,5 +1486,13 @@ export default function Trade() {
 
       </div>
     </div>
+  )
+}
+
+export default function Trade() {
+  return (
+    <SymbolProvider>
+      <TradeInner />
+    </SymbolProvider>
   )
 }

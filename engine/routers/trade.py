@@ -578,6 +578,173 @@ async def place_order_with_tp_sl(
         raise HTTPException(status_code=500, detail=f"Engine could not reach Binance: {exc}")
 
 
+def from_binance_symbol(symbol: str) -> str:
+    if not symbol:
+        return ""
+    if symbol.endswith("USDT"):
+        return f"{symbol[:-4]}-{symbol[-4:]}"
+    return symbol
+
+
+@router.get("/history-orders")
+async def get_history_orders(
+    symbol: str,
+    limit: int = 100,
+    x_binance_api_key: str = Header(..., alias="X-Binance-API-Key"),
+    x_binance_api_secret: str = Header(..., alias="X-Binance-API-Secret"),
+):
+    try:
+        binance_symbol = symbol.replace("-", "")
+        std_orders = await send_signed_request(
+            "GET", "/fapi/v1/allOrders", x_binance_api_key, x_binance_api_secret,
+            params={"symbol": binance_symbol, "limit": limit}
+        )
+
+        algo_orders = []
+        try:
+            algo_orders = await send_signed_request(
+                "GET", "/fapi/v1/historicalAlgoOrders", x_binance_api_key, x_binance_api_secret,
+                params={"symbol": binance_symbol, "limit": limit}
+            )
+        except Exception as e:
+            print(f"Failed to fetch historical algo orders: {e}")
+
+        normalized = []
+        for o in std_orders:
+            normalized.append({
+                "orderId": str(o.get("orderId")),
+                "clientOrderId": o.get("clientOrderId"),
+                "symbol": from_binance_symbol(o.get("symbol")),
+                "status": o.get("status"),
+                "price": o.get("price"),
+                "avgPrice": o.get("avgPrice"),
+                "origQty": o.get("origQty"),
+                "executedQty": o.get("executedQty"),
+                "side": o.get("side"),
+                "type": o.get("type"),
+                "timeInForce": o.get("timeInForce"),
+                "stopPrice": o.get("stopPrice"),
+                "time": o.get("time"),
+                "updateTime": o.get("updateTime"),
+                "reduceOnly": o.get("reduceOnly"),
+                "postOnly": o.get("postOnly"),
+                "isAlgo": False,
+            })
+
+        for ao in algo_orders:
+            normalized.append({
+                "orderId": str(ao.get("algoId")),
+                "clientOrderId": ao.get("clientAlgoId"),
+                "symbol": from_binance_symbol(ao.get("symbol")),
+                "status": ao.get("algoStatus"),
+                "price": "0.00",
+                "avgPrice": "0.00",
+                "origQty": ao.get("quantity"),
+                "executedQty": "0.00",
+                "side": ao.get("side"),
+                "type": ao.get("orderType"),
+                "timeInForce": "GTC",
+                "stopPrice": ao.get("triggerPrice"),
+                "time": ao.get("time"),
+                "updateTime": ao.get("updateTime"),
+                "reduceOnly": ao.get("reduceOnly"),
+                "postOnly": ao.get("postOnly"),
+                "isAlgo": True,
+            })
+
+        return {"success": True, "data": normalized}
+    except httpx.HTTPStatusError as exc:
+        try:
+            body = exc.response.json()
+            msg = body.get("msg", str(exc))
+        except Exception:
+            msg = str(exc)
+        raise HTTPException(status_code=400, detail=msg)
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=500, detail=f"Engine could not reach Binance: {exc}")
+
+
+@router.get("/history-executions")
+async def get_history_executions(
+    symbol: str,
+    limit: int = 100,
+    x_binance_api_key: str = Header(..., alias="X-Binance-API-Key"),
+    x_binance_api_secret: str = Header(..., alias="X-Binance-API-Secret"),
+):
+    try:
+        binance_symbol = symbol.replace("-", "")
+        trades = await send_signed_request(
+            "GET", "/fapi/v1/userTrades", x_binance_api_key, x_binance_api_secret,
+            params={"symbol": binance_symbol, "limit": limit}
+        )
+
+        normalized = []
+        for t in trades:
+            normalized.append({
+                "id": str(t.get("id")),
+                "orderId": str(t.get("orderId")),
+                "symbol": from_binance_symbol(t.get("symbol")),
+                "side": t.get("side"),
+                "price": t.get("price"),
+                "qty": t.get("qty"),
+                "commission": t.get("commission"),
+                "commissionAsset": t.get("commissionAsset"),
+                "time": t.get("time"),
+                "realizedPnl": t.get("realizedPnl"),
+                "maker": t.get("maker"),
+            })
+
+        return {"success": True, "data": normalized}
+    except httpx.HTTPStatusError as exc:
+        try:
+            body = exc.response.json()
+            msg = body.get("msg", str(exc))
+        except Exception:
+            msg = str(exc)
+        raise HTTPException(status_code=400, detail=msg)
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=500, detail=f"Engine could not reach Binance: {exc}")
+
+
+@router.get("/history-transactions")
+async def get_history_transactions(
+    symbol: str = None,
+    limit: int = 100,
+    x_binance_api_key: str = Header(..., alias="X-Binance-API-Key"),
+    x_binance_api_secret: str = Header(..., alias="X-Binance-API-Secret"),
+):
+    try:
+        params = {"limit": limit}
+        if symbol:
+            params["symbol"] = symbol.replace("-", "")
+        income = await send_signed_request(
+            "GET", "/fapi/v1/income", x_binance_api_key, x_binance_api_secret,
+            params=params
+        )
+
+        normalized = []
+        for i in income:
+            normalized.append({
+                "tranId": str(i.get("tranId")),
+                "symbol": from_binance_symbol(i.get("symbol")) if i.get("symbol") else "",
+                "incomeType": i.get("incomeType"),
+                "income": i.get("income"),
+                "asset": i.get("asset"),
+                "time": i.get("time"),
+            })
+
+        return {"success": True, "data": normalized}
+    except httpx.HTTPStatusError as exc:
+        try:
+            body = exc.response.json()
+            msg = body.get("msg", str(exc))
+        except Exception:
+            msg = str(exc)
+        raise HTTPException(status_code=400, detail=msg)
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=500, detail=f"Engine could not reach Binance: {exc}")
+
+
 @router.post("/margin-type")
 async def set_margin_type(
     payload: MarginTypeRequest,
