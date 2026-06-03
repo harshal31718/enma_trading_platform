@@ -20,6 +20,7 @@ from routers.backtest import router as backtest_router
 from routers.candles import router as candles_router
 from routers.dashboard import router as dashboard_router
 from routers.strategies import router as strategies_router
+from routers.trade import router as trade_router
 from services.strategy_seeder import seed_strategies
 
 load_dotenv()
@@ -101,6 +102,7 @@ app.include_router(candles_router, prefix="/candles", tags=["candles"])
 app.include_router(strategies_router, prefix="/strategies", tags=["strategies"])
 app.include_router(backtest_router, prefix="/backtest", tags=["backtest"])
 app.include_router(dashboard_router, prefix="/dashboard", tags=["dashboard"])
+app.include_router(trade_router, prefix="/trade", tags=["trade"])
 
 
 @app.get("/health")

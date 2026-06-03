@@ -11,7 +11,7 @@ const navItems = [
   { label: 'Dashboard', icon: LayoutDashboard, to: '/' },
   { label: 'Strategies', icon: Code2, to: '/strategies' },
   { label: 'Backtest', icon: FlaskConical, to: '/backtest' },
-  { label: 'Live Trading', icon: Activity, to: '/live' },
+  { label: 'Trade', icon: Activity, to: '/trade' },
   { label: 'Settings', icon: Settings, to: '/settings' },
 ]
 

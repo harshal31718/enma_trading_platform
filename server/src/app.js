@@ -9,6 +9,7 @@ const candleRoutes = require('./routes/candle.routes')
 const dashboardRoutes = require('./routes/dashboard.routes')
 const strategyRoutes = require('./routes/strategy.routes')
 const backtestRoutes = require('./routes/backtest.routes')
+const tradeRoutes = require('./routes/trade.routes')
 const errorHandler = require('./middleware/errorHandler')
 
 const app = express()
@@ -49,6 +50,7 @@ app.use('/api/v1/strategies', strategyRoutes)
 app.use('/api/v1/candles', candleRoutes)
 app.use('/api/v1/backtest', backtestRoutes)
 app.use('/api/v1/dashboard', dashboardRoutes)
+app.use('/api/v1/trade', tradeRoutes)
 
 app.use(errorHandler)
 

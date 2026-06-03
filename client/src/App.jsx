@@ -4,9 +4,9 @@ import queryClient from '@/lib/queryClient'
 import Navbar from '@/components/layout/Navbar'
 import Dashboard from '@/pages/Dashboard'
 import Backtest from '@/pages/Backtest'
-import LiveTrading from '@/pages/LiveTrading'
 import Strategies from '@/pages/Strategies'
 import Settings from '@/pages/Settings'
+import Trade from '@/pages/Trade'
 
 export default function App() {
   return (
@@ -17,9 +17,9 @@ export default function App() {
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/backtest" element={<Backtest />} />
-            <Route path="/live" element={<LiveTrading />} />
             <Route path="/strategies" element={<Strategies />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="/trade" element={<Trade />} />
           </Routes>
         </BrowserRouter>
       </QueryClientProvider>
