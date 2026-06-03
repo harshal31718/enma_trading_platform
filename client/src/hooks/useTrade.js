@@ -116,3 +116,58 @@ export function useCancelOrder() {
     },
   })
 }
+
+export function usePlaceOCOOrder() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ symbol, side, quantity, stopPrice, takeProfitPrice }) =>
+      api
+        .post('/api/v1/trade/order/oco_futures', { symbol, side, quantity, stopPrice, takeProfitPrice })
+        .then((r) => r.data.data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['trade', 'open-orders'] })
+      queryClient.invalidateQueries({ queryKey: ['trade', 'positions'] })
+      queryClient.invalidateQueries({ queryKey: ['trade', 'account'] })
+    },
+  })
+}
+
+export function usePlaceOrderWithTpSl() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ symbol, side, type, quantity, price, stopLoss, takeProfit }) =>
+      api
+        .post('/api/v1/trade/order/with_tp_sl', { symbol, side, type, quantity, price, stopLoss, takeProfit })
+        .then((r) => r.data.data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['trade', 'open-orders'] })
+      queryClient.invalidateQueries({ queryKey: ['trade', 'positions'] })
+      queryClient.invalidateQueries({ queryKey: ['trade', 'account'] })
+    },
+  })
+}
+
+export function useTradeOrderStatus(symbol, orderId, options = {}) {
+  return useQuery({
+    queryKey: ['trade', 'order', symbol, orderId],
+    queryFn: async () => {
+      const { data } = await api.get('/api/v1/trade/order', { params: { symbol, orderId } })
+      return data.data
+    },
+    enabled: !!symbol && !!orderId,
+    retry: false,
+    ...options,
+  })
+}
+
+export function useCancelAllOrders() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ symbol }) =>
+      api.delete('/api/v1/trade/all-orders', { params: { symbol } }).then((r) => r.data.data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['trade', 'open-orders'] })
+      queryClient.invalidateQueries({ queryKey: ['trade', 'account'] })
+    },
+  })
+}

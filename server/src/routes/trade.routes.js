@@ -13,6 +13,10 @@ const {
   closePosition,
   cancelOrder,
   getKlines,
+  placeOCOOrder,
+  placeOrderWithTpSl,
+  getOrderStatus,
+  cancelAllOrders,
 } = require('../controllers/trade.controller')
 
 router.get('/settings/keys', getSettingsKeys)
@@ -26,9 +30,14 @@ router.get('/open-orders', getOpenOrders)
 router.post('/leverage', changeLeverage)
 router.post('/margin-type', changeMarginType)
 
+// Specific /order sub-paths must be registered before the generic /order route
+router.post('/order/oco_futures', placeOCOOrder)
+router.post('/order/with_tp_sl', placeOrderWithTpSl)
 router.post('/order', placeOrder)
 router.post('/order/close', closePosition)
+router.get('/order', getOrderStatus)
 router.delete('/order', cancelOrder)
+router.delete('/all-orders', cancelAllOrders)
 
 router.get('/klines', getKlines)
 

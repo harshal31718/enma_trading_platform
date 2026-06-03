@@ -261,6 +261,103 @@ async function cancelOrder(req, res, next) {
   }
 }
 
+async function placeOCOOrder(req, res, next) {
+  try {
+    const { symbol, side, quantity, stopPrice, takeProfitPrice } = req.body
+    if (!symbol || !side || quantity == null) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'symbol, side, and quantity are required')
+    }
+    if (stopPrice == null && takeProfitPrice == null) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'At least one of stopPrice or takeProfitPrice is required')
+    }
+    if (!['BUY', 'SELL'].includes(side.toUpperCase())) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'side must be BUY or SELL')
+    }
+    if (typeof quantity !== 'number' || quantity <= 0) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'quantity must be a positive number')
+    }
+    const credHeaders = await loadCredentialHeaders()
+    const { data } = await engineClient.post(
+      '/trade/order/oco_futures',
+      { symbol, side: side.toUpperCase(), quantity, stopPrice, takeProfitPrice },
+      { headers: credHeaders }
+    )
+    res.json(ApiResponse.success(data.data))
+  } catch (err) {
+    if (err instanceof ApiError) return next(err)
+    const detail = err.response?.data?.detail
+    const message = typeof detail === 'string' ? detail : detail?.message || 'Failed to place OCO order'
+    next(new ApiError(err.response?.status || 500, 'ENGINE_ERROR', message))
+  }
+}
+
+async function placeOrderWithTpSl(req, res, next) {
+  try {
+    const { symbol, side, type, quantity, price, stopLoss, takeProfit } = req.body
+    if (!symbol || !side || !type || quantity == null) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'symbol, side, type, and quantity are required')
+    }
+    if (!['BUY', 'SELL'].includes(side.toUpperCase())) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'side must be BUY or SELL')
+    }
+    if (typeof quantity !== 'number' || quantity <= 0) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'quantity must be a positive number')
+    }
+    const credHeaders = await loadCredentialHeaders()
+    const { data } = await engineClient.post(
+      '/trade/order/with_tp_sl',
+      { symbol, side: side.toUpperCase(), type: type.toUpperCase(), quantity, price, stopLoss, takeProfit },
+      { headers: credHeaders }
+    )
+    res.json(ApiResponse.success(data.data))
+  } catch (err) {
+    if (err instanceof ApiError) return next(err)
+    const detail = err.response?.data?.detail
+    const message = typeof detail === 'string' ? detail : detail?.message || 'Failed to place order with TP/SL'
+    next(new ApiError(err.response?.status || 500, 'ENGINE_ERROR', message))
+  }
+}
+
+async function getOrderStatus(req, res, next) {
+  try {
+    const { symbol, orderId } = req.query
+    if (!symbol || !orderId) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'symbol and orderId are required')
+    }
+    const credHeaders = await loadCredentialHeaders()
+    const { data } = await engineClient.get('/trade/order', {
+      headers: credHeaders,
+      params: { symbol, orderId },
+    })
+    res.json(ApiResponse.success(data.data))
+  } catch (err) {
+    if (err instanceof ApiError) return next(err)
+    const detail = err.response?.data?.detail
+    const message = typeof detail === 'string' ? detail : detail?.message || 'Failed to fetch order status'
+    next(new ApiError(err.response?.status || 500, 'ENGINE_ERROR', message))
+  }
+}
+
+async function cancelAllOrders(req, res, next) {
+  try {
+    const { symbol } = req.query
+    if (!symbol) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'symbol is required')
+    }
+    const credHeaders = await loadCredentialHeaders()
+    const { data } = await engineClient.delete('/trade/all-orders', {
+      headers: credHeaders,
+      params: { symbol },
+    })
+    res.json(ApiResponse.success(data.data))
+  } catch (err) {
+    if (err instanceof ApiError) return next(err)
+    const detail = err.response?.data?.detail
+    const message = typeof detail === 'string' ? detail : detail?.message || 'Failed to cancel all orders'
+    next(new ApiError(err.response?.status || 500, 'ENGINE_ERROR', message))
+  }
+}
+
 module.exports = {
   getSettingsKeys,
   saveSettingsKeys,
@@ -274,4 +371,8 @@ module.exports = {
   closePosition,
   cancelOrder,
   getKlines,
+  placeOCOOrder,
+  placeOrderWithTpSl,
+  getOrderStatus,
+  cancelAllOrders,
 }

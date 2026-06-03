@@ -11,4 +11,5 @@ TA-Lib
 pandas
 numpy
 ccxt
-httpx
+pytest
+pytest-asyncio

@@ -11,7 +11,10 @@ import {
   usePlaceOrder,
   useCancelOrder,
   useClosePosition,
+  usePlaceOCOOrder,
+  useCancelAllOrders,
 } from '@/hooks/useTrade'
+import useOcoMonitor from '@/hooks/useOcoMonitor'
 
 const SYMBOL = 'BTC-USDT'
 const BINANCE_SYMBOL = 'BTCUSDT'
@@ -376,7 +379,7 @@ function RecentTrades() {
         <span className="text-[10px] text-gray-600">Amount (BTC)</span>
         <span className="text-[10px] text-gray-600">Time</span>
       </div>
-      <div className="flex-1 overflow-y-auto overflow-x-hidden min-h-0">
+      <div className="flex-1 overflow-hidden min-h-0">
         {trades.length === 0 ? (
           <div className="flex flex-col gap-1 p-2">
             {Array.from({ length: 10 }).map((_, i) => (
@@ -426,9 +429,214 @@ function EmptyRow({ message }) {
   )
 }
 
+// ─── TpSlModal ────────────────────────────────────────────────────────────────
+
+function TpSlModal({ position, onClose }) {
+  const [tpEnabled, setTpEnabled] = useState(false)
+  const [slEnabled, setSlEnabled] = useState(false)
+  const [tpPrice, setTpPrice] = useState('')
+  const [slPrice, setSlPrice] = useState('')
+  const [submitError, setSubmitError] = useState(null)
+
+  const posSize = parseFloat(position.positionAmt)
+  const isLong = posSize > 0
+  const quantity = Math.abs(posSize)
+  const markPrice = parseFloat(position.markPrice)
+  const entryPrice = parseFloat(position.entryPrice)
+  const entrySide = isLong ? 'BUY' : 'SELL'
+  const displaySymbol = position.symbol.replace('USDT', '-USDT')
+
+  const { mutate: execPlaceOCO, isPending } = usePlaceOCOOrder()
+
+  // Per-field inline validation (derived, no state needed)
+  const tpError = (() => {
+    if (!tpEnabled || !tpPrice) return null
+    const v = parseFloat(tpPrice)
+    if (isNaN(v) || v <= 0) return 'Enter a valid price'
+    if (isLong && v <= markPrice) return 'Trigger price should be higher than mark price'
+    if (!isLong && v >= markPrice) return 'Trigger price should be lower than mark price'
+    return null
+  })()
+
+  const slError = (() => {
+    if (!slEnabled || !slPrice) return null
+    const v = parseFloat(slPrice)
+    if (isNaN(v) || v <= 0) return 'Enter a valid price'
+    if (isLong && v >= markPrice) return 'Trigger price should be lower than mark price'
+    if (!isLong && v <= markPrice) return 'Trigger price should be higher than mark price'
+    return null
+  })()
+
+  const canConfirm =
+    !isPending &&
+    (tpEnabled || slEnabled) &&
+    (!tpEnabled || (tpPrice !== '' && !tpError)) &&
+    (!slEnabled || (slPrice !== '' && !slError))
+
+  function handleConfirm() {
+    setSubmitError(null)
+    execPlaceOCO(
+      {
+        symbol: displaySymbol,
+        side: entrySide,
+        quantity,
+        stopPrice: slEnabled ? parseFloat(slPrice) : undefined,
+        takeProfitPrice: tpEnabled ? parseFloat(tpPrice) : undefined,
+      },
+      {
+        onSuccess: onClose,
+        onError: (err) => {
+          const detail =
+            err.response?.data?.error?.message ||
+            err.response?.data?.message ||
+            err.response?.data?.detail ||
+            err.message
+          setSubmitError(typeof detail === 'string' ? detail : 'Failed to place TP/SL')
+        },
+      }
+    )
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
+      <div
+        className="bg-gray-900 border border-gray-700 rounded-xl w-80 flex flex-col shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
+          <span className="text-sm font-semibold text-gray-100">Take Profit / Stop Loss</span>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 transition-colors text-base leading-none">✕</button>
+        </div>
+
+        {/* Direction indicator (read-only, matches position) */}
+        <div className="flex mx-4 mt-3 rounded-lg overflow-hidden text-xs font-semibold">
+          <div className={`flex-1 py-2 text-center rounded-l-lg ${isLong ? 'bg-emerald-600 text-white' : 'bg-gray-800 text-gray-500'}`}>
+            Buy / Long
+          </div>
+          <div className={`flex-1 py-2 text-center rounded-r-lg ${!isLong ? 'bg-red-600 text-white' : 'bg-gray-800 text-gray-500'}`}>
+            Sell / Short
+          </div>
+        </div>
+
+        <div className="flex flex-col px-4 pt-3 pb-1">
+          <div className="text-[10px] text-gray-600 mb-2 tabular-nums">
+            Mark: {fmtPrice(markPrice)} · Entry: {fmtPrice(entryPrice)} · Qty: {quantity.toFixed(4)} BTC
+          </div>
+
+          {/* Take Profit section */}
+          <div className="flex flex-col gap-2 py-3 border-b border-gray-800">
+            <label
+              className="flex items-center gap-2.5 cursor-pointer select-none"
+              onClick={() => { setTpEnabled((v) => !v); setTpPrice('') }}
+            >
+              <div className={[
+                'w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 transition-colors',
+                tpEnabled ? 'bg-emerald-500 border-emerald-500' : 'border-gray-600 bg-transparent',
+              ].join(' ')}>
+                {tpEnabled && <span className="text-white text-[9px] font-bold leading-none">✓</span>}
+              </div>
+              <span className="text-sm text-gray-200 font-medium">Take Profit</span>
+            </label>
+
+            {tpEnabled && (
+              <>
+                <input
+                  type="number"
+                  value={tpPrice}
+                  onChange={(e) => setTpPrice(e.target.value)}
+                  placeholder="Trigger Price"
+                  autoFocus
+                  disabled={isPending}
+                  className={[
+                    'w-full bg-gray-800 border rounded-lg px-3 py-2 text-sm text-gray-100 placeholder-gray-600',
+                    'focus:outline-none tabular-nums transition-colors disabled:opacity-50',
+                    tpError ? 'border-red-500 focus:border-red-500' : 'border-gray-700 focus:border-gray-500',
+                  ].join(' ')}
+                />
+                {tpError && <span className="text-[11px] text-red-400">{tpError}</span>}
+                {!tpError && tpPrice && (
+                  <span className="text-[10px] text-gray-500">
+                    When Mark Price reaches <span className="text-gray-300 tabular-nums">{fmtPrice(tpPrice)} USDT</span>, a Market order will be triggered to close the position.
+                  </span>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* Stop Loss section */}
+          <div className="flex flex-col gap-2 py-3">
+            <label
+              className="flex items-center gap-2.5 cursor-pointer select-none"
+              onClick={() => { setSlEnabled((v) => !v); setSlPrice('') }}
+            >
+              <div className={[
+                'w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 transition-colors',
+                slEnabled ? 'bg-emerald-500 border-emerald-500' : 'border-gray-600 bg-transparent',
+              ].join(' ')}>
+                {slEnabled && <span className="text-white text-[9px] font-bold leading-none">✓</span>}
+              </div>
+              <span className="text-sm text-gray-200 font-medium">Stop Loss</span>
+            </label>
+
+            {slEnabled && (
+              <>
+                <input
+                  type="number"
+                  value={slPrice}
+                  onChange={(e) => setSlPrice(e.target.value)}
+                  placeholder="Trigger Price"
+                  disabled={isPending}
+                  className={[
+                    'w-full bg-gray-800 border rounded-lg px-3 py-2 text-sm text-gray-100 placeholder-gray-600',
+                    'focus:outline-none tabular-nums transition-colors disabled:opacity-50',
+                    slError ? 'border-red-500 focus:border-red-500' : 'border-gray-700 focus:border-gray-500',
+                  ].join(' ')}
+                />
+                {slError && <span className="text-[11px] text-red-400">{slError}</span>}
+                {!slError && slPrice && (
+                  <span className="text-[10px] text-gray-500">
+                    When Mark Price reaches <span className="text-gray-300 tabular-nums">{fmtPrice(slPrice)} USDT</span>, a Market order will be triggered to close the position.
+                  </span>
+                )}
+              </>
+            )}
+          </div>
+
+          {submitError && (
+            <div className="mb-2 text-[11px] text-red-400 bg-red-950/20 border border-red-800/30 rounded-lg px-3 py-2">
+              {submitError}
+            </div>
+          )}
+        </div>
+
+        {/* Confirm button */}
+        <div className="px-4 pb-4">
+          <button
+            onClick={handleConfirm}
+            disabled={!canConfirm}
+            className={[
+              'w-full py-3 rounded-lg text-sm font-semibold transition-colors',
+              canConfirm
+                ? 'bg-yellow-500 hover:bg-yellow-400 text-gray-950 cursor-pointer'
+                : 'bg-gray-800 text-gray-600 cursor-not-allowed',
+            ].join(' ')}
+          >
+            {isPending ? 'Confirming…' : 'Confirm'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── PositionsTable ───────────────────────────────────────────────────────────
+
 function PositionsTable({ data, isLoading }) {
   const cols = ['Symbol', 'Size', 'Entry Price', 'Mark Price', 'Liq Price', 'Margin Ratio', 'Unrealized PnL', '']
   const [closeError, setCloseError] = useState(null)
+  const [tpslPosition, setTpslPosition] = useState(null) // position object for modal
+
   const { mutate: execClose, isPending: closePending, variables: closeVars } = useClosePosition()
 
   function handleClose(symbol) {
@@ -449,129 +657,195 @@ function PositionsTable({ data, isLoading }) {
   }
 
   return (
-    <table className="w-full text-xs">
-      <thead>
-        <tr className="text-gray-500 border-b border-gray-800">
-          {cols.map((c) => <th key={c} className="text-left py-2 pr-6 font-medium whitespace-nowrap">{c}</th>)}
-        </tr>
-      </thead>
-      <tbody className="text-gray-400">
-        {isLoading ? (
-          <>
-            <SkeletonRow cols={cols} />
-            <SkeletonRow cols={cols} />
-          </>
-        ) : !data?.length ? (
-          <EmptyRow message="No open positions" />
-        ) : (
-          <>
-            {closeError && (
-              <tr>
-                <td colSpan={cols.length} className="py-1">
-                  <div className="bg-red-950/20 border border-red-800/40 rounded px-3 py-1.5 text-[10px] text-red-400">
-                    {closeError}
-                  </div>
-                </td>
-              </tr>
-            )}
-            {data.map((p) => {
-              const size = parseFloat(p.positionAmt)
-              const side = size > 0 ? 'Long' : 'Short'
-              const pnl = parseFloat(p.unRealizedProfit)
-              const isPnlPos = pnl >= 0
-              const isClosing = closePending && closeVars?.symbol === p.symbol
-              const marginRatio = p.marginRatio ? (parseFloat(p.marginRatio) * 100).toFixed(2) + '%' : '—'
-              return (
-                <tr key={p.symbol} className="border-b border-gray-800/30 hover:bg-gray-800/20">
-                  <td className="py-2 pr-6 whitespace-nowrap">
-                    <div className="flex items-center gap-2">
-                      <span className="text-gray-100">{p.symbol.replace('USDT', '-USDT')}</span>
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${side === 'Long' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>{side}</span>
+    <>
+      {tpslPosition && (
+        <TpSlModal position={tpslPosition} onClose={() => setTpslPosition(null)} />
+      )}
+
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="text-gray-500 border-b border-gray-800">
+            {cols.map((c) => <th key={c} className="text-left py-2 pr-6 font-medium whitespace-nowrap">{c}</th>)}
+          </tr>
+        </thead>
+        <tbody className="text-gray-400">
+          {isLoading ? (
+            <>
+              <SkeletonRow cols={cols} />
+              <SkeletonRow cols={cols} />
+            </>
+          ) : !data?.length ? (
+            <EmptyRow message="No open positions" />
+          ) : (
+            <>
+              {closeError && (
+                <tr>
+                  <td colSpan={cols.length} className="py-1">
+                    <div className="bg-red-950/20 border border-red-800/40 rounded px-3 py-1.5 text-[10px] text-red-400">
+                      {closeError}
                     </div>
                   </td>
-                  <td className="py-2 pr-6 tabular-nums">{Math.abs(size).toFixed(4)}</td>
-                  <td className="py-2 pr-6 tabular-nums">{fmtPrice(p.entryPrice)}</td>
-                  <td className="py-2 pr-6 tabular-nums">{fmtPrice(p.markPrice)}</td>
-                  <td className="py-2 pr-6 tabular-nums">{fmtPrice(p.liquidationPrice)}</td>
-                  <td className="py-2 pr-6 tabular-nums">{marginRatio}</td>
-                  <td className={`py-2 pr-6 tabular-nums font-medium ${isPnlPos ? 'text-emerald-400' : 'text-red-400'}`}>
-                    {isPnlPos ? '+' : ''}{pnl.toFixed(4)} USDT
-                  </td>
-                  <td className="py-2">
-                    <button
-                      disabled={isClosing}
-                      onClick={() => handleClose(p.symbol)}
-                      className={[
-                        'px-3 py-1 text-[10px] rounded border transition-colors whitespace-nowrap',
-                        isClosing
-                          ? 'border-gray-700 text-gray-600 cursor-not-allowed'
-                          : 'border-gray-600 text-gray-300 hover:bg-gray-700/50 cursor-pointer',
-                      ].join(' ')}
-                    >
-                      {isClosing ? 'Closing…' : 'Close Position'}
-                    </button>
-                  </td>
                 </tr>
-              )
-            })}
-          </>
-        )}
-      </tbody>
-    </table>
+              )}
+              {data.map((p) => {
+                const size = parseFloat(p.positionAmt)
+                const side = size > 0 ? 'Long' : 'Short'
+                const pnl = parseFloat(p.unRealizedProfit)
+                const isPnlPos = pnl >= 0
+                const isClosing = closePending && closeVars?.symbol === p.symbol
+                const marginRatio = p.marginRatio ? (parseFloat(p.marginRatio) * 100).toFixed(2) + '%' : '—'
+                return (
+                  <tr key={p.symbol} className="border-b border-gray-800/30 hover:bg-gray-800/20">
+                    <td className="py-2 pr-6 whitespace-nowrap">
+                      <div className="flex items-center gap-2">
+                        <span className="text-gray-100">{p.symbol.replace('USDT', '-USDT')}</span>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${side === 'Long' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>{side}</span>
+                      </div>
+                    </td>
+                    <td className="py-2 pr-6 tabular-nums">{Math.abs(size).toFixed(4)}</td>
+                    <td className="py-2 pr-6 tabular-nums">{fmtPrice(p.entryPrice)}</td>
+                    <td className="py-2 pr-6 tabular-nums">{fmtPrice(p.markPrice)}</td>
+                    <td className="py-2 pr-6 tabular-nums">{fmtPrice(p.liquidationPrice)}</td>
+                    <td className="py-2 pr-6 tabular-nums">{marginRatio}</td>
+                    <td className={`py-2 pr-6 tabular-nums font-medium ${isPnlPos ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {isPnlPos ? '+' : ''}{pnl.toFixed(4)} USDT
+                    </td>
+                    <td className="py-2">
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          disabled={isClosing}
+                          onClick={() => handleClose(p.symbol)}
+                          className={[
+                            'px-3 py-1 text-[10px] rounded border transition-colors whitespace-nowrap',
+                            isClosing
+                              ? 'border-gray-700 text-gray-600 cursor-not-allowed'
+                              : 'border-gray-600 text-gray-300 hover:bg-gray-700/50 cursor-pointer',
+                          ].join(' ')}
+                        >
+                          {isClosing ? 'Closing…' : 'Close Position'}
+                        </button>
+                        <button
+                          onClick={() => setTpslPosition(p)}
+                          className="px-3 py-1 text-[10px] rounded border border-gray-600 text-gray-400 hover:bg-gray-700/50 hover:border-yellow-600/40 hover:text-yellow-400 transition-colors whitespace-nowrap cursor-pointer"
+                        >
+                          TP/SL
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </>
+          )}
+        </tbody>
+      </table>
+    </>
   )
 }
 
-function OpenOrdersTable({ data, isLoading }) {
-  const cols = ['Symbol', 'Type', 'Side', 'Price', 'Amount', 'Filled', 'Status', '']
+function extractOcoId(clientOrderId) {
+  if (!clientOrderId) return null
+  const m = clientOrderId.match(/^((oco|tpsl)_[0-9a-f]{8}_)(?:sl|tp)$/)
+  return m ? m[1] : null
+}
+
+function OpenOrdersTable({ data, isLoading, onOcoBannerEvent }) {
+  const cols = ['Symbol', 'Type', 'Side', 'Price', 'Amount', 'Filled', 'Status', 'OCO Group', '']
   const { mutate: execCancel, isPending: cancelPending, variables: cancelVars } = useCancelOrder()
+  const { mutate: execCancelAll, isPending: cancelAllPending } = useCancelAllOrders()
+
+  function handleCancelOco(ocoId) {
+    // Cancel both legs by cancelling all orders for the symbol — the cleanest
+    // approach since Binance Futures has no group-cancel endpoint.
+    execCancelAll(
+      { symbol: SYMBOL },
+      {
+        onSuccess: () => onOcoBannerEvent?.('OCO group cancelled.'),
+        onError: () => onOcoBannerEvent?.('Failed to cancel OCO group.'),
+      }
+    )
+  }
 
   return (
-    <table className="w-full text-xs">
-      <thead>
-        <tr className="text-gray-500 border-b border-gray-800">
-          {cols.map((c) => <th key={c} className="text-left py-2 pr-6 font-medium whitespace-nowrap">{c}</th>)}
-        </tr>
-      </thead>
-      <tbody className="text-gray-400">
-        {isLoading ? (
-          <>
-            <SkeletonRow cols={cols} />
-            <SkeletonRow cols={cols} />
-          </>
-        ) : !data?.length ? (
-          <EmptyRow message="No open orders" />
-        ) : (
-          data.map((o) => {
-            const isCancelling = cancelPending && cancelVars?.orderId === o.orderId
-            return (
-              <tr key={o.orderId} className="border-b border-gray-800/30 hover:bg-gray-800/20">
-                <td className="py-2 pr-6 text-gray-100 whitespace-nowrap">{o.symbol.replace('USDT', '-USDT')}</td>
-                <td className="py-2 pr-6">{o.type}</td>
-                <td className={`py-2 pr-6 font-medium ${o.side === 'BUY' ? 'text-emerald-400' : 'text-red-400'}`}>{o.side}</td>
-                <td className="py-2 pr-6 tabular-nums">{fmtPrice(o.price)}</td>
-                <td className="py-2 pr-6 tabular-nums">{fmtQty(o.origQty)}</td>
-                <td className="py-2 pr-6 tabular-nums">{fmtQty(o.executedQty)}</td>
-                <td className="py-2 pr-6">{o.status}</td>
-                <td className="py-2">
-                  <button
-                    disabled={isCancelling}
-                    onClick={() => execCancel({ symbol: SYMBOL, orderId: o.orderId })}
-                    className={[
-                      'px-3 py-1 text-[10px] rounded border transition-colors',
-                      isCancelling
-                        ? 'border-gray-700 text-gray-600 cursor-not-allowed'
-                        : 'border-gray-600 text-gray-400 hover:bg-gray-700/50 cursor-pointer',
-                    ].join(' ')}
-                  >
-                    {isCancelling ? 'Cancelling…' : 'Cancel'}
-                  </button>
-                </td>
-              </tr>
-            )
-          })
-        )}
-      </tbody>
-    </table>
+    <div className="w-full">
+      {/* Cancel All button in table header */}
+      <div className="flex items-center justify-end px-2 py-1 border-b border-gray-800/40">
+        <button
+          disabled={cancelAllPending || !data?.length}
+          onClick={() => execCancelAll({ symbol: SYMBOL }, { onSuccess: () => onOcoBannerEvent?.('All orders cancelled.') })}
+          className="px-3 py-1 text-[10px] rounded border border-gray-600 text-gray-400 hover:bg-gray-700/50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          {cancelAllPending ? 'Cancelling…' : 'Cancel All'}
+        </button>
+      </div>
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="text-gray-500 border-b border-gray-800">
+            {cols.map((c) => <th key={c} className="text-left py-2 pr-6 font-medium whitespace-nowrap">{c}</th>)}
+          </tr>
+        </thead>
+        <tbody className="text-gray-400">
+          {isLoading ? (
+            <>
+              <SkeletonRow cols={cols} />
+              <SkeletonRow cols={cols} />
+            </>
+          ) : !data?.length ? (
+            <EmptyRow message="No open orders" />
+          ) : (
+            data.map((o) => {
+              const isCancelling = cancelPending && cancelVars?.orderId === o.orderId
+              const ocoId = extractOcoId(o.clientOrderId)
+              return (
+                <tr key={o.orderId} className="border-b border-gray-800/30 hover:bg-gray-800/20">
+                  <td className="py-2 pr-6 text-gray-100 whitespace-nowrap">{o.symbol.replace('USDT', '-USDT')}</td>
+                  <td className="py-2 pr-6">{o.type}</td>
+                  <td className={`py-2 pr-6 font-medium ${o.side === 'BUY' ? 'text-emerald-400' : 'text-red-400'}`}>{o.side}</td>
+                  <td className="py-2 pr-6 tabular-nums">{fmtPrice(o.price)}</td>
+                  <td className="py-2 pr-6 tabular-nums">{fmtQty(o.origQty)}</td>
+                  <td className="py-2 pr-6 tabular-nums">{fmtQty(o.executedQty)}</td>
+                  <td className="py-2 pr-6">{o.status}</td>
+                  <td className="py-2 pr-6">
+                    {ocoId ? (
+                      <span className="text-[10px] font-mono text-yellow-400 bg-yellow-400/10 px-1.5 py-0.5 rounded">
+                        {ocoId}
+                      </span>
+                    ) : (
+                      <span className="text-gray-700">—</span>
+                    )}
+                  </td>
+                  <td className="py-2">
+                    <div className="flex items-center gap-1">
+                      <button
+                        disabled={isCancelling}
+                        onClick={() => execCancel({ symbol: SYMBOL, orderId: o.orderId })}
+                        className={[
+                          'px-3 py-1 text-[10px] rounded border transition-colors',
+                          isCancelling
+                            ? 'border-gray-700 text-gray-600 cursor-not-allowed'
+                            : 'border-gray-600 text-gray-400 hover:bg-gray-700/50 cursor-pointer',
+                        ].join(' ')}
+                      >
+                        {isCancelling ? 'Cancelling…' : 'Cancel'}
+                      </button>
+                      {ocoId && (
+                        <button
+                          disabled={cancelAllPending}
+                          onClick={() => handleCancelOco(ocoId)}
+                          className="px-3 py-1 text-[10px] rounded border border-yellow-600/40 text-yellow-400 hover:bg-yellow-500/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                        >
+                          Cancel OCO
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              )
+            })
+          )}
+        </tbody>
+      </table>
+    </div>
   )
 }
 
@@ -613,15 +887,24 @@ function AssetsTable({ data, isLoading }) {
   )
 }
 
-function BottomPanel() {
+function BottomPanel({ ocoToast, ocoBanner, onDismissBanner }) {
   const [activeTab, setActiveTab] = useState('Positions')
 
   const { data: positions, isLoading: posLoading } = useTradePositions()
   const { data: openOrders, isLoading: ordLoading } = useTradeOpenOrders()
   const { data: account, isLoading: accLoading } = useTradeAccount()
 
+  const [localBanner, setLocalBanner] = useState(null)
+
   const posCount = positions?.length ?? 0
   const ordCount = openOrders?.length ?? 0
+
+  const activeBanner = ocoBanner || localBanner
+
+  function handleOcoBannerEvent(msg) {
+    setLocalBanner(msg)
+    setTimeout(() => setLocalBanner(null), 8000)
+  }
 
   return (
     <div className="bg-gray-900 border-t border-gray-800 flex flex-col shrink-0" style={{ height: '200px' }}>
@@ -646,12 +929,30 @@ function BottomPanel() {
           </button>
         ))}
       </div>
+
+      {/* Persistent OCO event banner */}
+      {activeBanner && (
+        <div className="flex items-center justify-between px-3 py-1.5 bg-yellow-400/10 border-b border-yellow-600/30 shrink-0">
+          <span className="text-[11px] text-yellow-400">{activeBanner}</span>
+          <button
+            onClick={() => { setLocalBanner(null); onDismissBanner?.() }}
+            className="text-yellow-600 hover:text-yellow-400 text-xs leading-none ml-2"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       <div className="flex-1 overflow-y-auto px-2 min-h-0">
         {activeTab === 'Positions' && (
           <PositionsTable data={positions} isLoading={posLoading} />
         )}
         {activeTab === 'Open Orders' && (
-          <OpenOrdersTable data={openOrders} isLoading={ordLoading} />
+          <OpenOrdersTable
+            data={openOrders}
+            isLoading={ordLoading}
+            onOcoBannerEvent={handleOcoBannerEvent}
+          />
         )}
         {activeTab === 'Order History' && (
           <p className="text-center text-gray-600 text-xs mt-8">Order history coming soon</p>
@@ -782,38 +1083,26 @@ function OrderForm() {
     }
   }
 
-  function buildOrderPayload(side) {
-    const cp = currentPriceRef.current
-    let quantity = parseFloat(qty)
-    if (isNaN(quantity) || quantity <= 0) return null
-
-    if (qtyUnit === 'USDT') {
-      if (cp <= 0) return null
-      quantity = quantity / cp
-    }
-
-    const payload = { symbol: SYMBOL, side, type: orderType.toUpperCase(), quantity }
-    if (orderType === 'Limit') {
-      const p = parseFloat(price)
-      if (isNaN(p) || p <= 0) return null
-      payload.price = p
-    }
-    return payload
-  }
-
   function handleSubmit(side) {
     setFormError(null)
-    const payload = buildOrderPayload(side)
-    if (!payload) {
+    const cp = currentPriceRef.current
+    let quantity = parseFloat(qty)
+    if (isNaN(quantity) || quantity <= 0) {
       setFormError('Enter a valid quantity' + (orderType === 'Limit' ? ' and price' : ''))
       return
     }
+    if (qtyUnit === 'USDT') {
+      if (cp <= 0) { setFormError('Market price unavailable'); return }
+      quantity = quantity / cp
+    }
+    const payload = { symbol: SYMBOL, side, type: orderType.toUpperCase(), quantity }
+    if (orderType === 'Limit') {
+      const p = parseFloat(price)
+      if (isNaN(p) || p <= 0) { setFormError('Enter a valid limit price'); return }
+      payload.price = p
+    }
     execPlaceOrder(payload, {
-      onSuccess: () => {
-        setQty('')
-        setPrice('')
-        setPct(null)
-      },
+      onSuccess: () => { setQty(''); setPrice(''); setPct(null) },
       onError: (err) => {
         const detail =
           err.response?.data?.error?.message ||
@@ -854,7 +1143,7 @@ function OrderForm() {
         </div>
 
         {/* Order type tabs */}
-        <div className="flex border-b border-gray-800 px-3">
+        <div className="flex items-center border-b border-gray-800 px-3">
           {['Limit', 'Market'].map((type) => (
             <button
               key={type}
@@ -952,27 +1241,31 @@ function OrderForm() {
             ))}
           </div>
 
-          {/* Buy / Sell buttons side by side */}
+          {/* Buy / Sell buttons */}
           <div className="flex gap-2 mt-1">
             <button
               onClick={() => handleSubmit('BUY')}
               disabled={orderPending}
-              className="flex-1 py-3 rounded text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
+              className="flex-1 py-3 rounded text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center"
             >
-              {orderPending ? (
-                <span className="inline-block w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              ) : 'Buy/Long'}
+              {orderPending
+                ? <span className="inline-block w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                : 'Buy/Long'}
             </button>
             <button
               onClick={() => handleSubmit('SELL')}
               disabled={orderPending}
-              className="flex-1 py-3 rounded text-xs font-semibold bg-red-600 hover:bg-red-500 text-white transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
+              className="flex-1 py-3 rounded text-xs font-semibold bg-red-600 hover:bg-red-500 text-white transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center"
             >
-              {orderPending ? (
-                <span className="inline-block w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              ) : 'Sell/Short'}
+              {orderPending
+                ? <span className="inline-block w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                : 'Sell/Short'}
             </button>
           </div>
+
+          <p className="text-[10px] text-gray-600 text-center mt-1">
+            Set TP/SL on open positions in the Positions tab below
+          </p>
         </div>
       </div>
     </>
@@ -982,9 +1275,34 @@ function OrderForm() {
 // ─── Trade (root) ─────────────────────────────────────────────────────────────
 
 export default function Trade() {
+  const [ocoToast, setOcoToast] = useState(null)
+  const [ocoBanner, setOcoBanner] = useState(null)
+  const toastTimerRef = useRef(null)
+
+  function showToast(msg) {
+    setOcoToast(msg)
+    clearTimeout(toastTimerRef.current)
+    toastTimerRef.current = setTimeout(() => setOcoToast(null), 4000)
+  }
+
+  function handleTpSlEvent(msg) {
+    showToast(msg)
+    setOcoBanner(msg)
+  }
+
+  // Monitor open orders for TP/SL fills and auto-cancel the sibling leg
+  useOcoMonitor({ symbol: SYMBOL, onEvent: handleTpSlEvent })
+
   return (
     <div className="bg-gray-950 text-gray-100 flex flex-col h-[calc(100vh-56px)] overflow-hidden mt-14">
       <TickerBar />
+
+      {/* Short-lived toast notification */}
+      {ocoToast && (
+        <div className="absolute top-20 right-4 z-50 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-xs text-gray-100 shadow-xl max-w-xs animate-fade-in">
+          {ocoToast}
+        </div>
+      )}
 
       {/* Main content — fills remaining height */}
       <div className="flex flex-1 min-h-0">
@@ -992,7 +1310,10 @@ export default function Trade() {
         {/* Left col — chart + bottom panel (fills remaining width) */}
         <div className="flex flex-col flex-1 min-w-0 min-h-0 border-r border-gray-800">
           <ChartContainer />
-          <BottomPanel />
+          <BottomPanel
+            ocoBanner={ocoBanner}
+            onDismissBanner={() => setOcoBanner(null)}
+          />
         </div>
 
         {/* Middle col — order book + recent trades, fixed width */}
