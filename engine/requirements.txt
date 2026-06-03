@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+pydantic>=2.0
+redis
+pymongo
+motor
+asyncpg
+TA-Lib
+pandas
+numpy
+ccxt

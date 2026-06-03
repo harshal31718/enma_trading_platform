@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+
+# Environment files - NEVER commit these
+.env
+.env.local
+.env.production
+
+# Build outputs
+dist/
+build/
+.next/
+
+# Logs
+*.log
+logs/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Spec and Claude Code files (local only)
+CLAUDE.md
+client/CLAUDE.md
+server/CLAUDE.md
+engine/CLAUDE.md
+docs/
+.claude/

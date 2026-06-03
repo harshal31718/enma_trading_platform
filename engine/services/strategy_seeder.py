@@ -1,0 +1,59 @@
+import os
+from datetime import datetime
+
+from config.mongo import get_database
+
+STRATEGIES_DIR = os.path.join(os.path.dirname(__file__), "..", "strategies")
+
+DEFAULT_STRATEGIES = [
+    {
+        "name": "SimpleEMACross",
+        "description": "Fast/slow EMA crossover. Goes long on golden cross, short on death cross. Uses ATR for dynamic stop-loss sizing.",
+    },
+    {
+        "name": "RSIReversion",
+        "description": "RSI mean reversion. Goes long when RSI < 30 (oversold), short when RSI > 70 (overbought). Exits when RSI reverts to 50.",
+    },
+    {
+        "name": "DonchianBreakout",
+        "description": "Donchian channel breakout. Goes long on upper channel break, short on lower channel break. Exits at middle band.",
+    },
+]
+
+
+async def seed_strategies():
+    """
+    Idempotent seeder — runs on engine startup.
+    Creates strategy folders/files on disk if missing.
+    Upserts metadata into MongoDB strategies collection.
+    """
+    db = get_database()
+
+    for strategy in DEFAULT_STRATEGIES:
+        name = strategy["name"]
+        strategy_dir = os.path.join(STRATEGIES_DIR, name)
+        file_path = os.path.join(strategy_dir, "__init__.py")
+        relative_path = f"strategies/{name}/__init__.py"
+
+        os.makedirs(strategy_dir, exist_ok=True)
+
+        if not os.path.exists(file_path):
+            print(f"[seeder] WARNING: {file_path} not found on disk")
+            continue
+
+        await db.strategies.update_one(
+            {"name": name},
+            {
+                "$set": {
+                    "name": name,
+                    "description": strategy["description"],
+                    "filePath": relative_path,
+                    "updatedAt": datetime.utcnow(),
+                },
+                "$setOnInsert": {
+                    "createdAt": datetime.utcnow(),
+                },
+            },
+            upsert=True,
+        )
+        print(f"[seeder] strategy ready: {name}")
