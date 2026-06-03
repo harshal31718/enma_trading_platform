@@ -6,7 +6,9 @@ const mongoose = require('mongoose')
 const Redis = require('ioredis')
 
 const candleRoutes = require('./routes/candle.routes')
+const dashboardRoutes = require('./routes/dashboard.routes')
 const strategyRoutes = require('./routes/strategy.routes')
+const backtestRoutes = require('./routes/backtest.routes')
 const errorHandler = require('./middleware/errorHandler')
 
 const app = express()
@@ -45,6 +47,8 @@ app.get('/api/v1/health', async (req, res) => {
 
 app.use('/api/v1/strategies', strategyRoutes)
 app.use('/api/v1/candles', candleRoutes)
+app.use('/api/v1/backtest', backtestRoutes)
+app.use('/api/v1/dashboard', dashboardRoutes)
 
 app.use(errorHandler)
 

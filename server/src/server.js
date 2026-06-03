@@ -5,7 +5,7 @@ const app = require('./app')
 const { initSocket } = require('./config/socket')
 
 // Import worker to start it — side effect only
-require('./workers/candle.worker')
+require('./workers/backtest.worker')
 
 const PORT = process.env.PORT || 5000
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://mongodb:27017/enma_trading'

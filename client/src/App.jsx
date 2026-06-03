@@ -6,7 +6,6 @@ import Dashboard from '@/pages/Dashboard'
 import Backtest from '@/pages/Backtest'
 import LiveTrading from '@/pages/LiveTrading'
 import Strategies from '@/pages/Strategies'
-import ImportCandles from '@/pages/ImportCandles'
 import Settings from '@/pages/Settings'
 
 export default function App() {
@@ -20,7 +19,6 @@ export default function App() {
             <Route path="/backtest" element={<Backtest />} />
             <Route path="/live" element={<LiveTrading />} />
             <Route path="/strategies" element={<Strategies />} />
-            <Route path="/import" element={<ImportCandles />} />
             <Route path="/settings" element={<Settings />} />
           </Routes>
         </BrowserRouter>

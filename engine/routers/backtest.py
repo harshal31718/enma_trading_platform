@@ -44,7 +44,7 @@ async def run_backtest(req: BacktestRequest):
             leverage=req.leverage,
             fee_rate=req.feeRate,
         )
-        return res
+        return {"success": True, "data": res}
     except Exception as e:
         logger.error(f"Backtest {req.jobId} failed: {e}")
         
@@ -57,25 +57,31 @@ async def run_backtest(req: BacktestRequest):
         strategy_doc = await db.strategies.find_one({"name": strategy_name})
         strategy_id = str(strategy_doc["_id"]) if strategy_doc else None
         
-        # Check if already written
-        existing = await db.backtestResults.find_one({"jobId": req.jobId})
-        if not existing:
-            await db.backtestResults.insert_one({
-                "jobId": req.jobId,
-                "strategyId": strategy_id,
-                "strategyName": strategy_name,
-                "exchange": req.exchange,
-                "symbol": req.symbol,
-                "timeframe": req.timeframe,
-                "startDate": req.startDate,
-                "endDate": req.endDate,
-                "capital": req.capital,
-                "leverage": req.leverage,
-                "feeRate": req.feeRate,
-                "status": "failed",
-                "error": str(e),
-                "createdAt": datetime.utcnow(),
-            })
+        await db.backtestResults.update_one(
+            {"jobId": req.jobId},
+            {
+                "$set": {
+                    "jobId": req.jobId,
+                    "strategyId": strategy_id,
+                    "strategyName": strategy_name,
+                    "exchange": req.exchange,
+                    "symbol": req.symbol,
+                    "timeframe": req.timeframe,
+                    "startDate": req.startDate,
+                    "endDate": req.endDate,
+                    "capital": req.capital,
+                    "leverage": req.leverage,
+                    "feeRate": req.feeRate,
+                    "status": "failed",
+                    "error": str(e),
+                    "updatedAt": datetime.utcnow(),
+                },
+                "$setOnInsert": {
+                    "createdAt": datetime.utcnow()
+                }
+            },
+            upsert=True
+        )
             
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -86,4 +92,11 @@ async def cancel_backtest(req: CancelRequest):
     r_client = aioredis.from_url(redis_url)
     await r_client.set(f"backtest:cancel:{req.jobId}", "1", ex=3600)
     await r_client.aclose()
-    return {"success": True, "data": {"status": "cancelling"}}
+
+    db = get_database()
+    await db.backtestResults.update_one(
+        {"jobId": req.jobId},
+        {"$set": {"status": "failed", "error": "Cancelled by user", "updatedAt": datetime.utcnow()}},
+    )
+
+    return {"success": True, "data": {"jobId": req.jobId, "status": "cancelled"}}

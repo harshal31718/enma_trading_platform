@@ -2,7 +2,6 @@ import { NavLink } from 'react-router-dom'
 import {
   LayoutDashboard,
   Code2,
-  Download,
   FlaskConical,
   Activity,
   Settings,
@@ -11,7 +10,6 @@ import {
 const navItems = [
   { label: 'Dashboard', icon: LayoutDashboard, to: '/' },
   { label: 'Strategies', icon: Code2, to: '/strategies' },
-  { label: 'Import Candles', icon: Download, to: '/import' },
   { label: 'Backtest', icon: FlaskConical, to: '/backtest' },
   { label: 'Live Trading', icon: Activity, to: '/live' },
   { label: 'Settings', icon: Settings, to: '/settings' },

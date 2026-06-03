@@ -2,7 +2,6 @@ import asyncio
 import os
 from datetime import datetime, timezone
 
-from config.mongo import get_database
 from config.timescale import get_pool
 from core.constants import DEFAULT_BATCH_SIZE
 from services.progress import publish_progress
@@ -33,7 +32,7 @@ async def import_candles(
     tf_ms = _timeframe_to_ms(timeframe)
     total_estimate = max(1, (end_ms - start_ms) // tf_ms)
 
-    instrument_type = "perpetual" if exchange == "Binance Futures" else "spot"
+    instrument_type = "futures" if exchange == "Binance Futures" else "spot"
     fetch_delay_ms = int(os.getenv("BINANCE_FETCH_DELAY_MS", "200")) / 1000
 
     current_ms = start_ms
@@ -56,7 +55,7 @@ async def import_candles(
         if not raw:
             break
 
-        # Build rows: (time, exchange, symbol, timeframe, instrument_type, open, high, low, close, volume, quote_volume)
+        # Build rows: (time, exchange, symbol, timeframe, instrument_type, expiry, open, high, low, close, volume, quote_volume)
         # quote_volume is not returned by ccxt fetch_ohlcv default klines — set to 0 for now
         rows = [
             (
@@ -65,12 +64,13 @@ async def import_candles(
                 symbol,
                 timeframe,
                 instrument_type,
+                None,  # expiry — NULL for spot and perpetual futures
                 c[1],  # open
                 c[2],  # high
                 c[3],  # low
                 c[4],  # close
                 c[5],  # volume
-                0,     # quote_volume — not available in standard OHLCV; future pass will use full kline endpoint
+                0,     # quote_volume
             )
             for c in raw
         ]
@@ -79,8 +79,8 @@ async def import_candles(
             await conn.executemany(
                 """
                 INSERT INTO candles
-                    (time, exchange, symbol, timeframe, instrument_type, open, high, low, close, volume, quote_volume)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                  (time, exchange, symbol, timeframe, instrument_type, expiry, open, high, low, close, volume, quote_volume)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                 ON CONFLICT DO NOTHING
                 """,
                 rows,
@@ -93,26 +93,12 @@ async def import_candles(
         await publish_progress(
             job_id=job_id,
             pct=pct,
-            message=f"Fetched {total_inserted} / ~{total_estimate} candles",
+            message=f"Auto-fetching candles for {symbol} {timeframe} — {pct}%",
             candles_fetched=total_inserted,
             total_estimate=total_estimate,
         )
 
         await asyncio.sleep(fetch_delay_ms)
-
-    # Write import record to MongoDB
-    db = get_database()
-    await db.candleImports.insert_one({
-        "jobId": job_id,
-        "exchange": exchange,
-        "symbol": symbol,
-        "timeframe": timeframe,
-        "startDate": start_date,
-        "endDate": end_date,
-        "candleCount": total_inserted,
-        "status": "completed",
-        "importedAt": datetime.utcnow(),
-    })
 
     return {
         "candlesImported": total_inserted,

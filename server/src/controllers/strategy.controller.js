@@ -6,7 +6,15 @@ const ApiError = require('../utils/ApiError')
 async function listStrategies(req, res, next) {
   try {
     const strategies = await Strategy.find({}).sort({ createdAt: 1 }).lean()
-    res.json(ApiResponse.success({ strategies }))
+    const formatted = strategies.map(s => ({
+      id: s._id,
+      name: s.name,
+      description: s.description,
+      filePath: s.filePath,
+      createdAt: s.createdAt,
+      updatedAt: s.updatedAt,
+    }))
+    res.json(ApiResponse.success({ strategies: formatted }))
   } catch (err) {
     next(err)
   }

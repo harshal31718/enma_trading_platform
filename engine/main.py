@@ -1,4 +1,12 @@
+import sys
 import os
+try:
+    if not os.path.exists('/engine'):
+        os.symlink('/app', '/engine')
+except Exception:
+    pass
+sys.path.insert(0, '/')
+
 import logging
 from contextlib import asynccontextmanager
 
@@ -10,6 +18,7 @@ from config.mongo import close_mongo, get_database
 from config.timescale import close_pool, init_pool, get_pool
 from routers.backtest import router as backtest_router
 from routers.candles import router as candles_router
+from routers.dashboard import router as dashboard_router
 from routers.strategies import router as strategies_router
 from services.strategy_seeder import seed_strategies
 
@@ -91,6 +100,7 @@ async def require_api_key(request: Request, call_next):
 app.include_router(candles_router, prefix="/candles", tags=["candles"])
 app.include_router(strategies_router, prefix="/strategies", tags=["strategies"])
 app.include_router(backtest_router, prefix="/backtest", tags=["backtest"])
+app.include_router(dashboard_router, prefix="/dashboard", tags=["dashboard"])
 
 
 @app.get("/health")
