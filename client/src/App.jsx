@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { QueryClientProvider } from '@tanstack/react-query'
 import queryClient from '@/lib/queryClient'
 import Navbar from '@/components/layout/Navbar'
@@ -19,7 +19,8 @@ export default function App() {
             <Route path="/backtest" element={<Backtest />} />
             <Route path="/strategies" element={<Strategies />} />
             <Route path="/settings" element={<Settings />} />
-            <Route path="/trade" element={<Trade />} />
+            <Route path="/trade" element={<Navigate to="/trade/BTC-USDT" replace />} />
+            <Route path="/trade/:symbol" element={<Trade />} />
           </Routes>
         </BrowserRouter>
       </QueryClientProvider>
