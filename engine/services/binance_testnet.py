@@ -7,6 +7,22 @@ import httpx
 
 BINANCE_TESTNET_BASE = "https://testnet.binancefuture.com"
 
+_client: httpx.AsyncClient | None = None
+
+
+def get_client() -> httpx.AsyncClient:
+    global _client
+    if _client is None:
+        _client = httpx.AsyncClient(timeout=10.0)
+    return _client
+
+
+async def close_client():
+    global _client
+    if _client is not None:
+        await _client.aclose()
+        _client = None
+
 
 async def send_signed_request(
     method: str,
@@ -33,15 +49,15 @@ async def send_signed_request(
     url = f"{BINANCE_TESTNET_BASE}{path}?{query_string}"
     headers = {"X-MBX-APIKEY": api_key}
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        if method.upper() == "GET":
-            resp = await client.get(url, headers=headers)
-        elif method.upper() == "POST":
-            resp = await client.post(url, headers=headers)
-        elif method.upper() == "DELETE":
-            resp = await client.delete(url, headers=headers)
-        else:
-            raise ValueError(f"Unsupported HTTP method: {method}")
+    client = get_client()
+    if method.upper() == "GET":
+        resp = await client.get(url, headers=headers)
+    elif method.upper() == "POST":
+        resp = await client.post(url, headers=headers)
+    elif method.upper() == "DELETE":
+        resp = await client.delete(url, headers=headers)
+    else:
+        raise ValueError(f"Unsupported HTTP method: {method}")
 
     resp.raise_for_status()
     return resp.json()

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { createChart, CandlestickSeries } from 'lightweight-charts'
 import useBinanceWS from '@/hooks/useBinanceWS'
 import {
@@ -255,6 +255,23 @@ function ChartContainer() {
 
 const BOOK_ROWS = 14
 
+const BookRow = memo(function BookRow({ price, qty, maxQty, side }) {
+  const barPct = Math.min((qty / maxQty) * 100, 100)
+  const isAsk = side === 'ask'
+  return (
+    <div className="relative flex items-center justify-between text-[11px] py-[3px] px-2 hover:bg-gray-800/60 cursor-default">
+      <div
+        className={`absolute inset-y-0 right-0 opacity-[0.12] ${isAsk ? 'bg-red-500' : 'bg-emerald-500'}`}
+        style={{ width: `${barPct}%` }}
+      />
+      <span className={`tabular-nums z-10 ${isAsk ? 'text-red-400' : 'text-emerald-400'}`}>
+        {price.toFixed(1)}
+      </span>
+      <span className="text-gray-400 tabular-nums z-10">{qty.toFixed(3)}</span>
+    </div>
+  )
+})
+
 function OrderBook() {
   const { streamPrefix } = useCurrentSymbol()
   const [book, setBook] = useState({ asks: [], bids: [] })
@@ -291,23 +308,6 @@ function OrderBook() {
   const bestBid = book.bids[0]?.price ?? 0
   const midPrice = bestAsk && bestBid ? ((bestAsk + bestBid) / 2).toFixed(1) : '—'
 
-  function BookRow({ price, qty, side }) {
-    const barPct = Math.min((qty / maxQty) * 100, 100)
-    const isAsk = side === 'ask'
-    return (
-      <div className="relative flex items-center justify-between text-[11px] py-[3px] px-2 hover:bg-gray-800/60 cursor-default">
-        <div
-          className={`absolute inset-y-0 right-0 opacity-[0.12] ${isAsk ? 'bg-red-500' : 'bg-emerald-500'}`}
-          style={{ width: `${barPct}%` }}
-        />
-        <span className={`tabular-nums z-10 ${isAsk ? 'text-red-400' : 'text-emerald-400'}`}>
-          {price.toFixed(1)}
-        </span>
-        <span className="text-gray-400 tabular-nums z-10">{qty.toFixed(3)}</span>
-      </div>
-    )
-  }
-
   return (
     <div className="bg-gray-900 border-r border-gray-800 flex flex-col min-h-0 flex-1">
       <div className="px-3 py-2 border-b border-gray-800 shrink-0">
@@ -326,7 +326,7 @@ function OrderBook() {
               <div key={i} className="h-[22px] mx-2 my-px bg-gray-800/60 rounded animate-pulse" />
             ))
           : book.asks.slice(0, BOOK_ROWS).map((row, i) => (
-              <BookRow key={i} price={row.price} qty={row.qty} side="ask" />
+              <BookRow key={i} price={row.price} qty={row.qty} maxQty={maxQty} side="ask" />
             ))}
       </div>
 
@@ -343,7 +343,7 @@ function OrderBook() {
               <div key={i} className="h-[22px] mx-2 my-px bg-gray-800/60 rounded animate-pulse" />
             ))
           : book.bids.slice(0, BOOK_ROWS).map((row, i) => (
-              <BookRow key={i} price={row.price} qty={row.qty} side="bid" />
+              <BookRow key={i} price={row.price} qty={row.qty} maxQty={maxQty} side="bid" />
             ))}
       </div>
     </div>
@@ -376,7 +376,7 @@ function RecentTrades() {
   useBinanceWS(`${streamPrefix}@aggTrade`, onTrade)
 
   return (
-    <div className="bg-gray-900 border-r border-gray-800 flex flex-col min-h-0" style={{ height: '240px' }}>
+    <div className="bg-gray-900 border-r border-gray-800 flex flex-col min-h-0 h-[240px]">
       <div className="px-3 py-2 border-b border-gray-800 shrink-0">
         <span className="text-xs font-semibold text-gray-200">Trades</span>
       </div>
@@ -662,6 +662,8 @@ function PositionsTable({ data, isLoading }) {
     )
   }
 
+  const activePositions = data?.filter((p) => parseFloat(p.positionAmt) !== 0) ?? []
+
   return (
     <>
       {tpslPosition && (
@@ -680,7 +682,7 @@ function PositionsTable({ data, isLoading }) {
               <SkeletonRow cols={cols} />
               <SkeletonRow cols={cols} />
             </>
-          ) : !data?.length ? (
+          ) : !activePositions.length ? (
             <EmptyRow message="No open positions" />
           ) : (
             <>
@@ -693,7 +695,7 @@ function PositionsTable({ data, isLoading }) {
                   </td>
                 </tr>
               )}
-              {data.map((p) => {
+              {activePositions.map((p) => {
                 const size = parseFloat(p.positionAmt)
                 const side = size > 0 ? 'Long' : 'Short'
                 const pnl = parseFloat(p.unRealizedProfit)
@@ -894,130 +896,145 @@ function AssetsTable({ data, isLoading }) {
   )
 }
 
-function OrderHistoryTable({ data, isLoading }) {
+const SyncWarningBanner = () => (
+  <div className="bg-yellow-950/20 border border-yellow-800/40 rounded px-3 py-1.5 text-[10px] text-yellow-400 mb-2 mt-1">
+    Warning: Connection to the Strategy Engine failed. Displaying cached/offline data.
+  </div>
+)
+
+function OrderHistoryTable({ data, isLoading, synced = true }) {
   const cols = ['Time', 'Symbol', 'Type', 'Side', 'Average', 'Price', 'Executed', 'Amount', 'Reduce Only', 'Post Only', 'Trigger Conditions', 'Status']
   return (
-    <table className="w-full text-xs">
-      <thead>
-        <tr className="text-gray-500 border-b border-gray-800">
-          {cols.map((c) => <th key={c} className="text-left py-2 pr-6 font-medium whitespace-nowrap">{c}</th>)}
-        </tr>
-      </thead>
-      <tbody className="text-gray-400">
-        {isLoading ? (
-          <>
-            <SkeletonRow cols={cols} />
-            <SkeletonRow cols={cols} />
-          </>
-        ) : !data?.length ? (
-          <EmptyRow message="No order history" />
-        ) : (
-          data.map((o) => {
-            const side = o.side.toUpperCase()
-            const isFilled = o.status === 'FILLED'
-            const isCanceled = o.status === 'CANCELED'
-            const isNew = o.status === 'NEW'
-            return (
-              <tr key={o.orderId} className="border-b border-gray-800/30 hover:bg-gray-800/20">
-                <td className="py-2 pr-6 whitespace-nowrap text-gray-500">{new Date(o.time).toLocaleString()}</td>
-                <td className="py-2 pr-6 whitespace-nowrap text-gray-100">{o.symbol.replace('USDT', '-USDT')}</td>
-                <td className="py-2 pr-6 whitespace-nowrap">{o.type}</td>
-                <td className={`py-2 pr-6 whitespace-nowrap font-medium ${side === 'BUY' ? 'text-emerald-400' : 'text-red-400'}`}>{side}</td>
-                <td className="py-2 pr-6 whitespace-nowrap tabular-nums">{o.avgPrice && parseFloat(o.avgPrice) > 0 ? fmtPrice(o.avgPrice) : '—'}</td>
-                <td className="py-2 pr-6 whitespace-nowrap tabular-nums">{fmtPrice(o.price)}</td>
-                <td className="py-2 pr-6 whitespace-nowrap tabular-nums">{fmtQty(o.executedQty)}</td>
-                <td className="py-2 pr-6 whitespace-nowrap tabular-nums">{fmtQty(o.origQty)}</td>
-                <td className="py-2 pr-6 whitespace-nowrap">{o.reduceOnly ? 'Yes' : 'No'}</td>
-                <td className="py-2 pr-6 whitespace-nowrap">{o.postOnly ? 'Yes' : 'No'}</td>
-                <td className="py-2 pr-6 whitespace-nowrap tabular-nums">{o.stopPrice && parseFloat(o.stopPrice) > 0 ? fmtPrice(o.stopPrice) : '—'}</td>
-                <td className={`py-2 pr-6 whitespace-nowrap font-medium ${isFilled ? 'text-emerald-400' : isCanceled ? 'text-gray-500' : isNew ? 'text-yellow-400' : 'text-gray-300'}`}>{o.status}</td>
-              </tr>
-            )
-          })
-        )}
-      </tbody>
-    </table>
+    <>
+      {!synced && !isLoading && <SyncWarningBanner />}
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="text-gray-500 border-b border-gray-800">
+            {cols.map((c) => <th key={c} className="text-left py-2 pr-6 font-medium whitespace-nowrap">{c}</th>)}
+          </tr>
+        </thead>
+        <tbody className="text-gray-400">
+          {isLoading ? (
+            <>
+              <SkeletonRow cols={cols} />
+              <SkeletonRow cols={cols} />
+            </>
+          ) : !data?.length ? (
+            <EmptyRow message="No order history" />
+          ) : (
+            data.map((o) => {
+              const side = o.side.toUpperCase()
+              const isFilled = o.status === 'FILLED'
+              const isCanceled = o.status === 'CANCELED'
+              const isNew = o.status === 'NEW'
+              return (
+                <tr key={o.orderId} className="border-b border-gray-800/30 hover:bg-gray-800/20">
+                  <td className="py-2 pr-6 whitespace-nowrap text-gray-500">{new Date(o.time).toLocaleString()}</td>
+                  <td className="py-2 pr-6 whitespace-nowrap text-gray-100">{o.symbol.replace('USDT', '-USDT')}</td>
+                  <td className="py-2 pr-6 whitespace-nowrap">{o.type}</td>
+                  <td className={`py-2 pr-6 whitespace-nowrap font-medium ${side === 'BUY' ? 'text-emerald-400' : 'text-red-400'}`}>{side}</td>
+                  <td className="py-2 pr-6 whitespace-nowrap tabular-nums">{o.avgPrice && parseFloat(o.avgPrice) > 0 ? fmtPrice(o.avgPrice) : '—'}</td>
+                  <td className="py-2 pr-6 whitespace-nowrap tabular-nums">{fmtPrice(o.price)}</td>
+                  <td className="py-2 pr-6 whitespace-nowrap tabular-nums">{fmtQty(o.executedQty)}</td>
+                  <td className="py-2 pr-6 whitespace-nowrap tabular-nums">{fmtQty(o.origQty)}</td>
+                  <td className="py-2 pr-6 whitespace-nowrap">{o.reduceOnly ? 'Yes' : 'No'}</td>
+                  <td className="py-2 pr-6 whitespace-nowrap">{o.postOnly ? 'Yes' : 'No'}</td>
+                  <td className="py-2 pr-6 whitespace-nowrap tabular-nums">{o.stopPrice && parseFloat(o.stopPrice) > 0 ? fmtPrice(o.stopPrice) : '—'}</td>
+                  <td className={`py-2 pr-6 whitespace-nowrap font-medium ${isFilled ? 'text-emerald-400' : isCanceled ? 'text-gray-500' : isNew ? 'text-yellow-400' : 'text-gray-300'}`}>{o.status}</td>
+                </tr>
+              )
+            })
+          )}
+        </tbody>
+      </table>
+    </>
   )
 }
 
-function TradeHistoryTable({ data, isLoading }) {
+function TradeHistoryTable({ data, isLoading, synced = true }) {
   const cols = ['Order No.', 'Time', 'Symbol', 'Side', 'Price', 'Quantity', 'Fee', 'Role', 'Realized Profit']
   return (
-    <table className="w-full text-xs">
-      <thead>
-        <tr className="text-gray-500 border-b border-gray-800">
-          {cols.map((c) => <th key={c} className="text-left py-2 pr-6 font-medium whitespace-nowrap">{c}</th>)}
-        </tr>
-      </thead>
-      <tbody className="text-gray-400">
-        {isLoading ? (
-          <>
-            <SkeletonRow cols={cols} />
-            <SkeletonRow cols={cols} />
-          </>
-        ) : !data?.length ? (
-          <EmptyRow message="No trade history" />
-        ) : (
-          data.map((t) => {
-            const side = t.side.toUpperCase()
-            const pnl = parseFloat(t.realizedPnl || '0')
-            return (
-              <tr key={t.id} className="border-b border-gray-800/30 hover:bg-gray-800/20">
-                <td className="py-2 pr-6 whitespace-nowrap text-gray-500 tabular-nums">{t.orderId}</td>
-                <td className="py-2 pr-6 whitespace-nowrap text-gray-500">{new Date(t.time).toLocaleString()}</td>
-                <td className="py-2 pr-6 whitespace-nowrap text-gray-100">{t.symbol.replace('USDT', '-USDT')}</td>
-                <td className={`py-2 pr-6 whitespace-nowrap font-medium ${side === 'BUY' ? 'text-emerald-400' : 'text-red-400'}`}>{side}</td>
-                <td className="py-2 pr-6 whitespace-nowrap tabular-nums">{fmtPrice(t.price)}</td>
-                <td className="py-2 pr-6 whitespace-nowrap tabular-nums">{fmtQty(t.qty)}</td>
-                <td className="py-2 pr-6 whitespace-nowrap text-gray-500 tabular-nums">{t.commission ? `${fmtQty(t.commission)} ${t.commissionAsset || 'USDT'}` : '—'}</td>
-                <td className="py-2 pr-6 whitespace-nowrap">{t.maker ? 'Maker' : 'Taker'}</td>
-                <td className={`py-2 pr-6 whitespace-nowrap font-medium tabular-nums ${pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                  {pnl >= 0 ? '+' : ''}{pnl.toFixed(4)} USDT
-                </td>
-              </tr>
-            )
-          })
-        )}
-      </tbody>
-    </table>
+    <>
+      {!synced && !isLoading && <SyncWarningBanner />}
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="text-gray-500 border-b border-gray-800">
+            {cols.map((c) => <th key={c} className="text-left py-2 pr-6 font-medium whitespace-nowrap">{c}</th>)}
+          </tr>
+        </thead>
+        <tbody className="text-gray-400">
+          {isLoading ? (
+            <>
+              <SkeletonRow cols={cols} />
+              <SkeletonRow cols={cols} />
+            </>
+          ) : !data?.length ? (
+            <EmptyRow message="No trade history" />
+          ) : (
+            data.map((t) => {
+              const side = t.side.toUpperCase()
+              const pnl = parseFloat(t.realizedPnl || '0')
+              return (
+                <tr key={t.id} className="border-b border-gray-800/30 hover:bg-gray-800/20">
+                  <td className="py-2 pr-6 whitespace-nowrap text-gray-500 tabular-nums">{t.orderId}</td>
+                  <td className="py-2 pr-6 whitespace-nowrap text-gray-500">{new Date(t.time).toLocaleString()}</td>
+                  <td className="py-2 pr-6 whitespace-nowrap text-gray-100">{t.symbol.replace('USDT', '-USDT')}</td>
+                  <td className={`py-2 pr-6 whitespace-nowrap font-medium ${side === 'BUY' ? 'text-emerald-400' : 'text-red-400'}`}>{side}</td>
+                  <td className="py-2 pr-6 whitespace-nowrap tabular-nums">{fmtPrice(t.price)}</td>
+                  <td className="py-2 pr-6 whitespace-nowrap tabular-nums">{fmtQty(t.qty)}</td>
+                  <td className="py-2 pr-6 whitespace-nowrap text-gray-500 tabular-nums">{t.commission ? `${fmtQty(t.commission)} ${t.commissionAsset || 'USDT'}` : '—'}</td>
+                  <td className="py-2 pr-6 whitespace-nowrap">{t.maker ? 'Maker' : 'Taker'}</td>
+                  <td className={`py-2 pr-6 whitespace-nowrap font-medium tabular-nums ${pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {pnl >= 0 ? '+' : ''}{pnl.toFixed(4)} USDT
+                  </td>
+                </tr>
+              )
+            })
+          )}
+        </tbody>
+      </table>
+    </>
   )
 }
 
-function TransactionHistoryTable({ data, isLoading }) {
+function TransactionHistoryTable({ data, isLoading, synced = true }) {
   const cols = ['Time', 'Type', 'Amount', 'Asset', 'Symbol']
   return (
-    <table className="w-full text-xs">
-      <thead>
-        <tr className="text-gray-500 border-b border-gray-800">
-          {cols.map((c) => <th key={c} className="text-left py-2 pr-6 font-medium whitespace-nowrap">{c}</th>)}
-        </tr>
-      </thead>
-      <tbody className="text-gray-400">
-        {isLoading ? (
-          <>
-            <SkeletonRow cols={cols} />
-            <SkeletonRow cols={cols} />
-          </>
-        ) : !data?.length ? (
-          <EmptyRow message="No transaction history" />
-        ) : (
-          data.map((tx) => {
-            const income = parseFloat(tx.income || '0')
-            return (
-              <tr key={tx.tranId} className="border-b border-gray-800/30 hover:bg-gray-800/20">
-                <td className="py-2 pr-6 whitespace-nowrap text-gray-500">{new Date(tx.time).toLocaleString()}</td>
-                <td className="py-2 pr-6 whitespace-nowrap">{tx.incomeType}</td>
-                <td className={`py-2 pr-6 whitespace-nowrap font-medium tabular-nums ${income >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                  {income >= 0 ? '+' : ''}{parseFloat(tx.income).toFixed(4)}
-                </td>
-                <td className="py-2 pr-6 whitespace-nowrap">{tx.asset}</td>
-                <td className="py-2 pr-6 whitespace-nowrap text-gray-100">{tx.symbol ? tx.symbol.replace('USDT', '-USDT') : '—'}</td>
-              </tr>
-            )
-          })
-        )}
-      </tbody>
-    </table>
+    <>
+      {!synced && !isLoading && <SyncWarningBanner />}
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="text-gray-500 border-b border-gray-800">
+            {cols.map((c) => <th key={c} className="text-left py-2 pr-6 font-medium whitespace-nowrap">{c}</th>)}
+          </tr>
+        </thead>
+        <tbody className="text-gray-400">
+          {isLoading ? (
+            <>
+              <SkeletonRow cols={cols} />
+              <SkeletonRow cols={cols} />
+            </>
+          ) : !data?.length ? (
+            <EmptyRow message="No transaction history" />
+          ) : (
+            data.map((tx) => {
+              const income = parseFloat(tx.income || '0')
+              return (
+                <tr key={tx.tranId} className="border-b border-gray-800/30 hover:bg-gray-800/20">
+                  <td className="py-2 pr-6 whitespace-nowrap text-gray-500">{new Date(tx.time).toLocaleString()}</td>
+                  <td className="py-2 pr-6 whitespace-nowrap">{tx.incomeType}</td>
+                  <td className={`py-2 pr-6 whitespace-nowrap font-medium tabular-nums ${income >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {income >= 0 ? '+' : ''}{parseFloat(tx.income).toFixed(4)}
+                  </td>
+                  <td className="py-2 pr-6 whitespace-nowrap">{tx.asset}</td>
+                  <td className="py-2 pr-6 whitespace-nowrap text-gray-100">{tx.symbol ? tx.symbol.replace('USDT', '-USDT') : '—'}</td>
+                </tr>
+              )
+            })
+          )}
+        </tbody>
+      </table>
+    </>
   )
 }
 
@@ -1028,11 +1045,28 @@ function BottomPanel({ ocoToast, ocoBanner, onDismissBanner }) {
   const { data: positions, isLoading: posLoading } = useTradePositions()
   const { data: openOrders, isLoading: ordLoading } = useTradeOpenOrders()
   const { data: account, isLoading: accLoading } = useTradeAccount()
-  const { data: ordersHistory, isLoading: ordHistoryLoading } = useTradeOrders(symbol, { refetchInterval: 4000 })
-  const { data: executions, isLoading: execLoading } = useTradeExecutions(symbol, { refetchInterval: 4000 })
-  const { data: transactions, isLoading: txLoading } = useTradeTransactions(symbol, { refetchInterval: 4000 })
+  const { data: ordersRaw, isLoading: ordHistoryLoading } = useTradeOrders(symbol, {
+    enabled: activeTab === 'Order History' && !!symbol,
+    refetchInterval: 8000,
+  })
+  const { data: execRaw, isLoading: execLoading } = useTradeExecutions(symbol, {
+    enabled: activeTab === 'Trade History' && !!symbol,
+    refetchInterval: 8000,
+  })
+  const { data: txRaw, isLoading: txLoading } = useTradeTransactions(symbol, {
+    enabled: activeTab === 'Transaction History',
+    refetchInterval: 8000,
+  })
+
+  const ordersHistory = ordersRaw?.orders ?? ordersRaw
+  const ordersSynced  = ordersRaw?.synced ?? true
+  const executions    = execRaw?.executions ?? execRaw
+  const execSynced    = execRaw?.synced ?? true
+  const transactions  = txRaw?.transactions ?? txRaw
+  const txSynced      = txRaw?.synced ?? true
 
   const [localBanner, setLocalBanner] = useState(null)
+  const bannerTimerRef = useRef(null)
 
   const posCount = positions?.length ?? 0
   const ordCount = openOrders?.length ?? 0
@@ -1040,12 +1074,17 @@ function BottomPanel({ ocoToast, ocoBanner, onDismissBanner }) {
   const activeBanner = ocoBanner || localBanner
 
   function handleOcoBannerEvent(msg) {
+    clearTimeout(bannerTimerRef.current)
     setLocalBanner(msg)
-    setTimeout(() => setLocalBanner(null), 8000)
+    bannerTimerRef.current = setTimeout(() => setLocalBanner(null), 8000)
   }
 
+  useEffect(() => {
+    return () => clearTimeout(bannerTimerRef.current)
+  }, [])
+
   return (
-    <div className="bg-gray-900 border-t border-gray-800 flex flex-col shrink-0" style={{ height: '200px' }}>
+    <div className="bg-gray-900 border-t border-gray-800 flex flex-col shrink-0 h-[200px]">
       <div className="flex border-b border-gray-800 shrink-0">
         {[
           { key: 'Positions', label: `Positions(${posCount})` },
@@ -1075,7 +1114,7 @@ function BottomPanel({ ocoToast, ocoBanner, onDismissBanner }) {
         <div className="flex items-center justify-between px-3 py-1.5 bg-yellow-400/10 border-b border-yellow-600/30 shrink-0">
           <span className="text-[11px] text-yellow-400">{activeBanner}</span>
           <button
-            onClick={() => { setLocalBanner(null); onDismissBanner?.() }}
+            onClick={() => { clearTimeout(bannerTimerRef.current); setLocalBanner(null); onDismissBanner?.() }}
             className="text-yellow-600 hover:text-yellow-400 text-xs leading-none ml-2"
           >
             ✕
@@ -1095,13 +1134,13 @@ function BottomPanel({ ocoToast, ocoBanner, onDismissBanner }) {
           />
         )}
         {activeTab === 'Order History' && (
-          <OrderHistoryTable data={ordersHistory} isLoading={ordHistoryLoading} />
+          <OrderHistoryTable data={ordersHistory} isLoading={ordHistoryLoading} synced={ordersSynced} />
         )}
         {activeTab === 'Trade History' && (
-          <TradeHistoryTable data={executions} isLoading={execLoading} />
+          <TradeHistoryTable data={executions} isLoading={execLoading} synced={execSynced} />
         )}
         {activeTab === 'Transaction History' && (
-          <TransactionHistoryTable data={transactions} isLoading={txLoading} />
+          <TransactionHistoryTable data={transactions} isLoading={txLoading} synced={txSynced} />
         )}
         {activeTab === 'Assets' && (
           <AssetsTable data={account} isLoading={accLoading} />
@@ -1436,16 +1475,20 @@ function TradeInner() {
   const [ocoBanner, setOcoBanner] = useState(null)
   const toastTimerRef = useRef(null)
 
-  function showToast(msg) {
+  useEffect(() => {
+    return () => clearTimeout(toastTimerRef.current)
+  }, [])
+
+  const showToast = useCallback((msg) => {
     setOcoToast(msg)
     clearTimeout(toastTimerRef.current)
     toastTimerRef.current = setTimeout(() => setOcoToast(null), 4000)
-  }
+  }, [])
 
-  function handleTpSlEvent(msg) {
+  const handleTpSlEvent = useCallback((msg) => {
     showToast(msg)
     setOcoBanner(msg)
-  }
+  }, [showToast])
 
   // Monitor open orders for TP/SL fills and auto-cancel the sibling leg
   useOcoMonitor({ symbol, onEvent: handleTpSlEvent })

@@ -8,5 +8,7 @@ export function useSymbols() {
       const res = await api.get('/api/v1/candles/symbols')
       return res.data.data
     },
+    staleTime: 1000 * 60 * 10,
+    gcTime: 1000 * 60 * 30,
   })
 }

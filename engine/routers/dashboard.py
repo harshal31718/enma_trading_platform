@@ -7,8 +7,11 @@ router = APIRouter()
 @router.get("/stats")
 async def get_dashboard_stats():
     db = get_database()
-    total_runs = await db.backtestResults.count_documents({})
-    completed_cursor = db.backtestResults.find({"status": "completed"})
+    total_runs = await db.backtestResults.count_documents({"status": "completed"})
+    completed_cursor = db.backtestResults.find(
+        {"status": "completed"},
+        {"strategyName": 1, "metrics.winRate": 1, "metrics.netProfit": 1, "metrics.sharpeRatio": 1, "_id": 0},
+    )
     completed_runs = await completed_cursor.to_list(length=1000)
 
     stats = {

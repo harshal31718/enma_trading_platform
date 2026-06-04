@@ -1,7 +1,10 @@
+import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 from config.mongo import get_database
+
+logger = logging.getLogger(__name__)
 
 STRATEGIES_DIR = os.path.join(os.path.dirname(__file__), "..", "strategies")
 
@@ -38,7 +41,7 @@ async def seed_strategies():
         os.makedirs(strategy_dir, exist_ok=True)
 
         if not os.path.exists(file_path):
-            print(f"[seeder] WARNING: {file_path} not found on disk")
+            logger.warning("Strategy file not found on disk: %s", file_path)
             continue
 
         await db.strategies.update_one(
@@ -48,12 +51,12 @@ async def seed_strategies():
                     "name": name,
                     "description": strategy["description"],
                     "filePath": relative_path,
-                    "updatedAt": datetime.utcnow(),
+                    "updatedAt": datetime.now(timezone.utc),
                 },
                 "$setOnInsert": {
-                    "createdAt": datetime.utcnow(),
+                    "createdAt": datetime.now(timezone.utc),
                 },
             },
             upsert=True,
         )
-        print(f"[seeder] strategy ready: {name}")
+        logger.info("Strategy ready: %s", name)

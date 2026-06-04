@@ -29,3 +29,9 @@ export function formatSignedPct(value) {
   const sign = num >= 0 ? '+' : ''
   return `${sign}${num.toFixed(2)}%`
 }
+
+export function formatIsoDate(dateString) {
+  if (!dateString) return ''
+  const date = new Date(dateString)
+  return date.toLocaleString()
+}

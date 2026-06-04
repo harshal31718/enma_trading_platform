@@ -1,4 +1,5 @@
-import os
+import asyncio
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
@@ -6,7 +7,7 @@ from config.mongo import get_database
 
 router = APIRouter()
 
-STRATEGIES_DIR = os.path.join(os.path.dirname(__file__), "..", "strategies")
+STRATEGIES_DIR = Path(__file__).parent.parent / "strategies"
 
 
 @router.get("")
@@ -30,13 +31,12 @@ async def list_strategies():
 @router.get("/{name}/code")
 async def get_strategy_code(name: str):
     """Reads strategy source code from disk"""
-    file_path = os.path.join(STRATEGIES_DIR, name, "__init__.py")
+    path = Path(STRATEGIES_DIR) / name / "__init__.py"
 
-    if not os.path.exists(file_path):
+    if not await asyncio.to_thread(path.exists):
         raise HTTPException(status_code=404, detail=f"Strategy '{name}' not found on disk")
 
-    with open(file_path, "r") as f:
-        code = f.read()
+    code = await asyncio.to_thread(path.read_text, encoding="utf-8")
 
     return {
         "success": True,

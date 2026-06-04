@@ -22,4 +22,8 @@ const BacktestResultSchema = new mongoose.Schema(
   { timestamps: true, collection: 'backtestResults' }
 )
 
+BacktestResultSchema.index({ status: 1 })
+BacktestResultSchema.index({ symbol: 1 })
+BacktestResultSchema.index({ strategyId: 1, createdAt: -1 })
+
 module.exports = mongoose.model('BacktestResult', BacktestResultSchema)

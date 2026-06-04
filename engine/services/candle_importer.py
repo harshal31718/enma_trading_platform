@@ -6,11 +6,7 @@ from config.timescale import get_pool
 from core.constants import DEFAULT_BATCH_SIZE
 from services.progress import publish_progress
 from utils.symbols import get_ccxt_exchange, to_ccxt_symbol
-
-
-def _timeframe_to_ms(timeframe: str) -> int:
-    units = {"m": 60_000, "h": 3_600_000, "d": 86_400_000, "w": 604_800_000}
-    return int(timeframe[:-1]) * units[timeframe[-1]]
+from utils.timeframes import to_ms
 
 
 async def import_candles(
@@ -29,7 +25,7 @@ async def import_candles(
     start_ms = int(start_dt.timestamp() * 1000)
     end_ms = int(end_dt.timestamp() * 1000)
 
-    tf_ms = _timeframe_to_ms(timeframe)
+    tf_ms = to_ms(timeframe)
     total_estimate = max(1, (end_ms - start_ms) // tf_ms)
 
     instrument_type = "futures" if exchange == "Binance Futures" else "spot"
@@ -61,7 +57,7 @@ async def import_candles(
             (
                 datetime.fromtimestamp(c[0] / 1000, tz=timezone.utc),
                 exchange,
-                symbol,
+                ccxt_symbol,
                 timeframe,
                 instrument_type,
                 None,  # expiry — NULL for spot and perpetual futures

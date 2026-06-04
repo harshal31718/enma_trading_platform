@@ -11,6 +11,8 @@ from config.timescale import get_pool
 from config.mongo import get_database
 from core.position import Position
 from services.candle_manager import ensure_candles_available
+from utils.symbols import to_ccxt_symbol
+from utils.timeframes import annual_factor
 
 logger = logging.getLogger(__name__)
 
@@ -22,38 +24,6 @@ EQUITY_CURVE_MAX_POINTS = 1_000
 # Batch size for bulk-inserting trades into backtestTrades collection
 TRADE_INSERT_BATCH = 500
 
-
-def _get_annual_factor(timeframe: str) -> int:
-    try:
-        val = int(timeframe[:-1])
-        unit = timeframe[-1]
-    except Exception:
-        return 8760
-    minutes_per_year = 525_600
-    if unit == "m":
-        return minutes_per_year // val
-    elif unit == "h":
-        return (minutes_per_year // 60) // val
-    elif unit == "d":
-        return 365 // val
-    elif unit == "w":
-        return 52 // val
-    return 8760
-
-
-def _downsample(equity_curve: list, max_points: int) -> list:
-    """Return at most max_points evenly-spaced entries from equity_curve."""
-    n = len(equity_curve)
-    if n <= max_points:
-        return equity_curve
-    indices = np.round(np.linspace(0, n - 1, max_points)).astype(int)
-    seen = set()
-    result = []
-    for i in indices:
-        if i not in seen:
-            seen.add(i)
-            result.append(equity_curve[i])
-    return result
 
 
 async def run_backtest_simulation(
@@ -114,7 +84,7 @@ async def run_backtest_simulation(
             WHERE exchange = $1 AND symbol = $2 AND timeframe = $3 AND time >= $4 AND time < $5
             ORDER BY time ASC
             """,
-            exchange, symbol, timeframe, start_dt, end_dt,
+            exchange, to_ccxt_symbol(symbol), timeframe, start_dt, end_dt,
         )
 
     if len(rows) < 50:
@@ -232,6 +202,7 @@ async def run_backtest_simulation(
                             "qty":        str(buy_qty),
                             "entryPrice": str(buy_price),
                             "entryAt":    time_t.isoformat(),
+                            "_entry_dt":  time_t,
                         }
                         try:
                             strategy.on_open_position(strategy.buy)
@@ -252,6 +223,7 @@ async def run_backtest_simulation(
                             "qty":        str(sell_qty),
                             "entryPrice": str(sell_price),
                             "entryAt":    time_t.isoformat(),
+                            "_entry_dt":  time_t,
                         }
                         try:
                             strategy.on_open_position(strategy.sell)
@@ -311,6 +283,7 @@ async def run_backtest_simulation(
                             "id":         f"t_{len(trades) + 1}",
                             "exitPrice":  str(exit_price),
                             "exitAt":     time_t.isoformat(),
+                            "_exit_dt":   time_t,
                             "exitReason": exit_reason,
                             "pnl":        f"{realized_pnl:.2f}",
                             "pnlPct":     f"{strategy.position.pnl_pct:.2f}",
@@ -406,7 +379,7 @@ async def run_backtest_simulation(
         rets   = np.where(mask, (curr - prev) / prev, 0.0)
         std_r  = np.std(rets)
         if std_r > 0:
-            annual  = _get_annual_factor(timeframe)
+            annual  = annual_factor(timeframe)
             mean_r  = np.mean(rets)
             sharpe  = float((mean_r / std_r) * np.sqrt(annual))
             neg     = rets[rets < 0]
@@ -425,14 +398,11 @@ async def run_backtest_simulation(
     # Average holding period in seconds
     avg_holding = 0.0
     if trades:
-        durations = []
-        for tr in trades:
-            try:
-                durations.append(
-                    (datetime.fromisoformat(tr["exitAt"]) - datetime.fromisoformat(tr["entryAt"])).total_seconds()
-                )
-            except Exception:
-                pass
+        durations = [
+            (tr["_exit_dt"] - tr["_entry_dt"]).total_seconds()
+            for tr in trades
+            if "_exit_dt" in tr and "_entry_dt" in tr
+        ]
         avg_holding = float(np.mean(durations)) if durations else 0.0
 
     metrics = {
@@ -499,9 +469,9 @@ async def run_backtest_simulation(
                 "metrics":      metrics,
                 "equityCurve":  equity_curve_docs,   # ≤1 000 points
                 "tradeCount":   total_trades,
-                "updatedAt":    datetime.utcnow(),
+                "updatedAt":    datetime.now(timezone.utc),
             },
-            "$setOnInsert": {"createdAt": datetime.utcnow()},
+            "$setOnInsert": {"createdAt": datetime.now(timezone.utc)},
         },
         upsert=True,
     )
@@ -521,6 +491,7 @@ async def run_backtest_simulation(
                 "exitReason":  tr.get("exitReason", ""),
                 "pnl":         tr["pnl"],
                 "pnlPct":      tr.get("pnlPct", "0.00"),
+                # _entry_dt / _exit_dt are internal datetime objects — never persisted
             }
             for i, tr in enumerate(trades)
         ]
@@ -535,7 +506,6 @@ async def run_backtest_simulation(
     )
 
     # ── 14. Cleanup ─────────────────────────────────────────────────────────
-    await r_client.delete(f"backtest:cancel:{job_id}")
     await r_client.aclose()
 
     return {

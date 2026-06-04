@@ -1,33 +1,16 @@
 import asyncio
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from config.timescale import get_pool
 from services.candle_importer import import_candles
 from services.progress import publish_progress
+from utils.symbols import to_ccxt_symbol
+from utils.timeframes import to_timedelta
 
 logger = logging.getLogger(__name__)
 
 WARMUP_CANDLES = 50  # Minimum candles needed for indicator warm-up
 EXTRA_FETCH_CANDLES = 200  # Extra candles to fetch before start date for safety
-
-
-def _timeframe_to_timedelta(timeframe: str) -> timedelta:
-    """Convert timeframe string to timedelta (e.g., '1h' -> timedelta(hours=1))."""
-    try:
-        val = int(timeframe[:-1])
-        unit = timeframe[-1]
-    except Exception:
-        return timedelta(hours=1)
-
-    if unit == "m":
-        return timedelta(minutes=val)
-    elif unit == "h":
-        return timedelta(hours=val)
-    elif unit == "d":
-        return timedelta(days=val)
-    elif unit == "w":
-        return timedelta(weeks=val)
-    return timedelta(hours=1)
 
 
 async def get_available_candles_count(
@@ -51,7 +34,7 @@ async def get_available_candles_count(
                 AND time >= $4 AND time < $5
                 """,
                 exchange,
-                symbol,
+                to_ccxt_symbol(symbol),
                 timeframe,
                 start_dt,
                 end_dt,
@@ -94,7 +77,7 @@ async def ensure_candles_available(
 
     # Need to fetch candles
     # Extend start date to include warm-up period
-    tf_delta = _timeframe_to_timedelta(timeframe)
+    tf_delta = to_timedelta(timeframe)
     extended_start_dt = start_dt - (tf_delta * EXTRA_FETCH_CANDLES)
     extended_end_dt = end_dt
 

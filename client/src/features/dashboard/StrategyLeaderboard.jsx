@@ -36,7 +36,7 @@ export default function StrategyLeaderboard({ data }) {
                     <TableCell className="text-right font-mono text-xs">
                       {formatPct(parseFloat(item.averageWinRate) * 100)}
                     </TableCell>
-                    <TableCell className={`text-right font-mono text-xs font-semibold ${avgProfit >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                    <TableCell className={`text-right font-mono text-xs font-semibold ${avgProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                       {avgProfit >= 0 ? '+' : ''}{formatPrice(avgProfit)}
                     </TableCell>
                     <TableCell className="text-right font-mono text-xs text-yellow-400 font-semibold">

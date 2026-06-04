@@ -1,5 +1,6 @@
 const express = require('express')
 const router = express.Router()
+const requireBinanceCredentials = require('../middleware/requireBinanceCredentials')
 const {
   getSettingsKeys,
   saveSettingsKeys,
@@ -22,9 +23,14 @@ const {
   getTradeTransactions,
 } = require('../controllers/trade.controller')
 
+// Public routes — no credentials required
 router.get('/settings/keys', getSettingsKeys)
 router.post('/settings/keys', saveSettingsKeys)
 router.post('/settings/verify', verifySettings)
+router.get('/klines', getKlines)
+
+// All routes below require valid Binance credentials
+router.use(requireBinanceCredentials)
 
 router.get('/account', getAccountDetails)
 router.get('/positions', getPositionRisk)
@@ -42,8 +48,6 @@ router.post('/order/close', closePosition)
 router.get('/order', getOrderStatus)
 router.delete('/order', cancelOrder)
 router.delete('/all-orders', cancelAllOrders)
-
-router.get('/klines', getKlines)
 
 router.get('/executions/history', getTradeExecutions)
 router.get('/transactions/history', getTradeTransactions)

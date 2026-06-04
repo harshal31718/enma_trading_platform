@@ -1,3 +1,4 @@
+import logging
 from abc import ABC, abstractmethod
 import numpy as np
 
@@ -203,4 +204,4 @@ class BaseStrategy(ABC):
 
     def log(self, msg: str) -> None:
         """Log a message during strategy execution."""
-        print(f"[{self.symbol}] {msg}")
+        logging.getLogger("BaseStrategy").info("[%s] %s", self.symbol, msg)

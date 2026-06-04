@@ -60,7 +60,7 @@ export default function RecentActivityTable({ data }) {
                     <TableCell className="text-gray-400 text-xs">{formatDate(run.createdAt)}</TableCell>
                     <TableCell className="text-right font-mono text-xs font-semibold">
                       {pnl ? (
-                        <span className={pnl.isPositive ? 'text-green-400' : 'text-red-400'}>
+                        <span className={pnl.isPositive ? 'text-emerald-400' : 'text-red-400'}>
                           {pnl.value} ({formatSignedPct(run.metrics.netProfitPct)})
                         </span>
                       ) : (

@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Eye, EyeOff, Loader2 } from 'lucide-react'
 import PageWrapper from '@/components/layout/PageWrapper'
 import PageHeader from '@/components/ui/PageHeader'
 import api from '@/lib/axios'
+import { useTradeSettings, useSaveTradeSettings } from '@/hooks/useTrade'
 
 const API_KEY_PATTERN = /^[a-zA-Z0-9-]+$/
 const API_KEY_MIN_LEN = 16
@@ -20,29 +20,6 @@ function validateSecret(value) {
   if (!value) return 'Secret key is required'
   if (value.length < SECRET_MIN_LEN) return `Must be at least ${SECRET_MIN_LEN} characters`
   return null
-}
-
-function useTradeSettings() {
-  return useQuery({
-    queryKey: ['trade', 'settings', 'keys'],
-    queryFn: async () => {
-      const res = await api.get('/api/v1/trade/settings/keys')
-      return res.data.data
-    },
-  })
-}
-
-function useSaveTradeSettings() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: async (body) => {
-      const res = await api.post('/api/v1/trade/settings/keys', body)
-      return res.data.data
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['trade', 'settings', 'keys'] })
-    },
-  })
 }
 
 export default function Settings() {
@@ -181,11 +158,11 @@ export default function Settings() {
               className={[
                 'rounded-lg p-4 mb-5',
                 verifyBanner.ok
-                  ? 'bg-green-900/20 border border-green-800/40'
+                  ? 'bg-emerald-950/20 border border-emerald-800/40'
                   : 'bg-red-900/20 border border-red-800/40',
               ].join(' ')}
             >
-              <p className={verifyBanner.ok ? 'text-green-400 text-sm' : 'text-red-400 text-sm'}>
+              <p className={verifyBanner.ok ? 'text-emerald-400 text-sm' : 'text-red-400 text-sm'}>
                 {verifyBanner.message}
               </p>
             </div>

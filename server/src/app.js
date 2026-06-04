@@ -4,6 +4,7 @@ const cors = require('cors')
 const morgan = require('morgan')
 const mongoose = require('mongoose')
 const Redis = require('ioredis')
+const rateLimit = require('express-rate-limit')
 
 const candleRoutes = require('./routes/candle.routes')
 const dashboardRoutes = require('./routes/dashboard.routes')
@@ -11,6 +12,7 @@ const strategyRoutes = require('./routes/strategy.routes')
 const backtestRoutes = require('./routes/backtest.routes')
 const tradeRoutes = require('./routes/trade.routes')
 const errorHandler = require('./middleware/errorHandler')
+const ApiError = require('./utils/ApiError')
 
 const app = express()
 
@@ -18,6 +20,15 @@ app.use(helmet())
 app.use(cors({ origin: process.env.CLIENT_URL || 'http://localhost:5173' }))
 app.use(morgan('dev'))
 app.use(express.json())
+
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  handler: (req, res, next) => {
+    next(new ApiError(429, 'TOO_MANY_REQUESTS', 'Too many requests from this IP, please try again after 15 minutes'))
+  },
+})
+app.use('/api/v1/', apiLimiter)
 
 // Health check — verifies live MongoDB and Redis connections
 app.get('/api/v1/health', async (req, res) => {

@@ -22,6 +22,7 @@ from routers.dashboard import router as dashboard_router
 from routers.strategies import router as strategies_router
 from routers.trade import router as trade_router
 from services.strategy_seeder import seed_strategies
+from services.binance_testnet import close_client
 
 load_dotenv()
 
@@ -71,6 +72,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     close_mongo()
     await close_pool()
+    await close_client()
     logger.info("Engine shutdown complete")
 
 

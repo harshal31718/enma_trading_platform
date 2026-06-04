@@ -1,3 +1,4 @@
+import logging
 from typing import Literal
 from uuid import uuid4
 
@@ -6,6 +7,8 @@ from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from services.binance_testnet import send_signed_request
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -161,7 +164,7 @@ async def get_open_orders(
                 normalized_algo.append(normalized_ao)
             data.extend(normalized_algo)
         except Exception as e:
-            print(f"Failed to fetch open algo orders: {e}")
+            logger.error("Failed to fetch open algo orders: %s", e)
 
         return {"success": True, "data": data}
     except httpx.HTTPStatusError as exc:
@@ -474,7 +477,7 @@ async def cancel_all_orders(
                 params={"symbol": binance_symbol},
             )
         except Exception as e:
-            print(f"Failed to cancel open algo orders: {e}")
+            logger.error("Failed to cancel open algo orders: %s", e)
             algo_data = None
 
         return {"success": True, "data": {"cancelled": True, "standard": std_data, "algo": algo_data}}
@@ -581,8 +584,10 @@ async def place_order_with_tp_sl(
 def from_binance_symbol(symbol: str) -> str:
     if not symbol:
         return ""
-    if symbol.endswith("USDT"):
-        return f"{symbol[:-4]}-{symbol[-4:]}"
+    for quote in ("USDT", "USDC", "BUSD", "BTC", "ETH", "BNB"):
+        if symbol.endswith(quote):
+            base = symbol[:-len(quote)]
+            return f"{base}-{quote}"
     return symbol
 
 
@@ -607,7 +612,7 @@ async def get_history_orders(
                 params={"symbol": binance_symbol, "limit": limit}
             )
         except Exception as e:
-            print(f"Failed to fetch historical algo orders: {e}")
+            logger.error("Failed to fetch historical algo orders: %s", e)
 
         normalized = []
         for o in std_orders:

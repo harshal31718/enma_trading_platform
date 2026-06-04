@@ -29,6 +29,30 @@ async function runBacktest(req, res, next) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'Missing required fields for running a backtest')
     }
 
+    const capitalNum = Number(capital)
+    if (!isFinite(capitalNum) || capitalNum <= 0) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'capital must be a positive number')
+    }
+
+    const leverageNum = Number(leverage ?? 1)
+    if (!Number.isInteger(leverageNum) || leverageNum < 1 || leverageNum > 125) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'leverage must be an integer between 1 and 125')
+    }
+
+    const feeRateNum = Number(feeRate !== undefined ? feeRate : 0.001)
+    if (!isFinite(feeRateNum) || feeRateNum < 0 || feeRateNum > 0.05) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'feeRate must be a number between 0 and 0.05')
+    }
+
+    const startDt = new Date(startDate)
+    const endDt = new Date(endDate)
+    if (isNaN(startDt.getTime()) || isNaN(endDt.getTime())) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'startDate and endDate must be valid dates')
+    }
+    if (startDt >= endDt) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'startDate must precede endDate')
+    }
+
     const strategy = await Strategy.findById(strategyId).lean()
     if (!strategy) {
       throw new ApiError(404, 'NOT_FOUND', 'Strategy not found')
@@ -92,7 +116,8 @@ async function getBacktest(req, res, next) {
 // Avoids the O(skip) collection scan that .skip() requires.
 async function listBacktests(req, res, next) {
   try {
-    const limit  = Math.min(parseInt(req.query.limit || 20, 10), 100)
+    const parsedLimit = parseInt(req.query.limit, 10)
+    const limit  = Math.min(isNaN(parsedLimit) ? 20 : parsedLimit, 100)
     const before = req.query.before  // MongoDB _id string of the last item seen
 
     const filter = before && mongoose.Types.ObjectId.isValid(before)
@@ -132,8 +157,10 @@ async function listBacktests(req, res, next) {
 async function getBacktestTrades(req, res, next) {
   try {
     const { id } = req.params
-    const page  = Math.max(1, parseInt(req.query.page  || 1,  10))
-    const limit = Math.min(   parseInt(req.query.limit || 50, 10), 200)
+    const parsedPage  = parseInt(req.query.page,  10)
+    const parsedLimit = parseInt(req.query.limit, 10)
+    const page  = Math.max(1, isNaN(parsedPage)  ? 1  : parsedPage)
+    const limit = Math.min(   isNaN(parsedLimit) ? 50 : parsedLimit, 200)
     const skip  = (page - 1) * limit
 
     // Resolve jobId — id may be a UUID (jobId) or a MongoDB ObjectId

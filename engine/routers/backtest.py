@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import os
 import redis.asyncio as aioredis
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 
 from services.backtest_runner import run_backtest_simulation
@@ -47,16 +47,17 @@ async def run_backtest(req: BacktestRequest):
         return {"success": True, "data": res}
     except Exception as e:
         logger.error(f"Backtest {req.jobId} failed: {e}")
-        
-        # Ensure we write a failed result to MongoDB
+
         db = get_database()
-        
-        # Extract strategy name
+
         parts = req.strategyFile.split("/")
         strategy_name = parts[1] if len(parts) >= 2 else req.strategyFile
         strategy_doc = await db.strategies.find_one({"name": strategy_name})
         strategy_id = str(strategy_doc["_id"]) if strategy_doc else None
-        
+
+        is_cancelled = str(e) == "JOB_CANCELLED"
+        status = "cancelled" if is_cancelled else "failed"
+
         await db.backtestResults.update_one(
             {"jobId": req.jobId},
             {
@@ -72,17 +73,17 @@ async def run_backtest(req: BacktestRequest):
                     "capital": req.capital,
                     "leverage": req.leverage,
                     "feeRate": req.feeRate,
-                    "status": "failed",
+                    "status": status,
                     "error": str(e),
-                    "updatedAt": datetime.utcnow(),
+                    "updatedAt": datetime.now(timezone.utc),
                 },
                 "$setOnInsert": {
-                    "createdAt": datetime.utcnow()
+                    "createdAt": datetime.now(timezone.utc)
                 }
             },
             upsert=True
         )
-            
+
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -90,13 +91,13 @@ async def run_backtest(req: BacktestRequest):
 async def cancel_backtest(req: CancelRequest):
     redis_url = os.getenv("REDIS_URL", "redis://redis:6379")
     r_client = aioredis.from_url(redis_url)
-    await r_client.set(f"backtest:cancel:{req.jobId}", "1", ex=3600)
+    await r_client.publish(f"backtest:cancel:{req.jobId}", "cancel")
     await r_client.aclose()
 
     db = get_database()
     await db.backtestResults.update_one(
         {"jobId": req.jobId},
-        {"$set": {"status": "failed", "error": "Cancelled by user", "updatedAt": datetime.utcnow()}},
+        {"$set": {"status": "cancelled", "error": "Cancelled by user", "updatedAt": datetime.now(timezone.utc)}},
     )
 
     return {"success": True, "data": {"jobId": req.jobId, "status": "cancelled"}}

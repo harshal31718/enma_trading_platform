@@ -32,6 +32,8 @@ export function useBacktestResult(id) {
       return res.data.data
     },
     enabled: !!id,
+    staleTime: (query) =>
+      ['completed', 'failed', 'cancelled'].includes(query.state.data?.status) ? Infinity : 0,
   })
 }
 

@@ -30,16 +30,9 @@ import {
   useCancelBacktest,
   useBacktestTrades,
 } from '../hooks/useBacktest'
-import { formatQty, formatPrice, formatPct, formatSignedPct, formatPnl } from '../utils/formatters'
+import { formatQty, formatPrice, formatPct, formatSignedPct, formatPnl, formatIsoDate } from '../utils/formatters'
 import socket from '../lib/socket'
 import { useQueryClient } from '@tanstack/react-query'
-
-function fmtDate(iso) {
-  if (!iso) return ''
-  const [year, month, day] = iso.split('-')
-  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
-  return `${parseInt(day, 10)} ${months[parseInt(month, 10) - 1]} '${year.slice(2)}`
-}
 
 export default function Backtest() {
   const queryClient = useQueryClient()
@@ -170,7 +163,7 @@ export default function Backtest() {
 
   const getPnlClass = (val) => {
     const n = parseFloat(val)
-    if (n > 0) return 'text-green-400'
+    if (n > 0) return 'text-emerald-400'
     if (n < 0) return 'text-red-400'
     return 'text-gray-300'
   }
@@ -314,7 +307,7 @@ export default function Backtest() {
                     <span className="text-gray-500 block">Date Range</span>
                     <span className="text-gray-300 font-medium flex items-center gap-1.5 mt-0.5">
                       <Calendar className="size-4 text-emerald-400" />
-                      {fmtDate(activeResult.startDate)} to {fmtDate(activeResult.endDate)}
+                      {formatIsoDate(activeResult.startDate)} to {formatIsoDate(activeResult.endDate)}
                     </span>
                   </div>
                   <div>
@@ -392,7 +385,7 @@ export default function Backtest() {
                                       {tr.exitReason ? tr.exitReason.replace('_', ' ') : '-'}
                                     </span>
                                   </TableCell>
-                                  <TableCell className={`text-right font-mono text-xs font-semibold ${pnl.isPositive ? 'text-green-400' : 'text-red-400'}`}>
+                                  <TableCell className={`text-right font-mono text-xs font-semibold ${pnl.isPositive ? 'text-emerald-400' : 'text-red-400'}`}>
                                     {pnl.value} ({formatSignedPct(tr.pnlPct)})
                                   </TableCell>
                                 </TableRow>

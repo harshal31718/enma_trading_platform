@@ -6,14 +6,7 @@ import { Input } from '../../components/ui/input'
 import { Select } from '../../components/ui/select'
 import { useStrategies } from '../../hooks/useStrategies'
 import { useSymbols } from '../../hooks/useCandles'
-
-// Formats an ISO date string (YYYY-MM-DD) as "29 Aug '25"
-function formatDateDisplay(iso) {
-  if (!iso) return ''
-  const [year, month, day] = iso.split('-')
-  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
-  return `${parseInt(day, 10)} ${months[parseInt(month, 10) - 1]} '${year.slice(2)}`
-}
+import { formatIsoDate } from '../../utils/formatters'
 
 // Date picker that shows "29 Aug '25" but stores/emits a YYYY-MM-DD ISO string
 function DateInput({ value, onChange, label }) {
@@ -26,7 +19,7 @@ function DateInput({ value, onChange, label }) {
         onClick={() => hiddenRef.current?.showPicker?.()}
         className="relative flex h-10 w-full items-center justify-between rounded border border-gray-800 bg-gray-950 px-3 py-2 text-sm text-gray-100 hover:border-gray-700 focus-visible:outline-none focus-visible:border-emerald-500 transition-colors"
       >
-        <span>{formatDateDisplay(value)}</span>
+        <span>{formatIsoDate(value)}</span>
         <Calendar className="size-4 text-gray-500 shrink-0" />
         <input
           ref={hiddenRef}

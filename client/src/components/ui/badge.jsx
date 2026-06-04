@@ -8,7 +8,7 @@ const variantClasses = {
   secondary:   'bg-gray-700 text-gray-300 border-gray-600',
   destructive: 'bg-red-400/10 text-red-400 border-red-400/20',
   outline:     'bg-transparent text-gray-300 border-gray-700',
-  profit:      'bg-green-500/15 text-green-400 border-green-500/20',
+  profit:      'bg-emerald-500/15 text-emerald-400 border-emerald-500/20',
   loss:        'bg-red-500/15 text-red-400 border-red-500/20',
 }
 

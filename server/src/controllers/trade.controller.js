@@ -6,17 +6,6 @@ const engineClient = require('../services/engineClient')
 const ApiResponse = require('../utils/ApiResponse')
 const ApiError = require('../utils/ApiError')
 
-async function loadCredentialHeaders() {
-  const settings = await Settings.findById('global').lean()
-  if (!settings?.binanceApiKey || !settings?.binanceApiSecret) {
-    throw new ApiError(400, 'NO_CREDENTIALS', 'Binance API credentials are not configured')
-  }
-  return {
-    'X-Binance-API-Key': settings.binanceApiKey,
-    'X-Binance-API-Secret': settings.binanceApiSecret,
-  }
-}
-
 function fromBinanceSymbol(sym) {
   if (!sym) return ''
   if (sym.endsWith('USDT')) {
@@ -30,9 +19,44 @@ function maskKey(key) {
   return key.slice(0, 4) + '*'.repeat(key.length - 8) + key.slice(-4)
 }
 
+function handleEngineError(err, defaultMessage) {
+  if (err instanceof ApiError) return err
+  const detail = err.response?.data?.detail
+  const message = typeof detail === 'string' ? detail : detail?.message || defaultMessage
+  return new ApiError(err.response?.status || 500, 'ENGINE_ERROR', message)
+}
+
+async function upsertTradeOrder(orderDetails, fallback = {}) {
+  await TradeOrder.findOneAndUpdate(
+    { orderId: String(orderDetails.orderId) },
+    {
+      $set: {
+        orderId: String(orderDetails.orderId),
+        clientOrderId: orderDetails.clientOrderId || fallback.clientOrderId || '',
+        symbol: fromBinanceSymbol(orderDetails.symbol) || fallback.symbol,
+        status: orderDetails.status || 'NEW',
+        price: String(orderDetails.price || fallback.price || '0'),
+        avgPrice: String(orderDetails.avgPrice || '0'),
+        origQty: String(orderDetails.origQty || fallback.quantity),
+        executedQty: String(orderDetails.executedQty || '0'),
+        side: orderDetails.side || fallback.side,
+        type: orderDetails.type || fallback.type,
+        timeInForce: orderDetails.timeInForce || 'GTC',
+        stopPrice: String(orderDetails.stopPrice || fallback.stopPrice || '0'),
+        time: orderDetails.updateTime ? new Date(orderDetails.updateTime) : new Date(),
+        updateTime: orderDetails.updateTime ? new Date(orderDetails.updateTime) : new Date(),
+        reduceOnly: orderDetails.reduceOnly || fallback.reduceOnly || false,
+        postOnly: orderDetails.postOnly || fallback.postOnly || false,
+        isAlgo: orderDetails.isAlgo || fallback.isAlgo || false,
+      }
+    },
+    { upsert: true }
+  )
+}
+
 async function getSettingsKeys(req, res, next) {
   try {
-    const settings = await Settings.findById('global').lean()
+    const settings = await Settings.findById('global')
 
     if (!settings) {
       return res.json(ApiResponse.success({ paperTrading: true, binanceApiKey: '' }))
@@ -57,7 +81,6 @@ async function saveSettingsKeys(req, res, next) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'paperTrading must be a boolean')
     }
 
-    // If keys are provided, verify them against Binance Testnet before saving
     if (binanceApiKey && binanceApiSecret) {
       try {
         await engineClient.post('/trade/verify', { binanceApiKey, binanceApiSecret })
@@ -71,15 +94,14 @@ async function saveSettingsKeys(req, res, next) {
       }
     }
 
-    const updateFields = { paperTrading }
-    if (binanceApiKey) updateFields.binanceApiKey = binanceApiKey
-    if (binanceApiSecret) updateFields.binanceApiSecret = binanceApiSecret
-
-    await Settings.findByIdAndUpdate(
-      'global',
-      { $set: updateFields },
-      { upsert: true, new: true }
-    )
+    let settings = await Settings.findById('global')
+    if (!settings) {
+      settings = new Settings({ _id: 'global' })
+    }
+    settings.paperTrading = paperTrading
+    if (binanceApiKey) settings.binanceApiKey = binanceApiKey
+    if (binanceApiSecret) settings.binanceApiSecret = binanceApiSecret
+    await settings.save()
 
     res.json(ApiResponse.success({ saved: true }))
   } catch (err) {
@@ -87,164 +109,9 @@ async function saveSettingsKeys(req, res, next) {
   }
 }
 
-async function getAccountDetails(req, res, next) {
-  try {
-    const credHeaders = await loadCredentialHeaders()
-    const { data } = await engineClient.get('/trade/account', { headers: credHeaders })
-    res.json(ApiResponse.success(data.data))
-  } catch (err) {
-    if (err instanceof ApiError) return next(err)
-    const detail = err.response?.data?.detail
-    const message = typeof detail === 'string' ? detail : detail?.message || 'Failed to fetch account'
-    next(new ApiError(err.response?.status || 500, 'ENGINE_ERROR', message))
-  }
-}
-
-async function getPositionRisk(req, res, next) {
-  try {
-    const credHeaders = await loadCredentialHeaders()
-    const { symbol } = req.query
-    const params = symbol ? { symbol } : {}
-    const { data } = await engineClient.get('/trade/positions', { headers: credHeaders, params })
-
-    // When a specific symbol is requested return the raw array (used for config reads).
-    // Without a symbol filter out zero-size positions for the active-positions tab.
-    const result = symbol
-      ? (data.data || [])
-      : (data.data || []).filter(
-          (p) => p.positionAmt !== '0' && p.positionAmt !== '0.0' && parseFloat(p.positionAmt) !== 0
-        )
-
-    res.json(ApiResponse.success(result))
-  } catch (err) {
-    if (err instanceof ApiError) return next(err)
-    const detail = err.response?.data?.detail
-    const message = typeof detail === 'string' ? detail : detail?.message || 'Failed to fetch positions'
-    next(new ApiError(err.response?.status || 500, 'ENGINE_ERROR', message))
-  }
-}
-
-async function getOpenOrders(req, res, next) {
-  try {
-    const credHeaders = await loadCredentialHeaders()
-    const { data } = await engineClient.get('/trade/open-orders', { headers: credHeaders })
-    res.json(ApiResponse.success(data.data))
-  } catch (err) {
-    if (err instanceof ApiError) return next(err)
-    const detail = err.response?.data?.detail
-    const message = typeof detail === 'string' ? detail : detail?.message || 'Failed to fetch open orders'
-    next(new ApiError(err.response?.status || 500, 'ENGINE_ERROR', message))
-  }
-}
-
-async function changeLeverage(req, res, next) {
-  try {
-    const { symbol, leverage } = req.body
-    if (!symbol || leverage == null) {
-      throw new ApiError(400, 'VALIDATION_ERROR', 'symbol and leverage are required')
-    }
-    const credHeaders = await loadCredentialHeaders()
-    const { data } = await engineClient.post('/trade/leverage', { symbol, leverage }, { headers: credHeaders })
-    res.json(ApiResponse.success(data.data))
-  } catch (err) {
-    if (err instanceof ApiError) return next(err)
-    const detail = err.response?.data?.detail
-    const message = typeof detail === 'string' ? detail : detail?.message || 'Failed to update leverage'
-    next(new ApiError(err.response?.status || 500, 'ENGINE_ERROR', message))
-  }
-}
-
-async function changeMarginType(req, res, next) {
-  try {
-    const { symbol, marginType } = req.body
-    if (!symbol || !marginType) {
-      throw new ApiError(400, 'VALIDATION_ERROR', 'symbol and marginType are required')
-    }
-    const credHeaders = await loadCredentialHeaders()
-    const { data } = await engineClient.post('/trade/margin-type', { symbol, marginType }, { headers: credHeaders })
-    res.json(ApiResponse.success(data.data))
-  } catch (err) {
-    if (err instanceof ApiError) return next(err)
-    const detail = err.response?.data?.detail
-    const message = typeof detail === 'string' ? detail : detail?.message || 'Failed to update margin type'
-    next(new ApiError(err.response?.status || 500, 'ENGINE_ERROR', message))
-  }
-}
-
-async function placeOrder(req, res, next) {
-  try {
-    const { symbol, side, type, quantity, price } = req.body
-    if (!symbol || !side || !type || quantity == null) {
-      throw new ApiError(400, 'VALIDATION_ERROR', 'symbol, side, type, and quantity are required')
-    }
-    if (typeof quantity !== 'number' || quantity <= 0) {
-      throw new ApiError(400, 'VALIDATION_ERROR', 'quantity must be a positive number')
-    }
-    const credHeaders = await loadCredentialHeaders()
-    const { data } = await engineClient.post(
-      '/trade/order',
-      { symbol, side, type, quantity, price },
-      { headers: credHeaders }
-    )
-    const orderDetails = data.data
-    try {
-      await TradeOrder.findOneAndUpdate(
-        { orderId: String(orderDetails.orderId) },
-        {
-          $set: {
-            orderId: String(orderDetails.orderId),
-            clientOrderId: orderDetails.clientOrderId,
-            symbol: fromBinanceSymbol(orderDetails.symbol) || symbol,
-            status: orderDetails.status || 'NEW',
-            price: String(orderDetails.price || price || '0'),
-            avgPrice: String(orderDetails.avgPrice || '0'),
-            origQty: String(orderDetails.origQty || quantity),
-            executedQty: String(orderDetails.executedQty || '0'),
-            side: orderDetails.side || side,
-            type: orderDetails.type || type,
-            timeInForce: orderDetails.timeInForce || 'GTC',
-            stopPrice: String(orderDetails.stopPrice || '0'),
-            time: orderDetails.updateTime ? new Date(orderDetails.updateTime) : new Date(),
-            updateTime: orderDetails.updateTime ? new Date(orderDetails.updateTime) : new Date(),
-            reduceOnly: orderDetails.reduceOnly || false,
-            postOnly: orderDetails.postOnly || false,
-            isAlgo: false,
-          }
-        },
-        { upsert: true }
-      )
-    } catch (dbErr) {
-      console.error('Failed to save local order draft:', dbErr)
-    }
-    res.json(ApiResponse.success(data.data))
-  } catch (err) {
-    if (err instanceof ApiError) return next(err)
-    const detail = err.response?.data?.detail
-    const message = typeof detail === 'string' ? detail : detail?.message || 'Failed to place order'
-    next(new ApiError(err.response?.status || 500, 'ENGINE_ERROR', message))
-  }
-}
-
-async function closePosition(req, res, next) {
-  try {
-    const { symbol } = req.body
-    if (!symbol) {
-      throw new ApiError(400, 'VALIDATION_ERROR', 'symbol is required')
-    }
-    const credHeaders = await loadCredentialHeaders()
-    const { data } = await engineClient.post('/trade/close-position', { symbol }, { headers: credHeaders })
-    res.json(ApiResponse.success(data.data))
-  } catch (err) {
-    if (err instanceof ApiError) return next(err)
-    const detail = err.response?.data?.detail
-    const message = typeof detail === 'string' ? detail : detail?.message || 'Failed to close position'
-    next(new ApiError(err.response?.status || 500, 'ENGINE_ERROR', message))
-  }
-}
-
 async function verifySettings(req, res, next) {
   try {
-    const settings = await Settings.findById('global').lean()
+    const settings = await Settings.findById('global')
     if (!settings?.binanceApiKey || !settings?.binanceApiSecret) {
       throw new ApiError(400, 'NO_CREDENTIALS', 'Binance API credentials are not configured')
     }
@@ -267,18 +134,127 @@ async function verifySettings(req, res, next) {
   }
 }
 
+async function getAccountDetails(req, res, next) {
+  try {
+    const { data } = await engineClient.get('/trade/account', { headers: req.binanceHeaders })
+    res.json(ApiResponse.success(data.data))
+  } catch (err) {
+    next(handleEngineError(err, 'Failed to fetch account'))
+  }
+}
+
+async function getPositionRisk(req, res, next) {
+  try {
+    const { symbol } = req.query
+    const params = symbol ? { symbol } : {}
+    const { data } = await engineClient.get('/trade/positions', { headers: req.binanceHeaders, params })
+
+    const result = symbol
+      ? (data.data || [])
+      : (data.data || []).filter(
+          (p) => p.positionAmt !== '0' && p.positionAmt !== '0.0' && parseFloat(p.positionAmt) !== 0
+        )
+
+    res.json(ApiResponse.success(result))
+  } catch (err) {
+    next(handleEngineError(err, 'Failed to fetch positions'))
+  }
+}
+
+async function getOpenOrders(req, res, next) {
+  try {
+    const { data } = await engineClient.get('/trade/open-orders', { headers: req.binanceHeaders })
+    res.json(ApiResponse.success(data.data))
+  } catch (err) {
+    next(handleEngineError(err, 'Failed to fetch open orders'))
+  }
+}
+
+async function changeLeverage(req, res, next) {
+  try {
+    const { symbol, leverage } = req.body
+    if (!symbol || leverage == null) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'symbol and leverage are required')
+    }
+    const { data } = await engineClient.post('/trade/leverage', { symbol, leverage }, { headers: req.binanceHeaders })
+    res.json(ApiResponse.success(data.data))
+  } catch (err) {
+    next(handleEngineError(err, 'Failed to update leverage'))
+  }
+}
+
+async function changeMarginType(req, res, next) {
+  try {
+    const { symbol, marginType } = req.body
+    if (!symbol || !marginType) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'symbol and marginType are required')
+    }
+    if (!['ISOLATED', 'CROSSED'].includes(marginType)) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'marginType must be ISOLATED or CROSSED')
+    }
+    const { data } = await engineClient.post('/trade/margin-type', { symbol, marginType }, { headers: req.binanceHeaders })
+    res.json(ApiResponse.success(data.data))
+  } catch (err) {
+    next(handleEngineError(err, 'Failed to update margin type'))
+  }
+}
+
+async function placeOrder(req, res, next) {
+  try {
+    const { symbol, side, type, quantity, price } = req.body
+    if (!symbol || !side || !type || quantity == null) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'symbol, side, type, and quantity are required')
+    }
+    if (typeof quantity !== 'number' || quantity <= 0) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'quantity must be a positive number')
+    }
+    const { data } = await engineClient.post(
+      '/trade/order',
+      { symbol, side, type, quantity, price },
+      { headers: req.binanceHeaders }
+    )
+    const orderDetails = data.data
+    try {
+      await upsertTradeOrder(orderDetails, { symbol, side, type, quantity, price })
+    } catch (dbErr) {
+      console.error('Failed to save local order draft:', dbErr)
+      throw new ApiError(500, 'DB_SYNC_ERROR', 'Order placed but local DB sync failed')
+    }
+    res.json(ApiResponse.success(data.data))
+  } catch (err) {
+    next(handleEngineError(err, 'Failed to place order'))
+  }
+}
+
+async function closePosition(req, res, next) {
+  try {
+    const { symbol } = req.body
+    if (!symbol) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'symbol is required')
+    }
+    const { data } = await engineClient.post('/trade/close-position', { symbol }, { headers: req.binanceHeaders })
+    res.json(ApiResponse.success(data.data))
+  } catch (err) {
+    next(handleEngineError(err, 'Failed to close position'))
+  }
+}
+
+const VALID_INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M']
+
 async function getKlines(req, res, next) {
   try {
-    const { symbol, interval, limit } = req.query
+    const { symbol, interval } = req.query
+    if (!VALID_INTERVALS.includes(interval)) {
+      throw new ApiError(400, 'VALIDATION_ERROR', `interval must be one of: ${VALID_INTERVALS.join(', ')}`)
+    }
+    const parsedLimit = parseInt(req.query.limit, 10)
+    const limit = (!isNaN(parsedLimit) && parsedLimit >= 1 && parsedLimit <= 1000) ? parsedLimit : 200
     const { data } = await engineClient.get('/trade/klines', {
       params: { symbol, interval, limit }
     })
     res.json(ApiResponse.success(data.data))
   } catch (err) {
-    if (err instanceof ApiError) return next(err)
-    const detail = err.response?.data?.detail
-    const message = typeof detail === 'string' ? detail : detail?.message || 'Failed to fetch public klines'
-    next(new ApiError(err.response?.status || 500, 'ENGINE_ERROR', message))
+    next(handleEngineError(err, 'Failed to fetch public klines'))
   }
 }
 
@@ -288,9 +264,8 @@ async function cancelOrder(req, res, next) {
     if (!symbol || !orderId) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'symbol and orderId are required')
     }
-    const credHeaders = await loadCredentialHeaders()
     const { data } = await engineClient.delete('/trade/order', {
-      headers: credHeaders,
+      headers: req.binanceHeaders,
       params: { symbol, orderId },
     })
     try {
@@ -300,13 +275,11 @@ async function cancelOrder(req, res, next) {
       )
     } catch (dbErr) {
       console.error('Failed to update canceled order status:', dbErr)
+      throw new ApiError(500, 'DB_SYNC_ERROR', 'Order cancelled but local DB sync failed')
     }
     res.json(ApiResponse.success(data.data))
   } catch (err) {
-    if (err instanceof ApiError) return next(err)
-    const detail = err.response?.data?.detail
-    const message = typeof detail === 'string' ? detail : detail?.message || 'Failed to cancel order'
-    next(new ApiError(err.response?.status || 500, 'ENGINE_ERROR', message))
+    next(handleEngineError(err, 'Failed to cancel order'))
   }
 }
 
@@ -325,52 +298,33 @@ async function placeOCOOrder(req, res, next) {
     if (typeof quantity !== 'number' || quantity <= 0) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'quantity must be a positive number')
     }
-    const credHeaders = await loadCredentialHeaders()
     const { data } = await engineClient.post(
       '/trade/order/oco_futures',
       { symbol, side: side.toUpperCase(), quantity, stopPrice, takeProfitPrice },
-      { headers: credHeaders }
+      { headers: req.binanceHeaders }
     )
     const ocoDetails = data.data
     if (ocoDetails?.orders && Array.isArray(ocoDetails.orders)) {
       try {
         for (const ord of ocoDetails.orders) {
-          await TradeOrder.findOneAndUpdate(
-            { orderId: String(ord.orderId) },
-            {
-              $set: {
-                orderId: String(ord.orderId),
-                clientOrderId: ord.clientOrderId,
-                symbol: symbol,
-                status: 'NEW',
-                price: '0.00',
-                avgPrice: '0.00',
-                origQty: String(quantity),
-                executedQty: '0.00',
-                side: side.toUpperCase() === 'BUY' ? 'SELL' : 'BUY',
-                type: ord.type,
-                timeInForce: 'GTC',
-                stopPrice: String(ord.type === 'STOP_MARKET' ? stopPrice : takeProfitPrice),
-                time: new Date(),
-                updateTime: new Date(),
-                reduceOnly: true,
-                postOnly: false,
-                isAlgo: true,
-              }
-            },
-            { upsert: true }
-          )
+          await upsertTradeOrder(ord, {
+            symbol,
+            quantity: String(quantity),
+            side: side.toUpperCase() === 'BUY' ? 'SELL' : 'BUY',
+            type: ord.type,
+            stopPrice: String(ord.type === 'STOP_MARKET' ? stopPrice : takeProfitPrice),
+            reduceOnly: true,
+            isAlgo: true,
+          })
         }
       } catch (dbErr) {
         console.error('Failed to save OCO order drafts:', dbErr)
+        throw new ApiError(500, 'DB_SYNC_ERROR', 'Order placed but local DB sync failed')
       }
     }
     res.json(ApiResponse.success(data.data))
   } catch (err) {
-    if (err instanceof ApiError) return next(err)
-    const detail = err.response?.data?.detail
-    const message = typeof detail === 'string' ? detail : detail?.message || 'Failed to place OCO order'
-    next(new ApiError(err.response?.status || 500, 'ENGINE_ERROR', message))
+    next(handleEngineError(err, 'Failed to place OCO order'))
   }
 }
 
@@ -386,104 +340,53 @@ async function placeOrderWithTpSl(req, res, next) {
     if (typeof quantity !== 'number' || quantity <= 0) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'quantity must be a positive number')
     }
-    const credHeaders = await loadCredentialHeaders()
     const { data } = await engineClient.post(
       '/trade/order/with_tp_sl',
       { symbol, side: side.toUpperCase(), type: type.toUpperCase(), quantity, price, stopLoss, takeProfit },
-      { headers: credHeaders }
+      { headers: req.binanceHeaders }
     )
     const resData = data.data
     try {
       if (resData.entry) {
-        await TradeOrder.findOneAndUpdate(
-          { orderId: String(resData.entry.orderId) },
-          {
-            $set: {
-              orderId: String(resData.entry.orderId),
-              clientOrderId: '',
-              symbol: symbol,
-              status: 'NEW',
-              price: String(price || '0'),
-              avgPrice: '0.00',
-              origQty: String(quantity),
-              executedQty: '0.00',
-              side: side.toUpperCase(),
-              type: type.toUpperCase(),
-              timeInForce: 'GTC',
-              stopPrice: '0.00',
-              time: new Date(),
-              updateTime: new Date(),
-              reduceOnly: false,
-              postOnly: false,
-              isAlgo: false,
-            }
-          },
-          { upsert: true }
-        )
+        await upsertTradeOrder(resData.entry, {
+          symbol,
+          price: String(price || '0'),
+          quantity: String(quantity),
+          side: side.toUpperCase(),
+          type: type.toUpperCase(),
+        })
       }
       if (resData.sl) {
-        await TradeOrder.findOneAndUpdate(
-          { orderId: String(resData.sl.orderId) },
-          {
-            $set: {
-              orderId: String(resData.sl.orderId),
-              clientOrderId: resData.sl.clientOrderId,
-              symbol: symbol,
-              status: 'NEW',
-              price: '0.00',
-              avgPrice: '0.00',
-              origQty: String(quantity),
-              executedQty: '0.00',
-              side: side.toUpperCase() === 'BUY' ? 'SELL' : 'BUY',
-              type: 'STOP_MARKET',
-              timeInForce: 'GTC',
-              stopPrice: String(stopLoss),
-              time: new Date(),
-              updateTime: new Date(),
-              reduceOnly: true,
-              postOnly: false,
-              isAlgo: true,
-            }
-          },
-          { upsert: true }
-        )
+        await upsertTradeOrder(resData.sl, {
+          clientOrderId: resData.sl.clientOrderId,
+          symbol,
+          quantity: String(quantity),
+          side: side.toUpperCase() === 'BUY' ? 'SELL' : 'BUY',
+          type: 'STOP_MARKET',
+          stopPrice: String(stopLoss),
+          reduceOnly: true,
+          isAlgo: true,
+        })
       }
       if (resData.tp) {
-        await TradeOrder.findOneAndUpdate(
-          { orderId: String(resData.tp.orderId) },
-          {
-            $set: {
-              orderId: String(resData.tp.orderId),
-              clientOrderId: resData.tp.clientOrderId,
-              symbol: symbol,
-              status: 'NEW',
-              price: '0.00',
-              avgPrice: '0.00',
-              origQty: String(quantity),
-              executedQty: '0.00',
-              side: side.toUpperCase() === 'BUY' ? 'SELL' : 'BUY',
-              type: 'TAKE_PROFIT_MARKET',
-              timeInForce: 'GTC',
-              stopPrice: String(takeProfit),
-              time: new Date(),
-              updateTime: new Date(),
-              reduceOnly: true,
-              postOnly: false,
-              isAlgo: true,
-            }
-          },
-          { upsert: true }
-        )
+        await upsertTradeOrder(resData.tp, {
+          clientOrderId: resData.tp.clientOrderId,
+          symbol,
+          quantity: String(quantity),
+          side: side.toUpperCase() === 'BUY' ? 'SELL' : 'BUY',
+          type: 'TAKE_PROFIT_MARKET',
+          stopPrice: String(takeProfit),
+          reduceOnly: true,
+          isAlgo: true,
+        })
       }
     } catch (dbErr) {
       console.error('Failed to save order with TP/SL drafts:', dbErr)
+      throw new ApiError(500, 'DB_SYNC_ERROR', 'Order placed but local DB sync failed')
     }
     res.json(ApiResponse.success(data.data))
   } catch (err) {
-    if (err instanceof ApiError) return next(err)
-    const detail = err.response?.data?.detail
-    const message = typeof detail === 'string' ? detail : detail?.message || 'Failed to place order with TP/SL'
-    next(new ApiError(err.response?.status || 500, 'ENGINE_ERROR', message))
+    next(handleEngineError(err, 'Failed to place order with TP/SL'))
   }
 }
 
@@ -493,17 +396,13 @@ async function getOrderStatus(req, res, next) {
     if (!symbol || !orderId) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'symbol and orderId are required')
     }
-    const credHeaders = await loadCredentialHeaders()
     const { data } = await engineClient.get('/trade/order', {
-      headers: credHeaders,
+      headers: req.binanceHeaders,
       params: { symbol, orderId },
     })
     res.json(ApiResponse.success(data.data))
   } catch (err) {
-    if (err instanceof ApiError) return next(err)
-    const detail = err.response?.data?.detail
-    const message = typeof detail === 'string' ? detail : detail?.message || 'Failed to fetch order status'
-    next(new ApiError(err.response?.status || 500, 'ENGINE_ERROR', message))
+    next(handleEngineError(err, 'Failed to fetch order status'))
   }
 }
 
@@ -513,9 +412,8 @@ async function cancelAllOrders(req, res, next) {
     if (!symbol) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'symbol is required')
     }
-    const credHeaders = await loadCredentialHeaders()
     const { data } = await engineClient.delete('/trade/all-orders', {
-      headers: credHeaders,
+      headers: req.binanceHeaders,
       params: { symbol },
     })
     try {
@@ -525,13 +423,11 @@ async function cancelAllOrders(req, res, next) {
       )
     } catch (dbErr) {
       console.error('Failed to update all canceled orders status:', dbErr)
+      throw new ApiError(500, 'DB_SYNC_ERROR', 'Orders cancelled but local DB sync failed')
     }
     res.json(ApiResponse.success(data.data))
   } catch (err) {
-    if (err instanceof ApiError) return next(err)
-    const detail = err.response?.data?.detail
-    const message = typeof detail === 'string' ? detail : detail?.message || 'Failed to cancel all orders'
-    next(new ApiError(err.response?.status || 500, 'ENGINE_ERROR', message))
+    next(handleEngineError(err, 'Failed to cancel all orders'))
   }
 }
 
@@ -541,11 +437,11 @@ async function getTradeOrders(req, res, next) {
     if (!symbol) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'symbol query parameter is required')
     }
-    const credHeaders = await loadCredentialHeaders()
 
+    let synced = true
     try {
       const { data } = await engineClient.get('/trade/history-orders', {
-        headers: credHeaders,
+        headers: req.binanceHeaders,
         params: { symbol, limit: 100 },
       })
 
@@ -569,10 +465,11 @@ async function getTradeOrders(req, res, next) {
       }
     } catch (engineErr) {
       console.error('Failed to sync trade orders from engine:', engineErr.message)
+      synced = false
     }
 
     const orders = await TradeOrder.find({ symbol }).sort({ time: -1 }).lean()
-    res.json(ApiResponse.success(orders))
+    res.json(ApiResponse.success({ orders, synced }))
   } catch (err) {
     next(err)
   }
@@ -584,11 +481,11 @@ async function getTradeExecutions(req, res, next) {
     if (!symbol) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'symbol query parameter is required')
     }
-    const credHeaders = await loadCredentialHeaders()
 
+    let synced = true
     try {
       const { data } = await engineClient.get('/trade/history-executions', {
-        headers: credHeaders,
+        headers: req.binanceHeaders,
         params: { symbol, limit: 100 },
       })
 
@@ -611,10 +508,11 @@ async function getTradeExecutions(req, res, next) {
       }
     } catch (engineErr) {
       console.error('Failed to sync executions from engine:', engineErr.message)
+      synced = false
     }
 
     const executions = await TradeExecution.find({ symbol }).sort({ time: -1 }).lean()
-    res.json(ApiResponse.success(executions))
+    res.json(ApiResponse.success({ executions, synced }))
   } catch (err) {
     next(err)
   }
@@ -623,13 +521,13 @@ async function getTradeExecutions(req, res, next) {
 async function getTradeTransactions(req, res, next) {
   try {
     const { symbol } = req.query
-    const credHeaders = await loadCredentialHeaders()
 
+    let synced = true
     try {
       const params = { limit: 100 }
       if (symbol) params.symbol = symbol
       const { data } = await engineClient.get('/trade/history-transactions', {
-        headers: credHeaders,
+        headers: req.binanceHeaders,
         params,
       })
 
@@ -652,11 +550,12 @@ async function getTradeTransactions(req, res, next) {
       }
     } catch (engineErr) {
       console.error('Failed to sync transactions from engine:', engineErr.message)
+      synced = false
     }
 
     const filter = symbol ? { symbol } : {}
     const transactions = await TradeTransaction.find(filter).sort({ time: -1 }).lean()
-    res.json(ApiResponse.success(transactions))
+    res.json(ApiResponse.success({ transactions, synced }))
   } catch (err) {
     next(err)
   }
