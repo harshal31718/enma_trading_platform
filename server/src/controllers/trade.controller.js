@@ -5,6 +5,7 @@ const TradeTransaction = require('../models/TradeTransaction')
 const engineClient = require('../services/engineClient')
 const ApiResponse = require('../utils/ApiResponse')
 const ApiError = require('../utils/ApiError')
+const { isSymbolFree, getSymbolLock } = require('../services/symbolLock')
 
 function fromBinanceSymbol(sym) {
   if (!sym) return ''
@@ -149,15 +150,46 @@ async function getPositionRisk(req, res, next) {
     const params = symbol ? { symbol } : {}
     const { data } = await engineClient.get('/trade/positions', { headers: req.binanceHeaders, params })
 
+    const allPositions = data.data || []
     const result = symbol
-      ? (data.data || [])
-      : (data.data || []).filter(
+      ? allPositions
+      : allPositions.filter(
           (p) => p.positionAmt !== '0' && p.positionAmt !== '0.0' && parseFloat(p.positionAmt) !== 0
         )
 
     res.json(ApiResponse.success(result))
+
+    // Fire-and-forget: keep manual Redis locks in sync with live positions.
+    // Only run on full (no symbol filter) polls — the client does this every 4000ms.
+    if (!symbol) {
+      _reconcileManualLocks(allPositions).catch(() => {})
+    }
   } catch (err) {
     next(handleEngineError(err, 'Failed to fetch positions'))
+  }
+}
+
+async function _reconcileManualLocks(allPositions) {
+  const { lockSymbol, releaseSymbolLock, getSymbolLock, getAllLockedSymbols } = require('../services/symbolLock')
+
+  const openSymbols = new Set()
+  for (const pos of allPositions) {
+    if (parseFloat(pos.positionAmt) !== 0) {
+      const sym = fromBinanceSymbol(pos.symbol)
+      openSymbols.add(sym)
+      const existing = await getSymbolLock(sym)
+      if (!existing) {
+        await lockSymbol(sym, 'manual').catch(() => {})
+      }
+    }
+  }
+
+  // Release manual locks for positions that are now closed (never touch bot locks)
+  const allLocked = await getAllLockedSymbols()
+  for (const [sym, lock] of Object.entries(allLocked)) {
+    if (lock.reason === 'manual' && !openSymbols.has(sym)) {
+      await releaseSymbolLock(sym).catch(() => {})
+    }
   }
 }
 
@@ -207,6 +239,12 @@ async function placeOrder(req, res, next) {
     }
     if (typeof quantity !== 'number' || quantity <= 0) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'quantity must be a positive number')
+    }
+    // Symbol lock check
+    const symbolFree = await isSymbolFree(symbol)
+    if (!symbolFree) {
+      const lock = await getSymbolLock(symbol)
+      return next(new ApiError(409, 'SYMBOL_LOCKED', `Symbol ${symbol} is locked by ${lock?.reason || 'an active position'}. Close it first.`))
     }
     const { data } = await engineClient.post(
       '/trade/order',
@@ -298,6 +336,12 @@ async function placeOCOOrder(req, res, next) {
     if (typeof quantity !== 'number' || quantity <= 0) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'quantity must be a positive number')
     }
+    // Symbol lock check
+    const symbolFree = await isSymbolFree(symbol)
+    if (!symbolFree) {
+      const lock = await getSymbolLock(symbol)
+      return next(new ApiError(409, 'SYMBOL_LOCKED', `Symbol ${symbol} is locked by ${lock?.reason || 'an active position'}. Close it first.`))
+    }
     const { data } = await engineClient.post(
       '/trade/order/oco_futures',
       { symbol, side: side.toUpperCase(), quantity, stopPrice, takeProfitPrice },
@@ -339,6 +383,12 @@ async function placeOrderWithTpSl(req, res, next) {
     }
     if (typeof quantity !== 'number' || quantity <= 0) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'quantity must be a positive number')
+    }
+    // Symbol lock check
+    const symbolFree = await isSymbolFree(symbol)
+    if (!symbolFree) {
+      const lock = await getSymbolLock(symbol)
+      return next(new ApiError(409, 'SYMBOL_LOCKED', `Symbol ${symbol} is locked by ${lock?.reason || 'an active position'}. Close it first.`))
     }
     const { data } = await engineClient.post(
       '/trade/order/with_tp_sl',

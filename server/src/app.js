@@ -11,6 +11,8 @@ const dashboardRoutes = require('./routes/dashboard.routes')
 const strategyRoutes = require('./routes/strategy.routes')
 const backtestRoutes = require('./routes/backtest.routes')
 const tradeRoutes = require('./routes/trade.routes')
+const algoRoutes = require('./routes/algo.routes')
+const internalRoutes = require('./routes/internal.routes')
 const errorHandler = require('./middleware/errorHandler')
 const ApiError = require('./utils/ApiError')
 
@@ -62,6 +64,8 @@ app.use('/api/v1/candles', candleRoutes)
 app.use('/api/v1/backtest', backtestRoutes)
 app.use('/api/v1/dashboard', dashboardRoutes)
 app.use('/api/v1/trade', tradeRoutes)
+app.use('/api/v1/algo', algoRoutes)
+app.use('/internal', internalRoutes)
 
 app.use(errorHandler)
 

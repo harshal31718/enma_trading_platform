@@ -35,4 +35,23 @@ async function getStrategyCode(req, res, next) {
   }
 }
 
-module.exports = { listStrategies, getStrategyCode }
+async function getStrategyParams(req, res, next) {
+  try {
+    const strategy = await Strategy.findById(req.params.id).lean()
+    if (!strategy) throw new ApiError(404, 'NOT_FOUND', 'Strategy not found')
+
+    try {
+      const response = await engineClient.get(`/strategies/${strategy.name}/params`)
+      res.json(ApiResponse.success(response.data.data))
+    } catch (engineErr) {
+      if (engineErr.response?.status === 404) {
+        return res.json(ApiResponse.success({ params: {} }))
+      }
+      throw engineErr
+    }
+  } catch (err) {
+    next(err)
+  }
+}
+
+module.exports = { listStrategies, getStrategyCode, getStrategyParams }

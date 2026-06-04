@@ -5,17 +5,23 @@ import {
   FlaskConical,
   Activity,
   Settings,
+  Bot,
 } from 'lucide-react'
+import { useAlgoSessions } from '../../hooks/useAlgoSessions'
 
 const navItems = [
   { label: 'Dashboard', icon: LayoutDashboard, to: '/' },
   { label: 'Strategies', icon: Code2, to: '/strategies' },
   { label: 'Backtest', icon: FlaskConical, to: '/backtest' },
   { label: 'Trade', icon: Activity, to: '/trade' },
+  { label: 'AlgoTrading', icon: Bot, to: '/algo' },
   { label: 'Settings', icon: Settings, to: '/settings' },
 ]
 
 export default function Navbar() {
+  const { data: algoSessions = [] } = useAlgoSessions()
+  const runningCount = algoSessions.filter((s) => s.status === 'running').length
+
   return (
     <header className="fixed top-0 left-0 right-0 h-14 bg-gray-900 border-b border-gray-800 flex items-center z-50">
       <div className="pl-6 w-[180px] shrink-0">
@@ -39,6 +45,11 @@ export default function Navbar() {
           >
             <Icon size={16} />
             {label}
+            {label === 'AlgoTrading' && runningCount > 0 && (
+              <span className="ml-1 text-xs bg-emerald-600 text-white px-1.5 py-0.5 rounded-full leading-none">
+                {runningCount}
+              </span>
+            )}
           </NavLink>
         ))}
       </nav>

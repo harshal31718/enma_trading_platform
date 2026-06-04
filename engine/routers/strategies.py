@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -46,3 +47,15 @@ async def get_strategy_code(name: str):
             "filePath": f"strategies/{name}/__init__.py",
         },
     }
+
+
+@router.get("/{name}/params")
+async def get_strategy_params(name: str):
+    """Returns the PARAMS schema for a strategy class."""
+    try:
+        module = importlib.import_module(f"strategies.{name}")
+        strategy_class = getattr(module, name)
+        params = getattr(strategy_class, "PARAMS", {})
+        return {"success": True, "data": {"params": params}}
+    except Exception:
+        raise HTTPException(status_code=404, detail=f"Strategy '{name}' not found")

@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from config.mongo import close_mongo, get_database
 from config.timescale import close_pool, init_pool, get_pool
+from routers.algo import router as algo_router
 from routers.backtest import router as backtest_router
 from routers.candles import router as candles_router
 from routers.dashboard import router as dashboard_router
@@ -105,6 +106,7 @@ app.include_router(strategies_router, prefix="/strategies", tags=["strategies"])
 app.include_router(backtest_router, prefix="/backtest", tags=["backtest"])
 app.include_router(dashboard_router, prefix="/dashboard", tags=["dashboard"])
 app.include_router(trade_router, prefix="/trade", tags=["trade"])
+app.include_router(algo_router, prefix="/algo", tags=["algo"])
 
 
 @app.get("/health")

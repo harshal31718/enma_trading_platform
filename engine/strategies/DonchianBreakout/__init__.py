@@ -10,17 +10,27 @@ class DonchianBreakout(BaseStrategy):
     Stop-loss at the opposite channel band.
     """
 
+    PARAMS = {
+        "period": {"type": "int", "default": 20, "min": 5, "max": 100, "label": "Donchian Period"},
+        "risk_pct": {"type": "float", "default": 0.1, "min": 0.01, "max": 1.0, "label": "Risk % of Balance"},
+    }
+
+    def __init__(self):
+        super().__init__()
+        self.period = 20
+        self.risk_pct = 0.1
+
     @property
     def upper(self):
-        return ta.donchian(self.candles, period=20)[0]
+        return ta.donchian(self.candles, period=self.period)[0]
 
     @property
     def lower(self):
-        return ta.donchian(self.candles, period=20)[2]
+        return ta.donchian(self.candles, period=self.period)[2]
 
     @property
     def mid(self):
-        return ta.donchian(self.candles, period=20)[1]
+        return ta.donchian(self.candles, period=self.period)[1]
 
     def should_long(self) -> bool:
         return self.close > self.upper
@@ -32,13 +42,13 @@ class DonchianBreakout(BaseStrategy):
         return False
 
     def go_long(self) -> None:
-        qty = self.balance * 0.1 / self.price
+        qty = self.balance * self.risk_pct / self.price
         self.buy = qty, self.price
         self.stop_loss = qty, self.lower
         self.take_profit = qty, self.price + (self.price - self.lower)
 
     def go_short(self) -> None:
-        qty = self.balance * 0.1 / self.price
+        qty = self.balance * self.risk_pct / self.price
         self.sell = qty, self.price
         self.stop_loss = qty, self.upper
         self.take_profit = qty, self.price - (self.upper - self.price)
