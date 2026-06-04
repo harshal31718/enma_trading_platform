@@ -248,7 +248,7 @@ export default function NewSessionWizard({ onCancel, onSuccess }) {
               </div>
               <div className="flex justify-between py-2 border-b border-gray-800">
                 <span className="text-gray-400">Mode</span>
-                <span className="text-emerald-400">Paper Trading</span>
+                <span className="text-yellow-400">Binance Testnet</span>
               </div>
               {hasParams && Object.keys(params).length > 0 && (
                 <div className="py-2 border-b border-gray-800">

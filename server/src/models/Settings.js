@@ -1,28 +1,15 @@
 const mongoose = require('mongoose')
-const { encrypt, decrypt } = require('../utils/encryption')
 
 const settingsSchema = new mongoose.Schema(
   {
     _id: { type: String, default: 'global' },
-    binanceApiKey: {
+    mode: {
       type: String,
-      default: '',
-      get: decrypt,
-      set: encrypt,
+      enum: ['testnet', 'mainnet'],
+      default: 'testnet',
     },
-    binanceApiSecret: {
-      type: String,
-      default: '',
-      get: decrypt,
-      set: encrypt,
-    },
-    paperTrading: { type: Boolean, default: true },
   },
-  {
-    timestamps: true,
-    toJSON: { getters: true },
-    toObject: { getters: true },
-  }
+  { timestamps: true }
 )
 
 module.exports = mongoose.model('Settings', settingsSchema)

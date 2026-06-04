@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 from config.timescale import get_pool
 from services.candle_importer import import_candles
 from services.progress import publish_progress
-from utils.symbols import to_ccxt_symbol
 from utils.timeframes import to_timedelta
 
 logger = logging.getLogger(__name__)
@@ -34,7 +33,7 @@ async def get_available_candles_count(
                 AND time >= $4 AND time < $5
                 """,
                 exchange,
-                to_ccxt_symbol(symbol),
+                symbol,
                 timeframe,
                 start_dt,
                 end_dt,
@@ -150,7 +149,7 @@ async def get_cached_candles_summary() -> list:
             )
             return [
                 {
-                    "symbol": r["symbol"].replace("/", "-"),
+                    "symbol": r["symbol"],
                     "timeframe": r["timeframe"],
                     "exchange": r["exchange"],
                     "instrument_type": r["instrument_type"],

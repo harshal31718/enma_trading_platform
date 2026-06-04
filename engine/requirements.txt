@@ -10,6 +10,6 @@ asyncpg
 TA-Lib
 pandas
 numpy
-ccxt
+websockets
 pytest
 pytest-asyncio

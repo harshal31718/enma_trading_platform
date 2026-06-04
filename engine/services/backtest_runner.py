@@ -11,7 +11,6 @@ from config.timescale import get_pool
 from config.mongo import get_database
 from core.position import Position
 from services.candle_manager import ensure_candles_available
-from utils.symbols import to_ccxt_symbol
 from utils.timeframes import annual_factor
 
 logger = logging.getLogger(__name__)
@@ -84,7 +83,7 @@ async def run_backtest_simulation(
             WHERE exchange = $1 AND symbol = $2 AND timeframe = $3 AND time >= $4 AND time < $5
             ORDER BY time ASC
             """,
-            exchange, to_ccxt_symbol(symbol), timeframe, start_dt, end_dt,
+            exchange, symbol, timeframe, start_dt, end_dt,
         )
 
     if len(rows) < 50:

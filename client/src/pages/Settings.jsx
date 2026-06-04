@@ -1,261 +1,108 @@
-import { useState, useEffect } from 'react'
-import { AlertTriangle, Eye, EyeOff, Loader2 } from 'lucide-react'
+import { useState } from 'react'
+import { Server, Zap, CheckCircle2, Clock, X } from 'lucide-react'
 import PageWrapper from '@/components/layout/PageWrapper'
 import PageHeader from '@/components/ui/PageHeader'
-import api from '@/lib/axios'
-import { useTradeSettings, useSaveTradeSettings } from '@/hooks/useTrade'
-
-const API_KEY_PATTERN = /^[a-zA-Z0-9-]+$/
-const API_KEY_MIN_LEN = 16
-const SECRET_MIN_LEN = 32
-
-function validateApiKey(value) {
-  if (!value) return 'API key is required'
-  if (!API_KEY_PATTERN.test(value)) return 'Only alphanumeric characters and hyphens allowed'
-  if (value.length < API_KEY_MIN_LEN) return `Must be at least ${API_KEY_MIN_LEN} characters`
-  return null
-}
-
-function validateSecret(value) {
-  if (!value) return 'Secret key is required'
-  if (value.length < SECRET_MIN_LEN) return `Must be at least ${SECRET_MIN_LEN} characters`
-  return null
-}
 
 export default function Settings() {
-  const { data, isLoading } = useTradeSettings()
-  const mutation = useSaveTradeSettings()
+  const [showComingSoon, setShowComingSoon] = useState(false)
 
-  const [apiKey, setApiKey] = useState('')
-  const [apiSecret, setApiSecret] = useState('')
-  const [paperTrading, setPaperTrading] = useState(true)
-  const [showSecret, setShowSecret] = useState(false)
-  const [errorMessage, setErrorMessage] = useState(null)
-  const [verifyBanner, setVerifyBanner] = useState(null) // { ok: bool, message: str }
-  const [saved, setSaved] = useState(false)
-  const [isVerifying, setIsVerifying] = useState(false)
-
-  // Per-field validation errors — only shown after the user has touched the field
-  const [apiKeyTouched, setApiKeyTouched] = useState(false)
-  const [secretTouched, setSecretTouched] = useState(false)
-
-  useEffect(() => {
-    if (data) {
-      setApiKey(data.binanceApiKey ?? '')
-      setPaperTrading(data.paperTrading ?? true)
-    }
-  }, [data])
-
-  // Keys are considered "new" if they don't contain the masked placeholder (*) character
-  const isNewApiKey = apiKey && !apiKey.includes('*')
-  const isNewSecret = !!apiSecret
-
-  // Validate only when new values are being submitted
-  const apiKeyError = isNewApiKey ? validateApiKey(apiKey) : null
-  const secretError = isNewSecret ? validateSecret(apiSecret) : null
-
-  // The submit button is disabled when:
-  // — there is a pending request, or
-  // — the user is entering a new API key but it fails validation, or
-  // — the user is entering a new secret but it fails validation
-  const submitDisabled =
-    mutation.isPending ||
-    isVerifying ||
-    isLoading ||
-    (isNewApiKey && !!apiKeyError) ||
-    (isNewSecret && !!secretError)
-
-  async function handleSubmit(e) {
-    e.preventDefault()
-    setErrorMessage(null)
-    setSaved(false)
-    setVerifyBanner(null)
-
-    // Touch both fields so errors show on submit attempt
-    if (isNewApiKey) setApiKeyTouched(true)
-    if (isNewSecret) setSecretTouched(true)
-
-    // Block if front-end validation fails
-    if ((isNewApiKey && apiKeyError) || (isNewSecret && secretError)) return
-
-    const body = { paperTrading }
-    if (isNewApiKey) body.binanceApiKey = apiKey
-    if (isNewSecret) body.binanceApiSecret = apiSecret
-
-    try {
-      await mutation.mutateAsync(body)
-      setSaved(true)
-      setApiSecret('')
-      setSecretTouched(false)
-
-      // After a successful save, call the verify endpoint
-      setIsVerifying(true)
-      try {
-        await api.post('/api/v1/trade/settings/verify')
-        setVerifyBanner({ ok: true, message: 'Keys verified successfully against Binance Testnet.' })
-      } catch (verifyErr) {
-        const msg =
-          verifyErr.response?.data?.error?.message ||
-          verifyErr.response?.data?.message ||
-          'Keys saved but verification failed — check your credentials.'
-        setVerifyBanner({ ok: false, message: msg })
-      } finally {
-        setIsVerifying(false)
-      }
-    } catch (err) {
-      const msg =
-        err.response?.data?.error?.message ||
-        err.response?.data?.message ||
-        'Failed to save settings'
-      setErrorMessage(msg)
-    }
+  function handleMainnetClick() {
+    setShowComingSoon(true)
+    setTimeout(() => setShowComingSoon(false), 4000)
   }
-
-  const isBusy = mutation.isPending || isVerifying
 
   return (
     <PageWrapper>
       <PageHeader
         title="Settings"
-        description="Configure exchange API keys and account preferences"
+        description="Configure the active trading environment"
       />
 
-      <div className="max-w-lg">
-        <div className="bg-gray-900 border border-gray-800 rounded-lg p-6">
-          <div className="flex items-center justify-between mb-1">
-            <h2 className="text-gray-100 text-sm font-medium">Binance Testnet API Keys</h2>
-            {data?.binanceApiKey ? (
-              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                Active
-              </span>
-            ) : (
-              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-800 text-gray-500 border border-gray-700/50">
-                <span className="h-1.5 w-1.5 rounded-full bg-gray-600" />
-                Not Configured
-              </span>
-            )}
+      {/* Coming Soon Toast */}
+      {showComingSoon && (
+        <div
+          className="fixed top-5 right-5 z-50 flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-950/80 backdrop-blur-md px-5 py-4 shadow-2xl shadow-amber-900/30"
+          style={{ animation: 'slideIn 0.25s ease-out' }}
+        >
+          <Clock size={18} className="text-amber-400 mt-0.5 shrink-0" />
+          <div>
+            <p className="text-amber-300 text-sm font-semibold">Mainnet — Coming Soon</p>
+            <p className="text-amber-500/80 text-xs mt-0.5">Live trading with real funds is not yet available.</p>
           </div>
-          <p className="text-gray-500 text-xs mb-5">
-            Keys are verified against Binance Futures Testnet before saving.
+          <button
+            onClick={() => setShowComingSoon(false)}
+            className="ml-2 text-amber-600 hover:text-amber-400 transition-colors"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
+      <style>{`
+        @keyframes slideIn {
+          from { opacity: 0; transform: translateY(-10px) scale(0.97); }
+          to   { opacity: 1; transform: translateY(0)     scale(1); }
+        }
+      `}</style>
+
+      <div className="max-w-lg">
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+          {/* Header */}
+          <div className="flex items-center justify-between mb-1">
+            <h2 className="text-gray-100 text-sm font-medium">Environment Configuration</h2>
+            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold border bg-yellow-500/10 text-yellow-400 border-yellow-500/20">
+              <span className="h-1.5 w-1.5 rounded-full bg-yellow-400 animate-pulse" />
+              Testnet / Demo
+            </span>
+          </div>
+          <p className="text-gray-500 text-xs mb-6">
+            Select the active Binance environment. Credentials are configured in{' '}
+            <code className="text-gray-400 bg-gray-800 px-1 rounded">server/.env</code>.
           </p>
 
-          {errorMessage && (
-            <div className="flex items-start gap-3 bg-red-950/20 border border-red-800/40 rounded-lg p-4 mb-5">
-              <AlertTriangle size={16} className="text-red-400 mt-0.5 shrink-0" />
-              <p className="text-red-400 text-sm">{errorMessage}</p>
-            </div>
-          )}
-
-          {saved && !verifyBanner && (
-            <div className="bg-emerald-950/20 border border-emerald-800/40 rounded-lg p-4 mb-5">
-              <p className="text-emerald-400 text-sm">Settings saved.</p>
-            </div>
-          )}
-
-          {verifyBanner && (
-            <div
-              className={[
-                'rounded-lg p-4 mb-5',
-                verifyBanner.ok
-                  ? 'bg-emerald-950/20 border border-emerald-800/40'
-                  : 'bg-red-900/20 border border-red-800/40',
-              ].join(' ')}
-            >
-              <p className={verifyBanner.ok ? 'text-emerald-400 text-sm' : 'text-red-400 text-sm'}>
-                {verifyBanner.message}
-              </p>
-            </div>
-          )}
-
-          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-            <div className="flex flex-col gap-1.5">
-              <label className="text-gray-400 text-xs">Binance Testnet API Key</label>
-              <input
-                type="password"
-                value={apiKey}
-                onChange={(e) => {
-                  setApiKey(e.target.value)
-                  setApiKeyTouched(true)
-                  setErrorMessage(null)
-                  setSaved(false)
-                  setVerifyBanner(null)
-                }}
-                placeholder={isLoading ? 'Loading…' : 'Paste your testnet API key'}
-                disabled={isLoading}
-                className="bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:border-emerald-600 disabled:opacity-50"
-              />
-              {apiKeyTouched && isNewApiKey && apiKeyError && (
-                <p className="text-red-400 text-xs mt-1">{apiKeyError}</p>
-              )}
-            </div>
-
-            <div className="flex flex-col gap-1.5">
-              <label className="text-gray-400 text-xs">Binance Testnet Secret Key</label>
-              <div className="relative">
-                <input
-                  type={showSecret ? 'text' : 'password'}
-                  value={apiSecret}
-                  onChange={(e) => {
-                    setApiSecret(e.target.value)
-                    setSecretTouched(true)
-                    setErrorMessage(null)
-                    setSaved(false)
-                    setVerifyBanner(null)
-                  }}
-                  placeholder={data?.binanceApiKey ? '••••••••••••••••••••••••' : 'Paste your testnet secret key'}
-                  disabled={isLoading}
-                  className="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 pr-10 text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:border-emerald-600 disabled:opacity-50"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowSecret((v) => !v)}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
-                  tabIndex={-1}
-                >
-                  {showSecret ? <EyeOff size={15} /> : <Eye size={15} />}
-                </button>
-              </div>
-              {secretTouched && isNewSecret && secretError && (
-                <p className="text-red-400 text-xs mt-1">{secretError}</p>
-              )}
-            </div>
-
-            <div className="flex items-center justify-between py-1">
-              <div>
-                <p className="text-gray-300 text-sm">Paper Trading Mode</p>
-                <p className="text-gray-600 text-xs mt-0.5">
-                  When enabled, orders are simulated and not sent to the exchange.
-                </p>
-              </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={paperTrading}
-                onClick={() => setPaperTrading((v) => !v)}
-                className={[
-                  'relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors',
-                  paperTrading ? 'bg-emerald-600' : 'bg-gray-700',
-                ].join(' ')}
-              >
-                <span
-                  className={[
-                    'pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transform transition-transform',
-                    paperTrading ? 'translate-x-5' : 'translate-x-0',
-                  ].join(' ')}
-                />
-              </button>
-            </div>
-
+          <div className="grid grid-cols-2 gap-3">
+            {/* Testnet — active / locked on */}
             <button
-              type="submit"
-              disabled={submitDisabled}
-              className="mt-2 flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-md px-4 py-2 transition-colors"
+              type="button"
+              className="flex flex-col items-start gap-2 rounded-lg border p-4 text-left cursor-default border-yellow-500/40 bg-yellow-500/5"
             >
-              {isBusy && <Loader2 size={14} className="animate-spin" />}
-              {mutation.isPending ? 'Saving…' : isVerifying ? 'Verifying…' : 'Save & Verify'}
+              <div className="flex items-center gap-2">
+                <Server size={15} className="text-yellow-400" />
+                <span className="text-sm font-medium text-yellow-400">Testnet / Demo</span>
+                <CheckCircle2 size={12} className="text-yellow-400 ml-auto" />
+              </div>
+              <p className="text-xs text-gray-500 leading-relaxed">
+                Paper trading on Binance Futures Demo. No real funds at risk. Uses{' '}
+                <code className="text-gray-400">BINANCE_TESTNET_API_KEY</code>.
+              </p>
             </button>
-          </form>
+
+            {/* Mainnet — disabled, shows coming soon */}
+            <button
+              type="button"
+              onClick={handleMainnetClick}
+              className="relative flex flex-col items-start gap-2 rounded-lg border p-4 text-left border-gray-700 bg-gray-800/30 hover:border-gray-600 transition-colors group"
+            >
+              {/* Coming soon badge */}
+              <span className="absolute top-2 right-2 text-[9px] font-bold uppercase tracking-wider text-amber-400 bg-amber-400/10 border border-amber-400/20 rounded-full px-2 py-0.5">
+                Soon
+              </span>
+              <div className="flex items-center gap-2">
+                <Zap size={15} className="text-gray-500 group-hover:text-gray-400 transition-colors" />
+                <span className="text-sm font-medium text-gray-500 group-hover:text-gray-400 transition-colors">
+                  Live / Mainnet
+                </span>
+              </div>
+              <p className="text-xs text-gray-600 leading-relaxed">
+                Real trades on Binance Futures Mainnet. Requires{' '}
+                <code className="text-gray-500">BINANCE_MAINNET_API_KEY</code>.
+              </p>
+            </button>
+          </div>
+
+          <p className="mt-5 text-[11px] text-gray-600">
+            Binance API keys are read from <code className="text-gray-500">server/.env</code> and are never stored in the database.
+          </p>
         </div>
       </div>
     </PageWrapper>

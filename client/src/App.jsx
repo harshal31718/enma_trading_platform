@@ -20,7 +20,7 @@ export default function App() {
             <Route path="/backtest" element={<Backtest />} />
             <Route path="/strategies" element={<Strategies />} />
             <Route path="/settings" element={<Settings />} />
-            <Route path="/trade" element={<Navigate to="/trade/BTC-USDT" replace />} />
+            <Route path="/trade" element={<Navigate to="/trade/BTCUSDT" replace />} />
             <Route path="/trade/:symbol" element={<Trade />} />
             <Route path="/algo" element={<AlgoTrading />} />
           </Routes>

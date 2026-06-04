@@ -12,8 +12,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-BINANCE_TESTNET_BASE = "https://testnet.binancefuture.com"
-
 
 class VerifyKeysRequest(BaseModel):
     binanceApiKey: str
@@ -61,10 +59,15 @@ class OrderWithTpSlRequest(BaseModel):
 
 
 @router.post("/verify")
-async def verify_keys(payload: VerifyKeysRequest):
+async def verify_keys(
+    payload: VerifyKeysRequest,
+    x_binance_mode: str = Header("testnet", alias="X-Binance-Mode"),
+):
     try:
         await send_signed_request(
-            "GET", "/fapi/v2/account", payload.binanceApiKey, payload.binanceApiSecret
+            "GET", "/fapi/v2/account",
+            payload.binanceApiKey, payload.binanceApiSecret,
+            mode=x_binance_mode,
         )
         return {"success": True}
     except httpx.HTTPStatusError as exc:
@@ -91,10 +94,13 @@ async def verify_keys(payload: VerifyKeysRequest):
 async def get_account(
     x_binance_api_key: str = Header(..., alias="X-Binance-API-Key"),
     x_binance_api_secret: str = Header(..., alias="X-Binance-API-Secret"),
+    x_binance_mode: str = Header("testnet", alias="X-Binance-Mode"),
 ):
     try:
         data = await send_signed_request(
-            "GET", "/fapi/v2/account", x_binance_api_key, x_binance_api_secret
+            "GET", "/fapi/v2/account",
+            x_binance_api_key, x_binance_api_secret,
+            mode=x_binance_mode,
         )
         return {"success": True, "data": data}
     except httpx.HTTPStatusError as exc:
@@ -112,15 +118,18 @@ async def get_account(
 async def get_positions(
     x_binance_api_key: str = Header(..., alias="X-Binance-API-Key"),
     x_binance_api_secret: str = Header(..., alias="X-Binance-API-Secret"),
+    x_binance_mode: str = Header("testnet", alias="X-Binance-Mode"),
     symbol: str = None,
 ):
     try:
         params = {}
         if symbol:
-            params["symbol"] = symbol.replace("-", "")
+            params["symbol"] = symbol
         data = await send_signed_request(
-            "GET", "/fapi/v2/positionRisk", x_binance_api_key, x_binance_api_secret,
+            "GET", "/fapi/v2/positionRisk",
+            x_binance_api_key, x_binance_api_secret,
             params=params if params else None,
+            mode=x_binance_mode,
         )
         return {"success": True, "data": data}
     except httpx.HTTPStatusError as exc:
@@ -138,15 +147,19 @@ async def get_positions(
 async def get_open_orders(
     x_binance_api_key: str = Header(..., alias="X-Binance-API-Key"),
     x_binance_api_secret: str = Header(..., alias="X-Binance-API-Secret"),
+    x_binance_mode: str = Header("testnet", alias="X-Binance-Mode"),
 ):
     try:
         data = await send_signed_request(
-            "GET", "/fapi/v1/openOrders", x_binance_api_key, x_binance_api_secret
+            "GET", "/fapi/v1/openOrders",
+            x_binance_api_key, x_binance_api_secret,
+            mode=x_binance_mode,
         )
-        # Fetch open algo orders and merge them
         try:
             algo_data = await send_signed_request(
-                "GET", "/fapi/v1/openAlgoOrders", x_binance_api_key, x_binance_api_secret
+                "GET", "/fapi/v1/openAlgoOrders",
+                x_binance_api_key, x_binance_api_secret,
+                mode=x_binance_mode,
             )
             normalized_algo = []
             for ao in algo_data:
@@ -183,12 +196,14 @@ async def set_leverage(
     payload: LeverageRequest,
     x_binance_api_key: str = Header(..., alias="X-Binance-API-Key"),
     x_binance_api_secret: str = Header(..., alias="X-Binance-API-Secret"),
+    x_binance_mode: str = Header("testnet", alias="X-Binance-Mode"),
 ):
     try:
-        binance_symbol = payload.symbol.replace("-", "")
         data = await send_signed_request(
-            "POST", "/fapi/v1/leverage", x_binance_api_key, x_binance_api_secret,
-            params={"symbol": binance_symbol, "leverage": payload.leverage},
+            "POST", "/fapi/v1/leverage",
+            x_binance_api_key, x_binance_api_secret,
+            params={"symbol": payload.symbol, "leverage": payload.leverage},
+            mode=x_binance_mode,
         )
         return {"success": True, "data": data}
     except httpx.HTTPStatusError as exc:
@@ -207,22 +222,25 @@ async def place_order(
     payload: OrderRequest,
     x_binance_api_key: str = Header(..., alias="X-Binance-API-Key"),
     x_binance_api_secret: str = Header(..., alias="X-Binance-API-Secret"),
+    x_binance_mode: str = Header("testnet", alias="X-Binance-Mode"),
 ):
     try:
-        binance_symbol = payload.symbol.replace("-", "")
         params = {
-            "symbol": binance_symbol,
+            "symbol": payload.symbol,
             "side": payload.side.upper(),
             "type": payload.type.upper(),
-            "quantity": f"{payload.quantity:.3f}",
+            "quantity": _fmt_qty(payload.quantity),
         }
         if payload.type.upper() == "LIMIT":
             if payload.price is None:
                 raise HTTPException(status_code=400, detail="price is required for LIMIT orders")
-            params["price"] = f"{payload.price:.2f}"
+            params["price"] = _fmt_price(payload.price)
             params["timeInForce"] = "GTC"
         data = await send_signed_request(
-            "POST", "/fapi/v1/order", x_binance_api_key, x_binance_api_secret, params=params
+            "POST", "/fapi/v1/order",
+            x_binance_api_key, x_binance_api_secret,
+            params=params,
+            mode=x_binance_mode,
         )
         return {"success": True, "data": data}
     except HTTPException:
@@ -243,35 +261,37 @@ async def close_position(
     payload: ClosePositionRequest,
     x_binance_api_key: str = Header(..., alias="X-Binance-API-Key"),
     x_binance_api_secret: str = Header(..., alias="X-Binance-API-Secret"),
+    x_binance_mode: str = Header("testnet", alias="X-Binance-Mode"),
 ):
     try:
-        binance_symbol = payload.symbol.replace("-", "")
-
-        # Read the current position size to know which side/qty flattens it.
         positions = await send_signed_request(
-            "GET", "/fapi/v2/positionRisk", x_binance_api_key, x_binance_api_secret,
-            params={"symbol": binance_symbol},
+            "GET", "/fapi/v2/positionRisk",
+            x_binance_api_key, x_binance_api_secret,
+            params={"symbol": payload.symbol},
+            mode=x_binance_mode,
         )
         position_amt = 0.0
         for p in positions:
-            if p.get("symbol") == binance_symbol:
+            if p.get("symbol") == payload.symbol:
                 position_amt = float(p.get("positionAmt", 0))
                 break
 
         if position_amt == 0:
             raise HTTPException(status_code=400, detail="No open position to close for this symbol")
 
-        # Opposite side, full absolute size, reduceOnly so it can only flatten.
         close_side = "SELL" if position_amt > 0 else "BUY"
         params = {
-            "symbol": binance_symbol,
+            "symbol": payload.symbol,
             "side": close_side,
             "type": "MARKET",
-            "quantity": f"{abs(position_amt):.3f}",
+            "quantity": _fmt_qty(abs(position_amt)),
             "reduceOnly": "true",
         }
         data = await send_signed_request(
-            "POST", "/fapi/v1/order", x_binance_api_key, x_binance_api_secret, params=params
+            "POST", "/fapi/v1/order",
+            x_binance_api_key, x_binance_api_secret,
+            params=params,
+            mode=x_binance_mode,
         )
         return {"success": True, "data": data}
     except HTTPException:
@@ -293,23 +313,26 @@ async def cancel_order(
     orderId: str,
     x_binance_api_key: str = Header(..., alias="X-Binance-API-Key"),
     x_binance_api_secret: str = Header(..., alias="X-Binance-API-Secret"),
+    x_binance_mode: str = Header("testnet", alias="X-Binance-Mode"),
 ):
     try:
-        binance_symbol = symbol.replace("-", "")
         try:
             data = await send_signed_request(
-                "DELETE", "/fapi/v1/order", x_binance_api_key, x_binance_api_secret,
-                params={"symbol": binance_symbol, "orderId": orderId},
+                "DELETE", "/fapi/v1/order",
+                x_binance_api_key, x_binance_api_secret,
+                params={"symbol": symbol, "orderId": orderId},
+                mode=x_binance_mode,
             )
             return {"success": True, "data": data}
         except httpx.HTTPStatusError as exc:
             try:
                 err_json = exc.response.json()
                 if err_json.get("code") in [-2013, -4120]:
-                    # Standard order doesn't exist or is not supported; try canceling as an algo order
                     algo_data = await send_signed_request(
-                        "DELETE", "/fapi/v1/algoOrder", x_binance_api_key, x_binance_api_secret,
-                        params={"symbol": binance_symbol, "algoId": orderId},
+                        "DELETE", "/fapi/v1/algoOrder",
+                        x_binance_api_key, x_binance_api_secret,
+                        params={"symbol": symbol, "algoId": orderId},
+                        mode=x_binance_mode,
                     )
                     return {"success": True, "data": algo_data}
             except Exception:
@@ -329,7 +352,7 @@ async def cancel_order(
 @router.get("/klines")
 async def get_klines(symbol: str, interval: str, limit: int = 200):
     url = "https://fapi.binance.com/fapi/v1/klines"
-    params = {"symbol": symbol.replace("-", ""), "interval": interval, "limit": limit}
+    params = {"symbol": symbol, "interval": interval, "limit": limit}
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.get(url, params=params)
     resp.raise_for_status()
@@ -341,53 +364,51 @@ async def place_oco_futures(
     payload: OCOFuturesRequest,
     x_binance_api_key: str = Header(..., alias="X-Binance-API-Key"),
     x_binance_api_secret: str = Header(..., alias="X-Binance-API-Secret"),
+    x_binance_mode: str = Header("testnet", alias="X-Binance-Mode"),
 ):
-    """Place optional STOP_MARKET and/or TAKE_PROFIT_MARKET close orders for an existing position.
-
-    Uses dedicated /fapi/v1/algoOrder endpoint to place conditional orders.
-    Both legs are placed with closePosition=true so they close the entire position.
-    At least one of stopPrice or takeProfitPrice must be provided.
-    The shared ocoId prefix lets the client correlate the orders.
-    """
     if payload.stopPrice is None and payload.takeProfitPrice is None:
         raise HTTPException(status_code=400, detail="At least one of stopPrice or takeProfitPrice is required")
 
     try:
-        binance_symbol = payload.symbol.replace("-", "")
         oco_id = f"oco_{uuid4().hex[:8]}_"
-        # SL/TP close the position — side must be opposite to entry
         close_side = "SELL" if payload.side == "BUY" else "BUY"
         placed_orders = []
 
         if payload.stopPrice is not None:
             sl_params = {
                 "algoType": "CONDITIONAL",
-                "symbol": binance_symbol,
+                "symbol": payload.symbol,
                 "side": close_side,
                 "type": "STOP_MARKET",
-                "triggerPrice": f"{payload.stopPrice:.2f}",
+                "triggerPrice": _fmt_price(payload.stopPrice),
                 "workingType": "MARK_PRICE",
                 "closePosition": "true",
                 "clientAlgoId": f"{oco_id}sl",
             }
             sl_order = await send_signed_request(
-                "POST", "/fapi/v1/algoOrder", x_binance_api_key, x_binance_api_secret, params=sl_params
+                "POST", "/fapi/v1/algoOrder",
+                x_binance_api_key, x_binance_api_secret,
+                params=sl_params,
+                mode=x_binance_mode,
             )
             placed_orders.append({"orderId": sl_order.get("algoId"), "type": "STOP_MARKET", "clientOrderId": f"{oco_id}sl"})
 
         if payload.takeProfitPrice is not None:
             tp_params = {
                 "algoType": "CONDITIONAL",
-                "symbol": binance_symbol,
+                "symbol": payload.symbol,
                 "side": close_side,
                 "type": "TAKE_PROFIT_MARKET",
-                "triggerPrice": f"{payload.takeProfitPrice:.2f}",
+                "triggerPrice": _fmt_price(payload.takeProfitPrice),
                 "workingType": "MARK_PRICE",
                 "closePosition": "true",
                 "clientAlgoId": f"{oco_id}tp",
             }
             tp_order = await send_signed_request(
-                "POST", "/fapi/v1/algoOrder", x_binance_api_key, x_binance_api_secret, params=tp_params
+                "POST", "/fapi/v1/algoOrder",
+                x_binance_api_key, x_binance_api_secret,
+                params=tp_params,
+                mode=x_binance_mode,
             )
             placed_orders.append({"orderId": tp_order.get("algoId"), "type": "TAKE_PROFIT_MARKET", "clientOrderId": f"{oco_id}tp"})
 
@@ -414,25 +435,27 @@ async def get_order_status(
     orderId: str,
     x_binance_api_key: str = Header(..., alias="X-Binance-API-Key"),
     x_binance_api_secret: str = Header(..., alias="X-Binance-API-Secret"),
+    x_binance_mode: str = Header("testnet", alias="X-Binance-Mode"),
 ):
     try:
-        binance_symbol = symbol.replace("-", "")
         try:
             data = await send_signed_request(
-                "GET", "/fapi/v1/order", x_binance_api_key, x_binance_api_secret,
-                params={"symbol": binance_symbol, "orderId": orderId},
+                "GET", "/fapi/v1/order",
+                x_binance_api_key, x_binance_api_secret,
+                params={"symbol": symbol, "orderId": orderId},
+                mode=x_binance_mode,
             )
             return {"success": True, "data": data}
         except httpx.HTTPStatusError as exc:
             try:
                 err_json = exc.response.json()
                 if err_json.get("code") in [-2013, -4120]:
-                    # Standard order doesn't exist or is not supported; query as an algo order
                     algo_data = await send_signed_request(
-                        "GET", "/fapi/v1/algoOrder", x_binance_api_key, x_binance_api_secret,
+                        "GET", "/fapi/v1/algoOrder",
+                        x_binance_api_key, x_binance_api_secret,
                         params={"algoId": orderId},
+                        mode=x_binance_mode,
                     )
-                    # Normalize algo order data to match standard order shape
                     normalized = {
                         **algo_data,
                         "status": algo_data.get("algoStatus"),
@@ -462,19 +485,21 @@ async def cancel_all_orders(
     symbol: str,
     x_binance_api_key: str = Header(..., alias="X-Binance-API-Key"),
     x_binance_api_secret: str = Header(..., alias="X-Binance-API-Secret"),
+    x_binance_mode: str = Header("testnet", alias="X-Binance-Mode"),
 ):
     try:
-        binance_symbol = symbol.replace("-", "")
-        # Cancel standard open orders
         std_data = await send_signed_request(
-            "DELETE", "/fapi/v1/allOpenOrders", x_binance_api_key, x_binance_api_secret,
-            params={"symbol": binance_symbol},
+            "DELETE", "/fapi/v1/allOpenOrders",
+            x_binance_api_key, x_binance_api_secret,
+            params={"symbol": symbol},
+            mode=x_binance_mode,
         )
-        # Cancel open algo orders
         try:
             algo_data = await send_signed_request(
-                "DELETE", "/fapi/v1/algoOpenOrders", x_binance_api_key, x_binance_api_secret,
-                params={"symbol": binance_symbol},
+                "DELETE", "/fapi/v1/algoOpenOrders",
+                x_binance_api_key, x_binance_api_secret,
+                params={"symbol": symbol},
+                mode=x_binance_mode,
             )
         except Exception as e:
             logger.error("Failed to cancel open algo orders: %s", e)
@@ -497,33 +522,29 @@ async def place_order_with_tp_sl(
     payload: OrderWithTpSlRequest,
     x_binance_api_key: str = Header(..., alias="X-Binance-API-Key"),
     x_binance_api_secret: str = Header(..., alias="X-Binance-API-Secret"),
+    x_binance_mode: str = Header("testnet", alias="X-Binance-Mode"),
 ):
-    """Place an entry order (LIMIT or MARKET) plus optional STOP_MARKET / TAKE_PROFIT_MARKET exits.
-
-    Uses dedicated /fapi/v1/algoOrder endpoint to place conditional orders.
-    SL/TP close orders always use the opposite side with closePosition=true.
-    A shared tpsl_ prefix lets the client correlate the legs.
-    """
     try:
-        binance_symbol = payload.symbol.replace("-", "")
         tpsl_id = f"tpsl_{uuid4().hex[:8]}_"
         close_side = "SELL" if payload.side == "BUY" else "BUY"
 
-        # 1. Entry order (standard order)
         entry_params: dict = {
-            "symbol": binance_symbol,
+            "symbol": payload.symbol,
             "side": payload.side,
             "type": payload.type,
-            "quantity": f"{payload.quantity:.3f}",
+            "quantity": _fmt_qty(payload.quantity),
         }
         if payload.type == "LIMIT":
             if payload.price is None:
                 raise HTTPException(status_code=400, detail="price is required for LIMIT orders")
-            entry_params["price"] = f"{payload.price:.2f}"
+            entry_params["price"] = _fmt_price(payload.price)
             entry_params["timeInForce"] = "GTC"
 
         entry_order = await send_signed_request(
-            "POST", "/fapi/v1/order", x_binance_api_key, x_binance_api_secret, params=entry_params
+            "POST", "/fapi/v1/order",
+            x_binance_api_key, x_binance_api_secret,
+            params=entry_params,
+            mode=x_binance_mode,
         )
 
         result: dict = {
@@ -531,41 +552,59 @@ async def place_order_with_tp_sl(
             "entry": {"orderId": entry_order.get("orderId"), "type": payload.type},
             "sl": None,
             "tp": None,
+            "warnings": [],
         }
 
-        # 2. Stop-loss (STOP_MARKET algo order)
+        # SL and TP are best-effort — if they fail (e.g. "would immediately trigger"
+        # because the price moved between signal and fill), the entry is still filled
+        # and the position must be tracked. Never fail the whole call here.
         if payload.stopLoss is not None:
             sl_params = {
                 "algoType": "CONDITIONAL",
-                "symbol": binance_symbol,
+                "symbol": payload.symbol,
                 "side": close_side,
                 "type": "STOP_MARKET",
-                "triggerPrice": f"{payload.stopLoss:.2f}",
+                "triggerPrice": _fmt_price(payload.stopLoss),
                 "workingType": "MARK_PRICE",
                 "closePosition": "true",
                 "clientAlgoId": f"{tpsl_id}sl",
             }
-            sl_order = await send_signed_request(
-                "POST", "/fapi/v1/algoOrder", x_binance_api_key, x_binance_api_secret, params=sl_params
-            )
-            result["sl"] = {"orderId": sl_order.get("algoId"), "type": "STOP_MARKET", "clientOrderId": f"{tpsl_id}sl"}
+            try:
+                sl_order = await send_signed_request(
+                    "POST", "/fapi/v1/algoOrder",
+                    x_binance_api_key, x_binance_api_secret,
+                    params=sl_params,
+                    mode=x_binance_mode,
+                )
+                result["sl"] = {"orderId": sl_order.get("algoId"), "type": "STOP_MARKET", "clientOrderId": f"{tpsl_id}sl"}
+            except Exception as e:
+                msg = e.response.json().get("msg", str(e)) if hasattr(e, "response") else str(e)
+                logger.warning(f"SL placement failed for {payload.symbol}: {msg}")
+                result["warnings"].append(f"SL skipped: {msg}")
 
-        # 3. Take-profit (TAKE_PROFIT_MARKET algo order)
         if payload.takeProfit is not None:
             tp_params = {
                 "algoType": "CONDITIONAL",
-                "symbol": binance_symbol,
+                "symbol": payload.symbol,
                 "side": close_side,
                 "type": "TAKE_PROFIT_MARKET",
-                "triggerPrice": f"{payload.takeProfit:.2f}",
+                "triggerPrice": _fmt_price(payload.takeProfit),
                 "workingType": "MARK_PRICE",
                 "closePosition": "true",
                 "clientAlgoId": f"{tpsl_id}tp",
             }
-            tp_order = await send_signed_request(
-                "POST", "/fapi/v1/algoOrder", x_binance_api_key, x_binance_api_secret, params=tp_params
-            )
-            result["tp"] = {"orderId": tp_order.get("algoId"), "type": "TAKE_PROFIT_MARKET", "clientOrderId": f"{tpsl_id}tp"}
+            try:
+                tp_order = await send_signed_request(
+                    "POST", "/fapi/v1/algoOrder",
+                    x_binance_api_key, x_binance_api_secret,
+                    params=tp_params,
+                    mode=x_binance_mode,
+                )
+                result["tp"] = {"orderId": tp_order.get("algoId"), "type": "TAKE_PROFIT_MARKET", "clientOrderId": f"{tpsl_id}tp"}
+            except Exception as e:
+                msg = e.response.json().get("msg", str(e)) if hasattr(e, "response") else str(e)
+                logger.warning(f"TP placement failed for {payload.symbol}: {msg}")
+                result["warnings"].append(f"TP skipped: {msg}")
 
         return {"success": True, "data": result}
     except HTTPException:
@@ -579,6 +618,14 @@ async def place_order_with_tp_sl(
         raise HTTPException(status_code=400, detail=msg)
     except httpx.RequestError as exc:
         raise HTTPException(status_code=500, detail=f"Engine could not reach Binance: {exc}")
+
+
+def _fmt_num(value: float) -> str:
+    s = f"{value:.8f}".rstrip('0').rstrip('.')
+    return s if s else '0'
+
+_fmt_qty = _fmt_num
+_fmt_price = _fmt_num
 
 
 def from_binance_symbol(symbol: str) -> str:
@@ -597,19 +644,23 @@ async def get_history_orders(
     limit: int = 100,
     x_binance_api_key: str = Header(..., alias="X-Binance-API-Key"),
     x_binance_api_secret: str = Header(..., alias="X-Binance-API-Secret"),
+    x_binance_mode: str = Header("testnet", alias="X-Binance-Mode"),
 ):
     try:
-        binance_symbol = symbol.replace("-", "")
         std_orders = await send_signed_request(
-            "GET", "/fapi/v1/allOrders", x_binance_api_key, x_binance_api_secret,
-            params={"symbol": binance_symbol, "limit": limit}
+            "GET", "/fapi/v1/allOrders",
+            x_binance_api_key, x_binance_api_secret,
+            params={"symbol": symbol, "limit": limit},
+            mode=x_binance_mode,
         )
 
         algo_orders = []
         try:
             algo_orders = await send_signed_request(
-                "GET", "/fapi/v1/historicalAlgoOrders", x_binance_api_key, x_binance_api_secret,
-                params={"symbol": binance_symbol, "limit": limit}
+                "GET", "/fapi/v1/historicalAlgoOrders",
+                x_binance_api_key, x_binance_api_secret,
+                params={"symbol": symbol, "limit": limit},
+                mode=x_binance_mode,
             )
         except Exception as e:
             logger.error("Failed to fetch historical algo orders: %s", e)
@@ -675,12 +726,14 @@ async def get_history_executions(
     limit: int = 100,
     x_binance_api_key: str = Header(..., alias="X-Binance-API-Key"),
     x_binance_api_secret: str = Header(..., alias="X-Binance-API-Secret"),
+    x_binance_mode: str = Header("testnet", alias="X-Binance-Mode"),
 ):
     try:
-        binance_symbol = symbol.replace("-", "")
         trades = await send_signed_request(
-            "GET", "/fapi/v1/userTrades", x_binance_api_key, x_binance_api_secret,
-            params={"symbol": binance_symbol, "limit": limit}
+            "GET", "/fapi/v1/userTrades",
+            x_binance_api_key, x_binance_api_secret,
+            params={"symbol": symbol, "limit": limit},
+            mode=x_binance_mode,
         )
 
         normalized = []
@@ -717,14 +770,17 @@ async def get_history_transactions(
     limit: int = 100,
     x_binance_api_key: str = Header(..., alias="X-Binance-API-Key"),
     x_binance_api_secret: str = Header(..., alias="X-Binance-API-Secret"),
+    x_binance_mode: str = Header("testnet", alias="X-Binance-Mode"),
 ):
     try:
         params = {"limit": limit}
         if symbol:
-            params["symbol"] = symbol.replace("-", "")
+            params["symbol"] = symbol
         income = await send_signed_request(
-            "GET", "/fapi/v1/income", x_binance_api_key, x_binance_api_secret,
-            params=params
+            "GET", "/fapi/v1/income",
+            x_binance_api_key, x_binance_api_secret,
+            params=params,
+            mode=x_binance_mode,
         )
 
         normalized = []
@@ -755,15 +811,14 @@ async def set_margin_type(
     payload: MarginTypeRequest,
     x_binance_api_key: str = Header(..., alias="X-Binance-API-Key"),
     x_binance_api_secret: str = Header(..., alias="X-Binance-API-Secret"),
+    x_binance_mode: str = Header("testnet", alias="X-Binance-Mode"),
 ):
-    # Isolated margin only — cross margin is removed platform-wide. The incoming
-    # marginType is ignored; ISOLATED is always applied. See DECISIONS.md
-    # "Isolated margin only (cross margin removed)".
     try:
-        binance_symbol = payload.symbol.replace("-", "")
         data = await send_signed_request(
-            "POST", "/fapi/v1/marginType", x_binance_api_key, x_binance_api_secret,
-            params={"symbol": binance_symbol, "marginType": "ISOLATED"},
+            "POST", "/fapi/v1/marginType",
+            x_binance_api_key, x_binance_api_secret,
+            params={"symbol": payload.symbol, "marginType": "ISOLATED"},
+            mode=x_binance_mode,
         )
         return {"success": True, "data": data}
     except httpx.HTTPStatusError as exc:
@@ -774,8 +829,6 @@ async def set_margin_type(
         except Exception:
             msg = str(exc)
             code = None
-        # -4046: "No need to change margin type" — symbol is already ISOLATED.
-        # This is the desired end state, so treat it as success.
         if code == -4046:
             return {"success": True, "data": {"code": 200, "msg": "success"}}
         raise HTTPException(status_code=400, detail=msg)

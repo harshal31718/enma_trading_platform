@@ -6,7 +6,7 @@ import { useCurrentSymbol } from '@/context/SymbolContext'
 import useBinanceWS from '@/hooks/useBinanceWS'
 
 const WATCHLIST_KEY = 'watchlist'
-const DEFAULT_WATCHLIST = ['BTC-USDT', 'ETH-USDT']
+const DEFAULT_WATCHLIST = ['BTCUSDT', 'ETHUSDT']
 
 function loadWatchlist() {
   try {
@@ -45,28 +45,20 @@ export default function SymbolSearchBar() {
 
   const futuresSymbols = symbols?.futures ?? []
 
-  // Map from Binance unhyphenated (BTCUSDT) → Enma hyphenated (BTC-USDT)
-  const binanceToEnma = useMemo(() => {
-    const map = {}
-    for (const sym of futuresSymbols) {
-      map[sym.replace('-', '')] = sym
-    }
-    return map
-  }, [futuresSymbols])
+  const symbolSet = useMemo(() => new Set(futuresSymbols), [futuresSymbols])
 
   const onTickers = useCallback((payload) => {
     if (!Array.isArray(payload)) return
     setMarketTickers((prev) => {
       const next = { ...prev }
       for (const item of payload) {
-        const enma = binanceToEnma[item.s]
-        if (enma) {
-          next[enma] = { price: item.c, changePct: item.P }
+        if (symbolSet.has(item.s)) {
+          next[item.s] = { price: item.c, changePct: item.P }
         }
       }
       return next
     })
-  }, [binanceToEnma])
+  }, [symbolSet])
 
   // Filtered list based on tab + query
   const baseList = activeTab === 'Watchlist' ? watchlist : futuresSymbols

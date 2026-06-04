@@ -24,6 +24,7 @@ from routers.strategies import router as strategies_router
 from routers.trade import router as trade_router
 from services.strategy_seeder import seed_strategies
 from services.binance_testnet import close_client
+from utils.symbols import load_exchange_rules
 
 load_dotenv()
 
@@ -67,6 +68,13 @@ async def lifespan(app: FastAPI):
         logger.info("Strategy seeding complete")
     except Exception as e:
         logger.error(f"Strategy seeding FAILED: {e}")
+
+    try:
+        await load_exchange_rules("Binance Futures")
+        await load_exchange_rules("Binance Spot")
+        logger.info("Exchange rules cached")
+    except Exception as e:
+        logger.error(f"Exchange rules caching FAILED: {e}")
 
     yield
 

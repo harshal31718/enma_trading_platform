@@ -2,11 +2,17 @@ import asyncio
 import os
 from datetime import datetime, timezone
 
+import httpx
+
 from config.timescale import get_pool
 from core.constants import DEFAULT_BATCH_SIZE
 from services.progress import publish_progress
-from utils.symbols import get_ccxt_exchange, to_ccxt_symbol
 from utils.timeframes import to_ms
+
+_KLINES_URLS = {
+    "Binance Futures": "https://fapi.binance.com/fapi/v1/klines",
+    "Binance Spot": "https://api.binance.com/api/v3/klines",
+}
 
 
 async def import_candles(
@@ -17,8 +23,9 @@ async def import_candles(
     start_date: str,
     end_date: str,
 ) -> dict:
-    ex = get_ccxt_exchange(exchange)
-    ccxt_symbol = to_ccxt_symbol(symbol)
+    klines_url = _KLINES_URLS.get(exchange)
+    if not klines_url:
+        raise ValueError(f"Unsupported exchange: {exchange}")
 
     start_dt = datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc)
     end_dt = datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc)
@@ -29,72 +36,74 @@ async def import_candles(
     total_estimate = max(1, (end_ms - start_ms) // tf_ms)
 
     instrument_type = "futures" if exchange == "Binance Futures" else "spot"
-    fetch_delay_ms = int(os.getenv("BINANCE_FETCH_DELAY_MS", "200")) / 1000
+    fetch_delay = int(os.getenv("BINANCE_FETCH_DELAY_MS", "200")) / 1000
 
     current_ms = start_ms
     total_inserted = 0
     pool = get_pool()
 
-    while current_ms < end_ms:
-        raw = await asyncio.to_thread(
-            ex.fetch_ohlcv,
-            ccxt_symbol,
-            timeframe,
-            since=current_ms,
-            limit=DEFAULT_BATCH_SIZE,
-        )
-        if not raw:
-            break
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        while current_ms < end_ms:
+            resp = await client.get(klines_url, params={
+                "symbol": symbol,
+                "interval": timeframe,
+                "startTime": current_ms,
+                "limit": DEFAULT_BATCH_SIZE,
+            })
+            resp.raise_for_status()
+            raw = resp.json()
 
-        # Filter out candles beyond end date
-        raw = [c for c in raw if c[0] < end_ms]
-        if not raw:
-            break
+            if not raw:
+                break
 
-        # Build rows: (time, exchange, symbol, timeframe, instrument_type, expiry, open, high, low, close, volume, quote_volume)
-        # quote_volume is not returned by ccxt fetch_ohlcv default klines — set to 0 for now
-        rows = [
-            (
-                datetime.fromtimestamp(c[0] / 1000, tz=timezone.utc),
-                exchange,
-                ccxt_symbol,
-                timeframe,
-                instrument_type,
-                None,  # expiry — NULL for spot and perpetual futures
-                c[1],  # open
-                c[2],  # high
-                c[3],  # low
-                c[4],  # close
-                c[5],  # volume
-                0,     # quote_volume
+            # Filter out candles at or beyond end date
+            raw = [c for c in raw if c[0] < end_ms]
+            if not raw:
+                break
+
+            # Binance kline array: [openTime, open, high, low, close, volume, closeTime, quoteVolume, ...]
+            rows = [
+                (
+                    datetime.fromtimestamp(c[0] / 1000, tz=timezone.utc),
+                    exchange,
+                    symbol,
+                    timeframe,
+                    instrument_type,
+                    None,       # expiry — NULL for spot and perpetual futures
+                    float(c[1]),  # open
+                    float(c[2]),  # high
+                    float(c[3]),  # low
+                    float(c[4]),  # close
+                    float(c[5]),  # volume
+                    float(c[7]),  # quoteVolume
+                )
+                for c in raw
+            ]
+
+            async with pool.acquire() as conn:
+                await conn.executemany(
+                    """
+                    INSERT INTO candles
+                      (time, exchange, symbol, timeframe, instrument_type, expiry, open, high, low, close, volume, quote_volume)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    rows,
+                )
+
+            total_inserted += len(rows)
+            current_ms = raw[-1][0] + tf_ms
+
+            pct = min(99, int((total_inserted / total_estimate) * 100))
+            await publish_progress(
+                job_id=job_id,
+                pct=pct,
+                message=f"Auto-fetching candles for {symbol} {timeframe} — {pct}%",
+                candles_fetched=total_inserted,
+                total_estimate=total_estimate,
             )
-            for c in raw
-        ]
 
-        async with pool.acquire() as conn:
-            await conn.executemany(
-                """
-                INSERT INTO candles
-                  (time, exchange, symbol, timeframe, instrument_type, expiry, open, high, low, close, volume, quote_volume)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-                ON CONFLICT DO NOTHING
-                """,
-                rows,
-            )
-
-        total_inserted += len(rows)
-        current_ms = raw[-1][0] + tf_ms
-
-        pct = min(99, int((total_inserted / total_estimate) * 100))
-        await publish_progress(
-            job_id=job_id,
-            pct=pct,
-            message=f"Auto-fetching candles for {symbol} {timeframe} — {pct}%",
-            candles_fetched=total_inserted,
-            total_estimate=total_estimate,
-        )
-
-        await asyncio.sleep(fetch_delay_ms)
+            await asyncio.sleep(fetch_delay)
 
     return {
         "candlesImported": total_inserted,

@@ -30,7 +30,13 @@ async function lockSymbol(symbol, reason, sessionId = null) {
   }
 }
 
-async function releaseSymbolLock(symbol) {
+async function releaseSymbolLock(symbol, sessionId = null) {
+  if (sessionId) {
+    const lock = await getSymbolLock(symbol)
+    if (lock && lock.sessionId !== sessionId) {
+      return
+    }
+  }
   await redis.del(`${LOCK_PREFIX}${symbol}`)
 }
 

@@ -2,13 +2,15 @@ from fastapi import APIRouter
 
 from core.constants import FUTURES_SYMBOLS
 from services.candle_manager import get_cached_candles_summary
+from utils.symbols import get_all_rules
 
 router = APIRouter()
 
 
 @router.get("/symbols")
 async def get_symbols():
-    return {"success": True, "data": {"futures": FUTURES_SYMBOLS, "spot": []}}
+    rules = get_all_rules("Binance Futures")
+    return {"success": True, "data": {"futures": FUTURES_SYMBOLS, "spot": [], "rules": rules}}
 
 
 @router.get("/cached")

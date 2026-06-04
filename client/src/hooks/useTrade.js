@@ -37,8 +37,8 @@ export function useTradeAccount(options = {}) {
       const { data } = await api.get('/api/v1/trade/account')
       return data.data
     },
-    refetchInterval: 4000,
-    staleTime: 3000,
+    refetchInterval: 15000,
+    staleTime: 12000,
     retry: false,
     ...options,
   })
@@ -51,8 +51,8 @@ export function useTradePositions(options = {}) {
       const { data } = await api.get('/api/v1/trade/positions')
       return data.data
     },
-    refetchInterval: 4000,
-    staleTime: 3000,
+    refetchInterval: 10000,
+    staleTime: 8000,
     retry: false,
     ...options,
   })
@@ -65,8 +65,8 @@ export function useTradeOpenOrders(options = {}) {
       const { data } = await api.get('/api/v1/trade/open-orders')
       return data.data
     },
-    refetchInterval: 4000,
-    staleTime: 3000,
+    refetchInterval: 10000,
+    staleTime: 8000,
     retry: false,
     ...options,
   })
@@ -75,10 +75,7 @@ export function useTradeOpenOrders(options = {}) {
 export function useTradeSymbolConfig(symbol) {
   return useQuery({
     queryKey: ['trade', 'positions'],
-    select: (positions) => {
-      const binanceSymbol = symbol?.replace('-', '')
-      return positions?.find((p) => p.symbol === binanceSymbol) ?? null
-    },
+    select: (positions) => positions?.find((p) => p.symbol === symbol) ?? null,
     enabled: !!symbol,
   })
 }

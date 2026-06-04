@@ -1,16 +1,25 @@
-const Settings = require('../models/Settings')
 const ApiError = require('../utils/ApiError')
 
 async function requireBinanceCredentials(req, res, next) {
   try {
-    const settings = await Settings.findById('global')
-    if (!settings?.binanceApiKey || !settings?.binanceApiSecret) {
-      throw new ApiError(400, 'NO_CREDENTIALS', 'Binance API credentials are not configured')
+    // Always testnet — mainnet is not yet available
+    const apiKey = process.env.BINANCE_TESTNET_API_KEY
+    const apiSecret = process.env.BINANCE_TESTNET_SECRET
+
+    if (!apiKey || !apiSecret) {
+      throw new ApiError(
+        400,
+        'NO_CREDENTIALS',
+        'Binance Testnet API credentials are not configured. Set BINANCE_TESTNET_API_KEY and BINANCE_TESTNET_SECRET in the environment.'
+      )
     }
+
     req.binanceHeaders = {
-      'X-Binance-API-Key': settings.binanceApiKey,
-      'X-Binance-API-Secret': settings.binanceApiSecret,
+      'X-Binance-API-Key': apiKey,
+      'X-Binance-API-Secret': apiSecret,
+      'X-Binance-Mode': 'testnet',
     }
+
     next()
   } catch (err) {
     next(err)

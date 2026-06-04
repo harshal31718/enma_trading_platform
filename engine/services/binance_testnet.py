@@ -5,7 +5,10 @@ from typing import Any
 
 import httpx
 
-BINANCE_TESTNET_BASE = "https://testnet.binancefuture.com"
+_BASE_URLS = {
+    "mainnet": "https://fapi.binance.com",
+    "testnet": "https://demo-fapi.binance.com",
+}
 
 _client: httpx.AsyncClient | None = None
 
@@ -13,7 +16,7 @@ _client: httpx.AsyncClient | None = None
 def get_client() -> httpx.AsyncClient:
     global _client
     if _client is None:
-        _client = httpx.AsyncClient(timeout=10.0)
+        _client = httpx.AsyncClient(timeout=30.0)
     return _client
 
 
@@ -30,13 +33,20 @@ async def send_signed_request(
     api_key: str,
     api_secret: str,
     params: dict | None = None,
+    mode: str = "testnet",
 ) -> Any:
-    """Make a signed request to the Binance Futures Testnet REST API."""
+    """Make a signed request to a Binance Futures REST API.
+
+    mode selects the base URL:
+      "mainnet" → https://fapi.binance.com
+      "testnet" → https://demo-fapi.binance.com
+    """
+    base_url = _BASE_URLS.get(mode, _BASE_URLS["testnet"])
+
     p = dict(params) if params else {}
     p["timestamp"] = int(time.time() * 1000)
     p["recvWindow"] = 5000
 
-    # Sort alphabetically and build query string
     query_string = "&".join(f"{k}={v}" for k, v in sorted(p.items()))
 
     signature = hmac.new(
@@ -46,7 +56,7 @@ async def send_signed_request(
     ).hexdigest()
 
     query_string += f"&signature={signature}"
-    url = f"{BINANCE_TESTNET_BASE}{path}?{query_string}"
+    url = f"{base_url}{path}?{query_string}"
     headers = {"X-MBX-APIKEY": api_key}
 
     client = get_client()

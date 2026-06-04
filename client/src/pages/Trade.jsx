@@ -20,6 +20,8 @@ import {
 import useOcoMonitor from '@/hooks/useOcoMonitor'
 import { SymbolProvider, useCurrentSymbol } from '@/context/SymbolContext'
 import SymbolSearchBar from '@/components/SymbolSearchBar'
+import { SYMBOL_LIMITS } from '@/utils/symbolLimits'
+import { useSymbols } from '@/hooks/useCandles'
 
 const BOTTOM_TABS = ['Positions', 'Open Orders', 'Order History', 'Trade History', 'Transaction History', 'Assets']
 
@@ -31,6 +33,25 @@ function fmtPrice(n) {
 
 function fmtQty(n, dp = 4) {
   return Number(n).toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp })
+}
+
+function getPrecisionDecimalPlaces(step) {
+  if (!step) return 4
+  const stepStr = step.toString()
+  if (stepStr.includes('e-')) {
+    const parts = stepStr.split('e-')
+    return parseInt(parts[1], 10)
+  }
+  if (stepStr.includes('.')) {
+    return stepStr.split('.')[1].length
+  }
+  return 0
+}
+
+function roundToStep(value, step) {
+  const decimals = getPrecisionDecimalPlaces(step)
+  const factor = Math.pow(10, decimals)
+  return Math.floor(value * factor) / factor
 }
 
 function fmtPct(n) {
@@ -1266,15 +1287,37 @@ function OrderForm() {
     )
   }
 
+  const { data: symbolsData } = useSymbols()
+
+  const activeRules = symbolsData?.rules?.[symbol] || SYMBOL_LIMITS[symbol] || {
+    tickSize: 0.001,
+    stepSize: 0.01,
+    minQty: 0.01,
+    minNotional: 5.0,
+  }
+
   function handlePctClick(p) {
     setPct(p)
     const leverage = typeof activeLeverage === 'number' ? activeLeverage : 1
     const targetUSDT = availableBalance * leverage * (p / 100)
+    
+    // Safety margin (99%) to prevent balance execution failures
+    const maxUSDT = availableBalance * leverage * 0.99
+    const safeUSDT = Math.min(targetUSDT, maxUSDT)
+
+    const step = activeRules.stepSize
     if (qtyUnit === 'USDT') {
-      setQty(targetUSDT.toFixed(2))
+      setQty(roundToStep(safeUSDT, 0.01).toString())
     } else {
       const cp = currentPriceRef.current
-      setQty(cp > 0 ? (targetUSDT / cp).toFixed(3) : '')
+      if (cp > 0) {
+        const rawQty = safeUSDT / cp
+        const roundedQty = roundToStep(rawQty, step)
+        const minQty = activeRules.minQty
+        setQty(roundedQty > 0 ? roundedQty.toString() : minQty.toString())
+      } else {
+        setQty('')
+      }
     }
   }
 
@@ -1286,15 +1329,49 @@ function OrderForm() {
       setFormError('Enter a valid quantity' + (orderType === 'Limit' ? ' and price' : ''))
       return
     }
+
+    const step = activeRules.stepSize
+    const minQty = activeRules.minQty
+    const minNotional = activeRules.minNotional
+
     if (qtyUnit === 'USDT') {
       if (cp <= 0) { setFormError('Market price unavailable'); return }
       quantity = quantity / cp
     }
+
+    // 1. Round quantity to stepSize precision
+    quantity = roundToStep(quantity, step)
+
+    // 2. Validate against minQty
+    if (quantity < minQty) {
+      setFormError(`Quantity must be no smaller than ${minQty} ${base}`)
+      return
+    }
+
+    // 3. Round price (if Limit) and get execution price
+    let executionPrice = cp
+    let limitPriceVal = parseFloat(price)
+    if (orderType === 'Limit') {
+      if (isNaN(limitPriceVal) || limitPriceVal <= 0) {
+        setFormError('Enter a valid limit price')
+        return
+      }
+      limitPriceVal = roundToStep(limitPriceVal, activeRules.tickSize)
+      executionPrice = limitPriceVal
+    }
+
+    // 4. Validate notional value
+    const notional = quantity * executionPrice
+    if (notional < minNotional) {
+      setFormError(
+        `Order's notional must be no smaller than ${minNotional} USDT (Current: ${notional.toFixed(2)} USDT). Please increase order size.`
+      )
+      return
+    }
+
     const payload = { symbol, side, type: orderType.toUpperCase(), quantity }
     if (orderType === 'Limit') {
-      const p = parseFloat(price)
-      if (isNaN(p) || p <= 0) { setFormError('Enter a valid limit price'); return }
-      payload.price = p
+      payload.price = limitPriceVal
     }
     execPlaceOrder(payload, {
       onSuccess: () => { setQty(''); setPrice(''); setPct(null) },
@@ -1368,6 +1445,12 @@ function OrderForm() {
             <span className="text-gray-300 tabular-nums">
               {availableBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT
             </span>
+          </div>
+
+          {/* Symbol limits badge */}
+          <div className="flex justify-between text-[10px] text-gray-500 border-t border-gray-800/40 pt-1.5 mt-0.5 shrink-0">
+            <span>Min Size: <span className="text-gray-400 font-medium tabular-nums">{activeRules.minQty} {base}</span></span>
+            <span>Min Value: <span className="text-gray-400 font-medium tabular-nums">{activeRules.minNotional} USDT</span></span>
           </div>
 
           {/* Price — only for Limit */}

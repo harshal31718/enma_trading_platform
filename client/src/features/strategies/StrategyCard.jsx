@@ -8,6 +8,7 @@ const STRATEGY_TYPES = {
   SimpleEMACross: { label: 'Trend Following', variant: 'default' },
   RSIReversion: { label: 'Mean Reversion', variant: 'info' },
   DonchianBreakout: { label: 'Breakout', variant: 'warning' },
+  MicroScalper: { label: 'Scalper', variant: 'destructive' },
 }
 
 export default function StrategyCard({ strategy }) {

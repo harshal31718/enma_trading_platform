@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react'
-import { Bot, Plus } from 'lucide-react'
-import { useAlgoSessions, useStopSession } from '../hooks/useAlgoSessions'
+import { Bot, Plus, Trash2 } from 'lucide-react'
+import { useAlgoSessions, useStopSession, useDeleteAllStopped } from '../hooks/useAlgoSessions'
 import { useSocket } from '../hooks/useSocket'
 import { useQueryClient } from '@tanstack/react-query'
 import SessionCard from '../components/algo/SessionCard'
@@ -11,7 +11,10 @@ export default function AlgoTrading() {
   const [showWizard, setShowWizard] = useState(false)
   const { data: sessions = [], isLoading } = useAlgoSessions()
   const stopSession = useStopSession()
+  const deleteAllStopped = useDeleteAllStopped()
   const qc = useQueryClient()
+
+  const hasStopped = sessions.some(s => s.status === 'stopped' || s.status === 'error')
 
   // Real-time updates via Socket.IO
   const handleSessionUpdate = useCallback((data) => {
@@ -57,16 +60,29 @@ export default function AlgoTrading() {
           <Bot size={24} className="text-emerald-400" />
           <div>
             <h1 className="text-xl font-semibold text-gray-100">AlgoTrading</h1>
-            <p className="text-sm text-gray-400">Automated paper-trading bots</p>
+            <p className="text-sm text-gray-400">Automated trading bots · Binance Testnet</p>
           </div>
         </div>
-        <button
-          onClick={() => setShowWizard(true)}
-          className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm rounded-lg transition-colors"
-        >
-          <Plus size={16} />
-          New Bot
-        </button>
+        <div className="flex items-center gap-2">
+          {hasStopped && (
+            <button
+              onClick={() => deleteAllStopped.mutate()}
+              disabled={deleteAllStopped.isPending}
+              className="flex items-center gap-2 px-3 py-2 bg-transparent hover:bg-red-500/10 text-gray-500 hover:text-red-400 text-sm rounded-lg border border-gray-700 hover:border-red-500/30 disabled:opacity-40 transition-all"
+              title="Clear all stopped sessions"
+            >
+              <Trash2 size={14} />
+              Clear stopped
+            </button>
+          )}
+          <button
+            onClick={() => setShowWizard(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm rounded-lg transition-colors"
+          >
+            <Plus size={16} />
+            New Bot
+          </button>
+        </div>
       </div>
 
       {/* Sessions list */}

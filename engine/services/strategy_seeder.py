@@ -21,6 +21,10 @@ DEFAULT_STRATEGIES = [
         "name": "DonchianBreakout",
         "description": "Donchian channel breakout. Goes long on upper channel break, short on lower channel break. Exits at middle band.",
     },
+    {
+        "name": "MicroScalper",
+        "description": "High-frequency stop-and-reverse scalper built for pipeline stress testing. Logic: 3/9 EMA crossover on 1m candles with an optional ATR volatility filter. Always in a position.",
+    },
 ]
 
 

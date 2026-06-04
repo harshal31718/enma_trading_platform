@@ -25,7 +25,7 @@ app.use(express.json())
 
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100,
+  max: 10000,
   handler: (req, res, next) => {
     next(new ApiError(429, 'TOO_MANY_REQUESTS', 'Too many requests from this IP, please try again after 15 minutes'))
   },

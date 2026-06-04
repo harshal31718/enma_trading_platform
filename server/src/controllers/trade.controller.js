@@ -7,19 +7,6 @@ const ApiResponse = require('../utils/ApiResponse')
 const ApiError = require('../utils/ApiError')
 const { isSymbolFree, getSymbolLock } = require('../services/symbolLock')
 
-function fromBinanceSymbol(sym) {
-  if (!sym) return ''
-  if (sym.endsWith('USDT')) {
-    return sym.slice(0, -4) + '-' + sym.slice(-4)
-  }
-  return sym
-}
-
-function maskKey(key) {
-  if (!key || key.length < 8) return key
-  return key.slice(0, 4) + '*'.repeat(key.length - 8) + key.slice(-4)
-}
-
 function handleEngineError(err, defaultMessage) {
   if (err instanceof ApiError) return err
   const detail = err.response?.data?.detail
@@ -34,7 +21,7 @@ async function upsertTradeOrder(orderDetails, fallback = {}) {
       $set: {
         orderId: String(orderDetails.orderId),
         clientOrderId: orderDetails.clientOrderId || fallback.clientOrderId || '',
-        symbol: fromBinanceSymbol(orderDetails.symbol) || fallback.symbol,
+        symbol: orderDetails.symbol || fallback.symbol,
         status: orderDetails.status || 'NEW',
         price: String(orderDetails.price || fallback.price || '0'),
         avgPrice: String(orderDetails.avgPrice || '0'),
@@ -58,17 +45,7 @@ async function upsertTradeOrder(orderDetails, fallback = {}) {
 async function getSettingsKeys(req, res, next) {
   try {
     const settings = await Settings.findById('global')
-
-    if (!settings) {
-      return res.json(ApiResponse.success({ paperTrading: true, binanceApiKey: '' }))
-    }
-
-    res.json(
-      ApiResponse.success({
-        paperTrading: settings.paperTrading,
-        binanceApiKey: maskKey(settings.binanceApiKey),
-      })
-    )
+    res.json(ApiResponse.success({ mode: settings?.mode ?? 'testnet' }))
   } catch (err) {
     next(err)
   }
@@ -76,35 +53,19 @@ async function getSettingsKeys(req, res, next) {
 
 async function saveSettingsKeys(req, res, next) {
   try {
-    const { binanceApiKey, binanceApiSecret, paperTrading } = req.body
-
-    if (typeof paperTrading !== 'boolean') {
-      throw new ApiError(400, 'VALIDATION_ERROR', 'paperTrading must be a boolean')
-    }
-
-    if (binanceApiKey && binanceApiSecret) {
-      try {
-        await engineClient.post('/trade/verify', { binanceApiKey, binanceApiSecret })
-      } catch (engineErr) {
-        const detail = engineErr.response?.data?.detail
-        const message =
-          typeof detail === 'string'
-            ? detail
-            : detail?.message || 'Binance Testnet verification failed'
-        throw new ApiError(400, 'VERIFICATION_FAILED', message)
-      }
+    const { mode } = req.body
+    if (!mode || !['testnet', 'mainnet'].includes(mode)) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'mode must be "testnet" or "mainnet"')
     }
 
     let settings = await Settings.findById('global')
     if (!settings) {
       settings = new Settings({ _id: 'global' })
     }
-    settings.paperTrading = paperTrading
-    if (binanceApiKey) settings.binanceApiKey = binanceApiKey
-    if (binanceApiSecret) settings.binanceApiSecret = binanceApiSecret
+    settings.mode = mode
     await settings.save()
 
-    res.json(ApiResponse.success({ saved: true }))
+    res.json(ApiResponse.success({ saved: true, mode }))
   } catch (err) {
     next(err)
   }
@@ -113,23 +74,36 @@ async function saveSettingsKeys(req, res, next) {
 async function verifySettings(req, res, next) {
   try {
     const settings = await Settings.findById('global')
-    if (!settings?.binanceApiKey || !settings?.binanceApiSecret) {
-      throw new ApiError(400, 'NO_CREDENTIALS', 'Binance API credentials are not configured')
+    const mode = settings?.mode ?? 'testnet'
+
+    let apiKey, apiSecret
+    if (mode === 'mainnet') {
+      apiKey = process.env.BINANCE_LIVE_API_KEY
+      apiSecret = process.env.BINANCE_LIVE_API_SECRET
+    } else {
+      apiKey = process.env.BINANCE_TESTNET_API_KEY
+      apiSecret = process.env.BINANCE_TESTNET_API_SECRET
     }
+
+    if (!apiKey || !apiSecret) {
+      throw new ApiError(400, 'NO_CREDENTIALS', `Binance ${mode} API credentials are not set in server .env`)
+    }
+
     try {
-      await engineClient.post('/trade/verify', {
-        binanceApiKey: settings.binanceApiKey,
-        binanceApiSecret: settings.binanceApiSecret,
-      })
+      await engineClient.post(
+        '/trade/verify',
+        { binanceApiKey: apiKey, binanceApiSecret: apiSecret },
+        { headers: { 'X-Binance-Mode': mode } }
+      )
     } catch (engineErr) {
       const detail = engineErr.response?.data?.detail
       const message =
         typeof detail === 'string'
           ? detail
-          : detail?.message || 'Binance Testnet verification failed'
+          : detail?.message || `Binance ${mode} verification failed`
       throw new ApiError(400, 'VERIFICATION_FAILED', message)
     }
-    res.json(ApiResponse.success({ verified: true }))
+    res.json(ApiResponse.success({ verified: true, mode }))
   } catch (err) {
     next(err)
   }
@@ -175,7 +149,7 @@ async function _reconcileManualLocks(allPositions) {
   const openSymbols = new Set()
   for (const pos of allPositions) {
     if (parseFloat(pos.positionAmt) !== 0) {
-      const sym = fromBinanceSymbol(pos.symbol)
+      const sym = pos.symbol
       openSymbols.add(sym)
       const existing = await getSymbolLock(sym)
       if (!existing) {
@@ -241,10 +215,9 @@ async function placeOrder(req, res, next) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'quantity must be a positive number')
     }
     // Symbol lock check
-    const symbolFree = await isSymbolFree(symbol)
-    if (!symbolFree) {
-      const lock = await getSymbolLock(symbol)
-      return next(new ApiError(409, 'SYMBOL_LOCKED', `Symbol ${symbol} is locked by ${lock?.reason || 'an active position'}. Close it first.`))
+    const lock = await getSymbolLock(symbol)
+    if (lock && lock.reason === 'bot') {
+      return next(new ApiError(409, 'SYMBOL_LOCKED', `Symbol ${symbol} is locked by an active bot session. Close it through the bot page or wait for the bot to close it.`))
     }
     const { data } = await engineClient.post(
       '/trade/order',
@@ -269,6 +242,10 @@ async function closePosition(req, res, next) {
     const { symbol } = req.body
     if (!symbol) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'symbol is required')
+    }
+    const lock = await getSymbolLock(symbol)
+    if (lock && lock.reason === 'bot') {
+      return next(new ApiError(409, 'SYMBOL_LOCKED', `Symbol ${symbol} is locked by an active bot session and cannot be closed manually.`))
     }
     const { data } = await engineClient.post('/trade/close-position', { symbol }, { headers: req.binanceHeaders })
     res.json(ApiResponse.success(data.data))
@@ -337,10 +314,9 @@ async function placeOCOOrder(req, res, next) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'quantity must be a positive number')
     }
     // Symbol lock check
-    const symbolFree = await isSymbolFree(symbol)
-    if (!symbolFree) {
-      const lock = await getSymbolLock(symbol)
-      return next(new ApiError(409, 'SYMBOL_LOCKED', `Symbol ${symbol} is locked by ${lock?.reason || 'an active position'}. Close it first.`))
+    const lock = await getSymbolLock(symbol)
+    if (lock && lock.reason === 'bot') {
+      return next(new ApiError(409, 'SYMBOL_LOCKED', `Symbol ${symbol} is locked by an active bot session. Close it through the bot page or wait for the bot to close it.`))
     }
     const { data } = await engineClient.post(
       '/trade/order/oco_futures',
@@ -385,10 +361,9 @@ async function placeOrderWithTpSl(req, res, next) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'quantity must be a positive number')
     }
     // Symbol lock check
-    const symbolFree = await isSymbolFree(symbol)
-    if (!symbolFree) {
-      const lock = await getSymbolLock(symbol)
-      return next(new ApiError(409, 'SYMBOL_LOCKED', `Symbol ${symbol} is locked by ${lock?.reason || 'an active position'}. Close it first.`))
+    const lock = await getSymbolLock(symbol)
+    if (lock && lock.reason === 'bot') {
+      return next(new ApiError(409, 'SYMBOL_LOCKED', `Symbol ${symbol} is locked by an active bot session. Close it through the bot page or wait for the bot to close it.`))
     }
     const { data } = await engineClient.post(
       '/trade/order/with_tp_sl',

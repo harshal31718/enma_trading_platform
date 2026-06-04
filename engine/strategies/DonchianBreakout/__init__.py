@@ -22,15 +22,15 @@ class DonchianBreakout(BaseStrategy):
 
     @property
     def upper(self):
-        return ta.donchian(self.candles, period=self.period)[0]
+        return ta.donchian(self.candles[:-1], period=self.period)[0]
 
     @property
     def lower(self):
-        return ta.donchian(self.candles, period=self.period)[2]
+        return ta.donchian(self.candles[:-1], period=self.period)[2]
 
     @property
     def mid(self):
-        return ta.donchian(self.candles, period=self.period)[1]
+        return ta.donchian(self.candles[:-1], period=self.period)[1]
 
     def should_long(self) -> bool:
         return self.close > self.upper

@@ -40,7 +40,7 @@ export default function BacktestConfigForm({ isRunning, onSubmit, onCancel }) {
 
   const [strategyId, setStrategyId] = useState('')
   const [exchange, setExchange] = useState('Binance Futures')
-  const [symbol, setSymbol] = useState('BTC-USDT')
+  const [symbol, setSymbol] = useState('BTCUSDT')
   const [timeframe, setTimeframe] = useState('1h')
   const [startDate, setStartDate] = useState('2023-01-01')
   const [endDate, setEndDate] = useState('2024-01-01')
