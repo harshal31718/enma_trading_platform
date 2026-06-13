@@ -28,6 +28,10 @@ class BacktestRequest(BaseModel):
     slippagePct:    float = 0.0005
     fundingEnabled: bool  = False
     fundingRate:    float = 0.0001
+    # Strategy alpha parameters (Tier 3) — keyed by PARAMS name, clamped by runner.
+    alphaParams:    dict  = {}
+    # Risk model parameters (Tier 2) — override global settings for this run.
+    riskParams:     dict  = {}
 
 
 class CancelRequest(BaseModel):
@@ -51,6 +55,8 @@ async def run_backtest(req: BacktestRequest):
             slippage_pct=req.slippagePct,
             funding_enabled=req.fundingEnabled,
             funding_rate=req.fundingRate,
+            alpha_params=req.alphaParams,
+            risk_params=req.riskParams,
         )
         return {"success": True, "data": res}
     except Exception as e:

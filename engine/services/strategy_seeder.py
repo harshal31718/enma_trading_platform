@@ -29,6 +29,10 @@ DEFAULT_STRATEGIES = [
         "name": "AdaptiveTrend",
         "description": "Regime-aware trend follower. Four layers must agree: trend-EMA regime, fast/slow EMA momentum cross, an ATR volatility gate, and volatility-targeted risk sizing. Exits via a chandelier ATR trailing stop with breakeven ratchet. Best on 1h/4h deep-liquidity pairs.",
     },
+    {
+        "name": "BestSupertrend",
+        "description": "Multi-timeframe Supertrend trend follower combined with SMA crossovers. Filters entries by higher-timeframe Supertrend and exits on SMA crosses.",
+    },
 ]
 
 

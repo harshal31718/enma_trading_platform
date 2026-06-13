@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react'
-import { Plus, Trash2 } from 'lucide-react'
+import { Plus, Trash2, Bot } from 'lucide-react'
 import { useAlgoSessions, useStopSession, useDeleteAllStopped } from '../hooks/useAlgoSessions'
 import { useSocket } from '../hooks/useSocket'
 import { useQueryClient } from '@tanstack/react-query'

@@ -71,7 +71,13 @@ class Position:
         return high >= self.liquidation_price
 
     def close(self, close_price: float) -> None:
-        """Close the position and realize P&L."""
+        """Close the position and realize P&L at the actual fill price.
+
+        update_pnl() must run *before* is_open is set to False — the guard
+        inside update_pnl() returns immediately when is_open is False, which
+        would leave pnl at zero for every SL/TP exit (BUG-01 fix).
+        Liquidation exits bypass this method and write realized_pnl directly.
+        """
         self.close_price = close_price
+        self.update_pnl(close_price)  # compute while still open
         self.is_open = False
-        self.update_pnl(close_price)

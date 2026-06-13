@@ -10,6 +10,13 @@ class BaseStrategy(ABC):
     All strategies must extend this class.
     """
 
+    # ── Class-level constants ────────────────────────────────────────────────
+    # Override in subclass to enforce a minimum warm-up window.
+    # The runner uses max(50, strategy.MIN_WARMUP_CANDLES) so strategies that
+    # need more than 50 bars (e.g. AdaptiveTrend's 200-bar trend EMA) get
+    # enough history before the first signal fires.
+    MIN_WARMUP_CANDLES: int = 50
+
     def __init__(self):
         # Candle data — set by the backtest/live engine before each call
         self.candles: np.ndarray = np.array([])
@@ -45,6 +52,27 @@ class BaseStrategy(ABC):
         self.is_backtesting: bool = False
         self.is_livetrading: bool = False
         self.is_papertrading: bool = False
+
+        # ── Risk Model — injected by runner from settings/risk_params ────────
+        # D6: risk_pct is no longer a strategy PARAMS field. It is injected
+        # from Tier 2 Risk settings. Strategies read self.risk_pct but never
+        # declare it in PARAMS.
+        self.risk_pct:         float = 0.01    # fraction of capital risked per trade
+        self.rrr:              float = 2.0     # reward-to-risk ratio for TP calculation
+        self.liq_buffer_pct:   float = 0.005  # minimum gap between SL and liquidation price
+        self.max_session_dd:   float = 0.20   # session drawdown limit (halts new entries)
+        self.slippage_pct:     float = 0.0005 # assumed adverse slippage on market fills
+        # fee_rate already declared above
+
+        # ── Risk Tracking — updated by runner each candle ────────────────────
+        self.peak_equity:      float = 0.0   # highest equity seen this session
+        self.session_drawdown: float = 0.0   # (peak - equity) / peak; checked by can_trade()
+        self.available_capital: float = 0.0  # shared capital pool; decremented on open, credited on close
+
+        # ── Execution ────────────────────────────────────────────────────────
+        self._close_at_open:   bool  = False   # set by close_position(); consumed by runner step A1
+        self.order_type:       str   = "market" # "market" | "limit"
+        self.limit_offset:     float = 0.0      # price offset for limit entries
 
     # ─────────────────────────────────────────
     # Candle property accessors
@@ -353,7 +381,12 @@ class BaseStrategy(ABC):
     # ─────────────────────────────────────────
 
     def liquidate(self) -> None:
-        """Close the open position immediately at market price."""
+        """[DEPRECATED] Close the open position at market price.
+
+        Prefer ``close_position()`` — it guarantees a next-open market exit
+        that cannot be pre-empted by SL/TP checks (BUG-03 fix). This method
+        is kept for backward compatibility only.
+        """
         if self.is_open:
             if self.is_long:
                 self.take_profit = self.position.qty, self.price
@@ -363,3 +396,63 @@ class BaseStrategy(ABC):
     def log(self, msg: str) -> None:
         """Log a message during strategy execution."""
         logging.getLogger("BaseStrategy").info("[%s] %s", self.symbol, msg)
+
+    # ─────────────────────────────────────────
+    # Model hooks — override for advanced control
+    # ─────────────────────────────────────────
+
+    def alpha(self) -> float:
+        """Signal strength: +1.0 long, -1.0 short, 0.0 flat.
+
+        Default implementation delegates to the boolean hooks so existing
+        strategies work without change. Override for continuous signals.
+        """
+        if self.should_long():  return  1.0
+        if self.should_short(): return -1.0
+        return 0.0
+
+    def can_trade(self) -> bool:
+        """Risk circuit breaker. Returns False to halt new entries.
+
+        Position management (update_position) still runs even when False.
+        Default: halt when session drawdown exceeds max_session_dd threshold.
+        """
+        return self.session_drawdown < self.max_session_dd
+
+    def alpha_beats_cost(self, signal: float) -> bool:
+        """TCM gate. Return False to veto the entry after alpha() fires.
+
+        Strategies can override to skip entries when expected edge < cost.
+        Default: always trade (no veto).
+        """
+        return True
+
+    def target_weight(self) -> float:
+        """PCM: desired equity weight for this strategy (0.0–1.0).
+
+        0.0 means use the qty from go_long()/go_short() directly.
+        Non-zero values are for portfolio-level capital allocation.
+        """
+        return 0.0
+
+    def close_position(self) -> None:
+        """Guaranteed market exit at the next candle's open price.
+
+        Unlike liquidate(), this flag is checked in runner step A1 *before*
+        SL/TP, so the exit cannot be pre-empted by the SL leg firing at a
+        worse price (BUG-03 fix). Use this for all strategy-driven exits.
+        """
+        if self.is_open:
+            self._close_at_open = True
+
+    def validate_params(self) -> None:
+        """Override to raise ValueError for invalid cross-param constraints.
+
+        Called by the runner after alpha_params are injected (D13). Raising
+        ValueError here aborts the backtest with a clear error message.
+        Example::
+
+            if self.fast_period >= self.slow_period:
+                raise ValueError("fast_period must be < slow_period")
+        """
+        pass

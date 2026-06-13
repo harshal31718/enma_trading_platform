@@ -59,6 +59,8 @@ async def run_backtest_simulation(
     slippage_pct: float | None = None,
     funding_enabled: bool = False,
     funding_rate: float | None = None,
+    alpha_params: dict | None = None,
+    risk_params: dict | None = None,
 ) -> dict:
     # ── 1. Parse strategy name ──────────────────────────────────────────────
     parts = strategy_file.split("/")
@@ -138,7 +140,47 @@ async def run_backtest_simulation(
     strategy.exchange_type  = "futures" if "Futures" in exchange else "spot"
     strategy.is_backtesting = True
 
-    warmup_period = min(50, len(rows) - 2)
+    # Resolve per-run simulation parameters first — needed for risk injection below.
+    taker_fee   = fee_rate
+    _slippage   = slippage_pct   if slippage_pct   is not None else SLIPPAGE_PCT
+    _fund_rate  = funding_rate   if funding_rate   is not None else FUNDING_RATE
+    _funding_on = funding_enabled
+    leverage    = max(int(leverage), 1)
+
+    # ── 6a. Inject and validate alpha params (BUG-02 fix) ────────────────
+    # Previously strategy_class() was called with no params — every UI config
+    # was ignored and all runs used the strategy's hardcoded defaults.
+    for key, val in (alpha_params or {}).items():
+        if hasattr(strategy, "PARAMS") and key in strategy.PARAMS:
+            bounds = strategy.PARAMS[key]
+            try:
+                typed_val = type(bounds["default"])(val)
+            except (TypeError, ValueError):
+                typed_val = val
+            typed_val = max(bounds["min"], min(bounds["max"], typed_val))
+            setattr(strategy, key, typed_val)
+        elif hasattr(strategy, key):
+            setattr(strategy, key, val)
+
+    try:
+        strategy.validate_params()
+    except ValueError as e:
+        raise RuntimeError(f"PARAM_ERROR: {e}")
+
+    # ── 6b. Inject risk model params ──────────────────────────────────
+    _risk = risk_params or {}
+    strategy.risk_pct          = float(_risk.get("risk_pct",       0.01))
+    strategy.rrr               = float(_risk.get("rrr",            2.0))
+    strategy.liq_buffer_pct    = float(_risk.get("liq_buffer_pct", 0.005))
+    strategy.max_session_dd    = float(_risk.get("max_session_dd", 0.20))
+    strategy.slippage_pct      = _slippage
+    strategy.fee_rate          = fee_rate
+    strategy.available_capital = float(capital)
+    strategy.peak_equity       = float(capital)
+
+    # ── 6c. Enforce minimum warm-up (D-02 fix) ─────────────────────────
+    warmup_period = max(strategy.MIN_WARMUP_CANDLES, min(50, len(rows) - 2))
+
     # equity_curve stores raw (iso_str, float) tuples — converted to dicts only
     # after downsampling, avoiding millions of dict allocations in the hot path.
     equity_timestamps: list[str]   = []
@@ -149,14 +191,6 @@ async def run_backtest_simulation(
     total_funding = 0.0
     liquidations = 0
     last_funding_dt = None  # last UTC funding boundary already charged for the open position
-
-    # Resolve per-run simulation parameters.  Module-level constants remain as
-    # fallbacks for any caller that doesn't pass these arguments.
-    taker_fee   = fee_rate
-    _slippage   = slippage_pct   if slippage_pct   is not None else SLIPPAGE_PCT
-    _fund_rate  = funding_rate   if funding_rate   is not None else FUNDING_RATE
-    _funding_on = funding_enabled
-    leverage    = max(int(leverage), 1)
 
     # ── 7. Redis connection ─────────────────────────────────────────────────
     redis_url = os.getenv("REDIS_URL", "redis://redis:6379")
@@ -293,7 +327,48 @@ async def run_backtest_simulation(
                     except Exception as e:
                         logger.error(f"on_open_position error: {e}")
 
-            # ── A. Execute pending orders ────────────────────────────────────
+            # ── A1. Strategy-requested close (close_position() flag) ─────────
+            # Checked after atomic flip (A0) but before new entry (A2).
+            # Guaranteed market exit at this candle's open — cannot be
+            # pre-empted by SL/TP legs (BUG-03 fix).
+            if strategy.position is not None and strategy._close_at_open:
+                strategy._close_at_open = False
+                was_long_close = strategy.is_long
+                exit_fill_close = open_t * (1.0 - _slippage) if was_long_close else open_t * (1.0 + _slippage)
+                exit_qty_close  = strategy.position.qty
+                fee = exit_qty_close * exit_fill_close * taker_fee
+                total_fees += fee
+                strategy.position.close(exit_fill_close)
+                realized_pnl = strategy.position.pnl - fee
+                strategy.balance += realized_pnl
+                strategy.available_capital += strategy.position.margin + realized_pnl
+                strategy.available_margin = strategy.balance
+                last_funding_dt = None
+
+                if active_trade:
+                    active_trade.update({
+                        "id":         f"t_{len(trades) + 1}",
+                        "exitPrice":  str(exit_fill_close),
+                        "exitAt":     time_t.isoformat(),
+                        "_exit_dt":   time_t,
+                        "exitReason": "strategy_exit",
+                        "pnl":        f"{realized_pnl:.2f}",
+                        "pnlPct":     f"{strategy.position.pnl_pct:.2f}",
+                    })
+                    trades.append(active_trade)
+                    active_trade = None
+
+                try:
+                    strategy.on_close_position((exit_qty_close, exit_fill_close))
+                except Exception as e:
+                    logger.error(f"on_close_position error (strategy_exit): {e}")
+
+                strategy.position      = None
+                strategy.stop_loss     = None
+                strategy.take_profit   = None
+                strategy._pending_flip = None
+
+            # ── A2. Execute pending entry orders ────────────────────────────
             if strategy.position is None:
                 # Let strategy cancel a pending entry before it fills
                 if strategy.buy is not None or strategy.sell is not None:
@@ -326,6 +401,7 @@ async def run_backtest_simulation(
                             "long", buy_qty, fill_price, leverage,
                             isolated_wallet=req_margin,
                         )
+                        strategy.available_capital -= req_margin
                         strategy.available_margin = strategy.balance - req_margin
                         last_funding_dt = time_t
                         active_trade = {
@@ -365,6 +441,7 @@ async def run_backtest_simulation(
                             "short", sell_qty, fill_price, leverage,
                             isolated_wallet=req_margin,
                         )
+                        strategy.available_capital -= req_margin
                         strategy.available_margin = strategy.balance - req_margin
                         last_funding_dt = time_t
                         active_trade = {
@@ -445,6 +522,7 @@ async def run_backtest_simulation(
 
                 if closed:
                     exit_qty = strategy.position.qty
+                    locked_margin = strategy.position.margin
                     if exit_reason == "liquidation":
                         # Isolated margin: the entire isolated wallet is
                         # forfeited — loss is capped at the margin locked for
@@ -464,6 +542,7 @@ async def run_backtest_simulation(
                         realized_pnl  = strategy.position.pnl - fee
                         trade_pnl_pct = strategy.position.pnl_pct
                     strategy.balance += realized_pnl
+                    strategy.available_capital += locked_margin + realized_pnl
                     strategy.available_margin = strategy.balance
                     last_funding_dt = None
 
@@ -490,21 +569,37 @@ async def run_backtest_simulation(
                     strategy.take_profit   = None
                     strategy._pending_flip = None  # a flip cannot survive its position
 
-            # ── B. Update strategy candle window ────────────────────────────
+            # ── B. Update strategy candle window + equity tracking ───────────
             strategy.candles = candles_np[:t + 1]
             strategy.index   = t
 
-            # ── C. Strategy decision hooks ───────────────────────────────────
+            # Track session peak equity and drawdown for can_trade() gate
+            current_equity = strategy.equity
+            if current_equity > strategy.peak_equity:
+                strategy.peak_equity = current_equity
+            if strategy.peak_equity > 0:
+                strategy.session_drawdown = (
+                    (strategy.peak_equity - current_equity) / strategy.peak_equity
+                )
+
+            # ── C. Strategy decision hooks ───────────────────────────────
             try:
-                strategy.before()
+                strategy.before()            # C1: cache indicators
+
                 if strategy.position is None:
-                    if strategy.should_long():
-                        strategy.go_long()
-                    elif strategy.should_short():
-                        strategy.go_short()
+                    # C2: risk circuit breaker — skip new entries if DD exceeded
+                    if strategy.can_trade():
+                        # C3: alpha + TCM gate
+                        signal = strategy.alpha()
+                        if signal != 0.0 and strategy.alpha_beats_cost(signal):
+                            if signal > 0:
+                                strategy.go_long()
+                            else:
+                                strategy.go_short()
                 else:
-                    strategy.update_position()
-                strategy.after()
+                    strategy.update_position()   # C4: manage open position
+
+                strategy.after()             # C5: post-candle cleanup
             except Exception as e:
                 raise RuntimeError(f"STRATEGY_ERROR: Python strategy error at step {t}: {e}")
 
@@ -520,16 +615,24 @@ async def run_backtest_simulation(
         except asyncio.CancelledError:
             pass
 
-    # ── 9. Force-close any open position at simulation end ──────────────────
+    # ── 9. Termination hooks + force-close open position ────────────────────
+    # BUG-04 fix: before_terminate() and terminate() were never called.
+    try:
+        strategy.before_terminate()
+    except Exception as e:
+        logger.error(f"[{job_id}] before_terminate error: {e}")
+
     if strategy.position is not None:
         last_close = candles_np[-1, 2]
         was_long   = strategy.is_long
         exit_fill  = last_close * (1.0 - _slippage) if was_long else last_close * (1.0 + _slippage)
         fee = strategy.position.qty * exit_fill * taker_fee
+        locked_margin = strategy.position.margin
         total_fees += fee
         strategy.position.close(exit_fill)
         realized_pnl      = strategy.position.pnl - fee
         strategy.balance += realized_pnl
+        strategy.available_capital += locked_margin + realized_pnl
         strategy.available_margin = strategy.balance
 
         if active_trade:
@@ -543,6 +646,11 @@ async def run_backtest_simulation(
                 "pnlPct":     f"{strategy.position.pnl_pct:.2f}",
             })
             trades.append(active_trade)
+
+    try:
+        strategy.terminate()
+    except Exception as e:
+        logger.error(f"[{job_id}] terminate error: {e}")
 
     # ── 10. Calculate metrics using NumPy (no Python loops) ─────────────────
     logger.info(f"[{job_id}] Simulation complete. Calculating metrics...")
