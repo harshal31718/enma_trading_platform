@@ -1,11 +1,12 @@
 import { useState, useCallback } from 'react'
-import { Bot, Plus, Trash2 } from 'lucide-react'
+import { Plus, Trash2 } from 'lucide-react'
 import { useAlgoSessions, useStopSession, useDeleteAllStopped } from '../hooks/useAlgoSessions'
 import { useSocket } from '../hooks/useSocket'
 import { useQueryClient } from '@tanstack/react-query'
 import SessionCard from '../components/algo/SessionCard'
 import NewSessionWizard from '../components/algo/NewSessionWizard'
 import PageWrapper from '../components/layout/PageWrapper'
+import PageHeader from '../components/ui/PageHeader'
 
 export default function AlgoTrading() {
   const [showWizard, setShowWizard] = useState(false)
@@ -54,36 +55,32 @@ export default function AlgoTrading() {
 
   return (
     <PageWrapper>
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-3">
-          <Bot size={24} className="text-emerald-400" />
-          <div>
-            <h1 className="text-xl font-semibold text-gray-100">AlgoTrading</h1>
-            <p className="text-sm text-gray-400">Automated trading bots · Binance Testnet</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          {hasStopped && (
+      <PageHeader
+        title="Algo Trading"
+        description="Automated trading bots · Binance Testnet"
+        actions={
+          <div className="flex items-center gap-2">
+            {hasStopped && (
+              <button
+                onClick={() => deleteAllStopped.mutate()}
+                disabled={deleteAllStopped.isPending}
+                className="flex items-center gap-2 px-3 py-2 bg-transparent hover:bg-red-500/10 text-gray-500 hover:text-red-400 text-sm rounded-lg border border-gray-700 hover:border-red-500/30 disabled:opacity-40 transition-all"
+                title="Clear all stopped sessions"
+              >
+                <Trash2 size={14} />
+                Clear stopped
+              </button>
+            )}
             <button
-              onClick={() => deleteAllStopped.mutate()}
-              disabled={deleteAllStopped.isPending}
-              className="flex items-center gap-2 px-3 py-2 bg-transparent hover:bg-red-500/10 text-gray-500 hover:text-red-400 text-sm rounded-lg border border-gray-700 hover:border-red-500/30 disabled:opacity-40 transition-all"
-              title="Clear all stopped sessions"
+              onClick={() => setShowWizard(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm rounded-lg transition-colors"
             >
-              <Trash2 size={14} />
-              Clear stopped
+              <Plus size={16} />
+              New Bot
             </button>
-          )}
-          <button
-            onClick={() => setShowWizard(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm rounded-lg transition-colors"
-          >
-            <Plus size={16} />
-            New Bot
-          </button>
-        </div>
-      </div>
+          </div>
+        }
+      />
 
       {/* Sessions list */}
       {isLoading ? (

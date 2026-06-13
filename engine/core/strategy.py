@@ -31,6 +31,10 @@ class BaseStrategy(ABC):
         self.stop_loss = None  # (qty, price) or [(qty, price), ...]
         self.take_profit = None  # (qty, price) or [(qty, price), ...]
 
+        # Pending atomic flip — written only by flip_position(), consumed and
+        # cleared by the engine. Never mutate directly from strategy code.
+        self._pending_flip: dict | None = None
+
         # Candle index counter — incremented by engine on each candle
         self.index: int = 0
 
@@ -100,6 +104,12 @@ class BaseStrategy(ABC):
         return self.is_livetrading or self.is_papertrading
 
     @property
+    def equity(self) -> float:
+        """Wallet balance plus unrealized P&L of any open position."""
+        unrealized = self.position.pnl if (self.position is not None and self.position.is_open) else 0.0
+        return self.balance + unrealized
+
+    @property
     def is_spot_trading(self) -> bool:
         return self.exchange_type == "spot"
 
@@ -121,10 +131,9 @@ class BaseStrategy(ABC):
         """Return True to open a short position. Called only when no position is open."""
         raise NotImplementedError
 
-    @abstractmethod
     def should_cancel_entry(self) -> bool:
-        """Return True to cancel a pending entry order."""
-        raise NotImplementedError
+        """Return True to cancel a pending entry order before it fills."""
+        return False
 
     @abstractmethod
     def go_long(self) -> None:
@@ -189,6 +198,155 @@ class BaseStrategy(ABC):
     def on_cancel(self) -> None:
         """Called after all active orders are canceled."""
         pass
+
+    # ─────────────────────────────────────────
+    # Risk-based sizing & stop/target helpers
+    # ─────────────────────────────────────────
+    #
+    # These centralize the platform's risk rules so strategies don't each
+    # reimplement (and get wrong) position sizing. All are additive — the
+    # legacy ``self.buy = qty, price`` pattern still works untouched.
+
+    def _atr(self, period: int = 14) -> float:
+        """Latest ATR. Lazy-imports indicators to avoid an import cycle and to
+        work under both the ``engine.`` and top-level module roots."""
+        try:
+            import engine.indicators as ta
+        except ImportError:
+            import indicators as ta
+        return float(ta.atr(self.candles, period=period))
+
+    def size_by_risk(
+        self, stop_price: float, risk_pct: float | None = None, entry_price: float | None = None
+    ) -> float:
+        """Quantity such that hitting ``stop_price`` loses ``risk_pct`` of equity.
+
+        Implements platform rule #6: ``(equity * risk_pct) / |entry - stop|``.
+        ``risk_pct`` defaults to ``self.risk_pct`` if the strategy defines it,
+        else 1%. The result is capped by ``max_qty()`` so a tight stop can never
+        demand more notional than the account's leverage allows.
+        """
+        entry = entry_price if entry_price is not None else self.price
+        if risk_pct is None:
+            risk_pct = float(getattr(self, "risk_pct", 0.01))
+        per_unit = abs(entry - stop_price)
+        if per_unit <= 0 or entry <= 0:
+            return 0.0
+        qty = (self.equity * risk_pct) / per_unit
+        return min(qty, self.max_qty(entry))
+
+    def size_by_notional(self, pct: float | None = None, entry_price: float | None = None) -> float:
+        """Legacy sizing: allocate ``pct`` of equity as notional (qty = equity*pct/price).
+
+        Kept for strategies that intentionally want fixed-fraction notional
+        rather than risk-based sizing. Also capped by ``max_qty()``.
+        """
+        entry = entry_price if entry_price is not None else self.price
+        if pct is None:
+            pct = float(getattr(self, "risk_pct", 0.1))
+        if entry <= 0:
+            return 0.0
+        qty = (self.equity * pct) / entry
+        return min(qty, self.max_qty(entry))
+
+    def max_qty(self, entry_price: float | None = None) -> float:
+        """Max quantity affordable: full equity at current leverage as margin."""
+        entry = entry_price if entry_price is not None else self.price
+        if entry <= 0:
+            return 0.0
+        max_notional = self.equity * max(self.leverage, 1)
+        return max_notional / entry
+
+    def atr_stop(self, direction: str, mult: float = 2.0, period: int = 14,
+                 entry_price: float | None = None) -> float:
+        """ATR-based stop price. long: entry - mult*ATR, short: entry + mult*ATR."""
+        entry = entry_price if entry_price is not None else self.price
+        atr = self._atr(period)
+        if direction == "long":
+            return entry - mult * atr
+        return entry + mult * atr
+
+    def rr_target(self, direction: str, stop_price: float, rr: float = 2.0,
+                  entry_price: float | None = None) -> float:
+        """Take-profit at a risk:reward multiple of the stop distance."""
+        entry = entry_price if entry_price is not None else self.price
+        risk = abs(entry - stop_price)
+        if direction == "long":
+            return entry + rr * risk
+        return entry - rr * risk
+
+    def trail_stop(self, atr_mult: float = 2.0, period: int = 14) -> None:
+        """Ratchet the stop-loss toward price by ``atr_mult`` ATR. Only ever
+        tightens (moves up for longs, down for shorts) — never loosens.
+        Call from ``update_position()`` while a position is open."""
+        if not self.is_open:
+            return
+        qty = self.position.qty
+        atr = self._atr(period)
+        if self.is_long:
+            new_sl = self.price - atr_mult * atr
+            cur = self.stop_loss[1] if self.stop_loss else None
+            if cur is None or new_sl > cur:
+                self.stop_loss = qty, new_sl
+        elif self.is_short:
+            new_sl = self.price + atr_mult * atr
+            cur = self.stop_loss[1] if self.stop_loss else None
+            if cur is None or new_sl < cur:
+                self.stop_loss = qty, new_sl
+
+    def move_to_breakeven(self, buffer_pct: float = 0.0) -> None:
+        """Move the stop to the entry price (plus a small buffer in the profit
+        direction). No-op if it would loosen the existing stop."""
+        if not self.is_open:
+            return
+        qty = self.position.qty
+        entry = self.position.entry_price
+        if self.is_long:
+            be = entry * (1.0 + buffer_pct)
+            cur = self.stop_loss[1] if self.stop_loss else None
+            if cur is None or be > cur:
+                self.stop_loss = qty, be
+        elif self.is_short:
+            be = entry * (1.0 - buffer_pct)
+            cur = self.stop_loss[1] if self.stop_loss else None
+            if cur is None or be < cur:
+                self.stop_loss = qty, be
+
+    # ─────────────────────────────────────────
+    # Atomic flip (close-and-reverse)
+    # ─────────────────────────────────────────
+
+    def flip_position(self, qty: float, stop_loss: float | None = None,
+                      take_profit: float | None = None) -> None:
+        """Atomically close the open position and open the opposite side.
+
+        Call from ``update_position()`` while a position is open. The engine
+        executes both legs as one unit (Pine-Script ``strategy.entry()``
+        reversal semantics): the old position is closed and the new opposite
+        position is opened at the same execution point, with ``stop_loss`` /
+        ``take_profit`` armed on the new position immediately — there is never
+        a window where the reversed position runs unprotected.
+
+        Do NOT combine this with writing ``self.buy`` / ``self.sell`` while a
+        position is open — that legacy pattern corrupts the open position's
+        exit plan and is exactly what this primitive replaces.
+
+        If the new leg cannot be afforded (margin + fee exceeds balance) or
+        any live order fails, the flip degrades to close-only: the engine
+        never leaves a doubled or unprotected position.
+        """
+        if not self.is_open:
+            raise RuntimeError("flip_position() requires an open position")
+        self._pending_flip = {
+            "direction": "short" if self.is_long else "long",
+            "qty": float(qty),
+            "stop_loss": stop_loss,
+            "take_profit": take_profit,
+        }
+
+    @property
+    def has_pending_flip(self) -> bool:
+        return self._pending_flip is not None
 
     # ─────────────────────────────────────────
     # Utility methods

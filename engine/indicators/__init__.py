@@ -1,65 +1,57 @@
-import numpy as np
-import talib
+"""Pluggable technical-indicator layer for the Enma engine.
 
+Public API is unchanged from the original flat module — strategies keep doing::
 
-def ema(candles: np.ndarray, period: int = 9, sequential: bool = False):
-    """Exponential Moving Average"""
-    close = candles[:, 2].astype(float)
-    result = talib.EMA(close, timeperiod=period)
-    return result if sequential else float(result[-1])
+    import engine.indicators as ta
+    fast = ta.ema(self.candles, period=9)
+    atr_series = ta.atr(self.candles, period=14, sequential=True)
 
+Underneath, every call now routes through a swappable
+:class:`IndicatorProvider`: TA-Lib by default, pandas-ta as a drop-in fallback.
+Switch backends with the ``ENMA_INDICATOR_LIBRARY`` env var (see ``config.py``);
+no strategy code changes. Add an indicator by declaring it on
+``IndicatorProvider`` (``base.py``) and implementing it in both adapters.
+"""
 
-def sma(candles: np.ndarray, period: int = 20, sequential: bool = False):
-    """Simple Moving Average"""
-    close = candles[:, 2].astype(float)
-    result = talib.SMA(close, timeperiod=period)
-    return result if sequential else float(result[-1])
+from .adapters import PandasTaIndicatorProvider, TalibIndicatorProvider
+from .base import (
+    IndicatorProvider,
+    adx,
+    atr,
+    bollinger_bands,
+    donchian,
+    ema,
+    get_indicators,
+    macd,
+    rsi,
+    set_indicator_provider,
+    sma,
+    stochastic,
+)
+from .config import IndicatorLibrary, get_indicator_provider
 
+# Eagerly install the configured backend so the first indicator call has a
+# provider ready and any misconfiguration fails at startup — not mid-backtest.
+# Idempotent: get_indicators() also lazy-initialises if this is ever skipped.
+set_indicator_provider(get_indicator_provider())
 
-def rsi(candles: np.ndarray, period: int = 14, sequential: bool = False):
-    """Relative Strength Index"""
-    close = candles[:, 2].astype(float)
-    result = talib.RSI(close, timeperiod=period)
-    return result if sequential else float(result[-1])
-
-
-def atr(candles: np.ndarray, period: int = 14, sequential: bool = False):
-    """Average True Range"""
-    high = candles[:, 3].astype(float)
-    low = candles[:, 4].astype(float)
-    close = candles[:, 2].astype(float)
-    result = talib.ATR(high, low, close, timeperiod=period)
-    return result if sequential else float(result[-1])
-
-
-def donchian(candles: np.ndarray, period: int = 20, sequential: bool = False):
-    """
-    Donchian Channel.
-    Returns: (upper, middle, lower)
-    """
-    high = candles[:, 3].astype(float)
-    low = candles[:, 4].astype(float)
-    upper = talib.MAX(high, timeperiod=period)
-    lower = talib.MIN(low, timeperiod=period)
-    middle = (upper + lower) / 2
-    if sequential:
-        return upper, middle, lower
-    return float(upper[-1]), float(middle[-1]), float(lower[-1])
-
-
-def macd(candles: np.ndarray, fast: int = 12, slow: int = 26, signal: int = 9, sequential: bool = False):
-    """MACD — returns (macd_line, signal_line, histogram)"""
-    close = candles[:, 2].astype(float)
-    macd_line, signal_line, histogram = talib.MACD(close, fastperiod=fast, slowperiod=slow, signalperiod=signal)
-    if sequential:
-        return macd_line, signal_line, histogram
-    return float(macd_line[-1]), float(signal_line[-1]), float(histogram[-1])
-
-
-def bollinger_bands(candles: np.ndarray, period: int = 20, std: float = 2.0, sequential: bool = False):
-    """Bollinger Bands — returns (upper, middle, lower)"""
-    close = candles[:, 2].astype(float)
-    upper, middle, lower = talib.BBANDS(close, timeperiod=period, nbdevup=std, nbdevdn=std)
-    if sequential:
-        return upper, middle, lower
-    return float(upper[-1]), float(middle[-1]), float(lower[-1])
+__all__ = [
+    # Provider framework
+    "IndicatorProvider",
+    "TalibIndicatorProvider",
+    "PandasTaIndicatorProvider",
+    "IndicatorLibrary",
+    "set_indicator_provider",
+    "get_indicators",
+    "get_indicator_provider",
+    # Convenience functions (stable public API)
+    "ema",
+    "sma",
+    "rsi",
+    "atr",
+    "donchian",
+    "macd",
+    "bollinger_bands",
+    "adx",
+    "stochastic",
+]

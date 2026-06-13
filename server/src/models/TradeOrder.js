@@ -23,4 +23,6 @@ const TradeOrderSchema = new mongoose.Schema(
   { timestamps: false, collection: 'tradeOrders' }
 )
 
+TradeOrderSchema.index({ symbol: 1, time: -1 })
+
 module.exports = mongoose.model('TradeOrder', TradeOrderSchema)

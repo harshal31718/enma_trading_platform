@@ -7,6 +7,7 @@ import { Select } from '../../components/ui/select'
 import { useStrategies } from '../../hooks/useStrategies'
 import { useSymbols } from '../../hooks/useCandles'
 import { formatIsoDate } from '../../utils/formatters'
+import { useExchangeSettings } from '../../hooks/useExchangeSettings'
 
 // Date picker that shows "29 Aug '25" but stores/emits a YYYY-MM-DD ISO string
 function DateInput({ value, onChange, label }) {
@@ -47,6 +48,18 @@ export default function BacktestConfigForm({ isRunning, onSubmit, onCancel }) {
   const [capital, setCapital] = useState('10000')
   const [leverage, setLeverage] = useState('1')
   const [feeRate, setFeeRate] = useState('0.001')
+
+  // Pre-fill from saved exchange settings (fires once)
+  const { data: exchangeSettings } = useExchangeSettings()
+  const settingsApplied = useRef(false)
+  useEffect(() => {
+    if (exchangeSettings && !settingsApplied.current) {
+      setCapital(String(exchangeSettings.defaultCapital ?? 10000))
+      setLeverage(String(exchangeSettings.defaultLeverage ?? 1))
+      setFeeRate(String(exchangeSettings.takerFee ?? 0.001))
+      settingsApplied.current = true
+    }
+  }, [exchangeSettings])
 
   useEffect(() => {
     if (strategies?.length > 0 && !strategyId) setStrategyId(strategies[0].id)

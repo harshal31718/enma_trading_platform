@@ -5,6 +5,7 @@ const engineClient  = require('../services/engineClient')
 const BacktestResult = require('../models/BacktestResult')
 const BacktestTrade  = require('../models/BacktestTrade')
 const Strategy       = require('../models/Strategy')
+const Settings       = require('../models/Settings')
 const ApiResponse    = require('../utils/ApiResponse')
 const ApiError       = require('../utils/ApiError')
 
@@ -39,7 +40,14 @@ async function runBacktest(req, res, next) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'leverage must be an integer between 1 and 125')
     }
 
-    const feeRateNum = Number(feeRate !== undefined ? feeRate : 0.001)
+    // Load saved exchange settings — used as defaults when the client omits fee/slippage
+    const savedSettings = await Settings.findById('global') || {}
+    const defaultFeeRate   = savedSettings.takerFee    ?? 0.0005
+    const defaultSlippage  = savedSettings.slippagePct ?? 0.0005
+    const defaultFunding   = savedSettings.fundingEnabled ?? false
+    const defaultFundingRate = savedSettings.fundingRate ?? 0.0001
+
+    const feeRateNum = Number(feeRate !== undefined ? feeRate : defaultFeeRate)
     if (!isFinite(feeRateNum) || feeRateNum < 0 || feeRateNum > 0.05) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'feeRate must be a number between 0 and 0.05')
     }
@@ -71,9 +79,9 @@ async function runBacktest(req, res, next) {
       timeframe,
       startDate,
       endDate,
-      capital:  Number(capital),
-      leverage: Number(leverage || 1),
-      feeRate:  Number(feeRate !== undefined ? feeRate : 0.001),
+      capital:  capitalNum,
+      leverage: leverageNum,
+      feeRate:  feeRateNum,
       status:   'queued',
     })
 
@@ -85,9 +93,12 @@ async function runBacktest(req, res, next) {
       timeframe,
       startDate,
       endDate,
-      capital:  Number(capital),
-      leverage: Number(leverage || 1),
-      feeRate:  Number(feeRate !== undefined ? feeRate : 0.001),
+      capital:      capitalNum,
+      leverage:     leverageNum,
+      feeRate:      feeRateNum,
+      slippagePct:  defaultSlippage,
+      fundingEnabled: defaultFunding,
+      fundingRate:  defaultFundingRate,
     }, { jobId })
 
     res.status(202).json(ApiResponse.success({ jobId, status: 'queued' }))

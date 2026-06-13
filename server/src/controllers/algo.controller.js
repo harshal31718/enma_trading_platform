@@ -1,5 +1,6 @@
 const LiveSession = require('../models/LiveSession')
 const Strategy = require('../models/Strategy')
+const Settings = require('../models/Settings')
 const engineClient = require('../services/engineClient')
 const ApiError = require('../utils/ApiError')
 const ApiResponse = require('../utils/ApiResponse')
@@ -61,6 +62,9 @@ async function startSession(req, res, next) {
     }
 
     // 5. Call Engine to start session
+    const savedSettings = await Settings.findById('global').lean() || {}
+    const feeRate = savedSettings.takerFee ?? 0.0005
+
     try {
       await engineClient.post('/algo/sessions', {
         session_id: String(session._id),
@@ -70,6 +74,7 @@ async function startSession(req, res, next) {
         params: params || {},
         capital: String(capital),
         leverage: Number(leverage) || 1,
+        fee_rate: feeRate,
       })
     } catch (engineErr) {
       // Rollback on engine failure

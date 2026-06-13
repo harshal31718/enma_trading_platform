@@ -18,7 +18,9 @@ function formatDate(dateStr) {
 function statusVariant(status) {
   if (status === 'completed') return 'default'
   if (status === 'failed') return 'danger'
-  return 'info'
+  if (status === 'cancelled') return 'warning'
+  if (status === 'running') return 'info'
+  return 'secondary'
 }
 
 export default function RecentActivityTable({ data }) {

@@ -12,4 +12,6 @@ const TradeTransactionSchema = new mongoose.Schema(
   { timestamps: false, collection: 'tradeTransactions' }
 )
 
+TradeTransactionSchema.index({ symbol: 1, time: -1 })
+
 module.exports = mongoose.model('TradeTransaction', TradeTransactionSchema)

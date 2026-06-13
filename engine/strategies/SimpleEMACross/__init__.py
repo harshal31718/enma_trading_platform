@@ -13,14 +13,14 @@ class SimpleEMACross(BaseStrategy):
     PARAMS = {
         "fast_period": {"type": "int", "default": 9, "min": 2, "max": 50, "label": "Fast EMA Period"},
         "slow_period": {"type": "int", "default": 21, "min": 5, "max": 200, "label": "Slow EMA Period"},
-        "risk_pct": {"type": "float", "default": 0.1, "min": 0.01, "max": 1.0, "label": "Risk % of Balance"},
+        "risk_pct": {"type": "float", "default": 0.01, "min": 0.001, "max": 0.1, "label": "Risk % of Equity per Trade"},
     }
 
     def __init__(self):
         super().__init__()
         self.fast_period = 9
         self.slow_period = 21
-        self.risk_pct = 0.1
+        self.risk_pct = 0.01
 
     @property
     def fast_ema(self):
@@ -50,15 +50,16 @@ class SimpleEMACross(BaseStrategy):
         return False
 
     def go_long(self) -> None:
-        qty = self.balance * self.risk_pct / self.price
-        atr = ta.atr(self.candles, period=14)
+        # Risk-based sizing: a 2-ATR stop loses exactly risk_pct of equity.
+        stop = self.atr_stop("long", mult=2.0, period=14)
+        qty = self.size_by_risk(stop)
         self.buy = qty, self.price
-        self.stop_loss = qty, self.price - (2 * atr)
-        self.take_profit = qty, self.price + (3 * atr)
+        self.stop_loss = qty, stop
+        self.take_profit = qty, self.rr_target("long", stop, rr=1.5)  # 3-ATR target
 
     def go_short(self) -> None:
-        qty = self.balance * self.risk_pct / self.price
-        atr = ta.atr(self.candles, period=14)
+        stop = self.atr_stop("short", mult=2.0, period=14)
+        qty = self.size_by_risk(stop)
         self.sell = qty, self.price
-        self.stop_loss = qty, self.price + (2 * atr)
-        self.take_profit = qty, self.price - (3 * atr)
+        self.stop_loss = qty, stop
+        self.take_profit = qty, self.rr_target("short", stop, rr=1.5)

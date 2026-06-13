@@ -48,10 +48,10 @@ class MicroScalper(BaseStrategy):
         },
         "risk_pct": {
             "type": "float",
-            "default": 0.05,
-            "min": 0.01,
-            "max": 1.0,
-            "label": "Risk % of Balance per Trade"
+            "default": 0.01,
+            "min": 0.001,
+            "max": 0.1,
+            "label": "Risk % of Equity per Trade"
         },
         "sl_atr_mult": {
             "type": "float",
@@ -157,40 +157,43 @@ class MicroScalper(BaseStrategy):
         return False
 
     def go_long(self) -> None:
-        qty = (self.balance * self.risk_pct) / self.price
         atr = self.atr
-
+        stop = self.price - (self.sl_atr_mult * atr)
+        qty = self.size_by_risk(stop)
         self.buy = qty, self.price
-        self.stop_loss = qty, self.price - (self.sl_atr_mult * atr)
+        self.stop_loss = qty, stop
         self.take_profit = qty, self.price + (self.tp_atr_mult * atr)
 
     def go_short(self) -> None:
-        qty = (self.balance * self.risk_pct) / self.price
         atr = self.atr
-
+        stop = self.price + (self.sl_atr_mult * atr)
+        qty = self.size_by_risk(stop)
         self.sell = qty, self.price
-        self.stop_loss = qty, self.price + (self.sl_atr_mult * atr)
+        self.stop_loss = qty, stop
         self.take_profit = qty, self.price - (self.tp_atr_mult * atr)
 
     def update_position(self) -> None:
         """
         Stop-and-reverse: if we are long and a short signal fires (or vice
-        versa), close the current position immediately by setting the
-        opposing order. The engine will close the open leg and open the new
-        one on the same candle.
+        versa), flip atomically. The engine closes the open leg and opens the
+        opposite one as a single unit, with the new SL/TP armed immediately.
         """
         if self.is_long and self._crossed_below() and self._is_volatile():
-            # Close long, flip to short
-            qty = (self.balance * self.risk_pct) / self.price
             atr = self.atr
-            self.sell = qty, self.price
-            self.stop_loss = qty, self.price + (self.sl_atr_mult * atr)
-            self.take_profit = qty, self.price - (self.tp_atr_mult * atr)
+            stop = self.price + (self.sl_atr_mult * atr)
+            qty = self.size_by_risk(stop)
+            self.flip_position(
+                qty,
+                stop_loss=stop,
+                take_profit=self.price - (self.tp_atr_mult * atr),
+            )
 
         elif self.is_short and self._crossed_above() and self._is_volatile():
-            # Close short, flip to long
-            qty = (self.balance * self.risk_pct) / self.price
             atr = self.atr
-            self.buy = qty, self.price
-            self.stop_loss = qty, self.price - (self.sl_atr_mult * atr)
-            self.take_profit = qty, self.price + (self.tp_atr_mult * atr)
+            stop = self.price - (self.sl_atr_mult * atr)
+            qty = self.size_by_risk(stop)
+            self.flip_position(
+                qty,
+                stop_loss=stop,
+                take_profit=self.price + (self.tp_atr_mult * atr),
+            )

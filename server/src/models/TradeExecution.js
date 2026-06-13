@@ -17,4 +17,6 @@ const TradeExecutionSchema = new mongoose.Schema(
   { timestamps: false, collection: 'tradeExecutions' }
 )
 
+TradeExecutionSchema.index({ symbol: 1, time: -1 })
+
 module.exports = mongoose.model('TradeExecution', TradeExecutionSchema)

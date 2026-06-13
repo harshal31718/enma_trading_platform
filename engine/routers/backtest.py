@@ -23,6 +23,11 @@ class BacktestRequest(BaseModel):
     capital: float
     leverage: int
     feeRate: float
+    # Simulation-realism overrides — server injects from saved exchange settings.
+    # Optional with safe defaults so existing callers without these fields still work.
+    slippagePct:    float = 0.0005
+    fundingEnabled: bool  = False
+    fundingRate:    float = 0.0001
 
 
 class CancelRequest(BaseModel):
@@ -43,6 +48,9 @@ async def run_backtest(req: BacktestRequest):
             capital=req.capital,
             leverage=req.leverage,
             fee_rate=req.feeRate,
+            slippage_pct=req.slippagePct,
+            funding_enabled=req.fundingEnabled,
+            funding_rate=req.fundingRate,
         )
         return {"success": True, "data": res}
     except Exception as e:

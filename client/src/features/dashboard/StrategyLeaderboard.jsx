@@ -29,7 +29,12 @@ export default function StrategyLeaderboard({ data }) {
                 return (
                   <TableRow key={item.strategyName}>
                     <TableCell className="font-semibold text-gray-200">
-                      <span className="text-gray-500 mr-2 text-xs">#{idx + 1}</span>
+                      <span className={`mr-2 text-xs font-bold ${
+                        idx === 0 ? 'text-yellow-400' :
+                        idx === 1 ? 'text-gray-300' :
+                        idx === 2 ? 'text-amber-600' :
+                        'text-gray-600'
+                      }`}>#{idx + 1}</span>
                       {item.strategyName}
                     </TableCell>
                     <TableCell className="text-center font-semibold text-gray-300">{item.runs}</TableCell>

@@ -25,6 +25,10 @@ DEFAULT_STRATEGIES = [
         "name": "MicroScalper",
         "description": "High-frequency stop-and-reverse scalper built for pipeline stress testing. Logic: 3/9 EMA crossover on 1m candles with an optional ATR volatility filter. Always in a position.",
     },
+    {
+        "name": "AdaptiveTrend",
+        "description": "Regime-aware trend follower. Four layers must agree: trend-EMA regime, fast/slow EMA momentum cross, an ATR volatility gate, and volatility-targeted risk sizing. Exits via a chandelier ATR trailing stop with breakeven ratchet. Best on 1h/4h deep-liquidity pairs.",
+    },
 ]
 
 

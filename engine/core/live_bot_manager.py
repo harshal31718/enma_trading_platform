@@ -55,6 +55,7 @@ class LiveBotManager:
         params = session_config.get("params", {})
         capital_per_symbol = float(session_config["capital"]) / len(symbols)
         leverage = int(session_config.get("leverage", 1))
+        fee_rate = float(session_config.get("fee_rate", 0.0005))
 
         # Dynamic import of strategy class
         import importlib
@@ -86,7 +87,7 @@ class LiveBotManager:
             task = asyncio.create_task(
                 self._run_symbol_loop(
                     session_id, strategy_class, symbol, params,
-                    timeframe, capital_per_symbol, leverage
+                    timeframe, capital_per_symbol, leverage, fee_rate
                 )
             )
             self._tasks[session_id].append(task)
@@ -186,7 +187,8 @@ class LiveBotManager:
 
     async def _run_symbol_loop(
         self, session_id: str, strategy_class, symbol: str,
-        params: dict, timeframe: str, capital: float, leverage: int
+        params: dict, timeframe: str, capital: float, leverage: int,
+        fee_rate: float = 0.0005,
     ) -> None:
         """Main loop for one symbol. Connects to Binance kline WebSocket and fires
         strategy logic on every closed candle. Runs until stop signal is set."""
@@ -202,7 +204,7 @@ class LiveBotManager:
         strategy.is_backtesting = False
         strategy.exchange = "Binance Futures"
         strategy.exchange_type = "futures"
-        strategy.fee_rate = 0.001
+        strategy.fee_rate = fee_rate
 
         # Set user params on instance
         for key, meta in getattr(strategy_class, "PARAMS", {}).items():
@@ -336,6 +338,8 @@ class LiveBotManager:
                                     await self._check_exits(session_id, strategy, symbol)
                                     if strategy.position is not None:
                                         strategy.update_position()
+                                        if strategy.has_pending_flip:
+                                            await self._execute_flip(session_id, strategy, symbol)
 
                                 strategy.after()
                             except Exception as e:
@@ -498,6 +502,46 @@ class LiveBotManager:
 
         logger.info(f"[AlgoBot] Testnet {direction} filled: {symbol} qty={qty} @ {fill_price}")
 
+    async def _execute_flip(self, session_id: str, strategy, symbol: str) -> None:
+        """Execute an atomic close-and-reverse signaled by strategy.flip_position().
+
+        Runs inside the single per-symbol task and is awaited sequentially, so
+        the two legs can never interleave with exit checks or another entry for
+        this symbol. The pending-flip flag is consumed BEFORE any network call:
+        a failed leg is never retried on a later candle, so a Binance error or
+        latency desync degrades the flip to close-only (flat) — never to a
+        doubled or unprotected position.
+        """
+        flip = strategy._pending_flip
+        strategy._pending_flip = None
+        if flip is None or strategy.position is None:
+            return
+
+        await self._notify_node(session_id, {
+            "event": "log",
+            "eventData": {"type": "info", "message": f"{symbol}: flip signal — reversing to {flip['direction']}"}
+        })
+
+        # Leg 1 — close the existing position (market, via Node internal route).
+        await self._close_position(session_id, strategy, symbol, strategy.price, "flip")
+        if strategy.position is not None:
+            return  # local close did not complete — never open the opposite leg
+
+        # Leg 2 — open the opposite side with the flip's SL/TP armed.
+        # _execute_entry re-validates qty/min-notional and drops an SL/TP that
+        # would immediately trigger, exactly like a normal entry.
+        qty = flip["qty"]
+        if qty <= 0:
+            return
+        order = (qty, strategy.price)
+        if flip["direction"] == "long":
+            strategy.buy = order
+        else:
+            strategy.sell = order
+        strategy.stop_loss   = (qty, flip["stop_loss"])   if flip["stop_loss"]   is not None else None
+        strategy.take_profit = (qty, flip["take_profit"]) if flip["take_profit"] is not None else None
+        await self._execute_entry(session_id, strategy, symbol, flip["direction"])
+
     async def _check_exits(self, session_id: str, strategy, symbol: str) -> None:
         """Check stop-loss and take-profit for open position."""
         if strategy.position is None:
@@ -585,6 +629,9 @@ class LiveBotManager:
         strategy.position = None
         strategy.stop_loss = None
         strategy.take_profit = None
+        strategy._pending_flip = None  # a flip cannot survive its position
+        # (the flip path captures its dict before calling here, so this only
+        # discards flips orphaned by an SL/TP/stop close)
         session["open_positions"].pop(symbol, None)
 
         await self._notify_node(session_id, {

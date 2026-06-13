@@ -2,7 +2,7 @@ import os
 import importlib
 import asyncio
 import numpy as np
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import json
 import logging
 import redis.asyncio as aioredis
@@ -10,6 +10,7 @@ import redis.asyncio as aioredis
 from config.timescale import get_pool
 from config.mongo import get_database
 from core.position import Position
+from core.margin import initial_margin
 from services.candle_manager import ensure_candles_available
 from utils.timeframes import annual_factor
 
@@ -22,6 +23,25 @@ EQUITY_CURVE_MAX_POINTS = 1_000
 
 # Batch size for bulk-inserting trades into backtestTrades collection
 TRADE_INSERT_BATCH = 500
+
+# ── Futures execution-realism defaults (see DECISIONS.md #10) ───────────────
+# The `fee_rate` passed into run_backtest_simulation is treated as the TAKER
+# rate (market fills: entry, SL/TP, liquidation, force-close). Resting limit
+# fills would use MAKER_FEE, but the current engine only models market fills.
+MAKER_FEE = 0.0002          # 0.02% — Binance USDⓈ-M maker
+SLIPPAGE_PCT = 0.0005       # 0.05% adverse slippage applied to every market fill
+FUNDING_RATE = 0.0          # per-8h funding rate; 0.0 disables funding entirely
+FUNDING_HOURS = (0, 8, 16)  # UTC hours at which perpetual funding is charged
+
+
+def _next_funding_boundary(dt: datetime) -> datetime:
+    """Next funding timestamp strictly after ``dt`` (00:00/08:00/16:00 UTC)."""
+    base = dt.replace(minute=0, second=0, microsecond=0)
+    for add in range(0, 25):
+        cand = base + timedelta(hours=add)
+        if cand > dt and cand.hour in FUNDING_HOURS:
+            return cand
+    return dt + timedelta(hours=8)
 
 
 
@@ -36,6 +56,9 @@ async def run_backtest_simulation(
     capital: float,
     leverage: int,
     fee_rate: float,
+    slippage_pct: float | None = None,
+    funding_enabled: bool = False,
+    funding_rate: float | None = None,
 ) -> dict:
     # ── 1. Parse strategy name ──────────────────────────────────────────────
     parts = strategy_file.split("/")
@@ -94,14 +117,14 @@ async def run_backtest_simulation(
 
     # ── 5. Build candle numpy array ─────────────────────────────────────────
     # Column order: [timestamp_ms, open, close, high, low, volume]
-    candles_np = np.empty((len(rows), 6), dtype=np.float64)
-    for idx, r in enumerate(rows):
-        candles_np[idx, 0] = r["time"].timestamp() * 1000
-        candles_np[idx, 1] = r["open"]
-        candles_np[idx, 2] = r["close"]
-        candles_np[idx, 3] = r["high"]
-        candles_np[idx, 4] = r["low"]
-        candles_np[idx, 5] = r["volume"]
+    candles_np = np.column_stack([
+        [r["time"].timestamp() * 1000 for r in rows],
+        [r["open"]   for r in rows],
+        [r["close"]  for r in rows],
+        [r["high"]   for r in rows],
+        [r["low"]    for r in rows],
+        [r["volume"] for r in rows],
+    ]).astype(np.float64)
 
     # ── 6. Initialise strategy ──────────────────────────────────────────────
     strategy = strategy_class()
@@ -123,6 +146,17 @@ async def run_backtest_simulation(
     trades: list[dict] = []
     active_trade: dict | None = None
     total_fees = 0.0
+    total_funding = 0.0
+    liquidations = 0
+    last_funding_dt = None  # last UTC funding boundary already charged for the open position
+
+    # Resolve per-run simulation parameters.  Module-level constants remain as
+    # fallbacks for any caller that doesn't pass these arguments.
+    taker_fee   = fee_rate
+    _slippage   = slippage_pct   if slippage_pct   is not None else SLIPPAGE_PCT
+    _fund_rate  = funding_rate   if funding_rate   is not None else FUNDING_RATE
+    _funding_on = funding_enabled
+    leverage    = max(int(leverage), 1)
 
     # ── 7. Redis connection ─────────────────────────────────────────────────
     redis_url = os.getenv("REDIS_URL", "redis://redis:6379")
@@ -173,13 +207,95 @@ async def run_backtest_simulation(
 
             # ── 8b. Candle values ────────────────────────────────────────────
             time_t  = rows[t]["time"]
+            open_t  = candles_np[t, 1]
             close_t = candles_np[t, 2]
             high_t  = candles_np[t, 3]
             low_t   = candles_np[t, 4]
 
+            # ── A0. Atomic flip (close-and-reverse) at this candle's open ───
+            # Signaled by flip_position() inside update_position() on the
+            # previous candle. Both legs fill at this candle's OPEN as one
+            # unit, so the reversed position enters this candle's
+            # liquidation/SL/TP checks below with its protective orders armed.
+            if strategy.position is not None and strategy._pending_flip is not None:
+                flip = strategy._pending_flip
+                strategy._pending_flip = None
+                was_long = strategy.is_long
+
+                # Leg 1 — close the old position (market fill: slippage + taker fee)
+                exit_fill = open_t * (1.0 - _slippage) if was_long else open_t * (1.0 + _slippage)
+                exit_qty  = strategy.position.qty
+                fee = exit_qty * exit_fill * taker_fee
+                total_fees += fee
+                strategy.position.close(exit_fill)
+                realized_pnl      = strategy.position.pnl - fee
+                strategy.balance += realized_pnl
+                strategy.available_margin = strategy.balance
+                last_funding_dt = None
+
+                if active_trade:
+                    active_trade.update({
+                        "id":         f"t_{len(trades) + 1}",
+                        "exitPrice":  str(exit_fill),
+                        "exitAt":     time_t.isoformat(),
+                        "_exit_dt":   time_t,
+                        "exitReason": "flip",
+                        "pnl":        f"{realized_pnl:.2f}",
+                        "pnlPct":     f"{strategy.position.pnl_pct:.2f}",
+                    })
+                    trades.append(active_trade)
+                    active_trade = None
+
+                try:
+                    strategy.on_close_position((exit_qty, exit_fill))
+                except Exception as e:
+                    logger.error(f"on_close_position error: {e}")
+
+                strategy.position    = None
+                strategy.stop_loss   = None
+                strategy.take_profit = None
+
+                # Leg 2 — open the opposite side at the same open (margin permitting)
+                new_dir    = flip["direction"]
+                new_qty    = flip["qty"]
+                fill_price = open_t * (1.0 + _slippage) if new_dir == "long" else open_t * (1.0 - _slippage)
+                notional   = new_qty * fill_price
+                req_margin = initial_margin(notional, leverage)
+                fee        = notional * taker_fee
+                if new_qty <= 0 or req_margin + fee > strategy.balance:
+                    logger.warning(
+                        f"[{job_id}] Flip degraded to close-only: qty {new_qty} margin "
+                        f"${req_margin:.2f} + fee ${fee:.2f} vs balance ${strategy.balance:.2f}"
+                    )
+                else:
+                    total_fees       += fee
+                    strategy.balance -= fee
+                    strategy.position = Position(
+                        new_dir, new_qty, fill_price, leverage,
+                        isolated_wallet=req_margin,
+                    )
+                    strategy.available_margin = strategy.balance - req_margin
+                    last_funding_dt = time_t
+                    # SL/TP supplied with the flip are armed before exit checks
+                    strategy.stop_loss   = (new_qty, flip["stop_loss"])   if flip["stop_loss"]   is not None else None
+                    strategy.take_profit = (new_qty, flip["take_profit"]) if flip["take_profit"] is not None else None
+                    active_trade = {
+                        "type":       new_dir,
+                        "qty":        str(new_qty),
+                        "entryPrice": str(fill_price),
+                        "entryAt":    time_t.isoformat(),
+                        "_entry_dt":  time_t,
+                        "leverage":   leverage,
+                        "liqPrice":   f"{strategy.position.liquidation_price:.4f}",
+                    }
+                    try:
+                        strategy.on_open_position((new_qty, fill_price))
+                    except Exception as e:
+                        logger.error(f"on_open_position error: {e}")
+
             # ── A. Execute pending orders ────────────────────────────────────
             if strategy.position is None:
-                # Let strategy cancel a pending entry
+                # Let strategy cancel a pending entry before it fills
                 if strategy.buy is not None or strategy.sell is not None:
                     try:
                         if strategy.should_cancel_entry():
@@ -188,44 +304,80 @@ async def run_backtest_simulation(
                     except Exception as e:
                         logger.error(f"Strategy should_cancel_entry error: {e}")
 
-                # Buy (long entry)
+                # Buy (long entry) — market order: fills at open of next candle
                 if strategy.buy is not None:
-                    buy_qty, buy_price = strategy.buy
-                    if low_t <= buy_price <= high_t:
-                        fee = buy_qty * buy_price * fee_rate
-                        total_fees      += fee
+                    buy_qty, _ = strategy.buy
+                    fill_price = open_t * (1.0 + _slippage)  # adverse slippage
+                    notional   = buy_qty * fill_price
+                    req_margin = initial_margin(notional, leverage)
+                    fee        = notional * taker_fee
+                    if req_margin + fee > strategy.balance:
+                        logger.warning(
+                            f"[{job_id}] Long entry rejected: margin ${req_margin:.2f} + fee "
+                            f"${fee:.2f} exceeds balance ${strategy.balance:.2f}"
+                        )
+                        strategy.buy         = None
+                        strategy.stop_loss   = None
+                        strategy.take_profit = None
+                    else:
+                        total_fees       += fee
                         strategy.balance -= fee
-                        strategy.position = Position("long", buy_qty, buy_price)
+                        strategy.position = Position(
+                            "long", buy_qty, fill_price, leverage,
+                            isolated_wallet=req_margin,
+                        )
+                        strategy.available_margin = strategy.balance - req_margin
+                        last_funding_dt = time_t
                         active_trade = {
                             "type":       "long",
                             "qty":        str(buy_qty),
-                            "entryPrice": str(buy_price),
+                            "entryPrice": str(fill_price),
                             "entryAt":    time_t.isoformat(),
                             "_entry_dt":  time_t,
+                            "leverage":   leverage,
+                            "liqPrice":   f"{strategy.position.liquidation_price:.4f}",
                         }
                         try:
-                            strategy.on_open_position(strategy.buy)
+                            strategy.on_open_position((buy_qty, fill_price))
                         except Exception as e:
                             logger.error(f"on_open_position error: {e}")
                         strategy.buy = None
 
-                # Sell (short entry)
+                # Sell (short entry) — market order: fills at open of next candle
                 elif strategy.sell is not None:
-                    sell_qty, sell_price = strategy.sell
-                    if low_t <= sell_price <= high_t:
-                        fee = sell_qty * sell_price * fee_rate
-                        total_fees      += fee
+                    sell_qty, _ = strategy.sell
+                    fill_price = open_t * (1.0 - _slippage)  # adverse slippage
+                    notional   = sell_qty * fill_price
+                    req_margin = initial_margin(notional, leverage)
+                    fee        = notional * taker_fee
+                    if req_margin + fee > strategy.balance:
+                        logger.warning(
+                            f"[{job_id}] Short entry rejected: margin ${req_margin:.2f} + fee "
+                            f"${fee:.2f} exceeds balance ${strategy.balance:.2f}"
+                        )
+                        strategy.sell        = None
+                        strategy.stop_loss   = None
+                        strategy.take_profit = None
+                    else:
+                        total_fees       += fee
                         strategy.balance -= fee
-                        strategy.position = Position("short", sell_qty, sell_price)
+                        strategy.position = Position(
+                            "short", sell_qty, fill_price, leverage,
+                            isolated_wallet=req_margin,
+                        )
+                        strategy.available_margin = strategy.balance - req_margin
+                        last_funding_dt = time_t
                         active_trade = {
                             "type":       "short",
                             "qty":        str(sell_qty),
-                            "entryPrice": str(sell_price),
+                            "entryPrice": str(fill_price),
                             "entryAt":    time_t.isoformat(),
                             "_entry_dt":  time_t,
+                            "leverage":   leverage,
+                            "liqPrice":   f"{strategy.position.liquidation_price:.4f}",
                         }
                         try:
-                            strategy.on_open_position(strategy.sell)
+                            strategy.on_open_position((sell_qty, fill_price))
                         except Exception as e:
                             logger.error(f"on_open_position error: {e}")
                         strategy.sell = None
@@ -234,11 +386,32 @@ async def run_backtest_simulation(
                 # ── Position open: update unrealized P&L ──────────────────
                 strategy.position.update_pnl(close_t)
 
+                # ── Funding: notional × rate at each 8h UTC boundary ────────
+                # A positive rate means longs pay shorts — shorts RECEIVE it.
+                # total_funding is net funding paid (negative = received).
+                if _funding_on and _fund_rate and last_funding_dt is not None:
+                    side_sign = 1.0 if strategy.position.type == "long" else -1.0
+                    boundary = _next_funding_boundary(last_funding_dt)
+                    while boundary <= time_t:
+                        funding = side_sign * strategy.position.qty * close_t * _fund_rate
+                        total_funding    += funding
+                        strategy.balance -= funding
+                        last_funding_dt   = boundary
+                        boundary = _next_funding_boundary(boundary)
+
                 closed      = False
                 exit_price  = 0.0
                 exit_reason = ""
+                was_long    = strategy.is_long  # captured before close() flips is_open
 
-                if strategy.is_long:
+                # ── Liquidation is checked BEFORE stop-loss / take-profit ──
+                if strategy.position.is_liquidated(high_t, low_t):
+                    exit_price   = strategy.position.liquidation_price
+                    exit_reason  = "liquidation"
+                    closed       = True
+                    liquidations += 1
+
+                if not closed and strategy.is_long:
                     sl = strategy.stop_loss
                     tp = strategy.take_profit
                     if sl is not None:
@@ -254,7 +427,7 @@ async def run_backtest_simulation(
                             exit_reason = "take_profit"
                             closed      = True
 
-                elif strategy.is_short:
+                elif not closed and strategy.is_short:
                     sl = strategy.stop_loss
                     tp = strategy.take_profit
                     if sl is not None:
@@ -271,33 +444,51 @@ async def run_backtest_simulation(
                             closed      = True
 
                 if closed:
-                    fee = strategy.position.qty * exit_price * fee_rate
-                    total_fees += fee
-                    strategy.position.close(exit_price)
-                    realized_pnl     = strategy.position.pnl - fee
+                    exit_qty = strategy.position.qty
+                    if exit_reason == "liquidation":
+                        # Isolated margin: the entire isolated wallet is
+                        # forfeited — loss is capped at the margin locked for
+                        # this position. No extra slippage or exit fee is
+                        # modeled; Binance's liquidation clearance fee comes
+                        # out of the forfeited margin.
+                        exit_fill = exit_price
+                        strategy.position.close(exit_fill)
+                        realized_pnl  = -strategy.position.margin
+                        trade_pnl_pct = -100.0
+                    else:
+                        # Adverse slippage on the market exit fill
+                        exit_fill = exit_price * (1.0 - _slippage) if was_long else exit_price * (1.0 + _slippage)
+                        fee = exit_qty * exit_fill * taker_fee
+                        total_fees += fee
+                        strategy.position.close(exit_fill)
+                        realized_pnl  = strategy.position.pnl - fee
+                        trade_pnl_pct = strategy.position.pnl_pct
                     strategy.balance += realized_pnl
+                    strategy.available_margin = strategy.balance
+                    last_funding_dt = None
 
                     if active_trade:
                         active_trade.update({
                             "id":         f"t_{len(trades) + 1}",
-                            "exitPrice":  str(exit_price),
+                            "exitPrice":  str(exit_fill),
                             "exitAt":     time_t.isoformat(),
                             "_exit_dt":   time_t,
                             "exitReason": exit_reason,
                             "pnl":        f"{realized_pnl:.2f}",
-                            "pnlPct":     f"{strategy.position.pnl_pct:.2f}",
+                            "pnlPct":     f"{trade_pnl_pct:.2f}",
                         })
                         trades.append(active_trade)
                         active_trade = None
 
                     try:
-                        strategy.on_close_position((strategy.position.qty, exit_price))
+                        strategy.on_close_position((exit_qty, exit_fill))
                     except Exception as e:
                         logger.error(f"on_close_position error: {e}")
 
-                    strategy.position   = None
-                    strategy.stop_loss  = None
-                    strategy.take_profit = None
+                    strategy.position      = None
+                    strategy.stop_loss     = None
+                    strategy.take_profit   = None
+                    strategy._pending_flip = None  # a flip cannot survive its position
 
             # ── B. Update strategy candle window ────────────────────────────
             strategy.candles = candles_np[:t + 1]
@@ -332,17 +523,21 @@ async def run_backtest_simulation(
     # ── 9. Force-close any open position at simulation end ──────────────────
     if strategy.position is not None:
         last_close = candles_np[-1, 2]
-        fee = strategy.position.qty * last_close * fee_rate
+        was_long   = strategy.is_long
+        exit_fill  = last_close * (1.0 - _slippage) if was_long else last_close * (1.0 + _slippage)
+        fee = strategy.position.qty * exit_fill * taker_fee
         total_fees += fee
-        strategy.position.close(last_close)
-        realized_pnl     = strategy.position.pnl - fee
+        strategy.position.close(exit_fill)
+        realized_pnl      = strategy.position.pnl - fee
         strategy.balance += realized_pnl
+        strategy.available_margin = strategy.balance
 
         if active_trade:
             active_trade.update({
                 "id":         f"t_{len(trades) + 1}",
-                "exitPrice":  str(last_close),
+                "exitPrice":  str(exit_fill),
                 "exitAt":     rows[-1]["time"].isoformat(),
+                "_exit_dt":   rows[-1]["time"],
                 "exitReason": "force_close",
                 "pnl":        f"{realized_pnl:.2f}",
                 "pnlPct":     f"{strategy.position.pnl_pct:.2f}",
@@ -416,6 +611,9 @@ async def run_backtest_simulation(
         "startingBalance":      f"{capital:.2f}",
         "finishingBalance":     f"{strategy.balance:.2f}",
         "totalFees":            f"{total_fees:.2f}",
+        "totalFunding":         f"{total_funding:.2f}",
+        "liquidations":         liquidations,
+        "leverage":             leverage,
         "winningTrades":        winning_trades,
         "losingTrades":         losing_trades,
         "averageWin":           f"{avg_win:.2f}",
@@ -490,6 +688,8 @@ async def run_backtest_simulation(
                 "exitReason":  tr.get("exitReason", ""),
                 "pnl":         tr["pnl"],
                 "pnlPct":      tr.get("pnlPct", "0.00"),
+                "leverage":    tr.get("leverage", 1),
+                "liqPrice":    tr.get("liqPrice", ""),
                 # _entry_dt / _exit_dt are internal datetime objects — never persisted
             }
             for i, tr in enumerate(trades)

@@ -82,7 +82,10 @@ export default function Dashboard() {
             <StrategyLeaderboard data={leaderboard} />
           </div>
 
-          <CachedCandlesTable data={cachedCandles} />
+          <div>
+            <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Historical Data Cache</h2>
+            <CachedCandlesTable data={cachedCandles} />
+          </div>
         </div>
       )}
     </PageWrapper>

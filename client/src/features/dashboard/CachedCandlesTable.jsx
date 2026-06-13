@@ -1,5 +1,6 @@
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../../components/ui/table'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../../components/ui/card'
+import { Badge } from '../../components/ui/badge'
 
 function formatDate(dateStr) {
   if (!dateStr) return '-'
@@ -27,6 +28,7 @@ export default function CachedCandlesTable({ data }) {
                 <TableHead>Symbol</TableHead>
                 <TableHead>Timeframe</TableHead>
                 <TableHead>Exchange</TableHead>
+                <TableHead>Type</TableHead>
                 <TableHead>Start Date</TableHead>
                 <TableHead>End Date</TableHead>
                 <TableHead className="text-right">Total Candles</TableHead>
@@ -38,6 +40,11 @@ export default function CachedCandlesTable({ data }) {
                   <TableCell className="font-semibold text-emerald-400">{item.symbol}</TableCell>
                   <TableCell className="font-mono text-xs">{item.timeframe}</TableCell>
                   <TableCell className="capitalize text-gray-300">{item.exchange}</TableCell>
+                  <TableCell>
+                    <Badge variant={item.instrument_type === 'futures' ? 'info' : 'secondary'}>
+                      {item.instrument_type || 'spot'}
+                    </Badge>
+                  </TableCell>
                   <TableCell className="text-xs text-gray-400">{formatDate(item.start_date)}</TableCell>
                   <TableCell className="text-xs text-gray-400">{formatDate(item.end_date)}</TableCell>
                   <TableCell className="text-right font-mono text-xs font-semibold text-gray-300">

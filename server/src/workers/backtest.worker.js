@@ -17,6 +17,9 @@ const worker = new Worker('backtest', async (job) => {
     capital,
     leverage,
     feeRate,
+    slippagePct,
+    fundingEnabled,
+    fundingRate,
   } = job.data
 
   subscribeToJob(jobId, 'backtest')
@@ -35,6 +38,9 @@ const worker = new Worker('backtest', async (job) => {
       capital,
       leverage,
       feeRate,
+      slippagePct,
+      fundingEnabled,
+      fundingRate,
     })
 
     // Engine wrote the full result to MongoDB — only update status here
@@ -47,16 +53,19 @@ const worker = new Worker('backtest', async (job) => {
     })
   } catch (err) {
     const errMsg = err.response?.data?.detail || err.message
+    const isCancelled = errMsg === 'JOB_CANCELLED'
+
     await BacktestResult.findOneAndUpdate({ jobId }, {
-      status: 'failed',
-      error: errMsg,
+      status: isCancelled ? 'cancelled' : 'failed',
+      error: isCancelled ? 'Cancelled by user' : errMsg,
     })
 
     const io = getIO()
-    io.to(`backtest:${jobId}`).emit('backtest:error', {
-      jobId,
-      error: errMsg,
-    })
+    if (isCancelled) {
+      io.to(`backtest:${jobId}`).emit('backtest:cancelled', { jobId })
+    } else {
+      io.to(`backtest:${jobId}`).emit('backtest:error', { jobId, error: errMsg })
+    }
 
     throw err
   } finally {

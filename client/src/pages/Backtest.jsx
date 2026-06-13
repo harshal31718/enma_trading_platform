@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, lazy, Suspense } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   TrendingUp,
@@ -18,7 +18,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../co
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../components/ui/table'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
-import EquityCurve from '../components/charts/EquityCurve'
+const EquityCurve = lazy(() => import('../components/charts/EquityCurve'))
 import BacktestConfigForm from '../features/backtest/BacktestConfigForm'
 import BacktestHistory from '../features/backtest/BacktestHistory'
 import BacktestMetricCard from '../features/backtest/BacktestMetricCard'
@@ -296,7 +296,9 @@ export default function Backtest() {
                   <CardDescription>Visualizing balance history and drawdowns over time</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <EquityCurve data={activeResult.equityCurve} />
+                  <Suspense fallback={<div className="h-48 flex items-center justify-center"><Loader2 className="size-6 animate-spin text-emerald-400" /></div>}>
+                    <EquityCurve data={activeResult.equityCurve} />
+                  </Suspense>
                 </CardContent>
               </Card>
 
@@ -328,6 +330,22 @@ export default function Backtest() {
                       {activeResult.metrics?.totalFees ? formatPrice(activeResult.metrics.totalFees) : '-'}
                     </span>
                   </div>
+                  {activeResult.metrics?.liquidations != null && (
+                    <div>
+                      <span className="text-gray-500 block">Liquidations</span>
+                      <span className={`font-medium block mt-0.5 ${activeResult.metrics.liquidations > 0 ? 'text-red-400' : 'text-gray-300'}`}>
+                        {activeResult.metrics.liquidations}
+                      </span>
+                    </div>
+                  )}
+                  {parseFloat(activeResult.metrics?.totalFunding || 0) !== 0 && (
+                    <div>
+                      <span className="text-gray-500 block">Net Funding</span>
+                      <span className={`font-medium block mt-0.5 ${parseFloat(activeResult.metrics.totalFunding) > 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+                        {parseFloat(activeResult.metrics.totalFunding) > 0 ? '-' : '+'}${Math.abs(parseFloat(activeResult.metrics.totalFunding)).toFixed(2)}
+                      </span>
+                    </div>
+                  )}
                 </div>
               </Card>
 

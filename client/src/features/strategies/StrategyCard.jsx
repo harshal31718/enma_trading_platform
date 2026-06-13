@@ -17,7 +17,7 @@ export default function StrategyCard({ strategy }) {
 
   return (
     <>
-      <div className="bg-gray-900 border border-gray-800 rounded-lg p-5 flex flex-col gap-3">
+      <div className="bg-gray-900 border border-gray-800 rounded-lg p-5 flex flex-col gap-3 hover:border-gray-700 hover:shadow-lg hover:shadow-black/20 transition-all duration-200">
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-2">
             <Code2 className="size-5 text-emerald-400" />

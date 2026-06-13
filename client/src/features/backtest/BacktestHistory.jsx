@@ -68,6 +68,9 @@ export default function BacktestHistory({ data, selectedId, onSelect, onRefresh,
                   {b.status === 'failed' && (
                     <Badge variant="danger" className="text-[10px] px-1 py-0">Fail</Badge>
                   )}
+                  {b.status === 'cancelled' && (
+                    <Badge variant="warning" className="text-[10px] px-1 py-0">Cancel</Badge>
+                  )}
                   {b.status === 'running' && (
                     <Badge variant="info" className="text-[10px] px-1 py-0 animate-pulse">Run</Badge>
                   )}

@@ -4,10 +4,10 @@ httpx
 python-dotenv
 pydantic>=2.0
 redis
-pymongo
 motor
 asyncpg
 TA-Lib
+pandas-ta-classic
 pandas
 numpy
 websockets

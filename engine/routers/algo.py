@@ -17,6 +17,10 @@ class StartSessionRequest(BaseModel):
     params: dict = {}
     capital: str
     leverage: int = 1
+    # Taker fee injected by the server from saved Exchange Settings. Must be
+    # declared here — Pydantic drops undeclared fields, which would silently
+    # discard the configured rate and leave the bot on its hardcoded fallback.
+    fee_rate: float = 0.0005
 
 
 class StopSessionRequest(BaseModel):

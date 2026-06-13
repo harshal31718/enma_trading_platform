@@ -37,8 +37,8 @@ export function useTradeAccount(options = {}) {
       const { data } = await api.get('/api/v1/trade/account')
       return data.data
     },
-    refetchInterval: 15000,
-    staleTime: 12000,
+    refetchInterval: 30000,
+    staleTime: 25000,
     retry: false,
     ...options,
   })

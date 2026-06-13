@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { ChevronRight, ChevronLeft, AlertTriangle } from 'lucide-react'
 import { useStrategies } from '../../hooks/useStrategies'
 import { useSymbols } from '../../hooks/useCandles'
 import { useStrategyParams, useStartSession, useLockedSymbols } from '../../hooks/useAlgoSessions'
+import { useExchangeSettings } from '../../hooks/useExchangeSettings'
 import ParamsForm from './ParamsForm'
 import SymbolPicker from './SymbolPicker'
 
@@ -23,6 +24,17 @@ export default function NewSessionWizard({ onCancel, onSuccess }) {
   const { data: paramsSchema } = useStrategyParams(selectedStrategy?.id)
   const { data: lockedSymbols = {} } = useLockedSymbols()
   const startSession = useStartSession()
+
+  // Pre-fill capital and leverage from bot defaults (fires once)
+  const { data: exchangeSettings } = useExchangeSettings()
+  const settingsApplied = useRef(false)
+  useEffect(() => {
+    if (exchangeSettings && !settingsApplied.current) {
+      setCapital(String(exchangeSettings.defaultBotCapital ?? 1000))
+      setLeverage(exchangeSettings.defaultBotLeverage ?? 1)
+      settingsApplied.current = true
+    }
+  }, [exchangeSettings])
 
   const futuresSymbols = symbolData?.futures || []
 
