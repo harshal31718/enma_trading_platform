@@ -15,6 +15,9 @@ const BacktestTradeSchema = new mongoose.Schema(
     pnlPct:      { type: String },
     leverage:    { type: Number },
     liqPrice:    { type: String },
+    runUpPct:    { type: String },
+    drawdownPct: { type: String },
+    barsHeld:    { type: Number },
   },
   { timestamps: false, collection: 'backtestTrades' }
 )

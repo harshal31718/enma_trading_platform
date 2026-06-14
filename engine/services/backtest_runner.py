@@ -45,6 +45,123 @@ def _next_funding_boundary(dt: datetime) -> datetime:
     return dt + timedelta(hours=8)
 
 
+def _finalize_trade(
+    active_trade: dict,
+    exit_idx: int,
+    exit_price: float,
+    exit_at: datetime,
+    exit_reason: str,
+    realized_pnl: float,
+    pnl_pct: float,
+    high_t: float,
+    low_t: float,
+) -> dict:
+    entry = float(active_trade["entryPrice"])
+    is_long = active_trade["type"] == "long"
+    
+    # Excursion update for exit candle
+    if is_long:
+        active_trade["_mfe"] = max(active_trade["_mfe"], high_t - entry)
+        active_trade["_mae"] = min(active_trade["_mae"], low_t - entry)
+    else:
+        active_trade["_mfe"] = max(active_trade["_mfe"], entry - low_t)
+        active_trade["_mae"] = min(active_trade["_mae"], entry - high_t)
+        
+    active_trade["runUpPct"] = f"{(active_trade['_mfe'] / entry) * 100:.2f}"
+    active_trade["drawdownPct"] = f"{abs(active_trade['_mae'] / entry) * 100:.2f}"
+    active_trade["barsHeld"] = int(exit_idx - active_trade["_entry_index"])
+    
+    active_trade.update({
+        "exitPrice": str(exit_price),
+        "exitAt": exit_at.isoformat(),
+        "_exit_dt": exit_at,
+        "exitReason": exit_reason,
+        "pnl": f"{realized_pnl:.2f}",
+        "pnlPct": f"{pnl_pct:.2f}",
+    })
+    return active_trade
+
+
+def _compute_side_metrics(side_trades: list[dict], starting_capital: float) -> dict:
+    n = len(side_trades)
+    if n == 0:
+        return {
+            "totalTrades": 0,
+            "winningTrades": 0,
+            "losingTrades": 0,
+            "winRate": "0.00",
+            "netProfit": "0.00",
+            "netProfitPct": "0.00",
+            "grossProfit": "0.00",
+            "grossLoss": "0.00",
+            "profitFactor": "0.00",
+            "averageWin": "0.00",
+            "averageLoss": "0.00",
+            "payoffRatio": "0.00",
+            "averageHoldingPeriod": "0",
+            "maxConsecutiveWins": 0,
+            "maxConsecutiveLosses": 0,
+        }
+        
+    pnls = np.array([float(t["pnl"]) for t in side_trades], dtype=np.float64)
+    win_pnl = pnls[pnls > 0]
+    loss_pnl = pnls[pnls <= 0]
+    
+    winning_trades = int(win_pnl.size)
+    losing_trades = n - winning_trades
+    win_rate = winning_trades / n
+    
+    net_profit = float(np.sum(pnls))
+    net_profit_pct = (net_profit / starting_capital) * 100.0
+    
+    gross_profit = float(np.sum(win_pnl)) if win_pnl.size else 0.0
+    gross_loss = float(np.sum(loss_pnl)) if loss_pnl.size else 0.0
+    
+    profit_factor = gross_profit / abs(gross_loss) if gross_loss != 0.0 else 0.0
+    
+    avg_win = float(np.mean(win_pnl)) if win_pnl.size else 0.0
+    avg_loss = float(np.mean(loss_pnl)) if loss_pnl.size else 0.0
+    payoff_ratio = avg_win / abs(avg_loss) if avg_loss != 0.0 else 0.0
+    
+    # Average holding period
+    durations = [
+        (tr["_exit_dt"] - tr["_entry_dt"]).total_seconds()
+        for tr in side_trades
+        if "_exit_dt" in tr and "_entry_dt" in tr
+    ]
+    avg_holding = float(np.mean(durations)) if durations else 0.0
+    
+    # Consecutive streaks
+    max_wins = cur_wins = 0
+    max_losses = cur_losses = 0
+    for p in pnls:
+        if p > 0:
+            cur_wins += 1
+            cur_losses = 0
+            max_wins = max(max_wins, cur_wins)
+        else:
+            cur_losses += 1
+            cur_wins = 0
+            max_losses = max(max_losses, cur_losses)
+            
+    return {
+        "totalTrades": n,
+        "winningTrades": winning_trades,
+        "losingTrades": losing_trades,
+        "winRate": f"{win_rate:.2f}",
+        "netProfit": f"{net_profit:.2f}",
+        "netProfitPct": f"{net_profit_pct:.2f}",
+        "grossProfit": f"{gross_profit:.2f}",
+        "grossLoss": f"{gross_loss:.2f}",
+        "profitFactor": f"{profit_factor:.2f}",
+        "averageWin": f"{avg_win:.2f}",
+        "averageLoss": f"{avg_loss:.2f}",
+        "payoffRatio": f"{payoff_ratio:.2f}",
+        "averageHoldingPeriod": f"{int(avg_holding)}",
+        "maxConsecutiveWins": max_wins,
+        "maxConsecutiveLosses": max_losses,
+    }
+
 
 async def run_backtest_simulation(
     job_id: str,
@@ -282,15 +399,18 @@ async def run_backtest_simulation(
                 last_funding_dt = None
 
                 if active_trade:
-                    active_trade.update({
-                        "id":         f"t_{len(trades) + 1}",
-                        "exitPrice":  str(exit_fill),
-                        "exitAt":     time_t.isoformat(),
-                        "_exit_dt":   time_t,
-                        "exitReason": "flip",
-                        "pnl":        f"{realized_pnl:.2f}",
-                        "pnlPct":     f"{strategy.position.pnl_pct:.2f}",
-                    })
+                    active_trade["id"] = f"t_{len(trades) + 1}"
+                    active_trade = _finalize_trade(
+                        active_trade,
+                        t,
+                        exit_fill,
+                        time_t,
+                        "flip",
+                        realized_pnl,
+                        strategy.position.pnl_pct,
+                        high_t,
+                        low_t,
+                    )
                     trades.append(active_trade)
                     active_trade = None
 
@@ -335,6 +455,9 @@ async def run_backtest_simulation(
                         "entryPrice": str(fill_price),
                         "entryAt":    time_t.isoformat(),
                         "_entry_dt":  time_t,
+                        "_entry_index": t,
+                        "_mfe":       0.0,
+                        "_mae":       0.0,
                         "leverage":   leverage,
                         "liqPrice":   f"{strategy.position.liquidation_price:.4f}",
                     }
@@ -363,15 +486,18 @@ async def run_backtest_simulation(
                 last_funding_dt = None
 
                 if active_trade:
-                    active_trade.update({
-                        "id":         f"t_{len(trades) + 1}",
-                        "exitPrice":  str(exit_fill_close),
-                        "exitAt":     time_t.isoformat(),
-                        "_exit_dt":   time_t,
-                        "exitReason": "strategy_exit",
-                        "pnl":        f"{realized_pnl:.2f}",
-                        "pnlPct":     f"{strategy.position.pnl_pct:.2f}",
-                    })
+                    active_trade["id"] = f"t_{len(trades) + 1}"
+                    active_trade = _finalize_trade(
+                        active_trade,
+                        t,
+                        exit_fill_close,
+                        time_t,
+                        "strategy_exit",
+                        realized_pnl,
+                        strategy.position.pnl_pct,
+                        high_t,
+                        low_t,
+                    )
                     trades.append(active_trade)
                     active_trade = None
 
@@ -428,6 +554,9 @@ async def run_backtest_simulation(
                             "entryPrice": str(fill_price),
                             "entryAt":    time_t.isoformat(),
                             "_entry_dt":  time_t,
+                            "_entry_index": t,
+                            "_mfe":       0.0,
+                            "_mae":       0.0,
                             "leverage":   leverage,
                             "liqPrice":   f"{strategy.position.liquidation_price:.4f}",
                         }
@@ -469,6 +598,9 @@ async def run_backtest_simulation(
                             "entryPrice": str(fill_price),
                             "entryAt":    time_t.isoformat(),
                             "_entry_dt":  time_t,
+                            "_entry_index": t,
+                            "_mfe":       0.0,
+                            "_mae":       0.0,
                             "leverage":   leverage,
                             "liqPrice":   f"{strategy.position.liquidation_price:.4f}",
                         }
@@ -481,6 +613,16 @@ async def run_backtest_simulation(
             else:
                 # ── Position open: update unrealized P&L ──────────────────
                 strategy.position.update_pnl(close_t)
+
+                # Update MFE/MAE excursions
+                if active_trade is not None:
+                    entry = float(active_trade["entryPrice"])
+                    if strategy.is_long:
+                        active_trade["_mfe"] = max(active_trade["_mfe"], high_t - entry)
+                        active_trade["_mae"] = min(active_trade["_mae"], low_t - entry)
+                    else:
+                        active_trade["_mfe"] = max(active_trade["_mfe"], entry - low_t)
+                        active_trade["_mae"] = min(active_trade["_mae"], entry - high_t)
 
                 # ── Funding: notional × rate at each 8h UTC boundary ────────
                 # A positive rate means longs pay shorts — shorts RECEIVE it.
@@ -567,15 +709,18 @@ async def run_backtest_simulation(
                     last_funding_dt = None
 
                     if active_trade:
-                        active_trade.update({
-                            "id":         f"t_{len(trades) + 1}",
-                            "exitPrice":  str(exit_fill),
-                            "exitAt":     time_t.isoformat(),
-                            "_exit_dt":   time_t,
-                            "exitReason": exit_reason,
-                            "pnl":        f"{realized_pnl:.2f}",
-                            "pnlPct":     f"{trade_pnl_pct:.2f}",
-                        })
+                        active_trade["id"] = f"t_{len(trades) + 1}"
+                        active_trade = _finalize_trade(
+                            active_trade,
+                            t,
+                            exit_fill,
+                            time_t,
+                            exit_reason,
+                            realized_pnl,
+                            trade_pnl_pct,
+                            high_t,
+                            low_t,
+                        )
                         trades.append(active_trade)
                         active_trade = None
 
@@ -641,15 +786,18 @@ async def run_backtest_simulation(
         strategy.available_margin = strategy.balance
 
         if active_trade:
-            active_trade.update({
-                "id":         f"t_{len(trades) + 1}",
-                "exitPrice":  str(exit_fill),
-                "exitAt":     rows[-1]["time"].isoformat(),
-                "_exit_dt":   rows[-1]["time"],
-                "exitReason": "force_close",
-                "pnl":        f"{realized_pnl:.2f}",
-                "pnlPct":     f"{strategy.position.pnl_pct:.2f}",
-            })
+            active_trade["id"] = f"t_{len(trades) + 1}"
+            active_trade = _finalize_trade(
+                active_trade,
+                total_candles - 1,
+                exit_fill,
+                rows[-1]["time"],
+                "force_close",
+                realized_pnl,
+                strategy.position.pnl_pct,
+                candles_np[-1, 3],
+                candles_np[-1, 4],
+            )
             trades.append(active_trade)
 
     try:
@@ -702,6 +850,35 @@ async def run_backtest_simulation(
     largest_win  = float(np.max(win_pnl))   if win_pnl.size  else 0.0
     largest_loss = float(np.min(loss_pnl))  if loss_pnl.size else 0.0
 
+    # Advanced aggregate metrics
+    gross_profit = float(np.sum(win_pnl)) if win_pnl.size else 0.0
+    gross_loss = float(np.sum(loss_pnl)) if loss_pnl.size else 0.0
+    profit_factor = gross_profit / abs(gross_loss) if gross_loss != 0.0 else 0.0
+    expectancy = float(np.mean(pnl_values)) if pnl_values.size else 0.0
+    payoff_ratio = avg_win / abs(avg_loss) if avg_loss != 0.0 else 0.0
+
+    running_min = np.minimum.accumulate(balances_arr)
+    runup_arr = np.where(running_min > 0, (balances_arr - running_min) / running_min, 0.0)
+    max_runup_pct = float(np.max(runup_arr)) * 100.0 if runup_arr.size else 0.0
+
+    buy_hold_pct = 0.0
+    if candles_np.shape[0] > warmup_period:
+        first_close = candles_np[warmup_period, 2]
+        last_close = candles_np[-1, 2]
+        buy_hold_pct = ((last_close - first_close) / first_close) * 100.0 if first_close > 0 else 0.0
+
+    max_wins = cur_wins = 0
+    max_losses = cur_losses = 0
+    for p in pnl_values:
+        if p > 0:
+            cur_wins += 1
+            cur_losses = 0
+            max_wins = max(max_wins, cur_wins)
+        else:
+            cur_losses += 1
+            cur_wins = 0
+            max_losses = max(max_losses, cur_losses)
+
     # Average holding period in seconds
     avg_holding = 0.0
     if trades:
@@ -711,6 +888,9 @@ async def run_backtest_simulation(
             if "_exit_dt" in tr and "_entry_dt" in tr
         ]
         avg_holding = float(np.mean(durations)) if durations else 0.0
+
+    long_trades = [t for t in trades if t["type"] == "long"]
+    short_trades = [t for t in trades if t["type"] == "short"]
 
     metrics = {
         "totalTrades":          total_trades,
@@ -734,6 +914,20 @@ async def run_backtest_simulation(
         "largestWin":           f"{largest_win:.2f}",
         "largestLoss":          f"{largest_loss:.2f}",
         "averageHoldingPeriod": f"{int(avg_holding)}",
+        "grossProfit":          f"{gross_profit:.2f}",
+        "grossLoss":            f"{gross_loss:.2f}",
+        "profitFactor":         f"{profit_factor:.2f}",
+        "expectancy":           f"{expectancy:.2f}",
+        "payoffRatio":          f"{payoff_ratio:.2f}",
+        "maxRunup":             f"{max_runup_pct:.2f}",
+        "buyHoldReturnPct":     f"{buy_hold_pct:.2f}",
+        "maxConsecutiveWins":   max_wins,
+        "maxConsecutiveLosses": max_losses,
+        "bySide": {
+            "all":   _compute_side_metrics(trades, capital),
+            "long":  _compute_side_metrics(long_trades, capital),
+            "short": _compute_side_metrics(short_trades, capital),
+        }
     }
 
     # ── 11. Downsample equity curve ─────────────────────────────────────────
@@ -803,6 +997,9 @@ async def run_backtest_simulation(
                 "pnlPct":      tr.get("pnlPct", "0.00"),
                 "leverage":    tr.get("leverage", 1),
                 "liqPrice":    tr.get("liqPrice", ""),
+                "runUpPct":    tr.get("runUpPct", "0.00"),
+                "drawdownPct": tr.get("drawdownPct", "0.00"),
+                "barsHeld":    tr.get("barsHeld", 0),
                 # _entry_dt / _exit_dt are internal datetime objects — never persisted
             }
             for i, tr in enumerate(trades)

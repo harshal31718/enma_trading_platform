@@ -33,6 +33,84 @@ import {
 import { formatQty, formatPrice, formatPct, formatSignedPct, formatPnl, formatIsoDate } from '../utils/formatters'
 import socket from '../lib/socket'
 import { useQueryClient } from '@tanstack/react-query'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs'
+
+function PerformanceTable({ bySide }) {
+  if (!bySide) return null;
+
+  const rows = [
+    { label: 'Net Profit', key: 'netProfit', format: (val, r) => `${formatPnl(val).value} (${formatSignedPct(r.netProfitPct)})`, isPnl: true },
+    { label: 'Gross Profit', key: 'grossProfit', format: (val) => formatPnl(val).value, isPnl: true },
+    { label: 'Gross Loss', key: 'grossLoss', format: (val) => formatPnl(val).value, isPnl: true },
+    { label: 'Profit Factor', key: 'profitFactor', format: (val) => parseFloat(val).toFixed(2), highlightPF: true },
+    { label: 'Total Trades', key: 'totalTrades', format: (val) => val },
+    { label: 'Winning Trades', key: 'winningTrades', format: (val) => val },
+    { label: 'Losing Trades', key: 'losingTrades', format: (val) => val },
+    { label: 'Win Rate (% Profitable)', key: 'winRate', format: (val) => formatPct(parseFloat(val) * 100) },
+    { label: 'Expectancy (Avg P&L)', key: 'expectancy', format: (val) => formatPnl(val).value, isPnl: true },
+    { label: 'Avg Win', key: 'averageWin', format: (val) => formatPnl(val).value, isPnl: true },
+    { label: 'Avg Loss', key: 'averageLoss', format: (val) => formatPnl(val).value, isPnl: true },
+    { label: 'Payoff Ratio (Win/Loss)', key: 'payoffRatio', format: (val) => parseFloat(val).toFixed(2) },
+    { label: 'Avg Holding Period', key: 'averageHoldingPeriod', format: (val) => {
+        const secs = parseInt(val)
+        if (secs >= 3600) return `${(secs / 3600).toFixed(1)}h`
+        if (secs >= 60) return `${(secs / 60).toFixed(1)}m`
+        return `${secs}s`
+      }
+    },
+    { label: 'Max Consecutive Wins', key: 'maxConsecutiveWins', format: (val) => val },
+    { label: 'Max Consecutive Losses', key: 'maxConsecutiveLosses', format: (val) => val },
+  ]
+
+  const getPnlClass = (val) => {
+    const n = parseFloat(val)
+    if (n > 0) return 'text-emerald-400 font-semibold'
+    if (n < 0) return 'text-red-400 font-semibold'
+    return 'text-gray-300'
+  }
+
+  const getPFClass = (val) => {
+    const n = parseFloat(val)
+    if (n >= 1) return 'text-emerald-400 font-semibold'
+    if (n > 0) return 'text-red-400 font-semibold'
+    return 'text-gray-300'
+  }
+
+  return (
+    <Table className="border border-gray-800 rounded-lg overflow-hidden">
+      <TableHeader className="bg-gray-950">
+        <TableRow>
+          <TableHead className="w-[250px] font-semibold text-gray-200">Metric</TableHead>
+          <TableHead className="font-semibold text-gray-200">All Trades</TableHead>
+          <TableHead className="font-semibold text-gray-200">Long Trades</TableHead>
+          <TableHead className="font-semibold text-gray-200">Short Trades</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.map((row, index) => {
+          const allVal = bySide.all?.[row.key] ?? '-'
+          const longVal = bySide.long?.[row.key] ?? '-'
+          const shortVal = bySide.short?.[row.key] ?? '-'
+
+          return (
+            <TableRow key={row.key} className={index % 2 === 0 ? 'bg-gray-900/40 border-b border-gray-800/60' : 'bg-transparent border-b border-gray-800/60'}>
+              <TableCell className="font-medium text-gray-300">{row.label}</TableCell>
+              <TableCell className={row.isPnl ? getPnlClass(allVal) : row.highlightPF ? getPFClass(allVal) : 'text-gray-400 font-mono text-sm'}>
+                {allVal !== '-' ? row.format(allVal, bySide.all) : '-'}
+              </TableCell>
+              <TableCell className={row.isPnl ? getPnlClass(longVal) : row.highlightPF ? getPFClass(longVal) : 'text-gray-400 font-mono text-sm'}>
+                {longVal !== '-' ? row.format(longVal, bySide.long) : '-'}
+              </TableCell>
+              <TableCell className={row.isPnl ? getPnlClass(shortVal) : row.highlightPF ? getPFClass(shortVal) : 'text-gray-400 font-mono text-sm'}>
+                {shortVal !== '-' ? row.format(shortVal, bySide.short) : '-'}
+              </TableCell>
+            </TableRow>
+          )
+        })}
+      </TableBody>
+    </Table>
+  )
+}
 
 export default function Backtest() {
   const queryClient = useQueryClient()
@@ -247,227 +325,291 @@ export default function Backtest() {
                 </div>
               )}
 
-              {activeResult.metrics && (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <BacktestMetricCard
-                    title="Net Profit"
-                    value={formatPrice(activeResult.metrics.netProfit)}
-                    subtext={formatSignedPct(activeResult.metrics.netProfitPct)}
-                    icon={DollarSign}
-                    valueClassName={getPnlClass(activeResult.metrics.netProfit)}
-                  />
-                  <BacktestMetricCard
-                    title="Max Drawdown"
-                    value={formatPct(activeResult.metrics.maxDrawdown)}
-                    subtext="Peak equity drop"
-                    icon={Percent}
-                    valueClassName="text-red-400"
-                  />
-                  <BacktestMetricCard
-                    title="Win Rate"
-                    value={formatPct(parseFloat(activeResult.metrics.winRate) * 100)}
-                    subtext={`${activeResult.metrics.winningTrades} of ${activeResult.metrics.totalTrades} trades`}
-                    icon={TrendingUp}
-                  />
-                  <BacktestMetricCard
-                    title="Sharpe Ratio"
-                    value={parseFloat(activeResult.metrics.sharpeRatio).toFixed(2)}
-                    subtext="Risk-adjusted return"
-                    icon={Activity}
-                  />
-                  <BacktestMetricCard
-                    title="Sortino Ratio"
-                    value={parseFloat(activeResult.metrics.sortinoRatio).toFixed(2)}
-                    subtext="Downside adjusted"
-                    icon={Activity}
-                  />
-                  <BacktestMetricCard
-                    title="Calmar Ratio"
-                    value={parseFloat(activeResult.metrics.calmarRatio).toFixed(2)}
-                    subtext="Return/DD ratio"
-                    icon={Activity}
-                  />
-                </div>
-              )}
+              <Tabs defaultValue="overview" className="w-full">
+                <TabsList className="mb-6 bg-gray-900 border border-gray-800">
+                  <TabsTrigger value="overview">Overview</TabsTrigger>
+                  <TabsTrigger value="performance">Performance Summary</TabsTrigger>
+                  <TabsTrigger value="trades">List of Trades</TabsTrigger>
+                </TabsList>
 
-              <Card>
-                <CardHeader>
-                  <CardTitle>Performance Charts</CardTitle>
-                  <CardDescription>Visualizing balance history and drawdowns over time</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <Suspense fallback={<div className="h-48 flex items-center justify-center"><Loader2 className="size-6 animate-spin text-emerald-400" /></div>}>
-                    <EquityCurve data={activeResult.equityCurve} />
-                  </Suspense>
-                </CardContent>
-              </Card>
-
-              <Card className="p-5">
-                <h4 className="text-gray-100 font-semibold mb-3">Simulation Config</h4>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                  <div>
-                    <span className="text-gray-500 block">Date Range</span>
-                    <span className="text-gray-300 font-medium flex items-center gap-1.5 mt-0.5">
-                      <Calendar className="size-4 text-emerald-400" />
-                      {formatIsoDate(activeResult.startDate)} to {formatIsoDate(activeResult.endDate)}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-gray-500 block">Symbol / Exchange</span>
-                    <span className="text-gray-300 font-medium block mt-0.5">
-                      {activeResult.symbol} ({activeResult.exchange})
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-gray-500 block">Leverage / Fee Rate</span>
-                    <span className="text-gray-300 font-medium block mt-0.5">
-                      {activeResult.leverage}x / {(activeResult.feeRate * 100).toFixed(2)}%
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-gray-500 block">Total Fees Paid</span>
-                    <span className="text-red-400 font-medium block mt-0.5">
-                      {activeResult.metrics?.totalFees ? formatPrice(activeResult.metrics.totalFees) : '-'}
-                    </span>
-                  </div>
-                  {activeResult.metrics?.liquidations != null && (
-                    <div>
-                      <span className="text-gray-500 block">Liquidations</span>
-                      <span className={`font-medium block mt-0.5 ${activeResult.metrics.liquidations > 0 ? 'text-red-400' : 'text-gray-300'}`}>
-                        {activeResult.metrics.liquidations}
-                      </span>
+                <TabsContent value="overview" className="space-y-6">
+                  {activeResult.metrics && (
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                      <BacktestMetricCard
+                        title="Net Profit"
+                        value={formatPrice(activeResult.metrics.netProfit)}
+                        subtext={formatSignedPct(activeResult.metrics.netProfitPct)}
+                        icon={DollarSign}
+                        valueClassName={getPnlClass(activeResult.metrics.netProfit)}
+                      />
+                      <BacktestMetricCard
+                        title="Max Drawdown"
+                        value={formatPct(activeResult.metrics.maxDrawdown)}
+                        subtext="Peak equity drop"
+                        icon={Percent}
+                        valueClassName="text-red-400"
+                      />
+                      <BacktestMetricCard
+                        title="Win Rate"
+                        value={formatPct(parseFloat(activeResult.metrics.winRate) * 100)}
+                        subtext={`${activeResult.metrics.winningTrades} of ${activeResult.metrics.totalTrades} trades`}
+                        icon={TrendingUp}
+                      />
+                      <BacktestMetricCard
+                        title="Profit Factor"
+                        value={activeResult.metrics.profitFactor ? parseFloat(activeResult.metrics.profitFactor).toFixed(2) : '-'}
+                        subtext="Gross Profit / Loss"
+                        icon={Activity}
+                        valueClassName={activeResult.metrics.profitFactor && parseFloat(activeResult.metrics.profitFactor) >= 1 ? 'text-emerald-400' : 'text-red-400'}
+                      />
+                      <BacktestMetricCard
+                        title="Sharpe Ratio"
+                        value={parseFloat(activeResult.metrics.sharpeRatio || 0).toFixed(2)}
+                        subtext="Risk-adjusted return"
+                        icon={Activity}
+                      />
+                      <BacktestMetricCard
+                        title="Sortino Ratio"
+                        value={parseFloat(activeResult.metrics.sortinoRatio || 0).toFixed(2)}
+                        subtext="Downside adjusted"
+                        icon={Activity}
+                      />
+                      <BacktestMetricCard
+                        title="Calmar Ratio"
+                        value={parseFloat(activeResult.metrics.calmarRatio || 0).toFixed(2)}
+                        subtext="Return/DD ratio"
+                        icon={Activity}
+                      />
+                      <BacktestMetricCard
+                        title="Expectancy"
+                        value={activeResult.metrics.expectancy ? formatPnl(activeResult.metrics.expectancy).value : '-'}
+                        subtext="Avg profit per trade"
+                        icon={DollarSign}
+                        valueClassName={activeResult.metrics.expectancy ? getPnlClass(activeResult.metrics.expectancy) : 'text-gray-300'}
+                      />
                     </div>
                   )}
-                  {parseFloat(activeResult.metrics?.totalFunding || 0) !== 0 && (
-                    <div>
-                      <span className="text-gray-500 block">Net Funding</span>
-                      <span className={`font-medium block mt-0.5 ${parseFloat(activeResult.metrics.totalFunding) > 0 ? 'text-red-400' : 'text-emerald-400'}`}>
-                        {parseFloat(activeResult.metrics.totalFunding) > 0 ? '-' : '+'}${Math.abs(parseFloat(activeResult.metrics.totalFunding)).toFixed(2)}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              </Card>
 
-              <Card>
-                <CardHeader>
-                  <CardTitle>Execution Log</CardTitle>
-                  <CardDescription>
-                    Complete historical trade record ({tradesData?.pagination?.total || 0} trades)
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {tradesData?.trades && tradesData.trades.length > 0 ? (() => {
-                    const totalTrades = tradesData.pagination.total
-                    const totalPages = tradesData.pagination.totalPages
-                    const startIdx = (tradePage - 1) * TRADES_PER_PAGE
-                    const pageTrades = tradesData.trades
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Performance Charts</CardTitle>
+                      <CardDescription>Visualizing balance history, drawdowns, and benchmark over time</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <Suspense fallback={<div className="h-48 flex items-center justify-center"><Loader2 className="size-6 animate-spin text-emerald-400" /></div>}>
+                        <EquityCurve 
+                          data={activeResult.equityCurve} 
+                          startingCapital={activeResult.capital}
+                          buyHoldReturnPct={activeResult.metrics?.buyHoldReturnPct || 0}
+                        />
+                      </Suspense>
+                    </CardContent>
+                  </Card>
 
-                    return (
-                      <div className="space-y-4">
-                        <Table>
-                          <TableHeader>
-                            <TableRow>
-                              <TableHead>ID</TableHead>
-                              <TableHead>Type</TableHead>
-                              <TableHead>Quantity</TableHead>
-                              <TableHead>Entry Price</TableHead>
-                              <TableHead>Exit Price</TableHead>
-                              <TableHead>Entry Time</TableHead>
-                              <TableHead>Reason</TableHead>
-                              <TableHead className="text-right">Net P&L</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {pageTrades.map((tr) => {
-                              const pnl = formatPnl(tr.pnl)
-                              return (
-                                <TableRow key={tr.id}>
-                                  <TableCell className="font-mono text-xs">{tr.id}</TableCell>
-                                  <TableCell>
-                                    <Badge variant={tr.type === 'long' ? 'profit' : 'destructive'}>
-                                      {tr.type.toUpperCase()}
-                                    </Badge>
-                                  </TableCell>
-                                  <TableCell className="font-mono text-xs">{formatQty(tr.qty)}</TableCell>
-                                  <TableCell className="font-mono text-xs">{formatPrice(tr.entryPrice)}</TableCell>
-                                  <TableCell className="font-mono text-xs">{formatPrice(tr.exitPrice)}</TableCell>
-                                  <TableCell className="text-gray-400 text-xs">
-                                    {new Date(tr.entryAt).toLocaleDateString('en-US', {
-                                      month: 'short', day: 'numeric',
-                                      hour: '2-digit', minute: '2-digit',
-                                    })}
-                                  </TableCell>
-                                  <TableCell>
-                                    <span className="text-xs capitalize text-gray-300">
-                                      {tr.exitReason ? tr.exitReason.replace('_', ' ') : '-'}
-                                    </span>
-                                  </TableCell>
-                                  <TableCell className={`text-right font-mono text-xs font-semibold ${pnl.isPositive ? 'text-emerald-400' : 'text-red-400'}`}>
-                                    {pnl.value} ({formatSignedPct(tr.pnlPct)})
-                                  </TableCell>
-                                </TableRow>
-                              )
-                            })}
-                          </TableBody>
-                        </Table>
-
-                        {totalPages > 1 && (
-                          <div className="flex items-center justify-between pt-2 border-t border-gray-800">
-                            <span className="text-xs text-gray-500">
-                              Showing {startIdx + 1}–{Math.min(startIdx + TRADES_PER_PAGE, totalTrades)} of {totalTrades} trades
-                            </span>
-                            <div className="flex items-center gap-1">
-                              <button
-                                onClick={() => setTradePage((p) => Math.max(1, p - 1))}
-                                disabled={tradePage === 1}
-                                className="p-1.5 rounded border border-gray-800 text-gray-400 hover:text-gray-100 hover:border-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                              >
-                                <ChevronLeft className="size-4" />
-                              </button>
-                              {Array.from({ length: totalPages }, (_, i) => i + 1)
-                                .filter((p) => p === 1 || p === totalPages || Math.abs(p - tradePage) <= 2)
-                                .reduce((acc, p, idx, arr) => {
-                                  if (idx > 0 && p - arr[idx - 1] > 1) acc.push('…')
-                                  acc.push(p)
-                                  return acc
-                                }, [])
-                                .map((item, idx) =>
-                                  item === '…' ? (
-                                    <span key={`e-${idx}`} className="px-1 text-gray-600 text-xs">…</span>
-                                  ) : (
-                                    <button
-                                      key={item}
-                                      onClick={() => setTradePage(item)}
-                                      className={`min-w-[28px] h-7 px-1.5 rounded border text-xs font-medium transition-colors ${
-                                        tradePage === item
-                                          ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400'
-                                          : 'border-gray-800 text-gray-400 hover:text-gray-100 hover:border-gray-600'
-                                      }`}
-                                    >
-                                      {item}
-                                    </button>
-                                  )
-                                )}
-                              <button
-                                onClick={() => setTradePage((p) => Math.min(totalPages, p + 1))}
-                                disabled={tradePage === totalPages}
-                                className="p-1.5 rounded border border-gray-800 text-gray-400 hover:text-gray-100 hover:border-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                              >
-                                <ChevronRight className="size-4" />
-                              </button>
-                            </div>
-                          </div>
-                        )}
+                  <Card className="p-5">
+                    <h4 className="text-gray-100 font-semibold mb-3">Simulation Config</h4>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                      <div>
+                        <span className="text-gray-500 block">Date Range</span>
+                        <span className="text-gray-300 font-medium flex items-center gap-1.5 mt-0.5">
+                          <Calendar className="size-4 text-emerald-400" />
+                          {formatIsoDate(activeResult.startDate)} to {formatIsoDate(activeResult.endDate)}
+                        </span>
                       </div>
-                    )
-                  })() : (
-                    <div className="text-center text-gray-500 py-6">
-                      No trades were executed during this backtest. Try relaxing strategy rules or expanding dates.
+                      <div>
+                        <span className="text-gray-500 block">Symbol / Exchange</span>
+                        <span className="text-gray-300 font-medium block mt-0.5">
+                          {activeResult.symbol} ({activeResult.exchange})
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-gray-500 block">Leverage / Fee Rate</span>
+                        <span className="text-gray-300 font-medium block mt-0.5">
+                          {activeResult.leverage}x / {(activeResult.feeRate * 100).toFixed(2)}%
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-gray-500 block">Total Fees Paid</span>
+                        <span className="text-red-400 font-medium block mt-0.5">
+                          {activeResult.metrics?.totalFees ? formatPrice(activeResult.metrics.totalFees) : '-'}
+                        </span>
+                      </div>
+                      {activeResult.metrics?.liquidations != null && (
+                        <div>
+                          <span className="text-gray-500 block">Liquidations</span>
+                          <span className={`font-medium block mt-0.5 ${activeResult.metrics.liquidations > 0 ? 'text-red-400' : 'text-gray-300'}`}>
+                            {activeResult.metrics.liquidations}
+                          </span>
+                        </div>
+                      )}
+                      {parseFloat(activeResult.metrics?.totalFunding || 0) !== 0 && (
+                        <div>
+                          <span className="text-gray-500 block">Net Funding</span>
+                          <span className={`font-medium block mt-0.5 ${parseFloat(activeResult.metrics.totalFunding) > 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+                            {parseFloat(activeResult.metrics.totalFunding) > 0 ? '-' : '+'}${Math.abs(parseFloat(activeResult.metrics.totalFunding)).toFixed(2)}
+                          </span>
+                        </div>
+                      )}
                     </div>
-                  )}
-                </CardContent>
-              </Card>
+                  </Card>
+                </TabsContent>
+
+                <TabsContent value="performance">
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Performance Breakdown</CardTitle>
+                      <CardDescription>Directional strategy performance side-by-side comparison</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      {activeResult.metrics?.bySide ? (
+                        <PerformanceTable bySide={activeResult.metrics.bySide} />
+                      ) : (
+                        <div className="text-center text-gray-500 py-6">
+                          Long/Short breakdown metrics not available for this run.
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                </TabsContent>
+
+                <TabsContent value="trades">
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Execution Log</CardTitle>
+                      <CardDescription>
+                        Complete historical trade record ({tradesData?.pagination?.total || 0} trades)
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      {tradesData?.trades && tradesData.trades.length > 0 ? (() => {
+                        const totalTrades = tradesData.pagination.total
+                        const totalPages = tradesData.pagination.totalPages
+                        const startIdx = (tradePage - 1) * TRADES_PER_PAGE
+                        const pageTrades = tradesData.trades
+
+                        return (
+                          <div className="space-y-4">
+                            <Table>
+                              <TableHeader>
+                                <TableRow>
+                                  <TableHead>ID</TableHead>
+                                  <TableHead>Type</TableHead>
+                                  <TableHead>Qty</TableHead>
+                                  <TableHead>Entry Price</TableHead>
+                                  <TableHead>Exit Price</TableHead>
+                                  <TableHead>Entry Time</TableHead>
+                                  <TableHead>Run-up (MFE)</TableHead>
+                                  <TableHead>Drawdown (MAE)</TableHead>
+                                  <TableHead>Bars</TableHead>
+                                  <TableHead>Reason</TableHead>
+                                  <TableHead className="text-right">Net P&L</TableHead>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {pageTrades.map((tr) => {
+                                  const pnl = formatPnl(tr.pnl)
+                                  const runUp = tr.runUpPct ? `${tr.runUpPct}%` : '-'
+                                  const drawdown = tr.drawdownPct ? `${tr.drawdownPct}%` : '-'
+                                  const bars = tr.barsHeld ?? '-'
+
+                                  return (
+                                    <TableRow key={tr.id}>
+                                      <TableCell className="font-mono text-xs">{tr.id}</TableCell>
+                                      <TableCell>
+                                        <Badge variant={tr.type === 'long' ? 'profit' : 'destructive'}>
+                                          {tr.type.toUpperCase()}
+                                        </Badge>
+                                      </TableCell>
+                                      <TableCell className="font-mono text-xs">{formatQty(tr.qty)}</TableCell>
+                                      <TableCell className="font-mono text-xs">{formatPrice(tr.entryPrice)}</TableCell>
+                                      <TableCell className="font-mono text-xs">{formatPrice(tr.exitPrice)}</TableCell>
+                                      <TableCell className="text-gray-400 text-xs">
+                                        {new Date(tr.entryAt).toLocaleDateString('en-US', {
+                                          month: 'short', day: 'numeric',
+                                          hour: '2-digit', minute: '2-digit',
+                                        })}
+                                      </TableCell>
+                                      <TableCell className="font-mono text-xs text-emerald-400">
+                                        {runUp}
+                                      </TableCell>
+                                      <TableCell className="font-mono text-xs text-red-400">
+                                        {drawdown}
+                                      </TableCell>
+                                      <TableCell className="font-mono text-xs text-gray-400">
+                                        {bars}
+                                      </TableCell>
+                                      <TableCell>
+                                        <span className="text-xs capitalize text-gray-300">
+                                          {tr.exitReason ? tr.exitReason.replace('_', ' ') : '-'}
+                                        </span>
+                                      </TableCell>
+                                      <TableCell className={`text-right font-mono text-xs font-semibold ${pnl.isPositive ? 'text-emerald-400' : 'text-red-400'}`}>
+                                        {pnl.value} ({formatSignedPct(tr.pnlPct)})
+                                      </TableCell>
+                                    </TableRow>
+                                  )
+                                })}
+                              </TableBody>
+                            </Table>
+
+                            {totalPages > 1 && (
+                              <div className="flex items-center justify-between pt-2 border-t border-gray-800">
+                                <span className="text-xs text-gray-500">
+                                  Showing {startIdx + 1}–{Math.min(startIdx + TRADES_PER_PAGE, totalTrades)} of {totalTrades} trades
+                                </span>
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    onClick={() => setTradePage((p) => Math.max(1, p - 1))}
+                                    disabled={tradePage === 1}
+                                    className="p-1.5 rounded border border-gray-800 text-gray-400 hover:text-gray-100 hover:border-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                                  >
+                                    <ChevronLeft className="size-4" />
+                                  </button>
+                                  {Array.from({ length: totalPages }, (_, i) => i + 1)
+                                    .filter((p) => p === 1 || p === totalPages || Math.abs(p - tradePage) <= 2)
+                                    .reduce((acc, p, idx, arr) => {
+                                      if (idx > 0 && p - arr[idx - 1] > 1) acc.push('…')
+                                      acc.push(p)
+                                      return acc
+                                    }, [])
+                                    .map((item, idx) =>
+                                      item === '…' ? (
+                                        <span key={`e-${idx}`} className="px-1 text-gray-600 text-xs">…</span>
+                                      ) : (
+                                        <button
+                                          key={item}
+                                          onClick={() => setTradePage(item)}
+                                          className={`min-w-[28px] h-7 px-1.5 rounded border text-xs font-medium transition-colors ${
+                                            tradePage === item
+                                              ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400'
+                                              : 'border-gray-800 text-gray-400 hover:text-gray-100 hover:border-gray-600'
+                                          }`}
+                                        >
+                                          {item}
+                                        </button>
+                                      )
+                                    )}
+                                  <button
+                                    onClick={() => setTradePage((p) => Math.min(totalPages, p + 1))}
+                                    disabled={tradePage === totalPages}
+                                    className="p-1.5 rounded border border-gray-800 text-gray-400 hover:text-gray-100 hover:border-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                                  >
+                                    <ChevronRight className="size-4" />
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })() : (
+                        <div className="text-center text-gray-500 py-6">
+                          No trades were executed during this backtest. Try relaxing strategy rules or expanding dates.
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                </TabsContent>
+              </Tabs>
             </div>
           ) : (
             <Card className="h-full flex flex-col justify-center items-center py-20 px-6 text-center">
