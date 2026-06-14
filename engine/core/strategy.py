@@ -2,6 +2,26 @@ import logging
 from abc import ABC, abstractmethod
 import numpy as np
 
+# Five-Model Quant Architecture (see plan.md). Dual import root: strategies are
+# loaded under the ``engine.`` package, but the engine services run with the
+# engine dir itself on sys.path (top-level ``core.``). Mirror the _atr() pattern.
+try:
+    from engine.core.models import (
+        Signal,
+        DefaultRiskModel,
+        DefaultCostModel,
+        DefaultPortfolioModel,
+        DefaultExecution,
+    )
+except ImportError:  # pragma: no cover - import-root fallback
+    from core.models import (
+        Signal,
+        DefaultRiskModel,
+        DefaultCostModel,
+        DefaultPortfolioModel,
+        DefaultExecution,
+    )
+
 
 class BaseStrategy(ABC):
     """
@@ -73,6 +93,15 @@ class BaseStrategy(ABC):
         self._close_at_open:   bool  = False   # set by close_position(); consumed by runner step A1
         self.order_type:       str   = "market" # "market" | "limit"
         self.limit_offset:     float = 0.0      # price offset for limit entries
+
+        # ── Five-Model Quant Architecture (see plan.md) ──────────────────────
+        # The strategy itself is the Alpha Model (forecast()/should_*). The other
+        # four models are pluggable; defaults reproduce legacy behavior exactly.
+        # Override per-strategy by reassigning any of these in the subclass.
+        self.risk_model      = DefaultRiskModel()
+        self.cost_model      = DefaultCostModel()
+        self.portfolio_model = DefaultPortfolioModel()
+        self.execution_model = DefaultExecution()
 
     # ─────────────────────────────────────────
     # Candle property accessors
@@ -249,19 +278,16 @@ class BaseStrategy(ABC):
     ) -> float:
         """Quantity such that hitting ``stop_price`` loses ``risk_pct`` of equity.
 
-        Implements platform rule #6: ``(equity * risk_pct) / |entry - stop|``.
-        ``risk_pct`` defaults to ``self.risk_pct`` if the strategy defines it,
-        else 1%. The result is capped by ``max_qty()`` so a tight stop can never
-        demand more notional than the account's leverage allows.
+        Implements platform rule #6: ``(equity * risk_pct) / |entry - stop|``,
+        capped by ``max_qty()`` so a tight stop can never demand more notional
+        than the account's leverage allows. ``risk_pct`` defaults to
+        ``self.risk_pct`` (else 1%).
+
+        Delegates to the Risk Model (Phase 1: one owner of risk-budget sizing) so
+        a custom ``risk_model`` can change sizing for every strategy at once; the
+        default is byte-identical to the former inline computation.
         """
-        entry = entry_price if entry_price is not None else self.price
-        if risk_pct is None:
-            risk_pct = float(getattr(self, "risk_pct", 0.01))
-        per_unit = abs(entry - stop_price)
-        if per_unit <= 0 or entry <= 0:
-            return 0.0
-        qty = (self.equity * risk_pct) / per_unit
-        return min(qty, self.max_qty(entry))
+        return self.risk_model.risk_budget_qty(self, stop_price, risk_pct, entry_price)
 
     def size_by_notional(self, pct: float | None = None, entry_price: float | None = None) -> float:
         """Legacy sizing: allocate ``pct`` of equity as notional (qty = equity*pct/price).
@@ -287,12 +313,12 @@ class BaseStrategy(ABC):
 
     def atr_stop(self, direction: str, mult: float = 2.0, period: int = 14,
                  entry_price: float | None = None) -> float:
-        """ATR-based stop price. long: entry - mult*ATR, short: entry + mult*ATR."""
-        entry = entry_price if entry_price is not None else self.price
-        atr = self._atr(period)
-        if direction == "long":
-            return entry - mult * atr
-        return entry + mult * atr
+        """ATR-based stop price. long: entry - mult*ATR, short: entry + mult*ATR.
+
+        Delegates to the Risk Model (Phase 1: one owner of stop placement); the
+        default is byte-identical to the former inline computation.
+        """
+        return self.risk_model.atr_stop(self, direction, mult, period, entry_price)
 
     def rr_target(self, direction: str, stop_price: float, rr: float = 2.0,
                   entry_price: float | None = None) -> float:
@@ -401,23 +427,36 @@ class BaseStrategy(ABC):
     # Model hooks — override for advanced control
     # ─────────────────────────────────────────
 
+    def forecast(self) -> Signal:
+        """Alpha Model output: direction + conviction for this candle.
+
+        Default derives a unit-conviction Signal from should_long()/should_short()
+        so every existing strategy is an Alpha Model with no changes. Override to
+        emit continuous conviction in [0, 1]. Consumed by the shared decision
+        pipeline; alpha() is kept as the legacy signed-float view.
+        """
+        if self.should_long():
+            return Signal(direction=1, conviction=1.0, ref_price=self.price)
+        if self.should_short():
+            return Signal(direction=-1, conviction=1.0, ref_price=self.price)
+        return Signal(direction=0, conviction=0.0, ref_price=self.price)
+
     def alpha(self) -> float:
         """Signal strength: +1.0 long, -1.0 short, 0.0 flat.
 
-        Default implementation delegates to the boolean hooks so existing
-        strategies work without change. Override for continuous signals.
+        Legacy signed-float view over forecast() — preserves the boolean-hook
+        behavior so existing call sites (backtest runner step C) are unchanged.
         """
-        if self.should_long():  return  1.0
-        if self.should_short(): return -1.0
-        return 0.0
+        return float(self.forecast().direction)
 
     def can_trade(self) -> bool:
         """Risk circuit breaker. Returns False to halt new entries.
 
-        Position management (update_position) still runs even when False.
-        Default: halt when session drawdown exceeds max_session_dd threshold.
+        Delegates to the Risk Model. Position management (update_position) still
+        runs even when False. Default: halt when session drawdown exceeds the
+        max_session_dd threshold. Override risk_model to customize.
         """
-        return self.session_drawdown < self.max_session_dd
+        return self.risk_model.can_trade(self)
 
     def alpha_beats_cost(self, signal: float) -> bool:
         """TCM gate. Return False to veto the entry after alpha() fires.

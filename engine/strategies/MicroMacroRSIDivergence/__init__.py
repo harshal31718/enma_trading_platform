@@ -23,15 +23,21 @@ class MicroMacroRSIDivergence(BaseStrategy):
       • EXIT     — ATR protective stop + reward:risk take-profit (sized through
                    the platform risk model), plus an optional early exit when an
                    opposite-side confluence divergence appears.
-      • FILTERS  — all four Pine quality filters are ported and on by default:
-                   RSI 50-level alignment, RSI momentum direction, smoothed-RSI
-                   confirmation, and the min-RSI-difference / pivot-distance
-                   noise gates. The 50-level and smoothed filters are applied in
-                   the reversal-correct sense (bullish divergences in the lower
-                   half / smoothed RSI sloping up; bearish in the upper half /
-                   smoothed RSI sloping down) — the inverse of the literal Pine,
-                   whose >50/<50 test would make reversal entries impossible at
-                   genuine price extremes. Each filter is individually toggleable.
+      • FILTERS  — the Pine quality filters are ported but, matching the Pine
+                   source, default OFF (RSI 50-level alignment, RSI momentum
+                   direction, smoothed-RSI confirmation). Only the always-on
+                   noise gates remain by default: min-RSI-difference and
+                   pivot-distance (min/max). With all the optional filters and a
+                   strict confluence window stacked on, the strategy fired no
+                   trades over a year of 1h candles — so the defaults were
+                   relaxed toward the Pine source (filters off, min_div_diff 4→2,
+                   confluence_window 30→80, min_pivot_bars 5→3). When enabled,
+                   the 50-level and smoothed filters apply in the reversal-correct
+                   sense (bullish divergences in the lower half / smoothed RSI
+                   sloping up; bearish in the upper half / smoothed RSI sloping
+                   down) — the inverse of the literal Pine, whose >50/<50 test
+                   would make reversal entries impossible at genuine price
+                   extremes. Each filter is individually toggleable.
 
     DIVERGENCE DEFINITIONS (regular)
     --------------------------------
@@ -86,7 +92,7 @@ class MicroMacroRSIDivergence(BaseStrategy):
             ),
         },
         "confluence_window": {
-            "type": "int", "default": 30, "min": 1, "max": 200,
+            "type": "int", "default": 80, "min": 1, "max": 200,
             "label": "Micro/Macro Confluence Window (bars)",
             "description": (
                 "Max distance between the macro pivot and the corroborating micro pivot. "
@@ -95,7 +101,7 @@ class MicroMacroRSIDivergence(BaseStrategy):
             ),
         },
         "min_pivot_bars": {
-            "type": "int", "default": 5, "min": 1, "max": 100,
+            "type": "int", "default": 3, "min": 1, "max": 100,
             "label": "Min Bars Between Pivots",
             "description": (
                 "Rejects divergences whose two pivots are too close together. "
@@ -111,7 +117,7 @@ class MicroMacroRSIDivergence(BaseStrategy):
             ),
         },
         "min_div_diff": {
-            "type": "float", "default": 4.0, "min": 0.0, "max": 50.0,
+            "type": "float", "default": 2.0, "min": 0.0, "max": 50.0,
             "label": "Min RSI Difference Between Pivots",
             "description": (
                 "Minimum RSI gap between the two pivots for a valid divergence (0 = off). "
@@ -135,27 +141,31 @@ class MicroMacroRSIDivergence(BaseStrategy):
             ),
         },
         "enable_rsi_level_filter": {
-            "type": "int", "default": 1, "min": 0, "max": 1,
+            "type": "int", "default": 0, "min": 0, "max": 1,
             "label": "RSI 50-Level Filter (1 = on)",
             "description": (
-                "Require RSI on the momentum-aligned side of 50 at the pivot "
-                "(>50 for bullish, <50 for bearish), per the Pine filter. 0 disables."
+                "Require RSI on the reversal-aligned side of 50 at the pivot "
+                "(<50 for bullish, >50 for bearish). Off by default to match the "
+                "Pine source (enableDivFilter=false); 1 enables."
             ),
         },
         "enable_rsi_direction_filter": {
-            "type": "int", "default": 1, "min": 0, "max": 1,
+            "type": "int", "default": 0, "min": 0, "max": 1,
             "label": "RSI Direction Filter (1 = on)",
             "description": (
                 "Require RSI momentum to be turning in the trade direction between pivots. "
-                "0 disables."
+                "Off by default to match the Pine source (enableRsiDirectionFilter=false); "
+                "1 enables. (Redundant with the core divergence test, which already "
+                "requires the RSI pivot to move in the trade direction.)"
             ),
         },
         "enable_smoothed_filter": {
-            "type": "int", "default": 1, "min": 0, "max": 1,
+            "type": "int", "default": 0, "min": 0, "max": 1,
             "label": "Smoothed-RSI Confirmation (1 = on)",
             "description": (
-                "Require the smoothed RSI on the momentum-aligned side of 50 at the pivot. "
-                "0 disables (also skips its computation)."
+                "Require the smoothed RSI to slope with the divergence between pivots. "
+                "Off by default to match the Pine source (enableSmoothedDivFilter=false); "
+                "1 enables (and computes the smoothed-RSI layer)."
             ),
         },
         "exit_on_opposite": {

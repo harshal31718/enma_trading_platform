@@ -35,9 +35,12 @@ Thumbs.db
 .mypy_cache/
 
 # Spec and Claude Code files (local only)
+AGENTS.md
 CLAUDE.md
 client/CLAUDE.md
 server/CLAUDE.md
 engine/CLAUDE.md
 docs/
 .claude/
+.mcp.json
+

@@ -12,6 +12,7 @@ const RISK_FIELDS = {
   riskRewardRatio:    { engineKey: 'rrr',            fallback: 2.0,   min: 0.1,    max: 100 },
   maxSessionDrawdown: { engineKey: 'max_session_dd', fallback: 0.20,  min: 0.01,   max: 1   },
   liqBufferPct:       { engineKey: 'liq_buffer_pct', fallback: 0.005, min: 0,      max: 0.5 },
+  minEdgeMult:        { engineKey: 'min_edge_mult',  fallback: 0.0,   min: 0,      max: 10  },
 }
 
 const clamp = (n, min, max) => Math.min(max, Math.max(min, n))
@@ -21,7 +22,7 @@ const clamp = (n, min, max) => Math.min(max, Math.max(min, n))
  * @param {object} [override]     Per-run camelCase overrides from the client. May be undefined.
  * @returns {object} engine risk_params dict with snake_case keys (all fields present).
  */
-function resolveRiskParams(savedSettings = {}, override = {}) {
+function resolveModelParams(savedSettings = {}, override = {}) {
   const ovr = override || {}
   const out = {}
   for (const [field, rule] of Object.entries(RISK_FIELDS)) {
@@ -34,4 +35,6 @@ function resolveRiskParams(savedSettings = {}, override = {}) {
   return out
 }
 
-module.exports = { resolveRiskParams, RISK_FIELDS }
+const resolveRiskParams = resolveModelParams;
+
+module.exports = { resolveModelParams, resolveRiskParams, RISK_FIELDS }

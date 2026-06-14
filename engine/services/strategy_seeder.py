@@ -10,18 +10,6 @@ STRATEGIES_DIR = os.path.join(os.path.dirname(__file__), "..", "strategies")
 
 DEFAULT_STRATEGIES = [
     {
-        "name": "SimpleEMACross",
-        "description": "Fast/slow EMA crossover. Goes long on golden cross, short on death cross. Uses ATR for dynamic stop-loss sizing.",
-    },
-    {
-        "name": "RSIReversion",
-        "description": "RSI mean reversion. Goes long when RSI < 30 (oversold), short when RSI > 70 (overbought). Exits when RSI reverts to 50.",
-    },
-    {
-        "name": "DonchianBreakout",
-        "description": "Donchian channel breakout. Goes long on upper channel break, short on lower channel break. Exits at middle band.",
-    },
-    {
         "name": "MicroScalper",
         "description": "High-frequency stop-and-reverse scalper built for pipeline stress testing. Logic: 3/9 EMA crossover on 1m candles with an optional ATR volatility filter. Always in a position.",
     },

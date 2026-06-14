@@ -272,9 +272,9 @@ export default function NewSessionWizard({ onCancel, onSuccess }) {
                 <span className="text-gray-100">{leverage}x</span>
               </div>
               <div className="flex justify-between py-2 border-b border-gray-800">
-                <span className="text-gray-400">Risk</span>
+                <span className="text-gray-400">Risk & Cost</span>
                 <span className="text-gray-100">
-                  {risk.riskPct}% / trade · {risk.riskReward}:1 R:R · {risk.maxDrawdown}% max DD
+                  {risk.riskPct}% / trade · {risk.riskReward}:1 R:R · {risk.maxDrawdown}% max DD · {risk.minEdgeMult} edge mult
                 </span>
               </div>
               <div className="flex justify-between py-2 border-b border-gray-800">

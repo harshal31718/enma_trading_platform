@@ -8,7 +8,7 @@ const Strategy       = require('../models/Strategy')
 const Settings       = require('../models/Settings')
 const ApiResponse    = require('../utils/ApiResponse')
 const ApiError       = require('../utils/ApiError')
-const { resolveRiskParams } = require('../utils/risk')
+const { resolveModelParams } = require('../utils/risk')
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
@@ -51,7 +51,7 @@ async function runBacktest(req, res, next) {
 
     // Risk model: merge per-run override (if any) over saved global defaults,
     // then map to the engine's snake_case risk_params dict.
-    const riskParams = resolveRiskParams(savedSettings, riskOverride)
+    const riskParams = resolveModelParams(savedSettings, riskOverride)
 
     const feeRateNum = Number(feeRate !== undefined ? feeRate : defaultFeeRate)
     if (!isFinite(feeRateNum) || feeRateNum < 0 || feeRateNum > 0.05) {

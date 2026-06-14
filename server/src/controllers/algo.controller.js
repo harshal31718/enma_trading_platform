@@ -6,7 +6,7 @@ const ApiError = require('../utils/ApiError')
 const ApiResponse = require('../utils/ApiResponse')
 const { lockSymbol, releaseSymbolLock, getAllLockedSymbols, isSymbolFree, getSymbolLock } = require('../services/symbolLock')
 const { getIO } = require('../config/socket')
-const { resolveRiskParams } = require('../utils/risk')
+const { resolveModelParams } = require('../utils/risk')
 
 // POST /api/v1/algo/sessions
 async function startSession(req, res, next) {
@@ -25,7 +25,7 @@ async function startSession(req, res, next) {
     // the engine's snake_case risk_params dict. Loaded up-front so it can be
     // persisted on the session and forwarded to the engine.
     const savedSettings = await Settings.findById('global').lean() || {}
-    const riskParams = resolveRiskParams(savedSettings, riskOverride)
+    const riskParams = resolveModelParams(savedSettings, riskOverride)
 
     // 2. All symbols free
     for (const symbol of symbols) {

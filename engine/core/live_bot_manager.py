@@ -10,6 +10,8 @@ import websockets
 
 from config.timescale import get_pool
 from core.position import Position
+from core.models import DefaultPortfolioModel, LiveExecution, OrderPlan
+from core.pipeline import evaluate
 from utils.symbols import round_price, round_qty, clamp_and_round_qty
 
 logger = logging.getLogger(__name__)
@@ -53,7 +55,12 @@ class LiveBotManager:
         symbols = session_config["symbols"]
         timeframe = session_config["timeframe"]
         params = session_config.get("params", {})
-        capital_per_symbol = float(session_config["capital"]) / len(symbols)
+        # Cross-symbol capital split owned by the Portfolio Model (Phase 3).
+        # Default is an equal split (byte-identical to the former
+        # capital/len(symbols)); a custom PortfolioModel can re-weight here.
+        allocation = DefaultPortfolioModel().allocate(
+            float(session_config["capital"]), symbols
+        )
         leverage = int(session_config.get("leverage", 1))
         fee_rate = float(session_config.get("fee_rate", 0.0005))
         risk_params = session_config.get("risk_params", {}) or {}
@@ -89,7 +96,7 @@ class LiveBotManager:
             task = asyncio.create_task(
                 self._run_symbol_loop(
                     session_id, strategy_class, symbol, params,
-                    timeframe, capital_per_symbol, leverage, fee_rate,
+                    timeframe, allocation[symbol], leverage, fee_rate,
                     risk_params,
                 )
             )
@@ -222,8 +229,13 @@ class LiveBotManager:
         strategy.rrr               = float(_risk.get("rrr",            strategy.rrr))
         strategy.liq_buffer_pct    = float(_risk.get("liq_buffer_pct", strategy.liq_buffer_pct))
         strategy.max_session_dd    = float(_risk.get("max_session_dd", strategy.max_session_dd))
+        strategy.cost_model.min_edge_mult = float(_risk.get("min_edge_mult", 0.0))
         strategy.available_capital = float(capital)
         strategy.peak_equity       = float(capital)
+
+        # Execution Model for the live env (real Binance market fills). Owns the
+        # realized exit-fee accounting; composes the strategy's Cost Model.
+        strategy.execution_model = LiveExecution()
 
         # Store strategy instance for stats access
         session = self.sessions.get(session_id)
@@ -340,19 +352,14 @@ class LiveBotManager:
                                 strategy.before()
 
                                 if strategy.position is None:
-                                    if strategy.should_long():
-                                        strategy.go_long()
-                                        if strategy.buy is not None:
-                                            await self._execute_entry(session_id, strategy, symbol, "long")
-                                    elif strategy.should_short():
-                                        strategy.go_short()
-                                        if strategy.sell is not None:
-                                            await self._execute_entry(session_id, strategy, symbol, "short")
+                                    plan = evaluate(strategy)
+                                    if plan is not None:
+                                        await self._execute_entry(session_id, strategy, symbol, plan)
                                 else:
                                     strategy.position.update_pnl(strategy.price)
                                     await self._check_exits(session_id, strategy, symbol)
                                     if strategy.position is not None:
-                                        strategy.update_position()
+                                        evaluate(strategy)
                                         if strategy.has_pending_flip:
                                             await self._execute_flip(session_id, strategy, symbol)
 
@@ -398,25 +405,23 @@ class LiveBotManager:
             logger.error(f"[AlgoBot] Unexpected error in symbol loop [{symbol}]: {e}")
 
     async def _execute_entry(
-        self, session_id: str, strategy, symbol: str, direction: str
+        self, session_id: str, strategy, symbol: str, plan: OrderPlan
     ) -> None:
         """Place a MARKET entry order on Binance Testnet and track position locally."""
         session = self.sessions.get(session_id)
         if not session:
             return
 
-        if direction == "long":
-            qty, price = strategy.buy
-        else:
-            qty, price = strategy.sell
+        direction = "long" if plan.direction > 0 else "short"
+        qty = plan.qty
 
         fill_price = strategy.price  # local fill price for PnL tracking
 
         # Snap quantity and prices to Binance's LOT_SIZE/PRICE_FILTER precision.
         exchange_name = "Binance Futures"
         qty = clamp_and_round_qty(symbol, exchange_name, qty, fill_price)
-        sl_raw = strategy.stop_loss[1] if strategy.stop_loss else None
-        tp_raw = strategy.take_profit[1] if strategy.take_profit else None
+        sl_raw = plan.stop_loss
+        tp_raw = plan.take_profit
         sl_price = round_price(symbol, exchange_name, sl_raw) if sl_raw else None
         tp_price = round_price(symbol, exchange_name, tp_raw) if tp_raw else None
 
@@ -548,14 +553,15 @@ class LiveBotManager:
         qty = flip["qty"]
         if qty <= 0:
             return
-        order = (qty, strategy.price)
-        if flip["direction"] == "long":
-            strategy.buy = order
-        else:
-            strategy.sell = order
-        strategy.stop_loss   = (qty, flip["stop_loss"])   if flip["stop_loss"]   is not None else None
-        strategy.take_profit = (qty, flip["take_profit"]) if flip["take_profit"] is not None else None
-        await self._execute_entry(session_id, strategy, symbol, flip["direction"])
+        plan = OrderPlan(
+            direction=1 if flip["direction"] == "long" else -1,
+            qty=qty,
+            entry_price=strategy.price,
+            stop_loss=flip["stop_loss"],
+            take_profit=flip["take_profit"],
+            order_type=getattr(strategy, "order_type", "market"),
+        )
+        await self._execute_entry(session_id, strategy, symbol, plan)
 
     async def _check_exits(self, session_id: str, strategy, symbol: str) -> None:
         """Check stop-loss and take-profit for open position."""
@@ -627,7 +633,7 @@ class LiveBotManager:
         except Exception as e:
             logger.error(f"[AlgoBot] Testnet close-position failed for {symbol}: {e}")
 
-        fee = strategy.position.qty * exit_price * strategy.fee_rate
+        fee = strategy.execution_model.exit_fee(strategy, strategy.position.qty, exit_price)
         strategy.position.close(exit_price)
         realized_pnl = strategy.position.pnl - fee
         strategy.balance += realized_pnl
@@ -685,7 +691,7 @@ class LiveBotManager:
         # Update local PnL tracking if the engine knew about this position
         if strategy and strategy.position:
             exit_price = strategy.price
-            fee = strategy.position.qty * exit_price * strategy.fee_rate
+            fee = strategy.execution_model.exit_fee(strategy, strategy.position.qty, exit_price)
             strategy.position.close(exit_price)
             realized_pnl = strategy.position.pnl - fee
             strategy.balance += realized_pnl

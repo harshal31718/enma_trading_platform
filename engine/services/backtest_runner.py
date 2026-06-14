@@ -10,7 +10,8 @@ import redis.asyncio as aioredis
 from config.timescale import get_pool
 from config.mongo import get_database
 from core.position import Position
-from core.margin import initial_margin
+from core.models import BacktestExecution
+from core.pipeline import evaluate
 from services.candle_manager import ensure_candles_available
 from utils.timeframes import annual_factor
 
@@ -141,7 +142,8 @@ async def run_backtest_simulation(
     strategy.is_backtesting = True
 
     # Resolve per-run simulation parameters first — needed for risk injection below.
-    taker_fee   = fee_rate
+    # fee_rate (taker) and _slippage are mirrored onto the strategy at 6b and are
+    # the single source the Cost Model reads for every fee/slippage fill (Phase 2).
     _slippage   = slippage_pct   if slippage_pct   is not None else SLIPPAGE_PCT
     _fund_rate  = funding_rate   if funding_rate   is not None else FUNDING_RATE
     _funding_on = funding_enabled
@@ -173,10 +175,16 @@ async def run_backtest_simulation(
     strategy.rrr               = float(_risk.get("rrr",            2.0))
     strategy.liq_buffer_pct    = float(_risk.get("liq_buffer_pct", 0.005))
     strategy.max_session_dd    = float(_risk.get("max_session_dd", 0.20))
+    strategy.cost_model.min_edge_mult = float(_risk.get("min_edge_mult", 0.0))
     strategy.slippage_pct      = _slippage
     strategy.fee_rate          = fee_rate
     strategy.available_capital = float(capital)
     strategy.peak_equity       = float(capital)
+
+    # Execution Model for this run — backtest env (next-open market fills).
+    # The single owner of fill assembly (price+notional+margin+fee); it composes
+    # the strategy's Cost Model, so a custom cost_model still flows through.
+    execution = BacktestExecution()
 
     # ── 6c. Enforce minimum warm-up (D-02 fix) ─────────────────────────
     warmup_period = max(strategy.MIN_WARMUP_CANDLES, min(50, len(rows) - 2))
@@ -262,9 +270,10 @@ async def run_backtest_simulation(
                 was_long = strategy.is_long
 
                 # Leg 1 — close the old position (market fill: slippage + taker fee)
-                exit_fill = open_t * (1.0 - _slippage) if was_long else open_t * (1.0 + _slippage)
                 exit_qty  = strategy.position.qty
-                fee = exit_qty * exit_fill * taker_fee
+                _fill = execution.exit_fill(strategy, open_t, exit_qty, "sell" if was_long else "buy")
+                exit_fill = _fill.fill_price
+                fee = _fill.fee
                 total_fees += fee
                 strategy.position.close(exit_fill)
                 realized_pnl      = strategy.position.pnl - fee
@@ -297,11 +306,13 @@ async def run_backtest_simulation(
                 # Leg 2 — open the opposite side at the same open (margin permitting)
                 new_dir    = flip["direction"]
                 new_qty    = flip["qty"]
-                fill_price = open_t * (1.0 + _slippage) if new_dir == "long" else open_t * (1.0 - _slippage)
-                notional   = new_qty * fill_price
-                req_margin = initial_margin(notional, leverage)
-                fee        = notional * taker_fee
-                if new_qty <= 0 or req_margin + fee > strategy.balance:
+                _entry = execution.entry_fill(strategy, open_t, new_qty, leverage,
+                                              "buy" if new_dir == "long" else "sell")
+                fill_price = _entry.fill_price
+                notional   = _entry.notional
+                req_margin = _entry.req_margin
+                fee        = _entry.fee
+                if new_qty <= 0 or not _entry.affordable(strategy.balance):
                     logger.warning(
                         f"[{job_id}] Flip degraded to close-only: qty {new_qty} margin "
                         f"${req_margin:.2f} + fee ${fee:.2f} vs balance ${strategy.balance:.2f}"
@@ -339,9 +350,10 @@ async def run_backtest_simulation(
             if strategy.position is not None and strategy._close_at_open:
                 strategy._close_at_open = False
                 was_long_close = strategy.is_long
-                exit_fill_close = open_t * (1.0 - _slippage) if was_long_close else open_t * (1.0 + _slippage)
                 exit_qty_close  = strategy.position.qty
-                fee = exit_qty_close * exit_fill_close * taker_fee
+                _fill = execution.exit_fill(strategy, open_t, exit_qty_close, "sell" if was_long_close else "buy")
+                exit_fill_close = _fill.fill_price
+                fee = _fill.fee
                 total_fees += fee
                 strategy.position.close(exit_fill_close)
                 realized_pnl = strategy.position.pnl - fee
@@ -387,11 +399,12 @@ async def run_backtest_simulation(
                 # Buy (long entry) — market order: fills at open of next candle
                 if strategy.buy is not None:
                     buy_qty, _ = strategy.buy
-                    fill_price = open_t * (1.0 + _slippage)  # adverse slippage
-                    notional   = buy_qty * fill_price
-                    req_margin = initial_margin(notional, leverage)
-                    fee        = notional * taker_fee
-                    if req_margin + fee > strategy.balance:
+                    _entry = execution.entry_fill(strategy, open_t, buy_qty, leverage, "buy")
+                    fill_price = _entry.fill_price          # adverse slippage
+                    notional   = _entry.notional
+                    req_margin = _entry.req_margin
+                    fee        = _entry.fee
+                    if not _entry.affordable(strategy.balance):
                         logger.warning(
                             f"[{job_id}] Long entry rejected: margin ${req_margin:.2f} + fee "
                             f"${fee:.2f} exceeds balance ${strategy.balance:.2f}"
@@ -427,11 +440,12 @@ async def run_backtest_simulation(
                 # Sell (short entry) — market order: fills at open of next candle
                 elif strategy.sell is not None:
                     sell_qty, _ = strategy.sell
-                    fill_price = open_t * (1.0 - _slippage)  # adverse slippage
-                    notional   = sell_qty * fill_price
-                    req_margin = initial_margin(notional, leverage)
-                    fee        = notional * taker_fee
-                    if req_margin + fee > strategy.balance:
+                    _entry = execution.entry_fill(strategy, open_t, sell_qty, leverage, "sell")
+                    fill_price = _entry.fill_price          # adverse slippage
+                    notional   = _entry.notional
+                    req_margin = _entry.req_margin
+                    fee        = _entry.fee
+                    if not _entry.affordable(strategy.balance):
                         logger.warning(
                             f"[{job_id}] Short entry rejected: margin ${req_margin:.2f} + fee "
                             f"${fee:.2f} exceeds balance ${strategy.balance:.2f}"
@@ -540,8 +554,9 @@ async def run_backtest_simulation(
                         trade_pnl_pct = -100.0
                     else:
                         # Adverse slippage on the market exit fill
-                        exit_fill = exit_price * (1.0 - _slippage) if was_long else exit_price * (1.0 + _slippage)
-                        fee = exit_qty * exit_fill * taker_fee
+                        _fill = execution.exit_fill(strategy, exit_price, exit_qty, "sell" if was_long else "buy")
+                        exit_fill = _fill.fill_price
+                        fee = _fill.fee
                         total_fees += fee
                         strategy.position.close(exit_fill)
                         realized_pnl  = strategy.position.pnl - fee
@@ -578,32 +593,16 @@ async def run_backtest_simulation(
             strategy.candles = candles_np[:t + 1]
             strategy.index   = t
 
-            # Track session peak equity and drawdown for can_trade() gate
-            current_equity = strategy.equity
-            if current_equity > strategy.peak_equity:
-                strategy.peak_equity = current_equity
-            if strategy.peak_equity > 0:
-                strategy.session_drawdown = (
-                    (strategy.peak_equity - current_equity) / strategy.peak_equity
-                )
+            # Track session peak equity and drawdown for the can_trade() gate.
+            # Owned by the Risk Model (Phase 1) so backtest and live share one
+            # drawdown-tracking implementation; math is identical to the former
+            # inline block (no behavior change).
+            strategy.risk_model.update_session_risk(strategy)
 
             # ── C. Strategy decision hooks ───────────────────────────────
             try:
                 strategy.before()            # C1: cache indicators
-
-                if strategy.position is None:
-                    # C2: risk circuit breaker — skip new entries if DD exceeded
-                    if strategy.can_trade():
-                        # C3: alpha + TCM gate
-                        signal = strategy.alpha()
-                        if signal != 0.0 and strategy.alpha_beats_cost(signal):
-                            if signal > 0:
-                                strategy.go_long()
-                            else:
-                                strategy.go_short()
-                else:
-                    strategy.update_position()   # C4: manage open position
-
+                evaluate(strategy)           # C2-C4: Alpha -> Risk -> Portfolio -> Cost -> Execution
                 strategy.after()             # C5: post-candle cleanup
             except Exception as e:
                 raise RuntimeError(f"STRATEGY_ERROR: Python strategy error at step {t}: {e}")
@@ -630,8 +629,9 @@ async def run_backtest_simulation(
     if strategy.position is not None:
         last_close = candles_np[-1, 2]
         was_long   = strategy.is_long
-        exit_fill  = last_close * (1.0 - _slippage) if was_long else last_close * (1.0 + _slippage)
-        fee = strategy.position.qty * exit_fill * taker_fee
+        _fill = execution.exit_fill(strategy, last_close, strategy.position.qty, "sell" if was_long else "buy")
+        exit_fill  = _fill.fill_price
+        fee = _fill.fee
         locked_margin = strategy.position.margin
         total_fees += fee
         strategy.position.close(exit_fill)

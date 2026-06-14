@@ -5,11 +5,11 @@ import { Code2 } from 'lucide-react'
 import CodeViewer from './CodeViewer'
 
 const STRATEGY_TYPES = {
-  SimpleEMACross: { label: 'Trend Following', variant: 'default' },
-  RSIReversion: { label: 'Mean Reversion', variant: 'info' },
-  DonchianBreakout: { label: 'Breakout', variant: 'warning' },
   MicroScalper: { label: 'Scalper', variant: 'destructive' },
   BestSupertrend: { label: 'Trend Following', variant: 'default' },
+  AdaptiveTrend: { label: 'Trend Following', variant: 'default' },
+  MicroMacroRSIDivergence: { label: 'Divergence', variant: 'info' },
+  MultiDivergence: { label: 'Divergence', variant: 'warning' },
 }
 
 export default function StrategyCard({ strategy }) {

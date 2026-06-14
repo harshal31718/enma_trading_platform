@@ -36,6 +36,7 @@ const settingsSchema = new mongoose.Schema(
     riskRewardRatio:    { type: Number, default: 2.0,   min: 0.1,    max: 100 }, // reward:risk multiple for take-profit
     maxSessionDrawdown: { type: Number, default: 0.20,  min: 0.01,   max: 1   }, // equity drawdown that halts new entries
     liqBufferPct:       { type: Number, default: 0.005, min: 0,      max: 0.5 }, // min gap between stop-loss and liquidation
+    minEdgeMult:        { type: Number, default: 0.0,   min: 0,      max: 10  }, // Cost Model minimum edge multiplier
   },
   { timestamps: true }
 )
