@@ -13,6 +13,9 @@ const BacktestResultSchema = new mongoose.Schema(
     capital: { type: Number },
     leverage: { type: Number },
     feeRate: { type: Number },
+    // Risk model params this run used (snake_case keys, e.g. risk_pct, rrr).
+    // Server-owned config input — not an engine-written result field.
+    riskParams: { type: mongoose.Schema.Types.Mixed },
     status: { type: String, enum: ['queued', 'running', 'completed', 'failed', 'cancelled'], default: 'queued' },
     error: { type: String },
     tradeCount: { type: Number },

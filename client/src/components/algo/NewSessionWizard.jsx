@@ -6,6 +6,7 @@ import { useStrategyParams, useStartSession, useLockedSymbols } from '../../hook
 import { useExchangeSettings } from '../../hooks/useExchangeSettings'
 import ParamsForm from './ParamsForm'
 import SymbolPicker from './SymbolPicker'
+import RiskParamsFields, { RISK_DEFAULTS, riskDefaultsFromSettings, riskFieldsToPayload } from '../RiskParamsFields'
 
 const TIMEFRAMES = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d']
 
@@ -17,6 +18,7 @@ export default function NewSessionWizard({ onCancel, onSuccess }) {
   const [timeframe, setTimeframe] = useState('1h')
   const [capital, setCapital] = useState('1000')
   const [leverage, setLeverage] = useState(1)
+  const [risk, setRisk] = useState(RISK_DEFAULTS)
   const [error, setError] = useState(null)
 
   const { data: strategies = [], isLoading: loadingStrategies } = useStrategies()
@@ -32,6 +34,7 @@ export default function NewSessionWizard({ onCancel, onSuccess }) {
     if (exchangeSettings && !settingsApplied.current) {
       setCapital(String(exchangeSettings.defaultBotCapital ?? 1000))
       setLeverage(exchangeSettings.defaultBotLeverage ?? 1)
+      setRisk(riskDefaultsFromSettings(exchangeSettings))
       settingsApplied.current = true
     }
   }, [exchangeSettings])
@@ -84,6 +87,7 @@ export default function NewSessionWizard({ onCancel, onSuccess }) {
         params: hasParams ? params : {},
         capital,
         leverage: Number(leverage),
+        riskParams: riskFieldsToPayload(risk),
       })
       onSuccess()
     } catch (err) {
@@ -230,6 +234,15 @@ export default function NewSessionWizard({ onCancel, onSuccess }) {
                 className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-emerald-500"
               />
             </div>
+            <div className="border-t border-gray-800 pt-4">
+              <p className="text-sm font-medium text-gray-300 mb-3">Risk Management</p>
+              <RiskParamsFields
+                values={risk}
+                onChange={setRisk}
+                inputClassName="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-emerald-500"
+                labelClassName="block text-xs text-gray-300 mb-1"
+              />
+            </div>
           </div>
         )}
 
@@ -257,6 +270,12 @@ export default function NewSessionWizard({ onCancel, onSuccess }) {
               <div className="flex justify-between py-2 border-b border-gray-800">
                 <span className="text-gray-400">Leverage</span>
                 <span className="text-gray-100">{leverage}x</span>
+              </div>
+              <div className="flex justify-between py-2 border-b border-gray-800">
+                <span className="text-gray-400">Risk</span>
+                <span className="text-gray-100">
+                  {risk.riskPct}% / trade · {risk.riskReward}:1 R:R · {risk.maxDrawdown}% max DD
+                </span>
               </div>
               <div className="flex justify-between py-2 border-b border-gray-800">
                 <span className="text-gray-400">Mode</span>

@@ -194,7 +194,12 @@ async def run_backtest_simulation(
 
     # ── 7. Redis connection ─────────────────────────────────────────────────
     redis_url = os.getenv("REDIS_URL", "redis://redis:6379")
-    r_client = aioredis.from_url(redis_url)
+    # socket_timeout=None: disables the per-read socket timeout on the publish
+    # client. Heavy strategies (MultiDivergence, BestSupertrend) block the
+    # asyncio event loop for several seconds between publish calls (100 candles
+    # × 50-100ms each). redis-py 8.x defaults to socket_timeout=5s which causes
+    # "Timeout reading from redis:6379" before the simulation completes.
+    r_client = aioredis.from_url(redis_url, socket_timeout=None, socket_connect_timeout=10)
 
     # ── 8. Async cancel-listener task ───────────────────────────────────────
     # Subscribes to backtest:cancel:{job_id} channel on a separate connection so
@@ -203,7 +208,7 @@ async def run_backtest_simulation(
 
     async def _watch_cancel():
         nonlocal is_cancelled
-        cancel_sub = aioredis.from_url(redis_url)
+        cancel_sub = aioredis.from_url(redis_url, socket_timeout=None, socket_connect_timeout=10)
         pubsub = cancel_sub.pubsub()
         await pubsub.subscribe(f"backtest:cancel:{job_id}")
         try:

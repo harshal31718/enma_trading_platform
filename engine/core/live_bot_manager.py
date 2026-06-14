@@ -56,6 +56,7 @@ class LiveBotManager:
         capital_per_symbol = float(session_config["capital"]) / len(symbols)
         leverage = int(session_config.get("leverage", 1))
         fee_rate = float(session_config.get("fee_rate", 0.0005))
+        risk_params = session_config.get("risk_params", {}) or {}
 
         # Dynamic import of strategy class
         import importlib
@@ -76,6 +77,7 @@ class LiveBotManager:
             "params": params,
             "capital": float(session_config["capital"]),
             "leverage": leverage,
+            "risk_params": risk_params,
             "status": "running",
             "pnl": 0.0,
             "open_positions": {},  # symbol -> dict with position info
@@ -87,7 +89,8 @@ class LiveBotManager:
             task = asyncio.create_task(
                 self._run_symbol_loop(
                     session_id, strategy_class, symbol, params,
-                    timeframe, capital_per_symbol, leverage, fee_rate
+                    timeframe, capital_per_symbol, leverage, fee_rate,
+                    risk_params,
                 )
             )
             self._tasks[session_id].append(task)
@@ -188,7 +191,7 @@ class LiveBotManager:
     async def _run_symbol_loop(
         self, session_id: str, strategy_class, symbol: str,
         params: dict, timeframe: str, capital: float, leverage: int,
-        fee_rate: float = 0.0005,
+        fee_rate: float = 0.0005, risk_params: dict | None = None,
     ) -> None:
         """Main loop for one symbol. Connects to Binance kline WebSocket and fires
         strategy logic on every closed candle. Runs until stop signal is set."""
@@ -209,6 +212,18 @@ class LiveBotManager:
         # Set user params on instance
         for key, meta in getattr(strategy_class, "PARAMS", {}).items():
             setattr(strategy, key, params.get(key, meta["default"]))
+
+        # Inject risk model params (mirrors backtest_runner step 6b). Live
+        # trading executes against real fills, so slippage_pct is left at the
+        # BaseStrategy default — it only models simulated market-fill slippage.
+        # Each per-symbol strategy gets its own slice of the session capital.
+        _risk = risk_params or {}
+        strategy.risk_pct          = float(_risk.get("risk_pct",       strategy.risk_pct))
+        strategy.rrr               = float(_risk.get("rrr",            strategy.rrr))
+        strategy.liq_buffer_pct    = float(_risk.get("liq_buffer_pct", strategy.liq_buffer_pct))
+        strategy.max_session_dd    = float(_risk.get("max_session_dd", strategy.max_session_dd))
+        strategy.available_capital = float(capital)
+        strategy.peak_equity       = float(capital)
 
         # Store strategy instance for stats access
         session = self.sessions.get(session_id)

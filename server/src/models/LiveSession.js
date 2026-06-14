@@ -6,6 +6,8 @@ const liveSessionSchema = new mongoose.Schema({
   symbols: [{ type: String, required: true }],
   timeframe: { type: String, required: true },
   params: { type: Object, default: {} },
+  // Risk model params this session runs with (snake_case keys, e.g. risk_pct, rrr).
+  riskParams: { type: Object, default: {} },
   mode: { type: String, enum: ['paper', 'live'], default: 'paper' },
   status: {
     type: String,

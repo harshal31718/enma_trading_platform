@@ -12,7 +12,7 @@ which the configuration factory catches to fall back to pandas-ta.
 
 from __future__ import annotations
 
-from ..base import CLOSE, HIGH, LOW, IndicatorProvider
+from ..base import CLOSE, HIGH, LOW, VOLUME, IndicatorProvider, pivots_from_candles
 
 try:  # TA-Lib is the primary backend (built inside the engine Docker image).
     import talib as _talib
@@ -99,3 +99,25 @@ class TalibIndicatorProvider(IndicatorProvider):
         if sequential:
             return k, d
         return float(k[-1]), float(d[-1])
+
+    # Pivots are pure price geometry (no TA-Lib equivalent), so both backends
+    # delegate to the shared helper — see engine/indicators/base.py.
+    def pivot_high(self, candles, left=10, right=10, source="high", sequential=False):
+        return pivots_from_candles(candles, left, right, source, True, sequential)
+
+    def pivot_low(self, candles, left=10, right=10, source="low", sequential=False):
+        return pivots_from_candles(candles, left, right, source, False, sequential)
+
+    def mfi(self, candles, period=14, sequential=False):
+        high = candles[:, HIGH].astype(float)
+        low = candles[:, LOW].astype(float)
+        close = candles[:, CLOSE].astype(float)
+        volume = candles[:, VOLUME].astype(float)
+        result = _talib.MFI(high, low, close, volume, timeperiod=period)
+        return result if sequential else float(result[-1])
+
+    def obv(self, candles, sequential=False):
+        close = candles[:, CLOSE].astype(float)
+        volume = candles[:, VOLUME].astype(float)
+        result = _talib.OBV(close, volume)
+        return result if sequential else float(result[-1])

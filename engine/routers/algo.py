@@ -21,6 +21,10 @@ class StartSessionRequest(BaseModel):
     # declared here — Pydantic drops undeclared fields, which would silently
     # discard the configured rate and leave the bot on its hardcoded fallback.
     fee_rate: float = 0.0005
+    # Risk model parameters (Tier 2) — server merges global Risk settings with
+    # any per-session override. Keyed by snake_case name (risk_pct, rrr,
+    # liq_buffer_pct, max_session_dd); injected onto each strategy instance.
+    risk_params: dict = {}
 
 
 class StopSessionRequest(BaseModel):

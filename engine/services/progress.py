@@ -15,6 +15,8 @@ def _get_client() -> aioredis.Redis:
         _redis_client = aioredis.from_url(
             os.getenv("REDIS_URL", "redis://redis:6379"),
             decode_responses=True,
+            socket_timeout=None,        # disable per-read timeout; backtest loop
+            socket_connect_timeout=10,  # blocks event loop between publish calls
         )
     return _redis_client
 

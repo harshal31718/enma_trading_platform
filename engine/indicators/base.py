@@ -30,11 +30,66 @@ from abc import ABC, abstractmethod
 from typing import Optional, Tuple, Union
 
 import numpy as np
+from numpy.lib.stride_tricks import sliding_window_view
 
 logger = logging.getLogger(__name__)
 
 # Column layout of the engine's candle array: [ts, open, close, high, low, vol].
 OPEN, CLOSE, HIGH, LOW, VOLUME = 1, 2, 3, 4, 5
+
+# Source-name → candle column, for pivot detection on price.
+_SOURCE_COL = {"open": OPEN, "close": CLOSE, "high": HIGH, "low": LOW}
+
+
+def _compute_pivots(values: np.ndarray, left: int, right: int, find_high: bool) -> np.ndarray:
+    """Library-agnostic swing-pivot detector (TradingView ``ta.pivothigh``/``pivotlow``).
+
+    Returns an array the same length as ``values`` where position ``i`` holds the
+    pivot value when bar ``i`` is the *centre* of a pivot — strictly greater than
+    (for highs) or strictly less than (for lows) every one of the ``left`` bars
+    before and ``right`` bars after it — and ``NaN`` otherwise.
+
+    No-lookahead by construction: a centre at ``i`` needs ``right`` bars after it,
+    so the final ``right`` positions are always ``NaN`` until those bars exist.
+    A pivot is therefore only ever "confirmed" ``right`` bars after it formed.
+    """
+    values = np.asarray(values, dtype=float)
+    n = values.size
+    out = np.full(n, np.nan)
+    total = left + right + 1
+    if n < total:
+        return out
+
+    sw = sliding_window_view(values, total)        # shape (n-total+1, total)
+    centre = sw[:, left]
+    left_part = sw[:, :left]
+    right_part = sw[:, left + 1:]
+    if find_high:
+        mask = (np.all(centre[:, None] > left_part, axis=1)
+                & np.all(centre[:, None] > right_part, axis=1))
+    else:
+        mask = (np.all(centre[:, None] < left_part, axis=1)
+                & np.all(centre[:, None] < right_part, axis=1))
+    centres = np.arange(left, n - right)
+    out[centres[mask]] = centre[mask]
+    return out
+
+
+def pivots_from_candles(candles: np.ndarray, left: int, right: int, source: str,
+                        find_high: bool, sequential: bool) -> "Single":
+    """Apply :func:`_compute_pivots` to a candle column selected by ``source``.
+
+    ``sequential=False`` returns the most recent *confirmed* pivot value (or
+    ``NaN`` when none exists yet); ``sequential=True`` returns the full
+    NaN-padded series so callers can recover each pivot's bar index.
+    Shared by every backend — pivots are pure price geometry, not library-specific.
+    """
+    col = _SOURCE_COL.get(source, HIGH if find_high else LOW)
+    series = _compute_pivots(candles[:, col].astype(float), left, right, find_high)
+    if sequential:
+        return series
+    valid = series[~np.isnan(series)]
+    return float(valid[-1]) if valid.size else float("nan")
 
 # Return types: a latest scalar OR the full series — single / pair / triple.
 Single = Union[float, np.ndarray]
@@ -102,6 +157,28 @@ class IndicatorProvider(ABC):
     def stochastic(self, candles: np.ndarray, period: int = 14, smooth_k: int = 3,
                    smooth_d: int = 3, sequential: bool = False) -> Pair:
         """Stochastic oscillator → ``(%K, %D)``."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def pivot_high(self, candles: np.ndarray, left: int = 10, right: int = 10,
+                   source: str = "high", sequential: bool = False) -> Single:
+        """Swing-high pivots (TradingView ``ta.pivothigh``). See ``pivots_from_candles``."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def pivot_low(self, candles: np.ndarray, left: int = 10, right: int = 10,
+                  source: str = "low", sequential: bool = False) -> Single:
+        """Swing-low pivots (TradingView ``ta.pivotlow``). See ``pivots_from_candles``."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def mfi(self, candles: np.ndarray, period: int = 14, sequential: bool = False) -> Single:
+        """Money Flow Index — volume-weighted RSI (0–100)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def obv(self, candles: np.ndarray, sequential: bool = False) -> Single:
+        """On-Balance Volume — cumulative volume flow (unbounded)."""
         raise NotImplementedError
 
 
@@ -174,3 +251,21 @@ def adx(candles: np.ndarray, period: int = 14, sequential: bool = False) -> Sing
 def stochastic(candles: np.ndarray, period: int = 14, smooth_k: int = 3, smooth_d: int = 3,
                sequential: bool = False) -> Pair:
     return get_indicators().stochastic(candles, period, smooth_k, smooth_d, sequential)
+
+
+def pivot_high(candles: np.ndarray, left: int = 10, right: int = 10, source: str = "high",
+               sequential: bool = False) -> Single:
+    return get_indicators().pivot_high(candles, left, right, source, sequential)
+
+
+def pivot_low(candles: np.ndarray, left: int = 10, right: int = 10, source: str = "low",
+              sequential: bool = False) -> Single:
+    return get_indicators().pivot_low(candles, left, right, source, sequential)
+
+
+def mfi(candles: np.ndarray, period: int = 14, sequential: bool = False) -> Single:
+    return get_indicators().mfi(candles, period, sequential)
+
+
+def obv(candles: np.ndarray, sequential: bool = False) -> Single:
+    return get_indicators().obv(candles, sequential)

@@ -17,7 +17,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from ..base import CLOSE, HIGH, LOW, OPEN, VOLUME, IndicatorProvider
+from ..base import CLOSE, HIGH, LOW, OPEN, VOLUME, IndicatorProvider, pivots_from_candles
 
 try:  # Optional dependency — and pandas-ta has historically fragile imports.
     import pandas_ta_classic as _pta  # noqa: F401  (registers the DataFrame `.ta` accessor)
@@ -107,3 +107,17 @@ class PandasTaIndicatorProvider(IndicatorProvider):
         if sequential:
             return np.asarray(k, dtype=float), np.asarray(d, dtype=float)
         return float(k.iloc[-1]), float(d.iloc[-1])
+
+    # Pivots are pure price geometry (no pandas-ta equivalent), so both backends
+    # delegate to the shared helper — see engine/indicators/base.py.
+    def pivot_high(self, candles, left=10, right=10, source="high", sequential=False):
+        return pivots_from_candles(candles, left, right, source, True, sequential)
+
+    def pivot_low(self, candles, left=10, right=10, source="low", sequential=False):
+        return pivots_from_candles(candles, left, right, source, False, sequential)
+
+    def mfi(self, candles, period=14, sequential=False):
+        return _out(_frame(candles).ta.mfi(length=period), sequential)
+
+    def obv(self, candles, sequential=False):
+        return _out(_frame(candles).ta.obv(), sequential)

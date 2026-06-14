@@ -20,6 +20,7 @@ const worker = new Worker('backtest', async (job) => {
     slippagePct,
     fundingEnabled,
     fundingRate,
+    riskParams,
   } = job.data
 
   subscribeToJob(jobId, 'backtest')
@@ -41,6 +42,7 @@ const worker = new Worker('backtest', async (job) => {
       slippagePct,
       fundingEnabled,
       fundingRate,
+      riskParams,
     })
 
     // Engine wrote the full result to MongoDB — only update status here

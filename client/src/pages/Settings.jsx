@@ -3,6 +3,7 @@ import { Server, Zap, CheckCircle2, Clock, X, AlertTriangle } from 'lucide-react
 import PageWrapper from '@/components/layout/PageWrapper'
 import PageHeader from '@/components/ui/PageHeader'
 import { useExchangeSettings, useUpdateExchangeSettings } from '../hooks/useExchangeSettings'
+import RiskParamsFields, { RISK_DEFAULTS, riskDefaultsFromSettings, riskFieldsToPayload } from '../components/RiskParamsFields'
 
 export default function Settings() {
   const [showComingSoon, setShowComingSoon] = useState(false)
@@ -17,6 +18,7 @@ export default function Settings() {
   const [slippagePct, setSlippagePct] = useState('')
   const [fundingEnabled, setFundingEnabled] = useState(false)
   const [fundingRate, setFundingRate] = useState('')
+  const [risk, setRisk] = useState(RISK_DEFAULTS)
   const [saveSuccess, setSaveSuccess] = useState(false)
   const successTimerRef = useRef(null)
 
@@ -34,6 +36,7 @@ export default function Settings() {
       setSlippagePct(String(((exchangeSettings.slippagePct ?? 0.0005) * 100).toPrecision(4).replace(/\.?0+$/, '')))
       setFundingEnabled(exchangeSettings.fundingEnabled ?? false)
       setFundingRate(String(((exchangeSettings.fundingRate ?? 0.0001) * 100).toPrecision(4).replace(/\.?0+$/, '')))
+      setRisk(riskDefaultsFromSettings(exchangeSettings))
     }
   }, [exchangeSettings])
 
@@ -52,6 +55,7 @@ export default function Settings() {
         slippagePct:      parseFloat(slippagePct) / 100,
         fundingEnabled,
         fundingRate:      parseFloat(fundingRate) / 100,
+        ...riskFieldsToPayload(risk),
       },
       {
         onSuccess: () => {
@@ -253,6 +257,17 @@ export default function Settings() {
                         onChange={(e) => setDefaultBotLeverage(e.target.value)} className={inputCls} required />}
                 </div>
               </div>
+            </div>
+
+            {/* ── Risk Management Defaults ─────────────────────────────────── */}
+            <div className="border-t border-gray-800 pt-5 mt-5">
+              <p className="text-gray-300 text-xs font-semibold mb-3">Risk Management Defaults</p>
+              {settingsLoading
+                ? <div className="grid grid-cols-2 gap-3">{[0, 1, 2, 3].map((i) => <div key={i} className={skeletonCls} />)}</div>
+                : <RiskParamsFields values={risk} onChange={setRisk} inputClassName={inputCls} labelClassName={labelCls} />}
+              <p className="text-gray-600 text-[10px] mt-2">
+                Pre-fills the backtest form and bot wizard. Each run can override these.
+              </p>
             </div>
 
             {/* ── Simulation Realism ───────────────────────────────────────── */}

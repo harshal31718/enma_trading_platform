@@ -6,11 +6,12 @@ const ApiError = require('../utils/ApiError')
 const ApiResponse = require('../utils/ApiResponse')
 const { lockSymbol, releaseSymbolLock, getAllLockedSymbols, isSymbolFree, getSymbolLock } = require('../services/symbolLock')
 const { getIO } = require('../config/socket')
+const { resolveRiskParams } = require('../utils/risk')
 
 // POST /api/v1/algo/sessions
 async function startSession(req, res, next) {
   try {
-    const { strategyId, symbols, timeframe, params, capital, leverage } = req.body
+    const { strategyId, symbols, timeframe, params, capital, leverage, riskParams: riskOverride } = req.body
 
     if (!strategyId || !symbols || !symbols.length || !timeframe || !capital) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'strategyId, symbols, timeframe, and capital are required')
@@ -19,6 +20,12 @@ async function startSession(req, res, next) {
     // 1. Strategy exists
     const strategy = await Strategy.findById(strategyId).lean()
     if (!strategy) throw new ApiError(404, 'NOT_FOUND', 'Strategy not found')
+
+    // Risk model: merge per-run override over saved global defaults, mapped to
+    // the engine's snake_case risk_params dict. Loaded up-front so it can be
+    // persisted on the session and forwarded to the engine.
+    const savedSettings = await Settings.findById('global').lean() || {}
+    const riskParams = resolveRiskParams(savedSettings, riskOverride)
 
     // 2. All symbols free
     for (const symbol of symbols) {
@@ -43,6 +50,7 @@ async function startSession(req, res, next) {
       params: params || {},
       capital: String(capital),
       leverage: Number(leverage) || 1,
+      riskParams,
       status: 'starting',
       mode: 'paper',
     })
@@ -62,7 +70,6 @@ async function startSession(req, res, next) {
     }
 
     // 5. Call Engine to start session
-    const savedSettings = await Settings.findById('global').lean() || {}
     const feeRate = savedSettings.takerFee ?? 0.0005
 
     try {
@@ -75,6 +82,7 @@ async function startSession(req, res, next) {
         capital: String(capital),
         leverage: Number(leverage) || 1,
         fee_rate: feeRate,
+        risk_params: riskParams,
       })
     } catch (engineErr) {
       // Rollback on engine failure

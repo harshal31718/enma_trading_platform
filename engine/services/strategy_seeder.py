@@ -33,6 +33,14 @@ DEFAULT_STRATEGIES = [
         "name": "BestSupertrend",
         "description": "Multi-timeframe Supertrend trend follower combined with SMA crossovers. Filters entries by higher-timeframe Supertrend and exits on SMA crosses.",
     },
+    {
+        "name": "MicroMacroRSIDivergence",
+        "description": "Regular RSI-divergence reversal with micro+macro pivot confluence. A macro swing-pivot divergence triggers only when a same-side micro divergence sits within the confluence window; filtered by RSI 50-level, RSI direction, smoothed-RSI, and pivot-distance/min-RSI-diff gates. Exits on ATR stop + R:R target plus optional opposite-divergence early exit. Best on 1h/4h.",
+    },
+    {
+        "name": "MultiDivergence",
+        "description": "Multi-oscillator divergence confluence (ported from the GainzAlgo Multi-Divergence Pine screener). Detects regular divergence between price swing pivots and nine sources (RSI, MFI, Stochastic, Z-Score, ADX, MACD, OBV, price-action, swing-volume); enters when at least N sources agree on a new pivot. ATR-based SL/TP with risk-per-trade sizing. Long & short.",
+    },
 ]
 
 

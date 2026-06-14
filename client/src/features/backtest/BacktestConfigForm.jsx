@@ -8,6 +8,7 @@ import { useStrategies } from '../../hooks/useStrategies'
 import { useSymbols } from '../../hooks/useCandles'
 import { formatIsoDate } from '../../utils/formatters'
 import { useExchangeSettings } from '../../hooks/useExchangeSettings'
+import RiskParamsFields, { RISK_DEFAULTS, riskDefaultsFromSettings, riskFieldsToPayload } from '../../components/RiskParamsFields'
 
 // Date picker that shows "29 Aug '25" but stores/emits a YYYY-MM-DD ISO string
 function DateInput({ value, onChange, label }) {
@@ -48,6 +49,7 @@ export default function BacktestConfigForm({ isRunning, onSubmit, onCancel }) {
   const [capital, setCapital] = useState('10000')
   const [leverage, setLeverage] = useState('1')
   const [feeRate, setFeeRate] = useState('0.001')
+  const [risk, setRisk] = useState(RISK_DEFAULTS)
 
   // Pre-fill from saved exchange settings (fires once)
   const { data: exchangeSettings } = useExchangeSettings()
@@ -57,6 +59,7 @@ export default function BacktestConfigForm({ isRunning, onSubmit, onCancel }) {
       setCapital(String(exchangeSettings.defaultCapital ?? 10000))
       setLeverage(String(exchangeSettings.defaultLeverage ?? 1))
       setFeeRate(String(exchangeSettings.takerFee ?? 0.001))
+      setRisk(riskDefaultsFromSettings(exchangeSettings))
       settingsApplied.current = true
     }
   }, [exchangeSettings])
@@ -83,6 +86,7 @@ export default function BacktestConfigForm({ isRunning, onSubmit, onCancel }) {
       capital: parseFloat(capital),
       leverage: parseInt(leverage, 10),
       feeRate: parseFloat(feeRate),
+      riskParams: riskFieldsToPayload(risk),
     })
   }
 
@@ -178,6 +182,12 @@ export default function BacktestConfigForm({ isRunning, onSubmit, onCancel }) {
               <label className="text-gray-400 text-xs font-medium">Fee Rate</label>
               <Input type="number" step="0.0001" value={feeRate} onChange={(e) => setFeeRate(e.target.value)} />
             </div>
+          </div>
+
+          {/* Risk Management — pre-filled from Settings, overridable per run */}
+          <div className="border-t border-gray-800 pt-4 space-y-2">
+            <p className="text-gray-300 text-xs font-semibold">Risk Management</p>
+            <RiskParamsFields values={risk} onChange={setRisk} />
           </div>
 
           {isRunning ? (

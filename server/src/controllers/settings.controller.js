@@ -8,18 +8,23 @@ const EXCHANGE_FIELDS = [
   'slippagePct', 'fundingEnabled', 'fundingRate',
   'defaultCapital', 'defaultLeverage',
   'defaultBotCapital', 'defaultBotLeverage',
+  'riskPct', 'riskRewardRatio', 'maxSessionDrawdown', 'liqBufferPct',
 ]
 
 // Validation ranges matching the Mongoose schema
 const FIELD_RULES = {
-  takerFee:           { min: 0,   max: 0.01  },
-  makerFee:           { min: 0,   max: 0.01  },
-  slippagePct:        { min: 0,   max: 0.05  },
-  fundingRate:        { min: 0,   max: 0.01  },
-  defaultCapital:     { min: 1               },
-  defaultLeverage:    { min: 1,   max: 125   },
-  defaultBotCapital:  { min: 1               },
-  defaultBotLeverage: { min: 1,   max: 125   },
+  takerFee:           { min: 0,      max: 0.01  },
+  makerFee:           { min: 0,      max: 0.01  },
+  slippagePct:        { min: 0,      max: 0.05  },
+  fundingRate:        { min: 0,      max: 0.01  },
+  defaultCapital:     { min: 1                  },
+  defaultLeverage:    { min: 1,      max: 125   },
+  defaultBotCapital:  { min: 1                  },
+  defaultBotLeverage: { min: 1,      max: 125   },
+  riskPct:            { min: 0.0001, max: 1     },
+  riskRewardRatio:    { min: 0.1,    max: 100   },
+  maxSessionDrawdown: { min: 0.01,   max: 1     },
+  liqBufferPct:       { min: 0,      max: 0.5   },
 }
 
 async function _getOrCreate() {
