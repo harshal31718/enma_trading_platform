@@ -34,13 +34,14 @@ Thumbs.db
 .pytest_cache/
 .mypy_cache/
 
-# Spec and Claude Code files (local only)
-AGENTS.md
+# Claude Code / spec files (local only — NOT workspace/, which IS tracked in git)
+.claude/
+.mcp.json
 CLAUDE.md
+AGENTS.md
 client/CLAUDE.md
 server/CLAUDE.md
 engine/CLAUDE.md
-docs/
-.claude/
-.mcp.json
-
+# Anchored to repo root so workspace/docs/ and workspace/plan/ stay tracked:
+/docs/
+/plan/
