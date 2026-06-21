@@ -8,6 +8,9 @@ logger = logging.getLogger(__name__)
 
 STRATEGIES_DIR = os.path.join(os.path.dirname(__file__), "..", "strategies")
 
+# NOTE: PnlFixer is intentionally NOT in this list — it was removed in a prior
+# session and does not exist in the codebase.  The chaos runner's allow-list
+# explicitly excludes it so it can never accidentally be re-introduced.
 DEFAULT_STRATEGIES = [
     {
         "name": "MicroScalper",

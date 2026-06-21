@@ -71,6 +71,19 @@ export function useDeleteAllStopped() {
   })
 }
 
+export function useStartChaos() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async () => {
+      const res = await api.post('/api/v1/algo/chaos')
+      return res.data.data
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['algo', 'sessions'] })
+    },
+  })
+}
+
 export function useLockedSymbols() {
   return useQuery({
     queryKey: ['algo', 'symbols', 'locked'],

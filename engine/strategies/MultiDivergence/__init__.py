@@ -101,7 +101,7 @@ class MultiDivergence(BaseStrategy):
 
     PARAMS = {
         "piv_len": {
-            "type": "int", "default": 2, "min": 2, "max": 15,
+            "type": "int", "default": 4, "min": 2, "max": 15,
             "label": "Divergence Pivot Length",
             "description": (
                 "Bars required on each side of a swing to confirm a pivot. "
@@ -110,7 +110,7 @@ class MultiDivergence(BaseStrategy):
             ),
         },
         "min_confluence": {
-            "type": "int", "default": 1, "min": 1, "max": 9,
+            "type": "int", "default": 3, "min": 1, "max": 9,
             "label": "Min Divergence Confluence",
             "description": (
                 "How many enabled sources must agree on a direction to trade. "
@@ -119,14 +119,14 @@ class MultiDivergence(BaseStrategy):
             ),
         },
         "sl_atr_mult": {
-            "type": "float", "default": 0.5, "min": 0.1, "max": 10.0,
+            "type": "float", "default": 1.5, "min": 0.1, "max": 10.0,
             "label": "SL ATR Multiplier",
             "description": (
                 "Stop distance as a multiple of ATR. Decreasing: tighter stop, more stop-outs."
             ),
         },
         "tp_atr_mult": {
-            "type": "float", "default": 0.5, "min": 0.1, "max": 20.0,
+            "type": "float", "default": 2.0, "min": 0.1, "max": 20.0,
             "label": "TP ATR Multiplier",
             "description": (
                 "Take-profit distance as a multiple of ATR. Decreasing: closer target, higher hit rate."
@@ -157,7 +157,7 @@ class MultiDivergence(BaseStrategy):
             ),
         },
         "atr_period": {
-            "type": "int", "default": 5, "min": 5, "max": 50,
+            "type": "int", "default": 14, "min": 5, "max": 50,
             "label": "ATR Period (stops/targets)",
             "description": (
                 "Lookback for the ATR used in sizing, stop and target. "
@@ -165,14 +165,14 @@ class MultiDivergence(BaseStrategy):
                 "Decreasing: more reactive to recent volatility."
             ),
         },
-        "rsi_period":    {"type": "int",   "default": 2,   "min": 2,  "max": 50,  "label": "RSI Period",          "description": ""},
-        "mfi_period":    {"type": "int",   "default": 2,   "min": 2,  "max": 50,  "label": "MFI Period",          "description": ""},
-        "stoch_period":  {"type": "int",   "default": 2,   "min": 2,  "max": 50,  "label": "Stochastic Period",   "description": ""},
-        "adx_period":    {"type": "int",   "default": 5,   "min": 5,  "max": 50,  "label": "ADX Period",          "description": ""},
-        "macd_fast":     {"type": "int",   "default": 2,   "min": 2,  "max": 50,  "label": "MACD Fast Length",    "description": ""},
-        "macd_slow":     {"type": "int",   "default": 5,   "min": 5,  "max": 100, "label": "MACD Slow Length",    "description": ""},
-        "macd_signal":   {"type": "int",   "default": 2,   "min": 2,  "max": 50,  "label": "MACD Signal Length",  "description": ""},
-        "z_period":      {"type": "int",   "default": 5,   "min": 5,  "max": 100, "label": "Z-Score Period",      "description": ""},
+        "rsi_period":    {"type": "int",   "default": 14,  "min": 2,  "max": 50,  "label": "RSI Period",          "description": ""},
+        "mfi_period":    {"type": "int",   "default": 14,  "min": 2,  "max": 50,  "label": "MFI Period",          "description": ""},
+        "stoch_period":  {"type": "int",   "default": 14,  "min": 2,  "max": 50,  "label": "Stochastic Period",   "description": ""},
+        "adx_period":    {"type": "int",   "default": 14,  "min": 5,  "max": 50,  "label": "ADX Period",          "description": ""},
+        "macd_fast":     {"type": "int",   "default": 12,  "min": 2,  "max": 50,  "label": "MACD Fast Length",    "description": ""},
+        "macd_slow":     {"type": "int",   "default": 26,  "min": 5,  "max": 100, "label": "MACD Slow Length",    "description": ""},
+        "macd_signal":   {"type": "int",   "default": 9,   "min": 2,  "max": 50,  "label": "MACD Signal Length",  "description": ""},
+        "z_period":      {"type": "int",   "default": 20,  "min": 5,  "max": 100, "label": "Z-Score Period",      "description": ""},
         "use_rsi":       {"type": "int",   "default": 1,   "min": 0,  "max": 1,   "label": "Enable RSI Divergence",   "description": ""},
         "use_mfi":       {"type": "int",   "default": 1,   "min": 0,  "max": 1,   "label": "Enable MFI Divergence",   "description": ""},
         "use_stoch":     {"type": "int",   "default": 1,   "min": 0,  "max": 1,   "label": "Enable Stochastic Divergence", "description": ""},

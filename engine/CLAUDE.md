@@ -60,6 +60,7 @@ engine/
 │   ├── progress.py         ← publish progress to Redis pub/sub channel progress:{jobId}
 │   ├── backtest_runner.py  ← backtest simulation loop (candle replay, fee/margin/SL-TP logic, metric computation)
 │   ├── binance_testnet.py  ← HMAC-signed Binance REST requests; _BASE_URLS dict for testnet/mainnet
+│   ├── trade_recorder.py   ← record_trade() + build_trade_record(); writes completed round-trip trades to MongoDB tradeRecords (best-effort, never blocks close path)
 │   └── strategy_seeder.py  ← seeds default strategies on startup (idempotent)
 ├── utils/
 │   ├── timeframes.py      ← timeframe string conversions
@@ -278,7 +279,7 @@ The engine connects to two databases. Connection configs live in `config/mongo.p
 
 | Database | Driver | Config file | Owns |
 |---|---|---|---|
-| MongoDB | motor (`AsyncIOMotorClient`) | `config/mongo.py` | `backtestResults`, `liveSessions` |
+| MongoDB | motor (`AsyncIOMotorClient`) | `config/mongo.py` | `backtestResults`, `liveSessions`, `tradeRecords` (engine is sole writer; server reads via Mongoose) |
 | TimescaleDB | asyncpg (connection pool) | `config/timescale.py` | `candles` hypertable — all OHLCV data |
 
 **TimescaleDB candles hypertable schema:**

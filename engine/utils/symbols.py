@@ -9,6 +9,116 @@ logger = logging.getLogger(__name__)
 # Cached exchange filter rules: (exchange, symbol) -> {"tickSize": Decimal, "stepSize": Decimal, "minQty": Decimal, "minNotional": Decimal}
 _rules_cache: dict[tuple[str, str], dict] = {}
 
+# ── Per-symbol max leverage ─────────────────────────────────────────────────
+# Source: GET /fapi/v1/leverageBracket (signed) → first bracket's initialLeverage.
+# Live/manual paths do a signed fetch and cache the result; backtest uses the
+# offline map below (no creds in the worker — keeps backtests deterministic).
+
+_MAX_LEVERAGE_CACHE: dict[tuple[str, str], int] = {}  # (exchange, symbol) -> max_lev
+
+# Hardcoded offline fallback: symbols relevant to the platform's chaos runner
+# and golden-master backtest suite.  Unknown symbols default to 20.
+_MAX_LEVERAGE_OFFLINE_MAP: dict[str, int] = {
+    "BTCUSDT":   125,
+    "ETHUSDT":   100,
+    "SOLUSDT":    50,
+    "BNBUSDT":    75,
+    "XRPUSDT":    75,
+    "DOGEUSDT":   75,
+    "ADAUSDT":    75,
+    "AVAXUSDT":   50,
+    "LINKUSDT":   75,
+    "DOTUSDT":    50,
+    "LTCUSDT":    75,
+    "MATICUSDT":  75,
+    "POLUSDT":    75,
+    "ARBUSDT":    50,
+    "OPUSDT":     50,
+    "NEARUSDT":   50,
+    "INJUSDT":    50,
+    "SUIUSDT":    50,
+}
+
+_LEVERAGE_BRACKET_URLS = {
+    "testnet":  "https://testnet.binancefuture.com/fapi/v1/leverageBracket",
+    "mainnet":  "https://fapi.binance.com/fapi/v1/leverageBracket",
+}
+
+
+async def get_max_leverage(
+    exchange: str,
+    symbol: str,
+    *,
+    api_key: str | None = None,
+    api_secret: str | None = None,
+    mode: str = "testnet",
+) -> int:
+    """
+    Return the Binance maximum leverage for (exchange, symbol).
+
+    Priority:
+      1. In-memory cache hit.
+      2. Signed GET /fapi/v1/leverageBracket → first bracket's initialLeverage
+         (only when api_key + api_secret provided).
+      3. Offline fallback map (used by backtest worker that has no creds).
+      4. Hard default of 20.
+    """
+    cache_key = (exchange, symbol)
+    cached = _MAX_LEVERAGE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    if api_key and api_secret:
+        try:
+            # Signed request — requires timestamp + signature
+            import hashlib
+            import hmac
+            import time
+            ts = int(time.time() * 1000)
+            query = f"symbol={symbol}&timestamp={ts}"
+            sig = hmac.new(
+                api_secret.encode(), query.encode(), hashlib.sha256
+            ).hexdigest()
+            url = _LEVERAGE_BRACKET_URLS.get(mode, _LEVERAGE_BRACKET_URLS["testnet"])
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    url,
+                    params={"symbol": symbol, "timestamp": ts, "signature": sig},
+                    headers={"X-MBX-APIKEY": api_key},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            # Response is a list of {symbol, brackets:[{initialLeverage,...}]}
+            if isinstance(data, list) and data:
+                brackets = data[0].get("brackets", [])
+            else:
+                brackets = data.get("brackets", [])
+            if brackets:
+                max_lev = int(brackets[0]["initialLeverage"])
+                _MAX_LEVERAGE_CACHE[cache_key] = max_lev
+                return max_lev
+        except Exception as e:
+            logger.warning(f"get_max_leverage({symbol}): signed fetch failed — {e}; using offline map")
+
+    # Offline fallback
+    max_lev = _MAX_LEVERAGE_OFFLINE_MAP.get(symbol, 20)
+    _MAX_LEVERAGE_CACHE[cache_key] = max_lev
+    return max_lev
+
+
+async def clamp_leverage(
+    requested: int,
+    exchange: str,
+    symbol: str,
+    *,
+    api_key: str | None = None,
+    api_secret: str | None = None,
+    mode: str = "testnet",
+) -> int:
+    """Return min(requested, symbol_max_leverage)."""
+    max_lev = await get_max_leverage(exchange, symbol, api_key=api_key, api_secret=api_secret, mode=mode)
+    return min(requested, max_lev)
+
 _EXCHANGE_INFO_URLS = {
     "Binance Futures": "https://testnet.binancefuture.com/fapi/v1/exchangeInfo",
     "Binance Spot": "https://api.binance.com/api/v3/exchangeInfo",

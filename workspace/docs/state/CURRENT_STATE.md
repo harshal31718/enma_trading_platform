@@ -91,7 +91,15 @@ Last updated: 2026-06-21
 - **Fee rate read from settings**: Live bot reads `takerFee` from Exchange Settings and applies it to position exit calculations
 - **UI-configurable risk model**: NewSessionWizard exposes the 4 risk fields (pre-filled from global defaults, overridable per session). The server resolves and forwards them as `risk_params` to the engine, which injects them onto each per-symbol strategy instance in `live_bot_manager._run_symbol_loop` (slippage left at default — live uses real fills). Persisted on the `liveSessions` doc
 - **Unified Decision Pipeline**: Live sessions evaluate signals through `pipeline.evaluate()`, running the canonical Alpha → Risk → Portfolio → Cost → Execution quant pipeline, enabling live drawdown-breaker and cost gating.
+- **Per-symbol leverage clamping** (`engine/utils/symbols.py → clamp_leverage()`): applies `min(requested, symbol_max)` on every execution path — live bot (signed `/fapi/v1/leverageBracket` fetch + cache, logs when reduced), manual `POST /leverage` (returns `effectiveLeverage` in response), backtest (offline hardcoded fallback map, silent, deterministic for golden master).
+- **Chaos Mode** (testnet-only stress tool): `POST /api/v1/algo/chaos` launches all 5 strategies simultaneously on 1m timeframe with maximally-volatile params and disjoint symbol sets (MicroScalper: BTC/ETH/SOL, AdaptiveTrend: BNB, BestSupertrend: XRP, MicroMacroRSIDivergence: DOGE, MultiDivergence: ADA). `engine/scripts/chaos_runner.py` is a thin console client with a live status table and `--stop` teardown. The Algo Trading page has a "Chaos Mode" button (amber, Zap icon) with a testnet-only confirm dialog and error banner.
 - Stop a running session
+
+### Order History (Trade Recorder)
+- Engine writes every completed round-trip trade to MongoDB `tradeRecords` collection via `engine/services/trade_recorder.py → record_trade()` (best-effort, never blocks the position-close path). Called by both `live_bot_manager` close paths (normal close + session stop).
+- Server reads via `GET /api/v1/order-history` (Mongoose `TradeRecord` model). Supports filters: `symbol`, `source` (bot|manual), `side`, `executedBy`; paginated (default 50, max 200); sorted by exitTime DESC.
+- Client: `client/src/pages/OrderHistory.jsx` — paginated trade log table with source/side badges. Hook: `client/src/hooks/useOrderHistory.js`.
+- Data ownership: engine writes exclusively (`tradeRecords`); server reads only.
 
 ### Technical Indicators (engine/indicators/) — pluggable backend
 - **Implemented:** `ema`, `sma`, `rsi`, `atr`, `donchian`, `macd`, `bollinger_bands`, `adx`, `stochastic`, `mfi`, `obv`, `pivot_high`, `pivot_low` (the last two are library-agnostic swing-pivot detectors — TradingView `ta.pivothigh`/`pivotlow` — usable on any candle column; the shared `_compute_pivots` primitive also detects pivots on arbitrary indicator series)

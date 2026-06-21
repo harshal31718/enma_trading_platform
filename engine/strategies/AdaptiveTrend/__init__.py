@@ -39,12 +39,12 @@ class AdaptiveTrend(BaseStrategy):
         Leverage : 1–3x
     """
 
-    # trend_period (50) + slope_lookback (1) + 4 buffer
-    MIN_WARMUP_CANDLES: int = 55
+    # trend_period (200) + slope_lookback (5) + 5 buffer
+    MIN_WARMUP_CANDLES: int = 210
 
     PARAMS = {
         "trend_period": {
-            "type": "int", "default": 50, "min": 50, "max": 400,
+            "type": "int", "default": 200, "min": 50, "max": 400,
             "label": "Trend Regime EMA Period",
             "description": (
                 "Increasing: longer-term trend filter, ignores shorter swings, fewer trades. "
@@ -52,7 +52,7 @@ class AdaptiveTrend(BaseStrategy):
             ),
         },
         "slope_lookback": {
-            "type": "int", "default": 1, "min": 1, "max": 50,
+            "type": "int", "default": 5, "min": 1, "max": 50,
             "label": "Trend Slope Lookback (bars)",
             "description": (
                 "Increasing: requires a stronger, longer slope to confirm trend direction. "
@@ -60,7 +60,7 @@ class AdaptiveTrend(BaseStrategy):
             ),
         },
         "fast_period": {
-            "type": "int", "default": 3, "min": 3, "max": 100,
+            "type": "int", "default": 21, "min": 3, "max": 100,
             "label": "Fast EMA Period (entry trigger)",
             "description": (
                 "Increasing: slower fast EMA, fewer crossovers, less responsive to price. "
@@ -68,7 +68,7 @@ class AdaptiveTrend(BaseStrategy):
             ),
         },
         "slow_period": {
-            "type": "int", "default": 10, "min": 10, "max": 200,
+            "type": "int", "default": 55, "min": 10, "max": 200,
             "label": "Slow EMA Period (entry trigger)",
             "description": (
                 "Increasing: more lag before crossover, stronger confirmation. "
@@ -76,7 +76,7 @@ class AdaptiveTrend(BaseStrategy):
             ),
         },
         "atr_period": {
-            "type": "int", "default": 5, "min": 5, "max": 50,
+            "type": "int", "default": 14, "min": 5, "max": 50,
             "label": "ATR Period",
             "description": (
                 "Increasing: smoother, slower ATR estimate, less responsive to volatility spikes. "
@@ -84,7 +84,7 @@ class AdaptiveTrend(BaseStrategy):
             ),
         },
         "atr_floor_mult": {
-            "type": "float", "default": 0.0, "min": 0.0, "max": 3.0,
+            "type": "float", "default": 1.0, "min": 0.0, "max": 3.0,
             "label": "Volatility Floor (ATR vs its avg; 0 = off)",
             "description": (
                 "Increasing: stricter volatility gate, sits out more low-volatility periods. "
@@ -92,7 +92,7 @@ class AdaptiveTrend(BaseStrategy):
             ),
         },
         "sl_atr_mult": {
-            "type": "float", "default": 0.5, "min": 0.5, "max": 6.0,
+            "type": "float", "default": 2.0, "min": 0.5, "max": 6.0,
             "label": "Initial Stop Distance (ATR multiple)",
             "description": (
                 "Increasing: wider initial stop, survives more noise, larger potential loss per trade. "
@@ -100,7 +100,7 @@ class AdaptiveTrend(BaseStrategy):
             ),
         },
         "trail_atr_mult": {
-            "type": "float", "default": 0.5, "min": 0.5, "max": 10.0,
+            "type": "float", "default": 3.0, "min": 0.5, "max": 10.0,
             "label": "Chandelier Trailing Distance (ATR multiple)",
             "description": (
                 "Increasing: stop trails further from peak, lets winners run longer but gives back more profit. "
@@ -116,7 +116,7 @@ class AdaptiveTrend(BaseStrategy):
             ),
         },
         "tp_r_mult": {
-            "type": "float", "default": 0.5, "min": 0.0, "max": 20.0,
+            "type": "float", "default": 0.0, "min": 0.0, "max": 20.0,
             "label": "Fixed Take-Profit (R multiple; 0 = pure trailing)",
             "description": (
                 "Increasing: sets a higher fixed TP target, combines with trailing. "

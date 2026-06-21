@@ -30,9 +30,9 @@ export default function StrategyLeaderboard({ data }) {
                   <TableRow key={item.strategyName}>
                     <TableCell className="font-semibold text-gray-200">
                       <span className={`mr-2 text-xs font-bold ${
-                        idx === 0 ? 'text-yellow-400' :
+                        idx === 0 ? 'text-emerald-400' :
                         idx === 1 ? 'text-gray-300' :
-                        idx === 2 ? 'text-amber-600' :
+                        idx === 2 ? 'text-gray-400' :
                         'text-gray-600'
                       }`}>#{idx + 1}</span>
                       {item.strategyName}
@@ -44,7 +44,7 @@ export default function StrategyLeaderboard({ data }) {
                     <TableCell className={`text-right font-mono text-xs font-semibold ${avgProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                       {avgProfit >= 0 ? '+' : ''}{formatPrice(avgProfit)}
                     </TableCell>
-                    <TableCell className="text-right font-mono text-xs text-yellow-400 font-semibold">
+                    <TableCell className="text-right font-mono text-xs text-gray-200 font-semibold">
                       {parseFloat(item.averageSharpe).toFixed(2)}
                     </TableCell>
                   </TableRow>

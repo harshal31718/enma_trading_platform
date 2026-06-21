@@ -9,9 +9,11 @@ const {
   getSessionEquity,
   deleteSession,
   deleteAllStopped,
+  startChaos,
 } = require('../controllers/algo.controller')
 
 router.post('/sessions', startSession)
+router.post('/chaos', startChaos)
 router.get('/sessions', listSessions)
 router.delete('/sessions', deleteAllStopped)
 router.get('/sessions/:id', getSession)

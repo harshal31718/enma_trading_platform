@@ -376,6 +376,215 @@ async function handleAlgoGetPosition(req, res) {
   }
 }
 
+// ── Chaos Mode ──────────────────────────────────────────────────────────────
+// POST /api/v1/algo/chaos
+// Launches all 5 strategies simultaneously with maximally-volatile params on 1m
+// timeframe for pipeline stress testing.  Every strategy gets its own disjoint
+// symbol set so the one-session-per-symbol lock is never tripped.
+// Testnet-only by construction (sessions are created with mode:'paper').
+
+const CHAOS_LEVERAGE = 50    // requested — clamped per-symbol by the engine
+const CHAOS_CAPITAL  = '500' // per session (disposable testnet money)
+const CHAOS_TF       = '1m'
+
+// Disjoint symbol assignment: MicroScalper gets the biggest chunk (most trades).
+const CHAOS_LAUNCH_LIST = [
+  {
+    name: 'MicroScalper',
+    symbols: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'],
+    params: {
+      fast_period:    2,
+      slow_period:    3,    // > fast_period invariant
+      atr_period:     5,
+      atr_multiplier: 0.0,  // 0 = volatility gate OFF → every crossover trades
+      sl_atr_mult:    0.1,
+      tp_atr_mult:    0.2,  // > sl_atr_mult invariant
+    },
+  },
+  {
+    name: 'AdaptiveTrend',
+    symbols: ['BNBUSDT'],
+    params: {
+      trend_period:   50,
+      slope_lookback: 1,
+      fast_period:    3,
+      slow_period:    10,   // > fast_period invariant
+      atr_period:     5,
+      atr_floor_mult: 0.0,  // 0 = volatility gate OFF
+      sl_atr_mult:    0.5,
+      trail_atr_mult: 0.5,
+      breakeven_r:    0.0,
+      tp_r_mult:      0.0,
+      max_leverage:   20.0,
+      allow_shorts:   1,
+    },
+  },
+  {
+    name: 'BestSupertrend',
+    symbols: ['XRPUSDT'],
+    params: {
+      order_type:        'Longs+Shorts',
+      fast_length:       1,
+      slow_length:       2,  // > fast_length invariant
+      factor:            1.0,
+      pd:                1,
+      sl_atr_mult:       0.5,
+      atr_period:        5,
+      tf:                '1h', // lower HTF = more HTF signals
+      position_size_pct: 1.0,
+    },
+  },
+  {
+    name: 'MicroMacroRSIDivergence',
+    symbols: ['DOGEUSDT'],
+    params: {
+      rsi_period:                  2,
+      micro_pivot:                 1,
+      macro_pivot:                 2,
+      confluence_window:           1,
+      min_pivot_bars:              1,
+      max_pivot_bars:              5,
+      min_div_diff:                0.0,
+      smooth_type:                 0,
+      smooth_length:               2,
+      enable_rsi_level_filter:     0,
+      enable_rsi_direction_filter: 0,
+      enable_smoothed_filter:      0,
+      exit_on_opposite:            1,
+      atr_period:                  5,
+      sl_atr_mult:                 0.5,
+    },
+  },
+  {
+    name: 'MultiDivergence',
+    symbols: ['ADAUSDT'],
+    params: {
+      piv_len:        2,
+      min_confluence: 1, // any single source fires a trade
+      sl_atr_mult:    0.1,
+      tp_atr_mult:    0.1,
+      use_custom_sl:  0,
+      custom_sl_pct:  0.1,
+      allow_shorts:   1,
+      atr_period:     5,
+      rsi_period:     2,
+      mfi_period:     2,
+      stoch_period:   2,
+      adx_period:     5,
+      macd_fast:      2,
+      macd_slow:      5,
+      macd_signal:    2,
+      z_period:       5,
+      use_rsi:        1, use_mfi: 1, use_stoch: 1, use_zscore: 1,
+      use_adx:        1, use_macd: 1, use_obv:   1, use_price:  1, use_swing: 1,
+    },
+  },
+]
+
+async function startChaos(req, res, next) {
+  try {
+    // 1. Build strategy {name: id} map
+    const allStrategies = await Strategy.find({}).lean()
+    const strategyMap = Object.fromEntries(allStrategies.map(s => [s.name, String(s._id)]))
+
+    const savedSettings = await Settings.findById('global').lean() || {}
+    const feeRate = savedSettings.takerFee ?? 0.0005
+    const riskParams = resolveModelParams(savedSettings, null)
+
+    const created = []
+    const errors  = []
+
+    for (const entry of CHAOS_LAUNCH_LIST) {
+      const strategyId = strategyMap[entry.name]
+      if (!strategyId) {
+        errors.push({ strategy: entry.name, error: 'Strategy not found in MongoDB — run engine to seed' })
+        continue
+      }
+
+      // Check all symbols for this entry are free
+      const blockedSymbols = []
+      for (const symbol of entry.symbols) {
+        if (!(await isSymbolFree(symbol))) {
+          const locks = await getAllLockedSymbols()
+          blockedSymbols.push({ symbol, lock: locks[symbol] })
+        }
+      }
+      if (blockedSymbols.length) {
+        errors.push({
+          strategy: entry.name,
+          error: `Symbols locked: ${blockedSymbols.map(b => b.symbol).join(', ')} — stop existing sessions first`,
+        })
+        continue
+      }
+
+      // Create session
+      let session
+      try {
+        session = await LiveSession.create({
+          strategyId,
+          strategyName: entry.name,
+          symbols:      entry.symbols,
+          timeframe:    CHAOS_TF,
+          params:       entry.params,
+          capital:      CHAOS_CAPITAL,
+          leverage:     CHAOS_LEVERAGE,
+          riskParams,
+          status: 'starting',
+          mode:   'paper',
+        })
+      } catch (dbErr) {
+        errors.push({ strategy: entry.name, error: `DB create failed: ${dbErr.message}` })
+        continue
+      }
+
+      // Lock symbols
+      const lockedSoFar = []
+      let lockFailed = false
+      try {
+        for (const symbol of entry.symbols) {
+          await lockSymbol(symbol, 'bot', String(session._id))
+          lockedSoFar.push(symbol)
+        }
+      } catch (lockErr) {
+        for (const s of lockedSoFar) await releaseSymbolLock(s, String(session._id)).catch(() => {})
+        await LiveSession.findByIdAndDelete(session._id)
+        errors.push({ strategy: entry.name, error: `Symbol lock failed: ${lockErr.message}` })
+        lockFailed = true
+      }
+      if (lockFailed) continue
+
+      // Call engine
+      try {
+        await engineClient.post('/algo/sessions', {
+          session_id:    String(session._id),
+          strategy_name: entry.name,
+          symbols:       entry.symbols,
+          timeframe:     CHAOS_TF,
+          params:        entry.params,
+          capital:       CHAOS_CAPITAL,
+          leverage:      CHAOS_LEVERAGE,
+          fee_rate:      feeRate,
+          risk_params:   riskParams,
+        })
+        await LiveSession.findByIdAndUpdate(session._id, { status: 'running' })
+        created.push({ strategy: entry.name, sessionId: String(session._id), symbols: entry.symbols, status: 'running' })
+      } catch (engineErr) {
+        for (const symbol of entry.symbols) await releaseSymbolLock(symbol, String(session._id)).catch(() => {})
+        await LiveSession.findByIdAndUpdate(session._id, { status: 'error', errorMessage: engineErr.message })
+        errors.push({ strategy: entry.name, error: `Engine start failed: ${engineErr.message}` })
+      }
+    }
+
+    res.status(errors.length && !created.length ? 502 : 207).json(ApiResponse.success({
+      launched: created,
+      errors,
+      note: '⚡ Chaos Mode — testnet-only. All sessions run on Binance Testnet (mode:paper). Stop with DELETE /api/v1/algo/sessions.',
+    }))
+  } catch (err) {
+    next(err)
+  }
+}
+
 module.exports = {
   startSession,
   stopSession,
@@ -390,6 +599,7 @@ module.exports = {
   handleAlgoGetPosition,
   deleteSession,
   deleteAllStopped,
+  startChaos,
 }
 
 // ── Internal handlers for real Binance order placement ──────────────────────

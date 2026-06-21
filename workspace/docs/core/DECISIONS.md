@@ -117,3 +117,21 @@ Calling `flip_position()` from `update_position()` records a pending flip (`_pen
 
 **Rationale:** Keeps the codebase modular, reduces duplicate execution flow/gating bugs, and ensures backtest and live systems execute matching risk/cost rules.
 
+## 14. Per-Symbol Leverage Clamping (`clamp_leverage`)
+**Decision:** Add a shared `get_max_leverage()` / `clamp_leverage()` resolver in `engine/utils/symbols.py` and wire it into every execution path so requested leverage is silently floored to `min(requested, symbol_max)`.
+
+**What this introduces:**
+- **`_MAX_LEVERAGE_OFFLINE_MAP`** — hardcoded `{symbol: max_lev}` dict for our top pairs (BTCUSDT→125, ETHUSDT→100, etc.), with a default of 20 for unknowns. Used exclusively by the backtest worker (no credentials in the worker, required for golden-master determinism).
+- **`_MAX_LEVERAGE_CACHE`** — in-memory per `(exchange, symbol)` cache, populated on first use. Cache persists for the engine process lifetime.
+- **`get_max_leverage(exchange, symbol, *, api_key, api_secret, mode)`** — returns the symbol's maximum leverage. Priority: (1) cache hit, (2) signed `GET /fapi/v1/leverageBracket` first bracket's `initialLeverage` when creds provided, (3) offline map.
+- **`clamp_leverage(requested, ...)`** — `min(requested, get_max_leverage(...))`.
+
+**Three wiring points (see feature.md §3A.2):**
+- **Live bot** (`live_bot_manager._run_symbol_loop`): signs with `BINANCE_TESTNET_API_KEY/SECRET` env vars; clamps before `set-leverage` callback; logs `"{symbol}: leverage clamped N→M"` to the session event log when reduced; updates `strategy.leverage` so notional caps remain consistent.
+- **Manual trade** (`routers/trade.POST /leverage`): uses request-scoped credentials from `X-Binance-*` headers; returns `effectiveLeverage` in the response body so the client can show the actual value.
+- **Backtest** (`services/backtest_runner.py`): offline map only (no creds in the worker); silent (no log surfacing); clamped value flows into `strategy.leverage` for the simulation.
+
+**Golden master impact:** The clamp was designed to be a no-op for golden config backtests — all seeded strategies' golden configs use leverage ≤ the offline map cap for their symbols. Verified 2026-06-21: `GOLDEN-MASTER OK — baseline == post_leverage_clamp within tol=1e-06 (5 strategies)`.
+
+**Rationale:** Binance rejects `POST /fapi/v1/leverage` with error `-4028 "leverage too large"` when the requested value exceeds the symbol's bracket cap. Previously this caused live bot startup failures and manual trade 400 errors for any symbol with a cap below the user-configured leverage. Clamping in the engine silently uses the highest allowed value, eliminating the rejection without requiring per-symbol user configuration. The offline fallback for the backtest worker keeps backtests deterministic (reproducible without network calls), consistent with the existing `core/margin.py` philosophy of using documented static Binance approximations.
+

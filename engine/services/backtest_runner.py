@@ -14,6 +14,7 @@ from core.models import BacktestExecution
 from core.pipeline import evaluate
 from services.candle_manager import ensure_candles_available
 from utils.timeframes import annual_factor
+from utils.symbols import _MAX_LEVERAGE_OFFLINE_MAP
 
 logger = logging.getLogger(__name__)
 
@@ -265,6 +266,9 @@ async def run_backtest_simulation(
     _fund_rate  = funding_rate   if funding_rate   is not None else FUNDING_RATE
     _funding_on = funding_enabled
     leverage    = max(int(leverage), 1)
+    # Clamp leverage to symbol max using offline map (no creds in worker).
+    _sym_max_lev = _MAX_LEVERAGE_OFFLINE_MAP.get(symbol, 20)
+    leverage     = min(leverage, _sym_max_lev)
 
     # ── 6a. Inject and validate alpha params (BUG-02 fix) ────────────────
     # Previously strategy_class() was called with no params — every UI config

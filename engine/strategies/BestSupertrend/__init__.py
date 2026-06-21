@@ -5,9 +5,9 @@ import engine.indicators as ta
 from engine.indicators.base import HIGH, LOW, CLOSE
 
 try:
-    from engine.core.models import SignalExitRiskModel, NotionalPortfolio, Signal
+    from engine.core.models import AtrBracketRiskModel, NotionalPortfolio, Signal
 except ImportError:
-    from core.models import SignalExitRiskModel, NotionalPortfolio, Signal
+    from core.models import AtrBracketRiskModel, NotionalPortfolio, Signal
 
 
 class BestSupertrend(BaseStrategy):
@@ -58,31 +58,45 @@ class BestSupertrend(BaseStrategy):
         },
         "fast_length": {
             "type": "int",
-            "default": 2,
+            "default": 7,
             "min": 1,
             "max": 100,
             "label": "Fast SMA Length"
         },
         "slow_length": {
             "type": "int",
-            "default": 3,
+            "default": 20,
             "min": 2,
             "max": 200,
             "label": "Slow SMA Length"
         },
         "factor": {
             "type": "float",
-            "default": 1.0,
+            "default": 3.0,
             "min": 1.0,
             "max": 100.0,
             "label": "Supertrend Factor"
         },
         "pd": {
             "type": "int",
-            "default": 2,
+            "default": 10,
             "min": 1,
             "max": 100,
             "label": "Supertrend ATR Period"
+        },
+        "sl_atr_mult": {
+            "type": "float",
+            "default": 2.0,
+            "min": 0.5,
+            "max": 10.0,
+            "label": "Stop-Loss ATR Multiplier"
+        },
+        "atr_period": {
+            "type": "int",
+            "default": 14,
+            "min": 5,
+            "max": 50,
+            "label": "ATR Period (stop sizing)"
         },
         "tf": {
             "type": "str",
@@ -108,12 +122,15 @@ class BestSupertrend(BaseStrategy):
         self.pd: int               = self.PARAMS["pd"]["default"]
         self.tf: str               = self.PARAMS["tf"]["default"]
         self.position_size_pct: float = self.PARAMS["position_size_pct"]["default"]
+        self.sl_atr_mult: float    = self.PARAMS["sl_atr_mult"]["default"]
+        self.atr_period: int       = self.PARAMS["atr_period"]["default"]
 
         # Pre-fetched HTF candles injected by live_bot_manager (None in backtest → resampling path)
         self._htf_candles = None
 
-        # Narang Black-Box: no bracket (signal-driven exit), notional sizing
-        self.risk_model      = SignalExitRiskModel()
+        # Narang Black-Box: ATR bracket for hard SL protection; signal-driven
+        # exits still fire first via forecast() returning direction=0 on crossover.
+        self.risk_model      = AtrBracketRiskModel()
         self.portfolio_model = NotionalPortfolio()
 
     def _is_same_timeframe(self) -> bool:

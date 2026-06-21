@@ -64,9 +64,10 @@ client/
 │   │   ├── useBacktest.js         ← TanStack Query hooks: useRunBacktest(), useBacktestsList(), useBacktestResult(id), useBacktestTrades(id, page, limit), useCancelBacktest()
 │   │   ├── useStrategies.js       ← TanStack Query hooks: useStrategies(), useStrategyCode(id)
 │   │   ├── useTrade.js            ← TanStack Query hooks: useTradeAccount(), useTradePositions(), useTradeOpenOrders(), useTradeSymbolConfig(symbol), useChangeLeverage(), useChangeMarginType(), usePlaceOrder(), usePlaceOrderWithTpSl(), useCancelOrder(), useClosePosition(), useCancelAllOrders()
-│   │   ├── useAlgoSessions.js     ← TanStack Query hooks for /api/v1/algo/* endpoints
+│   │   ├── useAlgoSessions.js     ← TanStack Query hooks for /api/v1/algo/* endpoints (includes useStartChaos)
 │   │   ├── useExchangeSettings.js ← TanStack Query hooks for /api/v1/settings/exchange
 │   │   ├── useOcoMonitor.js       ← monitors OCO order fill/cancel state via polling
+│   │   ├── useOrderHistory.js     ← useOrderHistory({ page, limit, filters }) → GET /api/v1/order-history
 │   │   └── useBinanceWS.js        ← registers/unregisters callbacks on the binanceWS singleton
 
 │   ├── context/
@@ -83,7 +84,8 @@ client/
 │   │   ├── Strategies.jsx     ← route: /strategies
 │   │   ├── Settings.jsx       ← route: /settings
 │   │   ├── Trade.jsx          ← route: /trade/:symbol (manual trading terminal)
-│   │   └── AlgoTrading.jsx    ← route: /algo (algo bot session management)
+│   │   ├── AlgoTrading.jsx    ← route: /algo (algo bot session management)
+│   │   └── OrderHistory.jsx   ← route: /order-history (paginated trade log; not in navbar)
 │   ├── store/
 │   │   └── useAuthStore.js
 │   │       Note: useUIStore.js has been deleted — it tracked sidebar state that no longer exists.

@@ -62,15 +62,15 @@ class MicroMacroRSIDivergence(BaseStrategy):
         Leverage : 1–3x
     """
 
-    # rsi_period(2) + macro_pivot(2) + buffer
-    MIN_WARMUP_CANDLES: int = 20
+    # rsi_period(14) + macro_pivot(5)*2 + buffer
+    MIN_WARMUP_CANDLES: int = 30
 
     SMOOTH_SMA = 0
     SMOOTH_EMA = 1
 
     PARAMS = {
         "rsi_period": {
-            "type": "int", "default": 2, "min": 2, "max": 50,
+            "type": "int", "default": 14, "min": 2, "max": 50,
             "label": "RSI Period",
             "description": (
                 "Increasing: slower RSI, smoother swings, fewer divergences. "
@@ -78,7 +78,7 @@ class MicroMacroRSIDivergence(BaseStrategy):
             ),
         },
         "micro_pivot": {
-            "type": "int", "default": 1, "min": 1, "max": 20,
+            "type": "int", "default": 3, "min": 1, "max": 20,
             "label": "Micro Pivot Length (left/right bars)",
             "description": (
                 "Increasing: micro swings need more confirmation, fewer micro signals. "
@@ -86,7 +86,7 @@ class MicroMacroRSIDivergence(BaseStrategy):
             ),
         },
         "macro_pivot": {
-            "type": "int", "default": 2, "min": 2, "max": 60,
+            "type": "int", "default": 5, "min": 2, "max": 60,
             "label": "Macro Pivot Length (left/right bars)",
             "description": (
                 "Increasing: larger structural swings, stronger but later/rarer signals. "
@@ -94,7 +94,7 @@ class MicroMacroRSIDivergence(BaseStrategy):
             ),
         },
         "confluence_window": {
-            "type": "int", "default": 200, "min": 1, "max": 200,
+            "type": "int", "default": 20, "min": 1, "max": 200,
             "label": "Micro/Macro Confluence Window (bars)",
             "description": (
                 "Max distance between the macro pivot and the corroborating micro pivot. "
@@ -142,9 +142,9 @@ class MicroMacroRSIDivergence(BaseStrategy):
             ),
         },
         "enable_rsi_level_filter": {
-            "type": "int", "default": 0, "min": 0, "max": 1,
+            "type": "int", "default": 1, "min": 0, "max": 1,
             "label": "RSI 50-Level Filter (1 = on)",
-            "description": "Off by default for maximum trades.",
+            "description": "On by default; requires RSI < 50 for longs, RSI > 50 for shorts.",
         },
         "enable_rsi_direction_filter": {
             "type": "int", "default": 0, "min": 0, "max": 1,
@@ -165,7 +165,7 @@ class MicroMacroRSIDivergence(BaseStrategy):
             ),
         },
         "atr_period": {
-            "type": "int", "default": 5, "min": 5, "max": 50,
+            "type": "int", "default": 14, "min": 5, "max": 50,
             "label": "ATR Period (stop sizing)",
             "description": (
                 "Increasing: smoother ATR, wider/steadier stops. "
@@ -173,7 +173,7 @@ class MicroMacroRSIDivergence(BaseStrategy):
             ),
         },
         "sl_atr_mult": {
-            "type": "float", "default": 0.5, "min": 0.5, "max": 6.0,
+            "type": "float", "default": 1.5, "min": 0.5, "max": 6.0,
             "label": "Stop Distance (ATR multiple)",
             "description": (
                 "Increasing: wider stop, survives more noise, larger risk per trade. "

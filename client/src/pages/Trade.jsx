@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { createChart, CandlestickSeries } from 'lightweight-charts'
 import useBinanceWS from '@/hooks/useBinanceWS'
 import {
@@ -657,7 +658,7 @@ function TpSlModal({ position, onClose }) {
             className={[
               'w-full py-3 rounded-lg text-sm font-semibold transition-colors',
               canConfirm
-                ? 'bg-yellow-500 hover:bg-yellow-400 text-gray-950 cursor-pointer'
+                ? 'bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer'
                 : 'bg-gray-800 text-gray-600 cursor-not-allowed',
             ].join(' ')}
           >
@@ -675,6 +676,16 @@ function PositionsTable({ data, isLoading, account }) {
   const cols = ['Symbol', 'Size', 'Entry Price', 'Mark Price', 'Liq Price', 'Margin Ratio', 'Unrealized PnL', '']
   const [closeError, setCloseError] = useState(null)
   const [tpslPosition, setTpslPosition] = useState(null) // position object for modal
+
+  const navigate = useNavigate()
+  const { symbol: activeSymbol } = useCurrentSymbol()
+
+  // Clicking a position row loads that symbol's full terminal (chart, ticker, order book,
+  // order form + per-symbol leverage/margin) via the route — same path SymbolSearchBar uses.
+  function handleRowClick(symbol) {
+    if (symbol === activeSymbol) return
+    navigate(`/trade/${symbol}`)
+  }
 
   const { mutate: execClose, isPending: closePending, variables: closeVars } = useClosePosition()
 
@@ -742,8 +753,17 @@ function PositionsTable({ data, isLoading, account }) {
                   ? (parseFloat(p.marginRatio) * 100).toFixed(2) + '%'
                   : accountMarginRatio
                 const marginRatio = posRatio
+                const isActive = p.symbol === activeSymbol
                 return (
-                  <tr key={p.symbol} className="border-b border-gray-800/30 hover:bg-gray-800/20">
+                  <tr
+                    key={p.symbol}
+                    onClick={() => handleRowClick(p.symbol)}
+                    title="View chart"
+                    className={[
+                      'border-b border-gray-800/30 cursor-pointer transition-colors',
+                      isActive ? 'bg-gray-800/40 border-l-2 border-emerald-500' : 'hover:bg-gray-800/20',
+                    ].join(' ')}
+                  >
                     <td className="py-2 pr-6 whitespace-nowrap">
                       <div className="flex items-center gap-2">
                         <span className="text-gray-100">{p.symbol.replace('USDT', '-USDT')}</span>
@@ -762,7 +782,7 @@ function PositionsTable({ data, isLoading, account }) {
                       <div className="flex items-center gap-1.5">
                         <button
                           disabled={isClosing}
-                          onClick={() => handleClose(p.symbol)}
+                          onClick={(e) => { e.stopPropagation(); handleClose(p.symbol) }}
                           className={[
                             'px-3 py-1 text-[10px] rounded border transition-colors whitespace-nowrap',
                             isClosing
@@ -773,7 +793,7 @@ function PositionsTable({ data, isLoading, account }) {
                           {isClosing ? 'Closing…' : 'Close Position'}
                         </button>
                         <button
-                          onClick={() => setTpslPosition(p)}
+                          onClick={(e) => { e.stopPropagation(); setTpslPosition(p) }}
                           className="px-3 py-1 text-[10px] rounded border border-gray-600 text-gray-400 hover:bg-gray-700/50 hover:border-yellow-600/40 hover:text-yellow-400 transition-colors whitespace-nowrap cursor-pointer"
                         >
                           TP/SL

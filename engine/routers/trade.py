@@ -7,6 +7,7 @@ from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from services.binance_testnet import send_signed_request
+from utils.symbols import clamp_leverage
 
 logger = logging.getLogger(__name__)
 
@@ -198,14 +199,19 @@ async def set_leverage(
     x_binance_api_secret: str = Header(..., alias="X-Binance-API-Secret"),
     x_binance_mode: str = Header("testnet", alias="X-Binance-Mode"),
 ):
+    effective = await clamp_leverage(
+        payload.leverage, "Binance Futures", payload.symbol,
+        api_key=x_binance_api_key, api_secret=x_binance_api_secret,
+        mode=x_binance_mode,
+    )
     try:
         data = await send_signed_request(
             "POST", "/fapi/v1/leverage",
             x_binance_api_key, x_binance_api_secret,
-            params={"symbol": payload.symbol, "leverage": payload.leverage},
+            params={"symbol": payload.symbol, "leverage": effective},
             mode=x_binance_mode,
         )
-        return {"success": True, "data": data}
+        return {"success": True, "data": data, "effectiveLeverage": effective}
     except httpx.HTTPStatusError as exc:
         try:
             body = exc.response.json()

@@ -18,7 +18,7 @@
     "symbol": "BTCUSDT",
     "timeframe": "1h"
   },
-  "label": "baseline",
+  "label": "post_leverage_clamp",
   "results": {
     "AdaptiveTrend": {
       "averageHoldingPeriod": "104400",

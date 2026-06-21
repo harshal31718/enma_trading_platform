@@ -31,7 +31,7 @@ const EquityTooltip = ({ active, payload }) => {
   if (!active || !payload?.length) return null
   const { t, balance } = payload[0].payload
   return (
-    <div className="bg-[#0E0E0E] border border-[#2E2E2E] rounded-md px-2.5 py-1.5 text-xs shadow-xl">
+    <div className="bg-gray-950 border border-gray-800 rounded-md px-2.5 py-1.5 text-xs shadow-xl">
       <div className="text-gray-500 font-mono mb-0.5">{new Date(t).toLocaleString([], { hour12: false })}</div>
       <div className="font-mono font-semibold text-gray-100">
         ${balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -176,7 +176,7 @@ export default function SessionCard({ session, onStop, stopping }) {
   const totalTrades = session.totalTrades || 0
 
   return (
-    <div className="bg-[#1C1C1C] border border-[#2E2E2E] rounded-xl overflow-hidden shadow-lg transition-all duration-300">
+    <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden shadow-lg hover:border-gray-700 transition-all duration-300">
 
       {/* ── Header row ── */}
       <div
@@ -263,10 +263,10 @@ export default function SessionCard({ session, onStop, stopping }) {
 
       {/* ── Expanded body ── */}
       {expanded && (
-        <div className="border-t border-[#2E2E2E]">
+        <div className="border-t border-gray-800">
 
           {/* ROW 1: Equity Curve + Session Stats */}
-          <div className="grid grid-cols-1 lg:grid-cols-[1.5fr_1fr] divide-y lg:divide-y-0 lg:divide-x divide-[#2E2E2E] bg-[#181818]">
+          <div className="grid grid-cols-1 lg:grid-cols-[1.5fr_1fr] divide-y lg:divide-y-0 lg:divide-x divide-gray-800 bg-gray-950/40">
 
             {/* Equity Curve */}
             <div className="p-5">
@@ -283,13 +283,13 @@ export default function SessionCard({ session, onStop, stopping }) {
                       domain={['dataMin', 'dataMax']}
                       tickFormatter={formatTime}
                       tick={{ fill: '#6B7280', fontSize: 10 }}
-                      stroke="#2E2E2E"
+                      stroke="#1f2937"
                       minTickGap={40}
                     />
                     <YAxis
                       domain={[minBalance, maxBalance]}
                       tick={{ fill: '#6B7280', fontSize: 10 }}
-                      stroke="#2E2E2E"
+                      stroke="#1f2937"
                       width={52}
                       tickFormatter={(v) => `$${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
                     />
@@ -343,7 +343,7 @@ export default function SessionCard({ session, onStop, stopping }) {
                     color: 'text-gray-200',
                   },
                 ].map(({ label, value, color }) => (
-                  <div key={label} className="bg-[#1C1C1C] rounded-lg p-3">
+                  <div key={label} className="bg-gray-900 border border-gray-800 rounded-lg p-3">
                     <div className="text-[10px] text-gray-500 mb-1">{label}</div>
                     <div className={`text-base font-bold ${color}`}>{value}</div>
                   </div>
@@ -353,14 +353,14 @@ export default function SessionCard({ session, onStop, stopping }) {
           </div>
 
           {/* ROW 2: Activity Log + Open Positions */}
-          <div className="grid grid-cols-1 lg:grid-cols-[1.5fr_1fr] divide-y lg:divide-y-0 lg:divide-x divide-[#2E2E2E] border-t border-[#2E2E2E]">
+          <div className="grid grid-cols-1 lg:grid-cols-[1.5fr_1fr] divide-y lg:divide-y-0 lg:divide-x divide-gray-800 border-t border-gray-800">
 
             {/* Activity Log */}
             <div className="p-5">
               <div className="flex items-center gap-1.5 text-[10px] font-semibold text-gray-500 uppercase tracking-widest mb-3">
                 <ScrollText size={12} /> Activity Log
               </div>
-              <div className="bg-[#141414] rounded-lg p-3 overflow-y-auto max-h-52 space-y-2 [&::-webkit-scrollbar]:hidden [scrollbar-width:none]">
+              <div className="bg-gray-950 rounded-lg p-3 overflow-y-auto max-h-52 space-y-2 [&::-webkit-scrollbar]:hidden [scrollbar-width:none]">
                 {logs.length === 0 ? (
                   <div className="text-center text-xs text-gray-600 py-6">No activity yet</div>
                 ) : (

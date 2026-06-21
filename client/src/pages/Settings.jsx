@@ -110,7 +110,7 @@ export default function Settings() {
         }
       `}</style>
 
-      <div className="max-w-lg">
+      <div className="mx-auto max-w-5xl grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
           {/* Header */}
           <div className="flex items-center justify-between mb-1">
@@ -169,10 +169,8 @@ export default function Settings() {
             Binance API keys are read from <code className="text-gray-500">server/.env</code> and are never stored in the database.
           </p>
         </div>
-      </div>
 
-      {/* ── Exchange Settings ─────────────────────────────────────────────── */}
-      <div className="max-w-lg mt-6">
+        {/* ── Exchange Settings ─────────────────────────────────────────────── */}
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
           <h2 className="text-gray-100 text-sm font-medium mb-1">Exchange Settings</h2>
           <p className="text-gray-500 text-xs mb-6">

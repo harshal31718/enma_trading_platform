@@ -28,11 +28,11 @@ class MicroScalper(BaseStrategy):
         Leverage : 1–5x
     """
 
-    MIN_WARMUP_CANDLES: int = 10   # volatile defaults: slow=3 + atr=5 + 2 buffer
+    MIN_WARMUP_CANDLES: int = 25   # slow=21 + atr=14 + 2 buffer (rounded up)
 
     PARAMS = {
         "fast_period": {
-            "type": "int", "default": 2, "min": 2, "max": 20,
+            "type": "int", "default": 9, "min": 2, "max": 20,
             "label": "Fast EMA Period",
             "description": (
                 "Increasing: fewer, more delayed crossover signals. "
@@ -40,7 +40,7 @@ class MicroScalper(BaseStrategy):
             ),
         },
         "slow_period": {
-            "type": "int", "default": 3, "min": 3, "max": 50,
+            "type": "int", "default": 21, "min": 3, "max": 50,
             "label": "Slow EMA Period",
             "description": (
                 "Increasing: longer trend confirmation, fewer flips. "
@@ -48,7 +48,7 @@ class MicroScalper(BaseStrategy):
             ),
         },
         "atr_period": {
-            "type": "int", "default": 5, "min": 5, "max": 50,
+            "type": "int", "default": 14, "min": 5, "max": 50,
             "label": "ATR Period",
             "description": (
                 "Increasing: smoother ATR baseline, more stable volatility gate. "
@@ -56,7 +56,7 @@ class MicroScalper(BaseStrategy):
             ),
         },
         "atr_multiplier": {
-            "type": "float", "default": 0.0, "min": 0.0, "max": 3.0,
+            "type": "float", "default": 1.2, "min": 0.0, "max": 3.0,
             "label": "ATR Volatility Threshold Multiplier (0 = filter off)",
             "description": (
                 "Increasing: stricter volatility requirement, fewer trades. "
@@ -64,7 +64,7 @@ class MicroScalper(BaseStrategy):
             ),
         },
         "sl_atr_mult": {
-            "type": "float", "default": 0.3, "min": 0.1, "max": 5.0,
+            "type": "float", "default": 1.5, "min": 0.1, "max": 5.0,
             "label": "Stop-Loss ATR Multiplier",
             "description": (
                 "Increasing: wider stop, fewer premature stop-outs but larger losses. "
@@ -72,7 +72,7 @@ class MicroScalper(BaseStrategy):
             ),
         },
         "tp_atr_mult": {
-            "type": "float", "default": 0.5, "min": 0.1, "max": 10.0,
+            "type": "float", "default": 2.0, "min": 0.1, "max": 10.0,
             "label": "Take-Profit ATR Multiplier",
             "description": (
                 "Increasing: TP target further from entry, bigger wins but fewer. "

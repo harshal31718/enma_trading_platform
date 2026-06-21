@@ -12,7 +12,8 @@ from config.timescale import get_pool
 from core.position import Position
 from core.models import DefaultPortfolioModel, LiveExecution, OrderPlan
 from core.pipeline import evaluate
-from utils.symbols import round_price, round_qty, clamp_and_round_qty
+from services.trade_recorder import record_trade, build_trade_record
+from utils.symbols import round_price, round_qty, clamp_and_round_qty, clamp_leverage
 
 logger = logging.getLogger(__name__)
 
@@ -250,6 +251,30 @@ class LiveBotManager:
         session = self.sessions.get(session_id)
         if session:
             session["strategy_instances"][symbol] = strategy
+
+        # Clamp requested leverage to what Binance actually allows for this symbol.
+        # Uses the signed /fapi/v1/leverageBracket endpoint if credentials are
+        # available via env (the live path always has them set in server/.env).
+        api_key = os.getenv("BINANCE_TESTNET_API_KEY")
+        api_secret = os.getenv("BINANCE_TESTNET_SECRET")
+        effective_leverage = await clamp_leverage(
+            leverage, "Binance Futures", symbol,
+            api_key=api_key, api_secret=api_secret, mode="testnet",
+        )
+        if effective_leverage != leverage:
+            logger.info(
+                f"[AlgoBot] {symbol}: leverage clamped {leverage}→{effective_leverage} "
+                f"(symbol max exceeded)"
+            )
+            await self._notify_node(session_id, {
+                "event": "log",
+                "eventData": {
+                    "type": "info",
+                    "message": f"{symbol}: leverage clamped {leverage}x→{effective_leverage}x (symbol max)"
+                }
+            })
+        leverage = effective_leverage
+        strategy.leverage = effective_leverage
 
         # Set leverage on Binance Testnet before entering
         try:
@@ -665,6 +690,14 @@ class LiveBotManager:
         if not session or strategy.position is None:
             return
 
+        pos = strategy.position
+        sl_price = strategy.stop_loss[1] if strategy.stop_loss else None
+        tp_price = strategy.take_profit[1] if strategy.take_profit else None
+        entry_time_str = session["open_positions"].get(symbol, {}).get("timestamp")
+        entry_time = datetime.fromisoformat(entry_time_str.replace("Z", "+00:00")) if entry_time_str else datetime.now(timezone.utc)
+        executed_by = session.get("strategy_name", "unknown")
+        exit_time = datetime.now(timezone.utc)
+
         sem = self._order_semaphores.get(session_id)
         try:
             async with (sem if sem else asyncio.nullcontext()):
@@ -679,9 +712,9 @@ class LiveBotManager:
         except Exception as e:
             logger.error(f"[AlgoBot] Testnet close-position failed for {symbol}: {e}")
 
-        fee = strategy.execution_model.exit_fee(strategy, strategy.position.qty, exit_price)
-        strategy.position.close(exit_price)
-        realized_pnl = strategy.position.pnl - fee
+        fee = strategy.execution_model.exit_fee(strategy, pos.qty, exit_price)
+        pos.close(exit_price)
+        realized_pnl = pos.pnl - fee
         strategy.balance += realized_pnl
         session["pnl"] += realized_pnl
 
@@ -690,15 +723,36 @@ class LiveBotManager:
             "pnl": str(round(realized_pnl, 2)),
             "exitPrice": str(exit_price),
             "exitReason": reason,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": exit_time.isoformat(),
         }
+
+        trade_record = build_trade_record(
+            source="bot",
+            executed_by=executed_by,
+            symbol=symbol,
+            side=pos.type,
+            qty=str(pos.qty),
+            entry_price=str(pos.entry_price),
+            exit_price=str(exit_price),
+            sl_order_price=str(sl_price) if sl_price is not None else None,
+            tp_order_price=str(tp_price) if tp_price is not None else None,
+            margin=str(pos.margin) if pos.margin else None,
+            liquidation_price=str(pos.liquidation_price) if pos.liquidation_price else None,
+            leverage=pos.leverage if pos.leverage else None,
+            net_pnl=str(round(realized_pnl, 2)),
+            pnl_pct=str(round(pos.pnl_pct, 2)) if pos.pnl_pct else None,
+            fee=str(round(fee, 2)) if fee else None,
+            exit_reason=reason,
+            session_id=session_id,
+            strategy_name=session.get("strategy_name"),
+            entry_time=entry_time,
+            exit_time=exit_time,
+        )
 
         strategy.position = None
         strategy.stop_loss = None
         strategy.take_profit = None
-        strategy._pending_flip = None  # a flip cannot survive its position
-        # (the flip path captures its dict before calling here, so this only
-        # discards flips orphaned by an SL/TP/stop close)
+        strategy._pending_flip = None
         session["open_positions"].pop(symbol, None)
 
         await self._notify_node(session_id, {
@@ -708,6 +762,8 @@ class LiveBotManager:
             "event": "position:close",
             "eventData": event_data,
         })
+
+        await record_trade(trade_record)
 
         logger.info(f"[AlgoBot] Position closed: {symbol} pnl={realized_pnl:.2f} reason={reason}")
 
@@ -736,15 +792,49 @@ class LiveBotManager:
 
         # Update local PnL tracking if the engine knew about this position
         if strategy and strategy.position:
+            pos = strategy.position
+            sl_price = strategy.stop_loss[1] if strategy.stop_loss else None
+            tp_price = strategy.take_profit[1] if strategy.take_profit else None
+            entry_time_str = session["open_positions"].get(symbol, {}).get("timestamp")
+            entry_time = datetime.fromisoformat(entry_time_str.replace("Z", "+00:00")) if entry_time_str else datetime.now(timezone.utc)
+            executed_by = session.get("strategy_name", "unknown")
+            exit_time = datetime.now(timezone.utc)
             exit_price = strategy.price
-            fee = strategy.execution_model.exit_fee(strategy, strategy.position.qty, exit_price)
-            strategy.position.close(exit_price)
-            realized_pnl = strategy.position.pnl - fee
+
+            fee = strategy.execution_model.exit_fee(strategy, pos.qty, exit_price)
+            pos.close(exit_price)
+            realized_pnl = pos.pnl - fee
             strategy.balance += realized_pnl
             session["pnl"] += realized_pnl
+
+            trade_record = build_trade_record(
+                source="bot",
+                executed_by=executed_by,
+                symbol=symbol,
+                side=pos.type,
+                qty=str(pos.qty),
+                entry_price=str(pos.entry_price),
+                exit_price=str(exit_price),
+                sl_order_price=str(sl_price) if sl_price is not None else None,
+                tp_order_price=str(tp_price) if tp_price is not None else None,
+                margin=str(pos.margin) if pos.margin else None,
+                liquidation_price=str(pos.liquidation_price) if pos.liquidation_price else None,
+                leverage=pos.leverage if pos.leverage else None,
+                net_pnl=str(round(realized_pnl, 2)),
+                pnl_pct=str(round(pos.pnl_pct, 2)) if pos.pnl_pct else None,
+                fee=str(round(fee, 2)) if fee else None,
+                exit_reason="session_stop",
+                session_id=session_id,
+                strategy_name=session.get("strategy_name"),
+                entry_time=entry_time,
+                exit_time=exit_time,
+            )
+
             strategy.position = None
             strategy.stop_loss = None
             strategy.take_profit = None
+
+            await record_trade(trade_record)
 
         session["open_positions"].pop(symbol, None)
 

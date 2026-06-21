@@ -43,6 +43,7 @@ server/
     │   ├── TradeOrder.js
     │   ├── TradeExecution.js
     │   ├── TradeTransaction.js
+    │   ├── TradeRecord.js     ← completed round-trip trades (engine writes, server reads; collection: tradeRecords)
     │   └── Settings.js        ← AES-encrypted Binance keys + exchange settings
     ├── routes/             ← Express routers (thin — logic in controllers)
     │   ├── strategy.routes.js   ← /strategies, /strategies/:id/code
@@ -50,17 +51,19 @@ server/
     │   ├── backtest.routes.js
     │   ├── dashboard.routes.js  ← /dashboard/stats
     │   ├── trade.routes.js      ← /trade/* (settings/keys, account, positions, orders, klines)
-    │   ├── algo.routes.js       ← /algo/sessions, /algo/symbols/locked
-    │   ├── settings.routes.js   ← /settings/exchange
-    │   └── internal.routes.js   ← /internal/algo/sessions/:id/* (engine callbacks)
+    │   ├── algo.routes.js         ← /algo/sessions, /algo/symbols/locked, /algo/chaos
+    │   ├── settings.routes.js     ← /settings/exchange
+    │   ├── orderHistory.routes.js ← /order-history (GET, paginated, filterable)
+    │   └── internal.routes.js     ← /internal/algo/sessions/:id/* (engine callbacks)
     ├── controllers/
     │   ├── strategy.controller.js   ← MongoDB queries + code proxy to engine
     │   ├── candle.controller.js     ← getSymbols, getCachedCandles
     │   ├── backtest.controller.js
     │   ├── dashboard.controller.js  ← proxies engine /dashboard/stats
     │   ├── trade.controller.js
-    │   ├── algo.controller.js       ← session CRUD + engine callbacks (handleEngineStats, handleAlgoPlaceOrder, …)
-    │   └── settings.controller.js   ← getExchangeSettings, updateExchangeSettings
+    │   ├── algo.controller.js         ← session CRUD + startChaos + engine callbacks (handleEngineStats, handleAlgoPlaceOrder, …)
+    │   ├── settings.controller.js     ← getExchangeSettings, updateExchangeSettings
+    │   └── orderHistory.controller.js ← getOrderHistory (reads tradeRecords; engine is sole writer)
     ├── services/
     │   ├── engineClient.js  ← axios instance for engine HTTP calls
     │   ├── backtestQueue.js ← BullMQ queue definition for bull:backtest
@@ -178,6 +181,7 @@ The server owns the routing, auth, and job queue layers. Database ownership is s
 | MongoDB — `backtestResults` | engine | Read-only for status/error fields only; engine writes all result data |
 | MongoDB — `backtestTrades` | engine | Read-only; engine bulk-writes all trades |
 | MongoDB — `liveSessions` | engine | Read-only (same pattern) |
+| MongoDB — `tradeRecords` | engine | Read-only via `TradeRecord.js` model — engine is sole writer |
 | TimescaleDB — `candles` | engine | **Never** — server never queries TimescaleDB |
 | Redis — BullMQ queues | server | Write (enqueue jobs) |
 | Redis — progress pub/sub | engine writes, server reads | Subscribe and relay to Socket.IO |

@@ -54,7 +54,7 @@ type Balance = { asset: string, walletBalance: string, availableBalance: string,
 - **`GET /api/v1/trade/account`** -> `{ assets: Balance[], totalWalletBalance, totalMarginBalance, totalAvailableBalance }`
 - **`GET /api/v1/trade/positions[?symbol]`** -> `{ positions: Position[] }`
 - **`GET /api/v1/trade/open-orders`** -> `{ orders: Order[] }`
-- **`POST /api/v1/trade/leverage`** -> Req: `{ symbol, leverage }` -> `{ symbol, leverage, maxNotionalValue }`
+- **`POST /api/v1/trade/leverage`** -> Req: `{ symbol, leverage }` -> `{ symbol, leverage, maxNotionalValue, effectiveLeverage: number }` (effectiveLeverage = min(requested, symbol_max); may be lower than requested if symbol cap exceeded)
 - **`POST /api/v1/trade/margin-type`** -> Req: `{ symbol, marginType: "ISOLATED" | "CROSSED" }` -> `{ code: 200, msg: "success" }`
 - **`POST /api/v1/trade/order`** -> Req: `{ symbol, side, type, quantity, price? }` -> `Order`
 - **`POST /api/v1/trade/order/with_tp_sl`** -> Req: `{ symbol, side, type, quantity, price?, stopLoss, takeProfit }` -> `{ entry: Order, sl: Order, tp: Order }`
@@ -84,6 +84,7 @@ type LiveSession = { _id: string, strategyId: string, strategyName: string, symb
 type SymbolLock = { reason: "bot"|"manual", sessionId: string|null, lockedAt: string }
 ```
 - **`POST /api/v1/algo/sessions`** -> Req: `{ strategyId, symbols, timeframe, params, capital, leverage }` -> `{ sessionId, status }`
+- **`POST /api/v1/algo/chaos`** -> No body required -> `{ launched: { strategy, sessionId, symbols, status }[], errors: { strategy, error }[], note: string }` — testnet-only; launches all 5 strategies with max-volatility params on 1m TF using hardcoded disjoint symbol sets. HTTP 207 if partial success, 502 if all failed.
 - **`GET /api/v1/algo/sessions`** -> `{ sessions: LiveSession[] }`
 - **`GET /api/v1/algo/sessions/:id`** -> `{ session: LiveSession }`
 - **`GET /api/v1/algo/sessions/:id/equity`** -> `{ equity: string, pnl: string }`
@@ -91,6 +92,12 @@ type SymbolLock = { reason: "bot"|"manual", sessionId: string|null, lockedAt: st
 - **`DELETE /api/v1/algo/sessions/:id`** -> `{ deleted: true }` (stopped sessions only)
 - **`DELETE /api/v1/algo/sessions`** -> `{ deleted: number }` (bulk delete all stopped)
 - **`GET /api/v1/algo/symbols/locked`** -> `{ locked: { [symbol]: SymbolLock } }`
+
+### Order History
+```typescript
+type TradeRecord = { tradeId: string, source: "bot"|"manual", executedBy: string, symbol: string, side: "long"|"short", qty: string, entryPrice: string, exitPrice: string, slOrderPrice?: string, tpOrderPrice?: string, margin?: string, liquidationPrice?: string, leverage?: number, netPnl: string, pnlPct?: string, fee?: string, exitReason: string, sessionId?: string, strategyName?: string, entryTime: string, exitTime: string, createdAt: string }
+```
+- **`GET /api/v1/order-history`** -> Query: `?symbol?&source?&side?&executedBy?&page?&limit?` -> `{ records: TradeRecord[], pagination: Pagination }` (default page=1, limit=50, max limit=200; sorted by exitTime DESC; engine is sole writer, server reads)
 
 ### Engine ↔ Node (Internal — not exposed to client)
 - **`PATCH /internal/algo/sessions/:id/stats`** (Engine → Node) -> Req: `{ pnl, openPositions, status?, event?, eventData? }`
