@@ -1,5 +1,5 @@
 import logging
-from abc import ABC, abstractmethod
+from abc import ABC
 import numpy as np
 
 # Five-Model Quant Architecture (see plan.md). Dual import root: strategies are
@@ -9,7 +9,7 @@ try:
     from engine.core.models import (
         Signal,
         DefaultRiskModel,
-        DefaultCostModel,
+        DefaultTransactionCostModel as DefaultCostModel,
         DefaultPortfolioModel,
         DefaultExecution,
     )
@@ -17,7 +17,7 @@ except ImportError:  # pragma: no cover - import-root fallback
     from core.models import (
         Signal,
         DefaultRiskModel,
-        DefaultCostModel,
+        DefaultTransactionCostModel as DefaultCostModel,
         DefaultPortfolioModel,
         DefaultExecution,
     )
@@ -98,6 +98,7 @@ class BaseStrategy(ABC):
         # The strategy itself is the Alpha Model (forecast()/should_*). The other
         # four models are pluggable; defaults reproduce legacy behavior exactly.
         # Override per-strategy by reassigning any of these in the subclass.
+        self.alpha_model     = self               # self IS the Alpha Model
         self.risk_model      = DefaultRiskModel()
         self.cost_model      = DefaultCostModel()
         self.portfolio_model = DefaultPortfolioModel()
@@ -178,33 +179,39 @@ class BaseStrategy(ABC):
     # Required methods — must be overridden
     # ─────────────────────────────────────────
 
-    @abstractmethod
     def should_long(self) -> bool:
-        """Return True to open a long position. Called only when no position is open."""
-        raise NotImplementedError
+        """Return True to open a long position. Called only when no position is open.
 
-    @abstractmethod
+        Default: False. Override in legacy strategies; ported strategies implement
+        forecast() instead and leave should_long/short at their defaults.
+        """
+        return False
+
     def should_short(self) -> bool:
-        """Return True to open a short position. Called only when no position is open."""
-        raise NotImplementedError
+        """Return True to open a short position. Called only when no position is open.
+
+        Default: False. Override in legacy strategies; ported strategies implement
+        forecast() instead and leave should_long/short at their defaults.
+        """
+        return False
 
     def should_cancel_entry(self) -> bool:
         """Return True to cancel a pending entry order before it fills."""
         return False
 
-    @abstractmethod
     def go_long(self) -> None:
         """Define entry, stop-loss, and take-profit for a long trade.
-        Set self.buy, self.stop_loss, self.take_profit.
-        """
-        raise NotImplementedError
 
-    @abstractmethod
+        Default: no-op (pass). Legacy strategies override this; ported strategies
+        implement forecast() and let route() write the order state.
+        """
+
     def go_short(self) -> None:
         """Define entry, stop-loss, and take-profit for a short trade.
-        Set self.sell, self.stop_loss, self.take_profit.
+
+        Default: no-op (pass). Legacy strategies override this; ported strategies
+        implement forecast() and let route() write the order state.
         """
-        raise NotImplementedError
 
     # ─────────────────────────────────────────
     # Optional lifecycle methods — override as needed

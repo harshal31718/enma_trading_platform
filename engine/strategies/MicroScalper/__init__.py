@@ -3,6 +3,11 @@ import numpy as np
 from engine.core.strategy import BaseStrategy
 import engine.indicators as ta
 
+try:
+    from engine.core.models import AtrBracketRiskModel, RiskBudgetPortfolio, Signal
+except ImportError:
+    from core.models import AtrBracketRiskModel, RiskBudgetPortfolio, Signal
+
 
 class MicroScalper(BaseStrategy):
     """
@@ -23,11 +28,11 @@ class MicroScalper(BaseStrategy):
         Leverage : 1–5x
     """
 
-    MIN_WARMUP_CANDLES: int = 28   # slow_period (9) + atr_period (14) + 5 buffer
+    MIN_WARMUP_CANDLES: int = 10   # volatile defaults: slow=3 + atr=5 + 2 buffer
 
     PARAMS = {
         "fast_period": {
-            "type": "int", "default": 3, "min": 2, "max": 20,
+            "type": "int", "default": 2, "min": 2, "max": 20,
             "label": "Fast EMA Period",
             "description": (
                 "Increasing: fewer, more delayed crossover signals. "
@@ -35,7 +40,7 @@ class MicroScalper(BaseStrategy):
             ),
         },
         "slow_period": {
-            "type": "int", "default": 9, "min": 3, "max": 50,
+            "type": "int", "default": 3, "min": 3, "max": 50,
             "label": "Slow EMA Period",
             "description": (
                 "Increasing: longer trend confirmation, fewer flips. "
@@ -43,7 +48,7 @@ class MicroScalper(BaseStrategy):
             ),
         },
         "atr_period": {
-            "type": "int", "default": 14, "min": 5, "max": 50,
+            "type": "int", "default": 5, "min": 5, "max": 50,
             "label": "ATR Period",
             "description": (
                 "Increasing: smoother ATR baseline, more stable volatility gate. "
@@ -51,7 +56,7 @@ class MicroScalper(BaseStrategy):
             ),
         },
         "atr_multiplier": {
-            "type": "float", "default": 0.5, "min": 0.0, "max": 3.0,
+            "type": "float", "default": 0.0, "min": 0.0, "max": 3.0,
             "label": "ATR Volatility Threshold Multiplier (0 = filter off)",
             "description": (
                 "Increasing: stricter volatility requirement, fewer trades. "
@@ -59,7 +64,7 @@ class MicroScalper(BaseStrategy):
             ),
         },
         "sl_atr_mult": {
-            "type": "float", "default": 1.0, "min": 0.1, "max": 5.0,
+            "type": "float", "default": 0.3, "min": 0.1, "max": 5.0,
             "label": "Stop-Loss ATR Multiplier",
             "description": (
                 "Increasing: wider stop, fewer premature stop-outs but larger losses. "
@@ -67,7 +72,7 @@ class MicroScalper(BaseStrategy):
             ),
         },
         "tp_atr_mult": {
-            "type": "float", "default": 1.5, "min": 0.1, "max": 10.0,
+            "type": "float", "default": 0.5, "min": 0.1, "max": 10.0,
             "label": "Take-Profit ATR Multiplier",
             "description": (
                 "Increasing: TP target further from entry, bigger wins but fewer. "
@@ -84,6 +89,10 @@ class MicroScalper(BaseStrategy):
         self.atr_multiplier: float = self.PARAMS["atr_multiplier"]["default"]
         self.sl_atr_mult:    float = self.PARAMS["sl_atr_mult"]["default"]
         self.tp_atr_mult:    float = self.PARAMS["tp_atr_mult"]["default"]
+
+        # Narang Black-Box: bind risk and portfolio models
+        self.risk_model      = AtrBracketRiskModel()
+        self.portfolio_model = RiskBudgetPortfolio()
 
     def validate_params(self) -> None:
         if self.fast_period >= self.slow_period:
@@ -151,60 +160,31 @@ class MicroScalper(BaseStrategy):
             self.vars.get("fast_ema_prev", 0) >= self.vars.get("slow_ema_prev", 0)
         )
 
-    # ── Strategy interface ──────────────────────────────────────────────────
+    # ── Alpha Model: forecast() handles both open and flat cases ────────────
 
-    def should_long(self) -> bool:
-        if len(self.candles) < self.MIN_WARMUP_CANDLES:
-            return False
-        return self._crossed_above() and self._is_volatile()
+    def forecast(self) -> Signal:
+        """Stop-and-reverse scalper logic.
 
-    def should_short(self) -> bool:
-        if len(self.candles) < self.MIN_WARMUP_CANDLES:
-            return False
-        return self._crossed_below() and self._is_volatile()
-
-    def should_cancel_entry(self) -> bool:
-        return False
-
-    def go_long(self) -> None:
-        stop = self.vars.get("atr_stop_long", self.price * 0.99)
-        self.vars["str_sl"] = stop
-        qty = self.size_by_risk(stop)
-        self.buy         = qty, self.price
-        self.stop_loss   = qty, stop
-        self.take_profit = qty, self.vars.get("atr_tp_long", self.price * 1.01)
-
-    def go_short(self) -> None:
-        stop = self.vars.get("atr_stop_short", self.price * 1.01)
-        self.vars["str_sl"] = stop
-        qty = self.size_by_risk(stop)
-        self.sell        = qty, self.price
-        self.stop_loss   = qty, stop
-        self.take_profit = qty, self.vars.get("atr_tp_short", self.price * 0.99)
-
-    def update_position(self) -> None:
+        While holding: flip direction on crossover (if volatile); maintain otherwise.
+        While flat: enter on crossover (if volatile); stay flat otherwise.
         """
-        Stop-and-reverse: if we are long and a short signal fires (or vice
-        versa), flip atomically. The engine closes the open leg and opens the
-        opposite one as a single unit, with the new SL/TP armed immediately.
-        """
-        if not self._is_volatile():
-            return
+        if len(self.candles) < self.MIN_WARMUP_CANDLES:
+            return Signal(direction=0)
 
-        if self.is_long and self._crossed_below():
-            stop = self.vars.get("atr_stop_short", self.price * 1.01)
-            qty  = self.size_by_risk(stop)
-            self.flip_position(
-                qty,
-                stop_loss=stop,
-                take_profit=self.vars.get("atr_tp_short", self.price * 0.99),
-            )
+        volatile = self._is_volatile()
 
-        elif self.is_short and self._crossed_above():
-            stop = self.vars.get("atr_stop_long", self.price * 0.99)
-            qty  = self.size_by_risk(stop)
-            self.flip_position(
-                qty,
-                stop_loss=stop,
-                take_profit=self.vars.get("atr_tp_long", self.price * 1.01),
-            )
+        if self.is_open:
+            # Holding — check for stop-and-reverse
+            if volatile and self.is_long and self._crossed_below():
+                return Signal(direction=-1, conviction=1.0, ref_price=self.price)
+            if volatile and self.is_short and self._crossed_above():
+                return Signal(direction=1, conviction=1.0, ref_price=self.price)
+            # Maintain current direction
+            return Signal(direction=1 if self.is_long else -1, conviction=1.0, ref_price=self.price)
+
+        # Flat — look for entry
+        if volatile and self._crossed_above():
+            return Signal(direction=1, conviction=1.0, ref_price=self.price)
+        if volatile and self._crossed_below():
+            return Signal(direction=-1, conviction=1.0, ref_price=self.price)
+        return Signal(direction=0, ref_price=self.price)

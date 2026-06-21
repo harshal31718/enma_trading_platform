@@ -112,7 +112,9 @@ Calling `flip_position()` from `update_position()` records a pending flip (`_pen
 - **Execution Engines Integration:**
   - `backtest_runner.py`'s decision step C invokes `evaluate(strategy)`.
   - `live_bot_manager.py`'s loop invokes `evaluate(strategy)` and forwards the returned `OrderPlan` to `_execute_entry()` / `_execute_flip()`.
-- **Live Gates Activation:** The Risk drawdown circuit breaker and Cost gating are now active in live trading sessions ( Binances Testnet).
+- **Live Gates Activation:** The Risk drawdown circuit breaker and Cost gating are now active in live trading sessions (Binances Testnet).
+- **BestSupertrend Drift:** The transition from legacy `liquidate()` to the unified execution model's next-bar open market exits via `_close_at_open` introduced a minor, intentional drift in backtest metrics for the `BestSupertrend` strategy (finishing balance changed from `10059.07` to `10059.03`). This represents a correct architectural alignment with the new execution model's exit handling.
 
 **Rationale:** Keeps the codebase modular, reduces duplicate execution flow/gating bugs, and ensures backtest and live systems execute matching risk/cost rules.
+
 

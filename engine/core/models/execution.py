@@ -1,37 +1,26 @@
-"""Execution Models — the single owner of fill mechanics.
+"""Execution Models — sole writer of order state and fill mechanics.
 
-The Execution Model turns an intended trade into concrete fills. It sits one
-layer above the Cost Model: a fill's slippage and fee come from
-``s.cost_model`` (so cost stays the single owner of those rates), while the
-Execution Model owns *assembling* a fill — adverse fill price, notional,
-isolated margin and the entry-affordability test — and the env-specific way an
-order is placed.
+route() is the primary contract (Narang strict boundary: strategies never write
+buy/sell/stop_loss/take_profit/_pending_flip/_close_at_open directly).
 
-* ``DefaultExecution`` — the pipeline planner (``plan()``) plus the shared
-  market-fill helpers (``entry_fill``/``exit_fill``). It is ``BaseStrategy``'s
-  default ``execution_model`` and the safe fallback everywhere.
-* ``BacktestExecution`` — the backtest env: market orders that fill at the next
-  candle's open with adverse slippage. Inherits the shared helpers unchanged
-  (the runner already calls them at ``open_t``), and is the instance the backtest
-  runner routes its fills through.
-* ``LiveExecution`` — the live env: real Binance market fills (no simulated
-  slippage). Adds ``exit_fee`` — the realized exit-fee accounting the live
-  manager applies on close. The full live entry/exit *orchestration* (rounding,
-  min-notional, bracket placement, network) unifies with the pipeline in Phase 5.
+Five paths in route():
+  1. flat  → flat:          no-op
+  2. hold  → flat (close):  _close_at_open = True
+  3. flat  → enter:         write buy/sell + bracket
+  4. hold  → flip:          flip_position()
+  5. hold  → maintain:      refresh bracket from constraints (handles trailing)
 
-``plan()`` keeps the Phase-0 behavior (delegate to ``go_long/go_short`` and read
-the strategy's ``buy``/``stop_loss`` bracket) so existing strategies are
-unchanged; it is consumed by the shared pipeline in Phase 5.
+plan() is kept as a deprecated shim for legacy runners not yet using the pipeline.
 """
 from __future__ import annotations
 
-from .base import ExecutionModel, OrderPlan, EntryFill, ExitFill, Signal, Target, RiskFrame
+from .base import (
+    ExecutionModel, OrderPlan, EntryFill, ExitFill,
+    Signal, TargetPortfolio, Target, RiskConstraints,
+)
 
 
 def _initial_margin(notional: float, leverage: float) -> float:
-    """Isolated initial margin via the engine's margin model. Dual import root
-    (strategies load under ``engine.``; services run with the engine dir on the
-    path) — mirror the pattern used in risk.py/strategy.py."""
     try:
         from engine.core.margin import initial_margin
     except ImportError:  # pragma: no cover - top-level module root
@@ -41,20 +30,14 @@ def _initial_margin(notional: float, leverage: float) -> float:
 
 class DefaultExecution(ExecutionModel):
 
-    # ── Shared market-fill mechanics (single owner; compose the Cost Model) ──
+    # ── Shared market-fill mechanics ─────────────────────────────────────────
 
     def entry_fill(self, s, ref_price: float, qty: float, leverage: float,
                    side: str) -> EntryFill:
-        """Assemble an opening market fill from a reference price.
-
-        ``side`` is ``"buy"`` (long entry / short cover) or ``"sell"`` (short
-        entry). Slippage and fee come from ``s.cost_model``; margin from the
-        isolated-margin model. Byte-identical to the runner's former inline
-        ``fill_price = adverse_fill(...); notional = qty*fill_price;
-        req_margin = initial_margin(notional, lev); fee = cost_model.fee(...)``.
-        """
+        """Opening market fill. Slippage and fee come from s.cost_model.
+        Byte-identical to the runner's former inline fill arithmetic."""
         fill_price = s.cost_model.adverse_fill(s, ref_price, side)
-        notional = qty * fill_price
+        notional   = qty * fill_price
         return EntryFill(
             fill_price=fill_price,
             notional=notional,
@@ -63,16 +46,82 @@ class DefaultExecution(ExecutionModel):
         )
 
     def exit_fill(self, s, ref_price: float, qty: float, side: str) -> ExitFill:
-        """Assemble a closing market fill. ``side`` is the fill direction of the
-        *exit* (long exit ⇒ ``"sell"``, short exit ⇒ ``"buy"``). Byte-identical
-        to the runner's former ``exit_fill = adverse_fill(...);
-        fee = cost_model.fee(qty*exit_fill)``."""
+        """Closing market fill. side is the exit direction ("sell" for long exit)."""
         fill_price = s.cost_model.adverse_fill(s, ref_price, side)
         return ExitFill(fill_price=fill_price, fee=s.cost_model.fee(s, qty * fill_price))
 
-    # ── Pipeline planner (consumed in Phase 5) ───────────────────────────────
+    # ── Primary contract: route target → order state ──────────────────────────
 
-    def plan(self, s, sig: Signal, target: Target, rf: RiskFrame) -> OrderPlan | None:
+    def route(
+        self, s, target: TargetPortfolio, current_holding: float = 0.0,
+        constraints: RiskConstraints | None = None,
+    ) -> OrderPlan | None:
+        """Diff desired target against current_holding and write the order state.
+
+        This is the sole place that assigns s.buy, s.sell, s.stop_loss,
+        s.take_profit, s._pending_flip, or s._close_at_open. Strategies and
+        models must NOT write these fields.
+        """
+        desired    = target.qty
+        is_holding = current_holding != 0.0
+        same_sign  = (desired > 0 and current_holding > 0) or (desired < 0 and current_holding < 0)
+
+        # Path 1: flat → flat
+        if desired == 0.0 and not is_holding:
+            return None
+
+        # Path 2: holding → flat (guaranteed next-open close; see BUG-03)
+        if desired == 0.0 and is_holding:
+            s._close_at_open = True
+            return None
+
+        # Path 5: maintain bracket (same direction, holding)
+        if is_holding and same_sign:
+            if constraints is not None:
+                if constraints.stop_price is not None and s.stop_loss is not None:
+                    s.stop_loss = s.stop_loss[0], constraints.stop_price
+                if constraints.take_profit_price is not None and s.take_profit is not None:
+                    s.take_profit = s.take_profit[0], constraints.take_profit_price
+            return None
+
+        sl  = constraints.stop_price        if constraints else None
+        tp  = constraints.take_profit_price if constraints else None
+        qty = abs(desired)
+        direction = 1 if desired > 0 else -1
+
+        # Path 4: flip (holding, opposite direction)
+        if is_holding and not same_sign:
+            s.flip_position(qty, stop_loss=sl, take_profit=tp)
+            return None
+
+        # Path 3: flat → enter
+        if desired > 0:
+            s.buy = qty, s.price
+            if sl is not None:
+                s.stop_loss   = qty, sl
+            if tp is not None:
+                s.take_profit = qty, tp
+        else:
+            s.sell = qty, s.price
+            if sl is not None:
+                s.stop_loss   = qty, sl
+            if tp is not None:
+                s.take_profit = qty, tp
+
+        return OrderPlan(
+            direction=direction,
+            qty=qty,
+            entry_price=s.price,
+            stop_loss=sl,
+            take_profit=tp,
+            order_type=getattr(s, "order_type", "market"),
+        )
+
+    # ── Deprecated plan() shim ────────────────────────────────────────────────
+
+    def plan(self, s, sig: Signal, target: TargetPortfolio, rf: RiskConstraints) -> OrderPlan | None:
+        """Deprecated — delegates to legacy go_long/go_short for call sites that
+        have not yet been updated to the route()-based pipeline. Remove in Phase 6."""
         if sig.direction > 0:
             s.go_long()
             order = s.buy
@@ -83,9 +132,8 @@ class DefaultExecution(ExecutionModel):
             return None
         if order is None:
             return None
-
         qty, price = order
-        sl = s.stop_loss[1] if s.stop_loss else None
+        sl = s.stop_loss[1]   if s.stop_loss   else None
         tp = s.take_profit[1] if s.take_profit else None
         return OrderPlan(
             direction=sig.direction,
@@ -98,16 +146,16 @@ class DefaultExecution(ExecutionModel):
 
 
 class BacktestExecution(DefaultExecution):
-    """Backtest env: market orders fill at the next candle's open with adverse
-    slippage. The shared ``entry_fill``/``exit_fill`` already model this exactly
-    (the runner invokes them at ``open_t``), so no override is needed."""
+    """Backtest env: fills at next candle's open with adverse slippage.
+
+    The shared entry_fill/exit_fill already model this (runner invokes them at
+    open_t). route() and plan() inherit from DefaultExecution unchanged.
+    """
 
 
 class LiveExecution(DefaultExecution):
     """Live env: real Binance market fills (no simulated slippage)."""
 
     def exit_fee(self, s, qty: float, exit_price: float) -> float:
-        """Realized taker fee the live manager deducts on close
-        (``qty * exit_price * fee_rate``). Routed through the Cost Model so the
-        fee rate has one owner; byte-identical to the former inline calc."""
+        """Realized taker fee on close. Routed through cost_model for one owner."""
         return s.cost_model.fee(s, qty * exit_price)

@@ -1,8 +1,12 @@
-"""Five-Model Quant Architecture — unified decision pipeline.
+"""Five-Model Quant Architecture — unified every-candle decision pipeline.
 
-Routes candidate signals through the canonical quant pipeline: Alpha, Risk,
-Portfolio, Cost, and Execution. Shared by both the backtest and live engines
-to ensure all risk/cost gates are honored identically in all environments.
+evaluate() runs all five models on every candle, regardless of position state.
+forecast() handles the is_open check internally (maintain/exit/flip while holding;
+entry logic while flat). The old guard `if s.is_open: update_position(); return`
+is gone — the pipeline is now unconditional.
+
+Call sites must pass current_holding as a signed quantity:
+  current_holding = (position.qty * (1 if is_long else -1)) if position else 0.0
 """
 from __future__ import annotations
 
@@ -12,27 +16,16 @@ except ImportError:
     from core.models import OrderPlan
 
 
-def evaluate(s) -> OrderPlan | None:
-    """Evaluate strategy state through the unified decision pipeline.
+def evaluate(s, current_holding: float = 0.0) -> "OrderPlan | None":
+    """Run the five-model pipeline for one candle.
 
-    If a position is open, runs position management / updates trailing stop
-    and returns None. If flat, runs Alpha -> Risk -> Portfolio -> Cost -> Execution.
+    Flow: forecast → assess → estimate → construct → route.
+    All five models run every candle; no early return for open positions.
     """
-    if s.is_open:
-        s.update_position()
-        return None          # exits/trailing = Risk-managed
-
-    sig = s.forecast()                            # 1 Alpha Model
-    if sig.flat:
-        return None
-
-    rf = s.risk_model.frame(s, sig)              # 2 Risk Model
-    if rf.vetoed:
-        return None                              # risk circuit breaker
-
-    tgt = s.portfolio_model.size(s, sig, rf)      # 4 Portfolio Construction Model
-    cost = s.cost_model.estimate(s, tgt)          # 3 Transaction Cost Model
-    if not s.cost_model.is_worth_it(s, sig, rf, cost):
-        return None                              # cost hurdle gate
-
-    return s.execution_model.plan(s, sig, tgt, rf)  # 5 Execution Model
+    sig         = s.forecast()                                          # 1 Alpha
+    constraints = s.risk_model.assess(s, sig, current_holding)         # 2 Risk
+    cost        = s.cost_model.estimate(s, sig, constraints)           # 3 TCM
+    target      = s.portfolio_model.construct(s, sig, constraints,     # 4 PCM
+                                              cost, current_holding)
+    return s.execution_model.route(s, target, current_holding,         # 5 Execution
+                                   constraints)

@@ -1,42 +1,87 @@
-"""Five-Model Quant Architecture (see plan.md).
+"""Five-Model Quant Architecture — public facade.
 
-Public facade: value objects, model interfaces, and default implementations.
-The Alpha Model is the strategy itself (BaseStrategy.forecast()); the other four
-models are pluggable and default to legacy-equivalent behavior.
+Value objects:  Signal, RiskConstraints, CostEstimate, TargetPortfolio, OrderPlan
+Deprecated aliases: RiskFrame, Cost, Target (remove in Phase 6)
+Interfaces: RiskModel, TransactionCostModel (= CostModel), PortfolioModel, ExecutionModel
+Implementations:
+  Risk      — DefaultRiskModel, AtrBracketRiskModel, ChandelierRiskModel, SignalExitRiskModel
+  TCM       — DefaultTransactionCostModel (= DefaultCostModel)
+  Portfolio — DefaultPortfolioModel, RiskBudgetPortfolio, NotionalPortfolio
+  Execution — DefaultExecution, BacktestExecution, LiveExecution
 """
 from .base import (
+    # Value objects (new names)
     Signal,
-    RiskFrame,
-    Cost,
-    Target,
+    RiskConstraints,
+    CostEstimate,
+    TargetPortfolio,
     OrderPlan,
     EntryFill,
     ExitFill,
+    # Deprecated aliases (remove Phase 6)
+    RiskFrame,
+    Cost,
+    Target,
+    # Interfaces
     RiskModel,
-    CostModel,
+    TransactionCostModel,
+    CostModel,          # alias for TransactionCostModel
     PortfolioModel,
     ExecutionModel,
 )
-from .risk import DefaultRiskModel
-from .cost import DefaultCostModel
-from .portfolio import DefaultPortfolioModel
-from .execution import DefaultExecution, BacktestExecution, LiveExecution
+from .risk import (
+    DefaultRiskModel,
+    AtrBracketRiskModel,
+    ChandelierRiskModel,
+    SignalExitRiskModel,
+)
+from .cost import (
+    DefaultTransactionCostModel,
+    DefaultCostModel,   # alias for DefaultTransactionCostModel
+)
+from .portfolio import (
+    DefaultPortfolioModel,
+    RiskBudgetPortfolio,
+    NotionalPortfolio,
+)
+from .execution import (
+    DefaultExecution,
+    BacktestExecution,
+    LiveExecution,
+)
 
 __all__ = [
+    # Value objects
     "Signal",
-    "RiskFrame",
-    "Cost",
-    "Target",
+    "RiskConstraints",
+    "CostEstimate",
+    "TargetPortfolio",
     "OrderPlan",
     "EntryFill",
     "ExitFill",
+    # Deprecated aliases
+    "RiskFrame",
+    "Cost",
+    "Target",
+    # Interfaces
     "RiskModel",
+    "TransactionCostModel",
     "CostModel",
     "PortfolioModel",
     "ExecutionModel",
+    # Risk implementations
     "DefaultRiskModel",
+    "AtrBracketRiskModel",
+    "ChandelierRiskModel",
+    "SignalExitRiskModel",
+    # TCM implementations
+    "DefaultTransactionCostModel",
     "DefaultCostModel",
+    # Portfolio implementations
     "DefaultPortfolioModel",
+    "RiskBudgetPortfolio",
+    "NotionalPortfolio",
+    # Execution implementations
     "DefaultExecution",
     "BacktestExecution",
     "LiveExecution",

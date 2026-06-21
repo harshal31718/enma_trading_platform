@@ -12,11 +12,16 @@ try:
 except ImportError:  # pragma: no cover - top-level module root
     from indicators.base import _compute_pivots
 
+try:
+    from engine.core.models import AtrBracketRiskModel, RiskBudgetPortfolio, Signal
+except ImportError:
+    from core.models import AtrBracketRiskModel, RiskBudgetPortfolio, Signal
+
 
 def _last2(series) -> tuple | None:
     """Return ``(newest, previous)`` confirmed pivot values from a NaN-padded
     pivot series, or ``None`` when fewer than two pivots exist yet."""
-    arr = np.asarray(series, dtype=float)
+    arr   = np.asarray(series, dtype=float)
     valid = arr[~np.isnan(arr)]
     if valid.size < 2:
         return None
@@ -96,7 +101,7 @@ class MultiDivergence(BaseStrategy):
 
     PARAMS = {
         "piv_len": {
-            "type": "int", "default": 5, "min": 2, "max": 15,
+            "type": "int", "default": 2, "min": 2, "max": 15,
             "label": "Divergence Pivot Length",
             "description": (
                 "Bars required on each side of a swing to confirm a pivot. "
@@ -105,7 +110,7 @@ class MultiDivergence(BaseStrategy):
             ),
         },
         "min_confluence": {
-            "type": "int", "default": 2, "min": 1, "max": 9,
+            "type": "int", "default": 1, "min": 1, "max": 9,
             "label": "Min Divergence Confluence",
             "description": (
                 "How many enabled sources must agree on a direction to trade. "
@@ -114,21 +119,17 @@ class MultiDivergence(BaseStrategy):
             ),
         },
         "sl_atr_mult": {
-            "type": "float", "default": 1.5, "min": 0.1, "max": 10.0,
+            "type": "float", "default": 0.5, "min": 0.1, "max": 10.0,
             "label": "SL ATR Multiplier",
             "description": (
-                "Stop distance as a multiple of 14-period ATR (ignored if custom "
-                "SL is on). Increasing: wider stop, fewer stop-outs, larger risk. "
-                "Decreasing: tighter stop, more stop-outs, smaller risk."
+                "Stop distance as a multiple of ATR. Decreasing: tighter stop, more stop-outs."
             ),
         },
         "tp_atr_mult": {
-            "type": "float", "default": 2.5, "min": 0.1, "max": 20.0,
+            "type": "float", "default": 0.5, "min": 0.1, "max": 20.0,
             "label": "TP ATR Multiplier",
             "description": (
-                "Take-profit distance as a multiple of 14-period ATR. "
-                "Increasing: targets bigger moves, lower hit rate, higher reward. "
-                "Decreasing: closer target, higher hit rate, smaller reward."
+                "Take-profit distance as a multiple of ATR. Decreasing: closer target, higher hit rate."
             ),
         },
         "use_custom_sl": {
@@ -156,7 +157,7 @@ class MultiDivergence(BaseStrategy):
             ),
         },
         "atr_period": {
-            "type": "int", "default": 14, "min": 5, "max": 50,
+            "type": "int", "default": 5, "min": 5, "max": 50,
             "label": "ATR Period (stops/targets)",
             "description": (
                 "Lookback for the ATR used in sizing, stop and target. "
@@ -164,121 +165,33 @@ class MultiDivergence(BaseStrategy):
                 "Decreasing: more reactive to recent volatility."
             ),
         },
-        "rsi_period": {
-            "type": "int", "default": 14, "min": 2, "max": 50,
-            "label": "RSI Period",
-            "description": (
-                "Lookback for the RSI divergence source. "
-                "Increasing: smoother RSI, fewer pivots. Decreasing: noisier, more pivots."
-            ),
-        },
-        "mfi_period": {
-            "type": "int", "default": 14, "min": 2, "max": 50,
-            "label": "MFI Period",
-            "description": (
-                "Lookback for the Money Flow Index source. "
-                "Increasing: smoother MFI. Decreasing: more reactive to volume bursts."
-            ),
-        },
-        "stoch_period": {
-            "type": "int", "default": 14, "min": 2, "max": 50,
-            "label": "Stochastic Period",
-            "description": (
-                "Lookback for the Stochastic %K source. "
-                "Increasing: smoother stochastic. Decreasing: faster, noisier."
-            ),
-        },
-        "adx_period": {
-            "type": "int", "default": 14, "min": 5, "max": 50,
-            "label": "ADX Period",
-            "description": (
-                "Lookback for the ADX trend-strength source. "
-                "Increasing: smoother trend reading. Decreasing: more reactive."
-            ),
-        },
-        "macd_fast": {
-            "type": "int", "default": 12, "min": 2, "max": 50,
-            "label": "MACD Fast Length",
-            "description": (
-                "Fast EMA of the MACD source. Increasing: slower MACD line. "
-                "Decreasing: faster, more sensitive MACD line."
-            ),
-        },
-        "macd_slow": {
-            "type": "int", "default": 26, "min": 5, "max": 100,
-            "label": "MACD Slow Length",
-            "description": (
-                "Slow EMA of the MACD source. Increasing: more lag, smoother. "
-                "Decreasing: faster, noisier MACD line."
-            ),
-        },
-        "macd_signal": {
-            "type": "int", "default": 9, "min": 2, "max": 50,
-            "label": "MACD Signal Length",
-            "description": (
-                "Signal EMA of the MACD source (unused for divergence pivots, kept "
-                "for a faithful MACD computation). Increasing/decreasing smooths/sharpens it."
-            ),
-        },
-        "z_period": {
-            "type": "int", "default": 20, "min": 5, "max": 100,
-            "label": "Z-Score Period",
-            "description": (
-                "Lookback for the rolling mean/stdev of the Z-Score source. "
-                "Increasing: longer-term statistical stretch. Decreasing: shorter-term."
-            ),
-        },
-        "use_rsi": {
-            "type": "int", "default": 1, "min": 0, "max": 1,
-            "label": "Enable RSI Divergence",
-            "description": "1: include RSI in the confluence vote. 0: exclude it.",
-        },
-        "use_mfi": {
-            "type": "int", "default": 1, "min": 0, "max": 1,
-            "label": "Enable MFI Divergence",
-            "description": "1: include MFI in the confluence vote. 0: exclude it.",
-        },
-        "use_stoch": {
-            "type": "int", "default": 1, "min": 0, "max": 1,
-            "label": "Enable Stochastic Divergence",
-            "description": "1: include Stochastic in the confluence vote. 0: exclude it.",
-        },
-        "use_zscore": {
-            "type": "int", "default": 1, "min": 0, "max": 1,
-            "label": "Enable Z-Score Divergence",
-            "description": "1: include Z-Score in the confluence vote. 0: exclude it.",
-        },
-        "use_adx": {
-            "type": "int", "default": 1, "min": 0, "max": 1,
-            "label": "Enable ADX Divergence",
-            "description": "1: include ADX in the confluence vote. 0: exclude it.",
-        },
-        "use_macd": {
-            "type": "int", "default": 1, "min": 0, "max": 1,
-            "label": "Enable MACD Divergence",
-            "description": "1: include MACD in the confluence vote. 0: exclude it.",
-        },
-        "use_obv": {
-            "type": "int", "default": 1, "min": 0, "max": 1,
-            "label": "Enable OBV Divergence",
-            "description": "1: include OBV in the confluence vote. 0: exclude it.",
-        },
-        "use_price": {
-            "type": "int", "default": 1, "min": 0, "max": 1,
-            "label": "Enable Price-Action Divergence",
-            "description": "1: include price-swing-contraction in the vote. 0: exclude it.",
-        },
-        "use_swing": {
-            "type": "int", "default": 1, "min": 0, "max": 1,
-            "label": "Enable Swing-Volume Divergence",
-            "description": "1: include raw-volume swing divergence in the vote. 0: exclude it.",
-        },
+        "rsi_period":    {"type": "int",   "default": 2,   "min": 2,  "max": 50,  "label": "RSI Period",          "description": ""},
+        "mfi_period":    {"type": "int",   "default": 2,   "min": 2,  "max": 50,  "label": "MFI Period",          "description": ""},
+        "stoch_period":  {"type": "int",   "default": 2,   "min": 2,  "max": 50,  "label": "Stochastic Period",   "description": ""},
+        "adx_period":    {"type": "int",   "default": 5,   "min": 5,  "max": 50,  "label": "ADX Period",          "description": ""},
+        "macd_fast":     {"type": "int",   "default": 2,   "min": 2,  "max": 50,  "label": "MACD Fast Length",    "description": ""},
+        "macd_slow":     {"type": "int",   "default": 5,   "min": 5,  "max": 100, "label": "MACD Slow Length",    "description": ""},
+        "macd_signal":   {"type": "int",   "default": 2,   "min": 2,  "max": 50,  "label": "MACD Signal Length",  "description": ""},
+        "z_period":      {"type": "int",   "default": 5,   "min": 5,  "max": 100, "label": "Z-Score Period",      "description": ""},
+        "use_rsi":       {"type": "int",   "default": 1,   "min": 0,  "max": 1,   "label": "Enable RSI Divergence",   "description": ""},
+        "use_mfi":       {"type": "int",   "default": 1,   "min": 0,  "max": 1,   "label": "Enable MFI Divergence",   "description": ""},
+        "use_stoch":     {"type": "int",   "default": 1,   "min": 0,  "max": 1,   "label": "Enable Stochastic Divergence", "description": ""},
+        "use_zscore":    {"type": "int",   "default": 1,   "min": 0,  "max": 1,   "label": "Enable Z-Score Divergence",   "description": ""},
+        "use_adx":       {"type": "int",   "default": 1,   "min": 0,  "max": 1,   "label": "Enable ADX Divergence",   "description": ""},
+        "use_macd":      {"type": "int",   "default": 1,   "min": 0,  "max": 1,   "label": "Enable MACD Divergence",  "description": ""},
+        "use_obv":       {"type": "int",   "default": 1,   "min": 0,  "max": 1,   "label": "Enable OBV Divergence",   "description": ""},
+        "use_price":     {"type": "int",   "default": 1,   "min": 0,  "max": 1,   "label": "Enable Price-Action Divergence", "description": ""},
+        "use_swing":     {"type": "int",   "default": 1,   "min": 0,  "max": 1,   "label": "Enable Swing-Volume Divergence", "description": ""},
     }
 
     def __init__(self):
         super().__init__()
         for key, spec in self.PARAMS.items():
             setattr(self, key, spec["default"])
+
+        # Narang Black-Box: static ATR bracket, risk-budget sizing
+        self.risk_model      = AtrBracketRiskModel()
+        self.portfolio_model = RiskBudgetPortfolio()
 
     def validate_params(self) -> None:
         enabled = sum(
@@ -307,12 +220,12 @@ class MultiDivergence(BaseStrategy):
         if n < w:
             return out
         csum = np.cumsum(np.insert(close, 0, 0.0))
-        csq = np.cumsum(np.insert(close * close, 0, 0.0))
-        s = csum[w:] - csum[:-w]
-        s2 = csq[w:] - csq[:-w]
+        csq  = np.cumsum(np.insert(close * close, 0, 0.0))
+        s    = csum[w:] - csum[:-w]
+        s2   = csq[w:] - csq[:-w]
         mean = s / w
-        var = np.clip(s2 / w - mean * mean, 0.0, None)
-        std = np.sqrt(var)
+        var  = np.clip(s2 / w - mean * mean, 0.0, None)
+        std  = np.sqrt(var)
         with np.errstate(invalid="ignore", divide="ignore"):
             z = np.where(std > 0, (close[w - 1:] - mean) / std, 0.0)
         out[w - 1:] = z
@@ -325,8 +238,8 @@ class MultiDivergence(BaseStrategy):
             return 0
         pr_hi0, pr_hi1 = pr_hi
         pr_lo0, pr_lo1 = pr_lo
-        swing_up_1 = pr_hi1 - pr_lo1
-        swing_up_0 = pr_hi0 - pr_lo0
+        swing_up_1   = pr_hi1 - pr_lo1
+        swing_up_0   = pr_hi0 - pr_lo0
         swing_down_1 = pr_hi1 - pr_lo0
         swing_down_0 = pr_hi0 - pr_lo1
         result = 0
@@ -350,13 +263,11 @@ class MultiDivergence(BaseStrategy):
             return
 
         atr = ta.atr(self.candles, period=self.atr_period)
-        self.vars["atr"] = float(atr) if atr == atr else 0.0  # NaN guard
+        self.vars["atr"] = float(atr) if atr == atr else 0.0
 
-        # Price swing pivots (high column for highs, low column for lows).
         ph = ta.pivot_high(self.candles, L, L, "high", sequential=True)
         pl = ta.pivot_low(self.candles, L, L, "low", sequential=True)
 
-        # Only act when a brand-new price pivot just confirmed at centre bar c.
         new_pivot = not np.isnan(ph[c]) or not np.isnan(pl[c])
         if not new_pivot:
             return
@@ -404,62 +315,38 @@ class MultiDivergence(BaseStrategy):
             tally(osc_div(self.candles[:, 5].astype(float)))
 
         bull, bear = votes["bull"], votes["bear"]
-        thr = int(self.min_confluence)
+        thr    = int(self.min_confluence)
         signal = 0
         if bull >= thr and bull > bear:
             signal = 1
         elif bear >= thr and bear > bull and self.allow_shorts:
             signal = -1
 
-        self.vars["signal"] = signal
+        self.vars["signal"]     = signal
         self.vars["bull_votes"] = bull
         self.vars["bear_votes"] = bear
 
-    # ── Entry decisions ─────────────────────────────────────────────────────
-
-    def should_long(self) -> bool:
-        return self.vars.get("signal", 0) == 1
-
-    def should_short(self) -> bool:
-        return bool(self.allow_shorts) and self.vars.get("signal", 0) == -1
-
-    # ── Order placement ─────────────────────────────────────────────────────
+    # ── Alpha Model: forecast() handles both open and flat cases ────────────
 
     def _stop_distance(self, entry: float, atr: float) -> float:
         if self.use_custom_sl:
             return entry * (self.custom_sl_pct / 100.0)
         return atr * self.sl_atr_mult
 
-    def go_long(self) -> None:
-        entry = self.price
-        atr = self.vars.get("atr", 0.0)
-        if atr <= 0 or entry <= 0:
-            return
-        sl_dist = self._stop_distance(entry, atr)
-        if sl_dist <= 0:
-            return
-        stop = entry - sl_dist
-        target = entry + atr * self.tp_atr_mult
-        qty = self.size_by_risk(stop, entry_price=entry)
-        if qty <= 0:
-            return
-        self.buy = qty, entry
-        self.stop_loss = qty, stop
-        self.take_profit = qty, target
+    def forecast(self) -> Signal:
+        """Multi-oscillator divergence confluence logic.
 
-    def go_short(self) -> None:
-        entry = self.price
-        atr = self.vars.get("atr", 0.0)
-        if atr <= 0 or entry <= 0:
-            return
-        sl_dist = self._stop_distance(entry, atr)
-        if sl_dist <= 0:
-            return
-        stop = entry + sl_dist
-        target = entry - atr * self.tp_atr_mult
-        qty = self.size_by_risk(stop, entry_price=entry)
-        if qty <= 0:
-            return
-        self.sell = qty, entry
-        self.stop_loss = qty, stop
-        self.take_profit = qty, target
+        While holding: maintain (ATR static bracket held by AtrBracketRiskModel).
+        While flat: enter when vars['signal'] fires on a new pivot confirmation.
+        """
+        if self.is_open:
+            return Signal(
+                direction=1 if self.is_long else -1,
+                conviction=1.0,
+                ref_price=self.price,
+            )
+
+        signal = self.vars.get("signal", 0)
+        if signal != 0:
+            return Signal(direction=signal, conviction=1.0, ref_price=self.price)
+        return Signal(direction=0, ref_price=self.price)

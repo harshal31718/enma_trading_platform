@@ -1,39 +1,39 @@
-"""Five-Model Quant Architecture — contracts and value objects.
+"""Five-Model Quant Architecture — contracts and value objects (Narang strict boundary).
 
-Defines the canonical quant model interfaces (Alpha is the strategy itself;
-Risk / Cost / Portfolio / Execution are pluggable) and the immutable value
-objects passed between them in the shared decision pipeline.
+Value objects passed between models:
+  Signal → RiskConstraints → CostEstimate → TargetPortfolio → OrderPlan
 
-This module is pure-Python (stdlib only) — it never imports numpy, TA-Lib, or
-any strategy, so it can be imported and unit-tested without the engine runtime.
-Each model receives the strategy instance ``s`` as its first argument and reads
-state through the existing BaseStrategy properties/helpers; the models hold no
-candle state of their own.
-
-See plan.md for the rollout phases. Phase 0 ships these contracts plus
-default implementations; the engines are wired to the pipeline in a later phase.
+Deprecated aliases kept for one refactor phase:
+  RiskFrame = RiskConstraints, Cost = CostEstimate, Target = TargetPortfolio,
+  TransactionCostModel = CostModel
 """
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Value objects — passed down the pipeline (Alpha → Risk → Portfolio → Cost → Execution)
+# Value objects
 # ─────────────────────────────────────────────────────────────────────────────
 
 @dataclass
 class Signal:
-    """Alpha Model output for one candle.
+    """Alpha Model output: prediction for one candle.
 
     direction: +1 long, -1 short, 0 flat.
-    conviction: strength in [0, 1] — 1.0 reproduces the legacy boolean signal.
-    ref_price: price the forecast was made at (entry reference).
+    magnitude: predicted move as decimal fraction (e.g. 0.02 = 2%). Feeds
+               the PCM edge-vs-cost veto when min_edge_mult > 0.
+    conviction: strength in [0, 1]; 1.0 reproduces legacy boolean signal.
+    asset / timeframe: filled by forecast() for multi-asset pipelines.
+    ref_price: close at forecast time (entry reference, internal).
     """
-    direction: int
+    direction: int = 0
+    magnitude: float = 0.0
     conviction: float = 1.0
+    timeframe: str = ""
     ref_price: float = 0.0
+    asset: str = ""
 
     @property
     def flat(self) -> bool:
@@ -41,24 +41,32 @@ class Signal:
 
 
 @dataclass
-class RiskFrame:
+class RiskConstraints:
     """Risk Model output: the trade's risk envelope.
 
-    vetoed: True to block the entry (circuit breaker / invalid stop).
-    stop_price: structural stop for this trade (None if undefined).
-    risk_per_unit: |entry - stop| — the volatility-scaled risk of one unit.
-    budget: capital permitted at risk for this trade (equity * risk_pct).
-    max_notional: hard exposure cap (equity * leverage).
+    vetoed: True blocks the entry (drawdown breaker or invalid stop).
+    max_drawdown_hit: True specifically when the drawdown circuit breaker fired.
+    stop_price: structural stop for this trade; None if no protective stop.
+    take_profit_price: structural take-profit; None if signal-driven or pure trail.
+    risk_per_unit: |entry - stop| — the per-unit risk (0 if no stop).
+    budget: capital permitted at risk (equity * risk_pct).
+    max_notional: hard exposure cap (equity * leverage or max_leverage).
     """
     vetoed: bool = False
+    max_drawdown_hit: bool = False
     stop_price: float | None = None
+    take_profit_price: float | None = None
     risk_per_unit: float = 0.0
     budget: float = 0.0
     max_notional: float = 0.0
 
 
+# Deprecated alias — remove in Phase 6 cleanup
+RiskFrame = RiskConstraints
+
+
 @dataclass
-class Cost:
+class CostEstimate:
     """Transaction Cost Model estimate for a candidate trade."""
     fee: float = 0.0
     slippage: float = 0.0
@@ -69,20 +77,32 @@ class Cost:
         return self.fee + self.slippage + self.impact
 
 
+# Deprecated alias — remove in Phase 6 cleanup
+Cost = CostEstimate
+
+
 @dataclass
-class Target:
-    """Portfolio Construction Model output: desired position size."""
+class TargetPortfolio:
+    """Portfolio Construction Model output: desired (signed) position.
+
+    qty: SIGNED desired quantity (+long, -short, 0 flat).
+    weight: |qty * price| / equity (for cross-asset allocation).
+    asset: symbol this target applies to.
+    """
+    asset: str = ""
     qty: float = 0.0
     weight: float = 0.0
 
 
+# Deprecated alias — remove in Phase 6 cleanup
+Target = TargetPortfolio
+
+
 @dataclass
 class OrderPlan:
-    """Execution Model output: the concrete order(s) to send.
+    """Execution Model output: the concrete order to send.
 
-    Phase 0 models a single market/limit order with an attached SL/TP bracket,
-    matching what the engines execute today. Slicing/routing fields are added in
-    the Execution phase.
+    direction: +1 long, -1 short (derived from target sign in route()).
     """
     direction: int
     qty: float
@@ -94,12 +114,8 @@ class OrderPlan:
 
 @dataclass
 class EntryFill:
-    """Execution Model output for an opening market fill.
-
-    The slippage-adjusted ``fill_price``, the resulting ``notional`` and isolated
-    ``req_margin``, and the ``fee`` charged. ``affordable`` is the runner's
-    entry-rejection predicate (``req_margin + fee <= balance``).
-    """
+    """Opening market fill: slippage-adjusted fill_price, notional,
+    isolated req_margin, and taker fee. affordable() is the entry-rejection test."""
     fill_price: float
     notional: float
     req_margin: float
@@ -111,26 +127,22 @@ class EntryFill:
 
 @dataclass
 class ExitFill:
-    """Execution Model output for a closing market fill: slippage-adjusted
-    ``fill_price`` and the ``fee`` charged."""
+    """Closing market fill: slippage-adjusted fill_price and taker fee."""
     fill_price: float
     fee: float
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Model interfaces
+# Model interfaces (ABCs)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class RiskModel(ABC):
-    """Estimates risk and gates exposure: stop placement, per-trade budget,
-    drawdown circuit breaker, liquidation-buffer and exposure caps.
+    """Stop placement, per-trade budget, drawdown breaker, trailing, and
+    liquidation-buffer guard.  assess() is the primary contract.
 
-    ``can_trade`` and ``frame`` are the abstract contract. The concrete helpers
-    below (``update_session_risk``, ``atr_stop``, ``risk_budget_qty``) are the
+    Concrete helpers (update_session_risk, atr_stop, risk_budget_qty) are the
     single owners of the platform's drawdown-tracking, stop-placement and
-    risk-budget sizing math — relocated here in the Risk phase so backtest, live
-    and the BaseStrategy helpers all route through one implementation. Each takes
-    the strategy ``s`` and reads its public surface; they hold no candle state.
+    risk-budget sizing math — shared across backtest, live, and all variants.
     """
 
     @abstractmethod
@@ -138,19 +150,22 @@ class RiskModel(ABC):
         """False halts new entries (position management still runs)."""
 
     @abstractmethod
-    def frame(self, s, sig: Signal) -> RiskFrame:
-        """Build the risk envelope for a candidate signal."""
+    def assess(self, s, sig: Signal, current_holding: float = 0.0) -> RiskConstraints:
+        """Build the risk envelope for a signal or an open position.
 
-    # ── Concrete defaults (inherited by every RiskModel) ────────────────────
+        Called every candle by the pipeline. When current_holding != 0 the
+        model also handles trailing (updating stop_price) so the runner's
+        existing bracket fields always reflect the latest constraints.
+        """
+
+    def frame(self, s, sig: Signal) -> RiskConstraints:
+        """Deprecated shim → assess(s, sig, 0.0). Remove in Phase 6."""
+        return self.assess(s, sig, 0.0)
+
+    # ── Concrete helpers (single owners of platform risk math) ──────────────
 
     def update_session_risk(self, s, equity: float | None = None) -> None:
-        """Track session peak equity and drawdown for the ``can_trade`` gate.
-
-        Relocated verbatim from the backtest runner's per-candle equity block so
-        the Risk Model is the sole owner of drawdown state; both engines call
-        this once per candle. ``equity`` defaults to ``s.equity``. Math is
-        identical to the former inline block (no behavior change).
-        """
+        """Track session peak equity and drawdown for the can_trade() gate."""
         eq = s.equity if equity is None else equity
         if eq > s.peak_equity:
             s.peak_equity = eq
@@ -159,22 +174,14 @@ class RiskModel(ABC):
 
     def atr_stop(self, s, direction: str, mult: float = 2.0, period: int = 14,
                  entry_price: float | None = None) -> float:
-        """ATR-based stop price. long: entry - mult*ATR, short: entry + mult*ATR.
-
-        Canonical owner of ``BaseStrategy.atr_stop`` (which delegates here).
-        """
+        """ATR-based stop: long = entry − mult·ATR, short = entry + mult·ATR."""
         entry = entry_price if entry_price is not None else s.price
         atr = s._atr(period)
-        if direction == "long":
-            return entry - mult * atr
-        return entry + mult * atr
+        return entry - mult * atr if direction == "long" else entry + mult * atr
 
     def risk_budget_qty(self, s, stop_price: float, risk_pct: float | None = None,
                         entry_price: float | None = None) -> float:
-        """Quantity such that hitting ``stop_price`` loses ``risk_pct`` of equity
-        (platform rule #6: ``(equity*risk_pct)/|entry-stop|``), capped by
-        ``s.max_qty``. Canonical owner of ``BaseStrategy.size_by_risk``.
-        """
+        """Qty such that hitting stop_price loses risk_pct of equity (rule #6)."""
         entry = entry_price if entry_price is not None else s.price
         if risk_pct is None:
             risk_pct = float(getattr(s, "risk_pct", 0.01))
@@ -185,53 +192,54 @@ class RiskModel(ABC):
         return min(qty, s.max_qty(entry))
 
 
-class CostModel(ABC):
-    """Predicts execution cost (fee + slippage + impact) and vetoes trades
-    whose expected edge does not beat their expected cost."""
+class TransactionCostModel(ABC):
+    """Predicts execution cost (fee + slippage + impact) — descriptive only.
+
+    The edge-vs-cost veto decision lives in PortfolioModel.construct().
+    """
+
+    min_edge_mult: float = 0.0   # 0 = veto off (golden-master default)
 
     @abstractmethod
-    def estimate(self, s, target: Target) -> Cost:
-        """Expected round-trip-relevant cost of trading ``target``."""
+    def estimate(self, s, sig: Signal, constraints: RiskConstraints) -> CostEstimate:
+        """Expected cost of a candidate trade; used by PCM for the edge gate."""
 
-    @abstractmethod
-    def is_worth_it(self, s, sig: Signal, rf: RiskFrame, cost: Cost) -> bool:
-        """True if expected edge justifies the estimated cost."""
+
+# Deprecated alias — remove in Phase 6 cleanup
+CostModel = TransactionCostModel
 
 
 class PortfolioModel(ABC):
-    """Combines Alpha conviction, Risk budget and Cost into a position size,
-    and (across symbols) splits a session's capital between them.
+    """Combines Alpha conviction, Risk budget and Cost into a signed target.
 
-    ``size`` is the abstract per-trade contract. ``allocate`` is a concrete,
-    inherited default: it is the single owner of the live session's cross-symbol
-    capital split (relocated from ``live_bot_manager``'s inline
-    ``capital/len(symbols)``), so a custom PortfolioModel can re-weight every
-    symbol at once. The default is an equal split, byte-identical to the former
-    inline math.
+    construct() is the primary contract. allocate() splits capital cross-symbol.
     """
 
     @abstractmethod
-    def size(self, s, sig: Signal, rf: RiskFrame) -> Target:
-        """Desired quantity/weight for this signal."""
+    def construct(self, s, sig: Signal, constraints: RiskConstraints,
+                  cost: CostEstimate, current_holding: float = 0.0) -> TargetPortfolio:
+        """Build the desired signed position target for this candle."""
 
     def allocate(self, total_capital: float, symbols: list[str]) -> dict[str, float]:
-        """Split ``total_capital`` across ``symbols`` for a live session.
-
-        Default: equal weight — each symbol receives ``total_capital / n``,
-        identical to the former ``float(capital) / len(symbols)``. Override to
-        weight by conviction, volatility or a target risk-parity allocation; the
-        live manager consumes whatever mapping is returned.
-        """
+        """Split total_capital across symbols. Default: equal weight."""
         n = len(symbols)
         if n == 0:
             return {}
         per_symbol = total_capital / n
         return {sym: per_symbol for sym in symbols}
 
+    def size(self, s, sig: Signal, rf: RiskConstraints) -> TargetPortfolio:
+        """Deprecated shim — calls construct() with empty cost. Remove in Phase 6."""
+        from .base import CostEstimate as _CE
+        return self.construct(s, sig, rf, _CE(), 0.0)
+
 
 class ExecutionModel(ABC):
-    """Turns a target position into concrete orders (type, slicing, routing)."""
+    """Sole writer of order state (buy/sell/stop_loss/take_profit/_pending_flip/
+    _close_at_open). Flips and closes are implicit from target vs current_holding.
+    """
 
     @abstractmethod
-    def plan(self, s, sig: Signal, target: Target, rf: RiskFrame) -> OrderPlan | None:
-        """Build the order plan, or None to place nothing."""
+    def route(self, s, target: TargetPortfolio, current_holding: float = 0.0,
+              constraints: RiskConstraints | None = None) -> OrderPlan | None:
+        """Diff desired target against current_holding and write the order state."""

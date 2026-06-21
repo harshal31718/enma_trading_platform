@@ -351,17 +351,22 @@ class LiveBotManager:
                             try:
                                 strategy.before()
 
-                                if strategy.position is None:
-                                    plan = evaluate(strategy)
-                                    if plan is not None:
-                                        await self._execute_entry(session_id, strategy, symbol, plan)
-                                else:
+                                if strategy.position is not None:
                                     strategy.position.update_pnl(strategy.price)
                                     await self._check_exits(session_id, strategy, symbol)
-                                    if strategy.position is not None:
-                                        evaluate(strategy)
-                                        if strategy.has_pending_flip:
-                                            await self._execute_flip(session_id, strategy, symbol)
+                                current_holding = (
+                                    strategy.position.qty * (1 if strategy.is_long else -1)
+                                ) if strategy.position else 0.0
+                                plan = evaluate(strategy, current_holding)
+                                if strategy.position is None and plan is not None:
+                                    await self._execute_entry(session_id, strategy, symbol, plan)
+                                elif strategy.has_pending_flip:
+                                    await self._execute_flip(session_id, strategy, symbol)
+                                elif strategy._close_at_open:
+                                    strategy._close_at_open = False
+                                    await self._close_position(
+                                        session_id, strategy, symbol, strategy.price, "strategy_exit"
+                                    )
 
                                 strategy.after()
                             except Exception as e:
@@ -431,18 +436,22 @@ class LiveBotManager:
             strategy.sell = None
             return
 
-        # Skip if the bumped notional exceeds the capital allocated to this symbol.
+        # Skip if the bumped notional exceeds the leveraged buying power allocated to this symbol.
         # This prevents BTCUSDT (minNotional=$50) from placing a $50 order when the
         # risk-sized qty was only worth ~$6 — that would risk far more than intended.
         notional = qty * fill_price
-        if notional > strategy.balance * 1.05:  # 5% tolerance for price movement
+        max_allowed_notional = strategy.balance * strategy.leverage * 1.05
+        if notional > max_allowed_notional:
             logger.warning(
-                f"[AlgoBot] {symbol}: notional ${notional:.2f} exceeds capital "
-                f"${strategy.balance:.2f} after min-notional bump, skipping"
+                f"[AlgoBot] {symbol}: notional ${notional:.2f} exceeds leveraged buying power "
+                f"${strategy.balance * strategy.leverage:.2f} (leverage {strategy.leverage}x) after min-notional bump, skipping"
             )
             await self._notify_node(session_id, {
                 "event": "log",
-                "eventData": {"type": "error", "message": f"Skipped {symbol}: notional ${notional:.2f} exceeds allocated capital ${strategy.balance:.2f}"}
+                "eventData": {
+                    "type": "error",
+                    "message": f"Skipped {symbol}: notional ${notional:.2f} exceeds leveraged buying power ${strategy.balance * strategy.leverage:.2f}"
+                }
             })
             strategy.buy = None
             strategy.sell = None

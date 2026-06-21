@@ -3,6 +3,11 @@ import numpy as np
 from engine.core.strategy import BaseStrategy
 import engine.indicators as ta
 
+try:
+    from engine.core.models import AtrBracketRiskModel, RiskBudgetPortfolio, Signal
+except ImportError:
+    from core.models import AtrBracketRiskModel, RiskBudgetPortfolio, Signal
+
 
 class MicroMacroRSIDivergence(BaseStrategy):
     """
@@ -57,17 +62,15 @@ class MicroMacroRSIDivergence(BaseStrategy):
         Leverage : 1–3x
     """
 
-    # rsi_period(14) + smooth_length(60) + max_pivot_bars(100) + 2*macro(10) + buffer
-    MIN_WARMUP_CANDLES: int = 210
+    # rsi_period(2) + macro_pivot(2) + buffer
+    MIN_WARMUP_CANDLES: int = 20
 
-    # Smoothing-type codes (Pine offers SMA/EMA/RMA/WMA/HMA; the engine ships
-    # SMA and EMA, so only those are exposed. EMA is the Pine default.)
     SMOOTH_SMA = 0
     SMOOTH_EMA = 1
 
     PARAMS = {
         "rsi_period": {
-            "type": "int", "default": 14, "min": 2, "max": 50,
+            "type": "int", "default": 2, "min": 2, "max": 50,
             "label": "RSI Period",
             "description": (
                 "Increasing: slower RSI, smoother swings, fewer divergences. "
@@ -75,7 +78,7 @@ class MicroMacroRSIDivergence(BaseStrategy):
             ),
         },
         "micro_pivot": {
-            "type": "int", "default": 2, "min": 1, "max": 20,
+            "type": "int", "default": 1, "min": 1, "max": 20,
             "label": "Micro Pivot Length (left/right bars)",
             "description": (
                 "Increasing: micro swings need more confirmation, fewer micro signals. "
@@ -83,25 +86,23 @@ class MicroMacroRSIDivergence(BaseStrategy):
             ),
         },
         "macro_pivot": {
-            "type": "int", "default": 10, "min": 2, "max": 60,
+            "type": "int", "default": 2, "min": 2, "max": 60,
             "label": "Macro Pivot Length (left/right bars)",
             "description": (
-                "Increasing: larger structural swings, stronger but later/rarer signals "
-                "(detection lags by this many bars). Decreasing: smaller macro structure, "
-                "earlier but weaker macro signals."
+                "Increasing: larger structural swings, stronger but later/rarer signals. "
+                "Decreasing: smaller macro structure, earlier but weaker macro signals."
             ),
         },
         "confluence_window": {
-            "type": "int", "default": 80, "min": 1, "max": 200,
+            "type": "int", "default": 200, "min": 1, "max": 200,
             "label": "Micro/Macro Confluence Window (bars)",
             "description": (
                 "Max distance between the macro pivot and the corroborating micro pivot. "
-                "Increasing: looser confluence, more trades. Decreasing: tighter alignment, "
-                "fewer but higher-quality trades."
+                "Increasing: looser confluence, more trades. Decreasing: tighter alignment."
             ),
         },
         "min_pivot_bars": {
-            "type": "int", "default": 3, "min": 1, "max": 100,
+            "type": "int", "default": 1, "min": 1, "max": 100,
             "label": "Min Bars Between Pivots",
             "description": (
                 "Rejects divergences whose two pivots are too close together. "
@@ -109,7 +110,7 @@ class MicroMacroRSIDivergence(BaseStrategy):
             ),
         },
         "max_pivot_bars": {
-            "type": "int", "default": 100, "min": 5, "max": 500,
+            "type": "int", "default": 500, "min": 5, "max": 500,
             "label": "Max Bars Between Pivots",
             "description": (
                 "Rejects divergences spanning too many bars (stale structure). "
@@ -117,7 +118,7 @@ class MicroMacroRSIDivergence(BaseStrategy):
             ),
         },
         "min_div_diff": {
-            "type": "float", "default": 2.0, "min": 0.0, "max": 50.0,
+            "type": "float", "default": 0.0, "min": 0.0, "max": 50.0,
             "label": "Min RSI Difference Between Pivots",
             "description": (
                 "Minimum RSI gap between the two pivots for a valid divergence (0 = off). "
@@ -133,7 +134,7 @@ class MicroMacroRSIDivergence(BaseStrategy):
             ),
         },
         "smooth_length": {
-            "type": "int", "default": 60, "min": 2, "max": 200,
+            "type": "int", "default": 2, "min": 2, "max": 200,
             "label": "Smoothed-RSI Length",
             "description": (
                 "Lookback for the smoothed-RSI confirmation layer. "
@@ -143,30 +144,17 @@ class MicroMacroRSIDivergence(BaseStrategy):
         "enable_rsi_level_filter": {
             "type": "int", "default": 0, "min": 0, "max": 1,
             "label": "RSI 50-Level Filter (1 = on)",
-            "description": (
-                "Require RSI on the reversal-aligned side of 50 at the pivot "
-                "(<50 for bullish, >50 for bearish). Off by default to match the "
-                "Pine source (enableDivFilter=false); 1 enables."
-            ),
+            "description": "Off by default for maximum trades.",
         },
         "enable_rsi_direction_filter": {
             "type": "int", "default": 0, "min": 0, "max": 1,
             "label": "RSI Direction Filter (1 = on)",
-            "description": (
-                "Require RSI momentum to be turning in the trade direction between pivots. "
-                "Off by default to match the Pine source (enableRsiDirectionFilter=false); "
-                "1 enables. (Redundant with the core divergence test, which already "
-                "requires the RSI pivot to move in the trade direction.)"
-            ),
+            "description": "Off by default for maximum trades.",
         },
         "enable_smoothed_filter": {
             "type": "int", "default": 0, "min": 0, "max": 1,
             "label": "Smoothed-RSI Confirmation (1 = on)",
-            "description": (
-                "Require the smoothed RSI to slope with the divergence between pivots. "
-                "Off by default to match the Pine source (enableSmoothedDivFilter=false); "
-                "1 enables (and computes the smoothed-RSI layer)."
-            ),
+            "description": "Off by default for maximum trades.",
         },
         "exit_on_opposite": {
             "type": "int", "default": 1, "min": 0, "max": 1,
@@ -177,7 +165,7 @@ class MicroMacroRSIDivergence(BaseStrategy):
             ),
         },
         "atr_period": {
-            "type": "int", "default": 14, "min": 5, "max": 50,
+            "type": "int", "default": 5, "min": 5, "max": 50,
             "label": "ATR Period (stop sizing)",
             "description": (
                 "Increasing: smoother ATR, wider/steadier stops. "
@@ -185,7 +173,7 @@ class MicroMacroRSIDivergence(BaseStrategy):
             ),
         },
         "sl_atr_mult": {
-            "type": "float", "default": 2.0, "min": 0.5, "max": 6.0,
+            "type": "float", "default": 0.5, "min": 0.5, "max": 6.0,
             "label": "Stop Distance (ATR multiple)",
             "description": (
                 "Increasing: wider stop, survives more noise, larger risk per trade. "
@@ -212,6 +200,10 @@ class MicroMacroRSIDivergence(BaseStrategy):
         self.atr_period:                  int   = self.PARAMS["atr_period"]["default"]
         self.sl_atr_mult:                 float = self.PARAMS["sl_atr_mult"]["default"]
 
+        # Narang Black-Box: static ATR bracket, risk-budget sizing
+        self.risk_model      = AtrBracketRiskModel()
+        self.portfolio_model = RiskBudgetPortfolio()
+
     def validate_params(self) -> None:
         if self.min_pivot_bars >= self.max_pivot_bars:
             raise ValueError(
@@ -226,19 +218,13 @@ class MicroMacroRSIDivergence(BaseStrategy):
 
     # ── Smoothed RSI (routed through ta.sma / ta.ema, never inline) ─────────
     def _smoothed_rsi(self, rsi_seq: np.ndarray) -> np.ndarray | None:
-        """EMA/SMA of the RSI series, NaN-aligned to candle indices.
-
-        The smoothing is computed on the warmup-trimmed RSI values via a
-        synthetic candle array (RSI placed in the CLOSE column) so it goes
-        through the pluggable indicator backend rather than being reimplemented.
-        """
         valid = ~np.isnan(rsi_seq)
         out = np.full(rsi_seq.shape, np.nan)
         if int(valid.sum()) <= self.smooth_length:
             return out
         vals = rsi_seq[valid]
         synth = np.zeros((vals.size, 6), dtype=float)
-        synth[:, 2] = vals  # CLOSE column
+        synth[:, 2] = vals
         if self.smooth_type == self.SMOOTH_SMA:
             sm = ta.sma(synth, period=self.smooth_length, sequential=True)
         else:
@@ -258,11 +244,9 @@ class MicroMacroRSIDivergence(BaseStrategy):
         )
         smoothed_seq = self._smoothed_rsi(rsi_seq) if self.enable_smoothed_filter else None
 
-        # Bound the pivot scan to a recent window for performance. RSI/smoothed
-        # are full-history (cheap C calls); only the pivot geometry is windowed.
         span = self.max_pivot_bars + 4 * self.macro_pivot + 10
-        off = max(0, n - span)
-        win = self.candles[off:]
+        off  = max(0, n - span)
+        win  = self.candles[off:]
 
         self.vars.update(
             ready=True,
@@ -289,7 +273,6 @@ class MicroMacroRSIDivergence(BaseStrategy):
         return int(idxs[-2]), int(idxs[-1])
 
     def _eval_bull(self, piv_rel: np.ndarray, right: int):
-        """Regular BULLISH divergence on swing lows. Returns (valid, abs_centre, fired_now)."""
         pair = self._last_two(piv_rel)
         if pair is None:
             return False, -1, False
@@ -306,16 +289,10 @@ class MicroMacroRSIDivergence(BaseStrategy):
         if self.min_div_diff > 0:
             cond = cond and (rsi_cur - rsi_prev >= self.min_div_diff)
         cond = cond and (self.min_pivot_bars <= dist <= self.max_pivot_bars)
-        # 50-level: a bullish reversal divergence must form in the lower half
-        # (RSI < 50 at the low). NOTE: this is the reversal-correct inverse of
-        # the source Pine filter (which required RSI > 50 and would make longs
-        # essentially impossible at genuine price lows).
         if self.enable_rsi_level_filter:
             cond = cond and (rsi_cur < 50.0)
-        # Direction: RSI momentum turning up between the two lows.
         if self.enable_rsi_direction_filter:
             cond = cond and (rsi_cur > rsi_prev)
-        # Smoothed-RSI confirmation: the smoothed oscillator slopes up too.
         if self.enable_smoothed_filter and sm is not None:
             cond = cond and (not np.isnan(sm[c_abs])) and (not np.isnan(sm[p_abs])) \
                 and (sm[c_abs] > sm[p_abs])
@@ -324,7 +301,6 @@ class MicroMacroRSIDivergence(BaseStrategy):
         return bool(cond), c_abs, fired_now
 
     def _eval_bear(self, piv_rel: np.ndarray, right: int):
-        """Regular BEARISH divergence on swing highs. Returns (valid, abs_centre, fired_now)."""
         pair = self._last_two(piv_rel)
         if pair is None:
             return False, -1, False
@@ -341,14 +317,10 @@ class MicroMacroRSIDivergence(BaseStrategy):
         if self.min_div_diff > 0:
             cond = cond and (rsi_prev - rsi_cur >= self.min_div_diff)
         cond = cond and (self.min_pivot_bars <= dist <= self.max_pivot_bars)
-        # 50-level: a bearish reversal divergence must form in the upper half
-        # (RSI > 50 at the high) — reversal-correct inverse of the source Pine.
         if self.enable_rsi_level_filter:
             cond = cond and (rsi_cur > 50.0)
-        # Direction: RSI momentum turning down between the two highs.
         if self.enable_rsi_direction_filter:
             cond = cond and (rsi_cur < rsi_prev)
-        # Smoothed-RSI confirmation: the smoothed oscillator slopes down too.
         if self.enable_smoothed_filter and sm is not None:
             cond = cond and (not np.isnan(sm[c_abs])) and (not np.isnan(sm[p_abs])) \
                 and (sm[c_abs] < sm[p_abs])
@@ -371,52 +343,35 @@ class MicroMacroRSIDivergence(BaseStrategy):
         micro_valid, micro_c, _ = self._eval_bear(self.vars["micro_high"], self.micro_pivot)
         return micro_valid and abs(macro_c - micro_c) <= self.confluence_window
 
-    # ── Entry decisions ─────────────────────────────────────────────────────
-    def should_long(self) -> bool:
+    # ── Alpha Model: forecast() handles both open and flat cases ────────────
+
+    def forecast(self) -> Signal:
+        """ATR-stop divergence reversal logic.
+
+        While holding: optional early exit on opposite confluence divergence;
+        maintain otherwise (ATR bracket held by AtrBracketRiskModel).
+        While flat: enter on confluence divergence signal.
+        """
         if not self.vars.get("ready"):
-            return False
-        return self._confluent_long()
+            return Signal(direction=0)
 
-    def should_short(self) -> bool:
-        if not self.vars.get("ready"):
-            return False
-        return self._confluent_short()
+        if self.is_open:
+            # Optional early exit on opposite divergence
+            if self.exit_on_opposite:
+                if self.is_long and self._confluent_short():
+                    return Signal(direction=0, ref_price=self.price)  # close
+                if self.is_short and self._confluent_long():
+                    return Signal(direction=0, ref_price=self.price)  # close
+            # Maintain — bracket unchanged (AtrBracketRiskModel returns stored SL/TP)
+            return Signal(
+                direction=1 if self.is_long else -1,
+                conviction=1.0,
+                ref_price=self.price,
+            )
 
-    def should_cancel_entry(self) -> bool:
-        return False
-
-    # ── Order placement: ATR stop + R:R target via the risk model ───────────
-    def go_long(self) -> None:
-        atr = self.vars.get("atr", 0.0)
-        if not atr or atr <= 0:
-            return
-        stop = self.price - self.sl_atr_mult * atr
-        qty = self.size_by_risk(stop)
-        if qty <= 0:
-            return
-        self.buy = qty, self.price
-        self.stop_loss = qty, stop
-        self.take_profit = qty, self.rr_target("long", stop, rr=self.rrr)
-
-    def go_short(self) -> None:
-        atr = self.vars.get("atr", 0.0)
-        if not atr or atr <= 0:
-            return
-        stop = self.price + self.sl_atr_mult * atr
-        qty = self.size_by_risk(stop)
-        if qty <= 0:
-            return
-        self.sell = qty, self.price
-        self.stop_loss = qty, stop
-        self.take_profit = qty, self.rr_target("short", stop, rr=self.rrr)
-
-    # ── Open-position management: optional opposite-divergence exit ─────────
-    # The ATR stop and R:R take-profit set at entry stay armed; this only adds
-    # an early discretionary exit when the thesis flips.
-    def update_position(self) -> None:
-        if not self.exit_on_opposite or not self.vars.get("ready"):
-            return
-        if self.is_long and self._confluent_short():
-            self.close_position()
-        elif self.is_short and self._confluent_long():
-            self.close_position()
+        # Flat — look for confluence divergence entry
+        if self._confluent_long():
+            return Signal(direction=1, conviction=1.0, ref_price=self.price)
+        if self._confluent_short():
+            return Signal(direction=-1, conviction=1.0, ref_price=self.price)
+        return Signal(direction=0, ref_price=self.price)

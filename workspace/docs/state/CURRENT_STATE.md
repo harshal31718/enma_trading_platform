@@ -3,7 +3,7 @@
 **Authority:** This is the single source of truth for what ENMA currently does.
 Read this before starting any work. If this conflicts with chat history, this document wins.
 
-Last updated: 2026-06-20
+Last updated: 2026-06-21
 
 ---
 
@@ -20,16 +20,21 @@ Last updated: 2026-06-20
 - Create a new strategy (scaffolds file on disk + MongoDB metadata)
 - View strategy source code (read-only modal)
 - Extract strategy params (dynamic from Python file inspection)
-- 5 strategies seeded on startup: `MicroScalper`, `AdaptiveTrend` (regime-aware trend follower: trend-EMA regime + EMA momentum cross + ATR volatility gate + volatility-targeted sizing, chandelier ATR trailing-stop exit), `BestSupertrend` (multi-timeframe Supertrend + SMA crossovers), `MicroMacroRSIDivergence` (RSI divergence with micro+macro pivot confluence), `MultiDivergence` (multi-oscillator divergence confluence — ported from the GainzAlgo Multi-Divergence Pine screener: regular divergence between price swing pivots and 9 sources — RSI, MFI, Stochastic, Z-Score, ADX, MACD, OBV, price-action, swing-volume — entering when ≥ N sources agree on a fresh pivot, ATR-based SL/TP with risk-per-trade sizing, long & short)
+- 5 strategies seeded on startup — each ported to the Narang Black-Box architecture (defines `forecast()`, binds specific risk/portfolio model, does not own `go_long`/`go_short`/`update_position`):
+  - `MicroScalper` — `AtrBracketRiskModel` + `RiskBudgetPortfolio`; volatility-gated momentum crossover; flips while holding
+  - `AdaptiveTrend` — `ChandelierRiskModel` + `RiskBudgetPortfolio`; regime-aware trend follower with chandelier trailing exit
+  - `BestSupertrend` — `SignalExitRiskModel` + `NotionalPortfolio`; multi-timeframe Supertrend + SMA crossovers; closes via `_close_at_open` (intentional behavioral change from prior `liquidate()`)
+  - `MicroMacroRSIDivergence` — `AtrBracketRiskModel` + `RiskBudgetPortfolio`; RSI divergence with micro+macro pivot confluence; optional opposite-divergence exit
+  - `MultiDivergence` — `AtrBracketRiskModel` + `RiskBudgetPortfolio`; multi-oscillator divergence confluence (9 sources: RSI, MFI, Stochastic, Z-Score, ADX, MACD, OBV, price-action, swing-volume)
 
 ### Backtesting
 - BullMQ job queue (`bull:backtest`) — Node server enqueues, engine executes
 - Candle auto-fetch before backtest via `ensure_candles_available()` — no manual import step needed
 - Backtest simulation: strict sequential candle replay, no lookahead
 - Orders execute at OPEN of next candle after signal
-- **Unified Decision Pipeline**: Backtest runs evaluate signals through `pipeline.evaluate()`, unifying backtest and live decision flows.
+- **Narang Strict Black-Box Five-Model Pipeline**: All five models (Alpha → Risk → TCM → PCM → Execution) now have clean, non-leaking boundaries. `pipeline.evaluate(s, current_holding)` is unconditional every-candle — no early return for open positions. `current_holding` (signed: +long, -short, 0=flat) flows through all five models. Alpha (strategy) only emits `Signal` via `forecast()` — no account/order writes. Risk owns stops/trailing/drawdown breaker via `assess()`. TCM owns cost estimation via `estimate()`. PCM owns sizing/veto via `construct()`. Execution is sole writer of buy/sell/stop_loss/take_profit/_pending_flip/_close_at_open via `route()` (5 paths: flat→flat, hold→flat close, flat→enter, flip, maintain bracket).
 - **Isolated-margin futures model**: real leverage (initial margin locked on entry, affordability check), Binance tiered-MMR **liquidation** checked before SL/TP (loss capped at the forfeited isolated margin, `pnlPct=-100`), **maker/taker fees**, **adverse slippage** on market fills, and **optional funding** (off by default; longs pay / shorts receive on a positive rate) — see DECISIONS.md #10
-- **Risk-based position sizing** centralized in `BaseStrategy` (`size_by_risk`, `atr_stop`, `rr_target`, `trail_stop`, `move_to_breakeven`); all 4 built-in strategies now size by true risk-per-trade (rule #6)
+- **Risk-based position sizing** centralized in `BaseStrategy` (`size_by_risk`, `atr_stop`, `rr_target`, `trail_stop`, `move_to_breakeven`); all 5 strategies size via pluggable `PortfolioModel` subclasses (rule #6)
 - **UI-configurable risk model**: `risk_pct`, `rrr`, `max_session_dd`, and `liq_buffer_pct` are editable per-run from the BacktestConfigForm (pre-filled from the global Risk Management defaults in Exchange Settings, overridable per run). The server merges per-run override over saved defaults (`utils/risk.js → resolveRiskParams`), maps to the engine's snake_case `riskParams` dict, persists it on `backtestResults`, and forwards it through the worker; the engine injects it in `backtest_runner` step 6b
 - **Configurable simulation parameters**: Trading fees (taker/maker %), slippage %, funding rate, and capital/leverage defaults are all stored in MongoDB Settings (Exchange Settings form), not hardcoded. Defaults: taker 0.05%, maker 0.02%, slippage 0.05%, funding off
 - Stop-loss / take-profit checked on every candle's high/low
@@ -103,7 +108,14 @@ Last updated: 2026-06-20
 
 ## In Progress
 
-_(No active feature work. Workflow V2 Stabilization complete 2026-06-05.)_
+**Narang Black-Box refactor — golden master gate pending (2026-06-21).**
+All implementation is complete. Must run in Docker before declaring done:
+```
+docker compose exec engine python -m scripts.golden_master run --label modular_merger
+docker compose exec engine python -m scripts.golden_master compare --a baseline --b modular_merger
+docker compose exec engine python -m pytest engine/tests/test_boundaries.py -q
+```
+BestSupertrend will show intentional drift (`liquidate()` → `_close_at_open`) — snapshot a new baseline for it and document in `DECISIONS.md`.
 
 ---
 

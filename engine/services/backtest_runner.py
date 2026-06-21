@@ -747,8 +747,11 @@ async def run_backtest_simulation(
             # ── C. Strategy decision hooks ───────────────────────────────
             try:
                 strategy.before()            # C1: cache indicators
-                evaluate(strategy)           # C2-C4: Alpha -> Risk -> Portfolio -> Cost -> Execution
-                strategy.after()             # C5: post-candle cleanup
+                current_holding = (          # C2: compute signed holding
+                    strategy.position.qty * (1 if strategy.is_long else -1)
+                ) if strategy.position else 0.0
+                evaluate(strategy, current_holding)  # C3-C7: full five-model pipeline
+                strategy.after()             # C8: post-candle cleanup
             except Exception as e:
                 raise RuntimeError(f"STRATEGY_ERROR: Python strategy error at step {t}: {e}")
 
