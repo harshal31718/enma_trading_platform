@@ -30,7 +30,9 @@ type Balance = { asset: string, walletBalance: string, availableBalance: string,
 
 ### Strategies & Backtesting
 - **`GET /api/v1/strategies`** -> `{ strategies: Strategy[] }`
-- **`POST /api/v1/strategies`** -> Req: `{ name, description }` -> `{ strategy: Strategy }`
+- **`POST /api/v1/strategies`** -> Req: `{ name, description, sourceName?, template? }` -> `{ strategy: Strategy }`
+  - `sourceName` clones an existing strategy by name
+  - `template: 'blank'` scaffolds a new blank strategy
 - **`GET /api/v1/strategies/:id/code`** -> `{ code: string }`
 - **`PUT /api/v1/strategies/:id/code`** -> Req: `{ code: string }` -> `{ savedAt: string }`
 - **`GET /api/v1/strategies/:id/params`** -> `{ params: { [key]: { type, default, min, max, label } } }`

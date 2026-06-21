@@ -12,7 +12,7 @@ const STRATEGY_TYPES = {
   MultiDivergence: { label: 'Divergence', variant: 'warning' },
 }
 
-export default function StrategyCard({ strategy }) {
+export default function StrategyCard({ strategy, onClone }) {
   const [viewOpen, setViewOpen] = useState(false)
   const type = STRATEGY_TYPES[strategy.name] ?? { label: 'Custom', variant: 'default' }
 
@@ -27,19 +27,28 @@ export default function StrategyCard({ strategy }) {
           <Badge variant={type.variant}>{type.label}</Badge>
         </div>
         <p className="text-gray-400 text-sm leading-relaxed">{strategy.description}</p>
-        <div className="flex items-center justify-between mt-1">
+        <div className="flex items-center justify-between mt-1 gap-2">
           <span className="text-gray-600 text-xs">
             {new Date(strategy.createdAt).toLocaleDateString('en-US', {
               year: 'numeric', month: 'short', day: 'numeric'
             })}
           </span>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setViewOpen(true)}
-          >
-            View Code
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setViewOpen(true)}
+            >
+              View Code
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onClone?.()}
+            >
+              Clone
+            </Button>
+          </div>
         </div>
       </div>
       <CodeViewer

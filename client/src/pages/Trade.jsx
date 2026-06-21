@@ -31,6 +31,18 @@ function fmtPrice(n) {
   return Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
+function fmtPriceForSymbol(n, symbol) {
+  const limits = SYMBOL_LIMITS[symbol]
+  const dp = limits ? getPrecisionDecimalPlaces(limits.tickSize) : 2
+  return Number(n).toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp })
+}
+
+function fmtQtyForSymbol(n, symbol) {
+  const limits = SYMBOL_LIMITS[symbol]
+  const dp = limits ? getPrecisionDecimalPlaces(limits.stepSize) : 4
+  return Number(n).toFixed(Math.max(dp, 0))
+}
+
 function fmtQty(n, dp = 4) {
   return Number(n).toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp })
 }
@@ -548,7 +560,7 @@ function TpSlModal({ position, onClose }) {
 
         <div className="flex flex-col px-4 pt-3 pb-1">
           <div className="text-[10px] text-gray-600 mb-2 tabular-nums">
-            Mark: {fmtPrice(markPrice)} · Entry: {fmtPrice(entryPrice)} · Qty: {quantity.toFixed(4)} BTC
+            Mark: {fmtPriceForSymbol(markPrice, position.symbol)} · Entry: {fmtPriceForSymbol(entryPrice, position.symbol)} · Qty: {fmtQtyForSymbol(quantity, position.symbol)} {position.symbol.replace('USDT', '')}
           </div>
 
           {/* Take Profit section */}
@@ -659,7 +671,7 @@ function TpSlModal({ position, onClose }) {
 
 // ─── PositionsTable ───────────────────────────────────────────────────────────
 
-function PositionsTable({ data, isLoading }) {
+function PositionsTable({ data, isLoading, account }) {
   const cols = ['Symbol', 'Size', 'Entry Price', 'Mark Price', 'Liq Price', 'Margin Ratio', 'Unrealized PnL', '']
   const [closeError, setCloseError] = useState(null)
   const [tpslPosition, setTpslPosition] = useState(null) // position object for modal
@@ -684,6 +696,10 @@ function PositionsTable({ data, isLoading }) {
   }
 
   const activePositions = data?.filter((p) => parseFloat(p.positionAmt) !== 0) ?? []
+
+  const maintMargin = parseFloat(account?.totalMaintMargin ?? 0)
+  const marginBalance = parseFloat(account?.totalMarginBalance ?? 0)
+  const accountMarginRatio = marginBalance > 0 ? (maintMargin / marginBalance * 100).toFixed(2) + '%' : '—'
 
   return (
     <>
@@ -722,7 +738,10 @@ function PositionsTable({ data, isLoading }) {
                 const pnl = parseFloat(p.unRealizedProfit)
                 const isPnlPos = pnl >= 0
                 const isClosing = closePending && closeVars?.symbol === p.symbol
-                const marginRatio = p.marginRatio ? (parseFloat(p.marginRatio) * 100).toFixed(2) + '%' : '—'
+                const posRatio = p.marginRatio && parseFloat(p.marginRatio) > 0
+                  ? (parseFloat(p.marginRatio) * 100).toFixed(2) + '%'
+                  : accountMarginRatio
+                const marginRatio = posRatio
                 return (
                   <tr key={p.symbol} className="border-b border-gray-800/30 hover:bg-gray-800/20">
                     <td className="py-2 pr-6 whitespace-nowrap">
@@ -731,13 +750,13 @@ function PositionsTable({ data, isLoading }) {
                         <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${side === 'Long' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>{side}</span>
                       </div>
                     </td>
-                    <td className="py-2 pr-6 tabular-nums">{Math.abs(size).toFixed(4)}</td>
-                    <td className="py-2 pr-6 tabular-nums">{fmtPrice(p.entryPrice)}</td>
-                    <td className="py-2 pr-6 tabular-nums">{fmtPrice(p.markPrice)}</td>
-                    <td className="py-2 pr-6 tabular-nums">{fmtPrice(p.liquidationPrice)}</td>
+                    <td className="py-2 pr-6 tabular-nums">{fmtQtyForSymbol(Math.abs(size), p.symbol)}</td>
+                    <td className="py-2 pr-6 tabular-nums">{fmtPriceForSymbol(p.entryPrice, p.symbol)}</td>
+                    <td className="py-2 pr-6 tabular-nums">{fmtPriceForSymbol(p.markPrice, p.symbol)}</td>
+                    <td className="py-2 pr-6 tabular-nums">{fmtPriceForSymbol(p.liquidationPrice, p.symbol)}</td>
                     <td className="py-2 pr-6 tabular-nums">{marginRatio}</td>
                     <td className={`py-2 pr-6 tabular-nums font-medium ${isPnlPos ? 'text-emerald-400' : 'text-red-400'}`}>
-                      {isPnlPos ? '+' : ''}{pnl.toFixed(4)} USDT
+                      {isPnlPos ? '+' : ''}{pnl.toFixed(2)} USDT
                     </td>
                     <td className="py-2">
                       <div className="flex items-center gap-1.5">
@@ -1145,7 +1164,7 @@ function BottomPanel({ ocoToast, ocoBanner, onDismissBanner }) {
 
       <div className="flex-1 overflow-y-auto px-2 min-h-0">
         {activeTab === 'Positions' && (
-          <PositionsTable data={positions} isLoading={posLoading} />
+          <PositionsTable data={positions} isLoading={posLoading} account={account} />
         )}
         {activeTab === 'Open Orders' && (
           <OpenOrdersTable

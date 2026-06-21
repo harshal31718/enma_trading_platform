@@ -31,6 +31,24 @@ class BestSupertrend(BaseStrategy):
     See workspace/docs/core/DECISIONS.md for rationale.
     """
 
+    # Maps tf param values to Binance interval strings
+    TF_MAP = {
+        "1h": "1h",
+        "4h": "4h",
+        "daily": "1d",
+        "weekly": "1w",
+        "monthly": "1M",
+    }
+
+    # Maps tf param values to pandas resample rules (backtest path)
+    _RESAMPLE_RULES = {
+        "1h": "1h",
+        "4h": "4h",
+        "daily": "D",
+        "weekly": "W-MON",
+        "monthly": "MS",
+    }
+
     PARAMS = {
         "order_type": {
             "type": "str",
@@ -69,7 +87,7 @@ class BestSupertrend(BaseStrategy):
         "tf": {
             "type": "str",
             "default": "daily",
-            "options": ["daily", "weekly", "monthly", "quarterly", "yearly"],
+            "options": ["1h", "4h", "daily", "weekly", "monthly"],
             "label": "Supertrend Timeframe"
         },
         "position_size_pct": {
@@ -91,35 +109,30 @@ class BestSupertrend(BaseStrategy):
         self.tf: str               = self.PARAMS["tf"]["default"]
         self.position_size_pct: float = self.PARAMS["position_size_pct"]["default"]
 
+        # Pre-fetched HTF candles injected by live_bot_manager (None in backtest → resampling path)
+        self._htf_candles = None
+
         # Narang Black-Box: no bracket (signal-driven exit), notional sizing
         self.risk_model      = SignalExitRiskModel()
         self.portfolio_model = NotionalPortfolio()
 
     def _is_same_timeframe(self) -> bool:
-        tf_map = {
-            "daily": "1d",
-            "weekly": "1w",
-            "monthly": "1M",
-            "quarterly": "3M",
-            "yearly": "12M"
-        }
-        mapped = tf_map.get(self.tf.lower())
+        mapped = self.TF_MAP.get(self.tf.lower())
         if mapped is None:
             return False
-        return self.timeframe.lower() == mapped.lower()
+        # Case-sensitive: "1m" (1 min) must not match "1M" (monthly)
+        return self.timeframe == mapped
 
     def _get_resampled_candles(self) -> np.ndarray:
         if self._is_same_timeframe():
             return self.candles
 
-        tf_map = {
-            "daily": "D",
-            "weekly": "W-MON",
-            "monthly": "MS",
-            "quarterly": "3MS",
-            "yearly": "YS"
-        }
-        rule = tf_map.get(self.tf.lower(), "D")
+        # Use pre-fetched HTF candles if available (live bot path)
+        if self._htf_candles is not None and len(self._htf_candles) > 0:
+            return self._htf_candles
+
+        # Fall back to resampling (backtest path)
+        rule = self._RESAMPLE_RULES.get(self.tf.lower(), "D")
 
         df = pd.DataFrame(self.candles, columns=['timestamp', 'open', 'close', 'high', 'low', 'volume'])
         df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms', utc=True)

@@ -86,7 +86,7 @@ async function startSession(req, res, next) {
       })
     } catch (engineErr) {
       // Rollback on engine failure
-      for (const symbol of symbols) await releaseSymbolLock(symbol, String(session._id)).catch(() => {})
+      for (const symbol of symbols) await releaseSymbolLock(symbol, String(session._id)).catch(() => { })
       await LiveSession.findByIdAndUpdate(session._id, {
         status: 'error',
         errorMessage: engineErr.message,
@@ -125,7 +125,7 @@ async function stopSession(req, res, next) {
     // Call engine asynchronously — don't await full stop
     engineClient.post(`/algo/sessions/${req.params.id}/stop`).catch(async (err) => {
       console.error(`[AlgoBot] Engine stop call failed for ${req.params.id}:`, err.message)
-      
+
       // Force stop in DB if engine fails (e.g. 404 because engine restarted)
       await LiveSession.findByIdAndUpdate(req.params.id, { status: 'stopped', stoppedAt: new Date() })
 
@@ -138,7 +138,7 @@ async function stopSession(req, res, next) {
           await engineClient.post('/trade/close-position', { symbol }, { headers }).catch((closeErr) => {
             console.log(`[AlgoBot] Note: No position closed or error for ${symbol}: ${closeErr.message}`)
           })
-          await releaseSymbolLock(symbol, String(session._id)).catch(() => {})
+          await releaseSymbolLock(symbol, String(session._id)).catch(() => { })
         }
       } catch (fallbackErr) {
         console.error(`[AlgoBot] Fallback position closing/lock release failed:`, fallbackErr.message)
@@ -249,7 +249,7 @@ async function handleEngineStats(req, res, next) {
         io.emit('algo:session:log', openLog)
         await LiveSession.findByIdAndUpdate(id, {
           $push: { logs: { $each: [{ type: openLog.type, message: openLog.message }], $slice: -100 } }
-        }).catch(() => {})
+        }).catch(() => { })
       }
 
       if (event === 'position:close' && eventData) {
@@ -265,8 +265,8 @@ async function handleEngineStats(req, res, next) {
         io.emit('algo:session:log', closeLog)
         await LiveSession.findByIdAndUpdate(id, {
           $push: { logs: { $each: [{ type: closeLog.type, message: closeLog.message }], $slice: -100 } }
-        }).catch(() => {})
-        
+        }).catch(() => { })
+
         // Push to trade history
         const currentBalance = parseFloat(session.capital) + parseFloat(session.pnl || '0')
         await LiveSession.findByIdAndUpdate(id, {
@@ -278,11 +278,10 @@ async function handleEngineStats(req, res, next) {
             }
           }
         })
-        
-        // Release the Redis lock for this symbol
-        if (eventData.symbol) {
-          await releaseSymbolLock(eventData.symbol, id).catch(() => {})
-        }
+
+        // NOTE: Symbol lock is intentionally NOT released here.
+        // The lock persists for the entire bot session to allow multiple trades on the same symbol.
+        // Lock is released only when the session stops or encounters an error.
       }
 
       if (status === 'error') {
@@ -296,7 +295,7 @@ async function handleEngineStats(req, res, next) {
         // Release all symbol locks for errored sessions
         if (session?.symbols) {
           for (const sym of session.symbols) {
-            await releaseSymbolLock(sym, id).catch(() => {})
+            await releaseSymbolLock(sym, id).catch(() => { })
           }
         }
       }
@@ -311,7 +310,7 @@ async function handleEngineStats(req, res, next) {
         io.emit('algo:session:log', logEntry)
         await LiveSession.findByIdAndUpdate(id, {
           $push: { logs: { $each: [{ type: logEntry.type, message: logEntry.message }], $slice: -100 } }
-        }).catch(() => {})
+        }).catch(() => { })
       }
 
       if (event === 'stopped') {
@@ -319,7 +318,7 @@ async function handleEngineStats(req, res, next) {
         const session2 = await LiveSession.findById(id).lean()
         if (session2?.symbols) {
           for (const sym of session2.symbols) {
-            await releaseSymbolLock(sym, id).catch(() => {})
+            await releaseSymbolLock(sym, id).catch(() => { })
           }
         }
       }

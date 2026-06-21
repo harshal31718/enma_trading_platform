@@ -18,6 +18,7 @@ Last updated: 2026-06-21
 ### Strategy Management
 - List all strategies (metadata: name, description, filePath)
 - Create a new strategy (scaffolds file on disk + MongoDB metadata)
+- Clone an existing strategy into a new name
 - View strategy source code (read-only modal)
 - Extract strategy params (dynamic from Python file inspection)
 - 5 strategies seeded on startup — each ported to the Narang Black-Box architecture (defines `forecast()`, binds specific risk/portfolio model, does not own `go_long`/`go_short`/`update_position`):
@@ -45,7 +46,8 @@ Last updated: 2026-06-21
 - Cancel in-progress backtest (Redis cancel flag)
 - Deep-link to any result via `?jobId=` query param
 - Vectorized metric calculations using NumPy (drawdown, Sharpe, Sortino, Calmar, gross profit/loss, profit factor, expectancy, payoff ratio, streaks, and buy & hold benchmark)
-- Detailed tabbed report UI: Overview (Headline cards + Equity/Drawdown/Benchmark chart + Config summary), Performance Summary (comparative All / Long / Short table), and List of Trades (log table with excursions)
+- Detailed tabbed report UI: Overview (Headline cards + Equity/Drawdown/Benchmark chart + Config summary + Performance Calendar), Performance Summary (comparative All / Long / Short table), and List of Trades (log table with excursions)
+- **Performance Calendar**: Visualizes backtest results by Day, Week, Month, or Quarter in the Overview tab. Color-coded by P&L intensity (emerald-400 for profit, red-400 for loss). Supported by `backtest-analytics.js` utility and `useAllBacktestTrades` hook.
 - BacktestConfigForm pre-fills capital and leverage from Exchange Settings defaults
 
 ### Dashboard
@@ -108,14 +110,21 @@ Last updated: 2026-06-21
 
 ## In Progress
 
-**Narang Black-Box refactor — golden master gate pending (2026-06-21).**
-All implementation is complete. Must run in Docker before declaring done:
-```
-docker compose exec engine python -m scripts.golden_master run --label modular_merger
-docker compose exec engine python -m scripts.golden_master compare --a baseline --b modular_merger
-docker compose exec engine python -m pytest engine/tests/test_boundaries.py -q
-```
-BestSupertrend will show intentional drift (`liquidate()` → `_close_at_open`) — snapshot a new baseline for it and document in `DECISIONS.md`.
+None.
+
+## Verified Baselines
+
+### Narang Black-Box Refactor
+- Verified in Docker on 2026-06-21.
+- Golden snapshots refreshed for the current strict five-model pipeline (`baseline` and `modular_merger`).
+- Verification commands:
+  ```
+  docker compose exec engine python -m scripts.golden_master run --label baseline
+  docker compose exec engine python -m scripts.golden_master run --label modular_merger
+  docker compose exec engine python -m scripts.golden_master compare --a baseline --b modular_merger
+  docker compose exec engine python -m pytest tests/test_boundaries.py -q
+  ```
+- Results: golden comparison passed for all 5 seeded strategies; boundary regression suite passed 20/20.
 
 ---
 

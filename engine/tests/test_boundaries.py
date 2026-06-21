@@ -8,17 +8,22 @@ Asserts that each seeded strategy:
      (account state, order writes, execution/sizing calls)
 
 Run with:
-    docker compose exec engine python -m pytest engine/tests/test_boundaries.py -q
+    docker compose exec engine python -m pytest tests/test_boundaries.py -q
 """
 import ast
 import importlib
 import inspect
+import os
 import pkgutil
+import sys
 import textwrap
 from pathlib import Path
 from typing import Iterator
 
 import pytest
+
+if os.name != "nt" and Path("/engine").exists():
+    sys.path.insert(0, "/")
 
 # ── Seeded strategies to check ───────────────────────────────────────────────
 SEEDED_STRATEGIES = [

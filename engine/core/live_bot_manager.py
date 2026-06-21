@@ -19,6 +19,15 @@ logger = logging.getLogger(__name__)
 # How many historical candles to load for indicator warmup
 WARMUP_CANDLES = 200
 
+# Maps strategy tf param values to Binance interval strings (case-sensitive: "1M" = monthly)
+_TF_TO_BINANCE = {
+    "1h": "1h",
+    "4h": "4h",
+    "daily": "1d",
+    "weekly": "1w",
+    "monthly": "1M",
+}
+
 # Server URL for callbacks
 SERVER_URL = os.getenv("SERVER_URL", "http://server:5000")
 
@@ -278,6 +287,18 @@ class LiveBotManager:
             logger.error(f"[AlgoBot] Failed to load warmup candles for {symbol}: {e}")
             strategy.candles = np.empty((0, 6), dtype=np.float64)
 
+        # Fetch HTF candles if strategy uses a higher timeframe (e.g. BestSupertrend tf param)
+        htf_tf = getattr(strategy, 'tf', None)
+        if htf_tf is not None:
+            htf_interval = _TF_TO_BINANCE.get(htf_tf.lower())
+            if htf_interval and htf_interval != timeframe:
+                try:
+                    htf_candles = await self._fetch_htf_candles(symbol, htf_interval, 50)
+                    strategy._htf_candles = htf_candles
+                    logger.info(f"[AlgoBot] {symbol}: HTF ({htf_interval}) candles loaded: {len(htf_candles)}")
+                except Exception as e:
+                    logger.warning(f"[AlgoBot] {symbol}: HTF candle fetch failed — {e}")
+
         # Sync any pre-existing Binance position into local state.
         # This recovers positions that were opened before the engine tracked them
         # (e.g. SL/TP placement failed on a prior run, leaving an untracked fill).
@@ -346,6 +367,22 @@ class LiveBotManager:
                                     "event": "log",
                                     "eventData": {"type": "info", "message": f"{symbol}: Ready · {len(strategy.candles)} candles loaded"}
                                 })
+
+                            # Update HTF candles on each closed base candle (live multi-timeframe)
+                            _htf_tf = getattr(strategy, 'tf', None)
+                            if _htf_tf is not None and getattr(strategy, '_htf_candles', None) is not None:
+                                _htf_interval = _TF_TO_BINANCE.get(_htf_tf.lower())
+                                if _htf_interval and _htf_interval != timeframe:
+                                    try:
+                                        _new_htf = await self._fetch_htf_candles(symbol, _htf_interval, 2)
+                                        if len(_new_htf) > 0:
+                                            _last_ts = strategy._htf_candles[-1, 0] if len(strategy._htf_candles) > 0 else 0
+                                            if _new_htf[-1, 0] > _last_ts:
+                                                strategy._htf_candles = self._append_candle(strategy._htf_candles, _new_htf[-1])
+                                                if len(strategy._htf_candles) > 100:
+                                                    strategy._htf_candles = strategy._htf_candles[-100:]
+                                    except Exception as _e:
+                                        logger.warning(f"[AlgoBot] {symbol}: HTF candle update failed — {_e}")
 
                             # Strategy execution
                             try:
@@ -863,6 +900,38 @@ class LiveBotManager:
             return candles
         except Exception as e:
             logger.error(f"[AlgoBot] Binance REST candle fetch failed for {symbol}: {e}")
+            return np.empty((0, 6), dtype=np.float64)
+
+    async def _fetch_htf_candles(
+        self, symbol: str, tf_interval: str, limit: int = 50
+    ) -> np.ndarray:
+        """Fetch HTF candles from Binance Futures REST for live multi-timeframe strategies.
+        Returns the same [timestamp_ms, open, close, high, low, volume] layout as base candles.
+        Excludes the currently open candle (same as _fetch_candles_from_rest)."""
+        url = "https://fapi.binance.com/fapi/v1/klines"
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(url, params={
+                    "symbol": symbol,
+                    "interval": tf_interval,
+                    "limit": limit,
+                })
+                resp.raise_for_status()
+                raw = resp.json()
+            if not raw:
+                return np.empty((0, 6), dtype=np.float64)
+            raw = raw[:-1]  # Exclude the currently open candle
+            candles = np.empty((len(raw), 6), dtype=np.float64)
+            for i, c in enumerate(raw):
+                candles[i, 0] = float(c[0])  # timestamp ms
+                candles[i, 1] = float(c[1])  # open
+                candles[i, 2] = float(c[4])  # close
+                candles[i, 3] = float(c[2])  # high
+                candles[i, 4] = float(c[3])  # low
+                candles[i, 5] = float(c[5])  # volume
+            return candles
+        except Exception as e:
+            logger.error(f"[AlgoBot] HTF REST fetch failed for {symbol} {tf_interval}: {e}")
             return np.empty((0, 6), dtype=np.float64)
 
     def _append_candle(self, candles: np.ndarray, new_candle: np.ndarray) -> np.ndarray:

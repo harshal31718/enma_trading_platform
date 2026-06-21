@@ -51,8 +51,8 @@ export function useTradePositions(options = {}) {
       const { data } = await api.get('/api/v1/trade/positions')
       return data.data
     },
-    refetchInterval: 10000,
-    staleTime: 8000,
+    refetchInterval: 3000,
+    staleTime: 2000,
     retry: false,
     ...options,
   })

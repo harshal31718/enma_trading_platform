@@ -1,13 +1,13 @@
 const mongoose = require('mongoose')
 const { v4: uuidv4 } = require('uuid')
 const backtestQueue = require('../services/backtestQueue')
-const engineClient  = require('../services/engineClient')
+const engineClient = require('../services/engineClient')
 const BacktestResult = require('../models/BacktestResult')
-const BacktestTrade  = require('../models/BacktestTrade')
-const Strategy       = require('../models/Strategy')
-const Settings       = require('../models/Settings')
-const ApiResponse    = require('../utils/ApiResponse')
-const ApiError       = require('../utils/ApiError')
+const BacktestTrade = require('../models/BacktestTrade')
+const Strategy = require('../models/Strategy')
+const Settings = require('../models/Settings')
+const ApiResponse = require('../utils/ApiResponse')
+const ApiError = require('../utils/ApiError')
 const { resolveModelParams } = require('../utils/risk')
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -44,9 +44,9 @@ async function runBacktest(req, res, next) {
 
     // Load saved exchange settings — used as defaults when the client omits fee/slippage
     const savedSettings = await Settings.findById('global') || {}
-    const defaultFeeRate   = savedSettings.takerFee    ?? 0.0005
-    const defaultSlippage  = savedSettings.slippagePct ?? 0.0005
-    const defaultFunding   = savedSettings.fundingEnabled ?? false
+    const defaultFeeRate = savedSettings.takerFee ?? 0.0005
+    const defaultSlippage = savedSettings.slippagePct ?? 0.0005
+    const defaultFunding = savedSettings.fundingEnabled ?? false
     const defaultFundingRate = savedSettings.fundingRate ?? 0.0001
 
     // Risk model: merge per-run override (if any) over saved global defaults,
@@ -78,18 +78,18 @@ async function runBacktest(req, res, next) {
 
     await BacktestResult.create({
       jobId,
-      strategyId:   strategy._id,
+      strategyId: strategy._id,
       strategyName: strategy.name,
       exchange,
       symbol,
       timeframe,
       startDate,
       endDate,
-      capital:  capitalNum,
+      capital: capitalNum,
       leverage: leverageNum,
-      feeRate:  feeRateNum,
+      feeRate: feeRateNum,
       riskParams,
-      status:   'queued',
+      status: 'queued',
     })
 
     await backtestQueue.add('run', {
@@ -100,12 +100,12 @@ async function runBacktest(req, res, next) {
       timeframe,
       startDate,
       endDate,
-      capital:      capitalNum,
-      leverage:     leverageNum,
-      feeRate:      feeRateNum,
-      slippagePct:  defaultSlippage,
+      capital: capitalNum,
+      leverage: leverageNum,
+      feeRate: feeRateNum,
+      slippagePct: defaultSlippage,
       fundingEnabled: defaultFunding,
-      fundingRate:  defaultFundingRate,
+      fundingRate: defaultFundingRate,
       riskParams,
     }, { jobId })
 
@@ -136,12 +136,40 @@ async function getBacktest(req, res, next) {
 async function listBacktests(req, res, next) {
   try {
     const parsedLimit = parseInt(req.query.limit, 10)
-    const limit  = Math.min(isNaN(parsedLimit) ? 20 : parsedLimit, 100)
+    const limit = Math.min(isNaN(parsedLimit) ? 20 : parsedLimit, 100)
     const before = req.query.before  // MongoDB _id string of the last item seen
 
-    const filter = before && mongoose.Types.ObjectId.isValid(before)
-      ? { _id: { $lt: new mongoose.Types.ObjectId(before) } }
-      : {}
+    const { strategyName, symbol, timeframe, status, createdAfter, createdBefore } = req.query
+
+    const filter = {}
+
+    if (strategyName) filter.strategyName = strategyName
+    if (symbol) filter.symbol = symbol
+    if (timeframe) filter.timeframe = timeframe
+    if (status) filter.status = status
+
+    if (createdAfter || createdBefore) {
+      filter.createdAt = {}
+      if (createdAfter) {
+        const afterDate = new Date(createdAfter)
+        if (!isNaN(afterDate.getTime())) {
+          filter.createdAt.$gte = afterDate
+        }
+      }
+      if (createdBefore) {
+        const beforeDate = new Date(createdBefore)
+        if (!isNaN(beforeDate.getTime())) {
+          filter.createdAt.$lte = beforeDate
+        }
+      }
+      if (Object.keys(filter.createdAt).length === 0) {
+        delete filter.createdAt
+      }
+    }
+
+    if (before && mongoose.Types.ObjectId.isValid(before)) {
+      filter._id = { $lt: new mongoose.Types.ObjectId(before) }
+    }
 
     const backtests = await BacktestResult.find(filter)
       .select('jobId strategyName symbol timeframe status exchange createdAt error tradeCount')
@@ -149,21 +177,21 @@ async function listBacktests(req, res, next) {
       .limit(limit + 1)   // fetch one extra to know if there's a next page
       .lean()
 
-    const hasMore  = backtests.length > limit
-    const page     = hasMore ? backtests.slice(0, limit) : backtests
+    const hasMore = backtests.length > limit
+    const page = hasMore ? backtests.slice(0, limit) : backtests
     const nextCursor = hasMore ? String(page[page.length - 1]._id) : null
 
     const formatted = page.map(b => ({
-      id:           b._id,
-      jobId:        b.jobId,
+      id: b._id,
+      jobId: b.jobId,
       strategyName: b.strategyName,
-      symbol:       b.symbol,
-      timeframe:    b.timeframe,
-      status:       b.status,
-      exchange:     b.exchange,
-      createdAt:    b.createdAt,
-      error:        b.error,
-      tradeCount:   b.tradeCount ?? null,
+      symbol: b.symbol,
+      timeframe: b.timeframe,
+      status: b.status,
+      exchange: b.exchange,
+      createdAt: b.createdAt,
+      error: b.error,
+      tradeCount: b.tradeCount ?? null,
     }))
 
     res.json(ApiResponse.success({ backtests: formatted, nextCursor }))
@@ -176,11 +204,11 @@ async function listBacktests(req, res, next) {
 async function getBacktestTrades(req, res, next) {
   try {
     const { id } = req.params
-    const parsedPage  = parseInt(req.query.page,  10)
+    const parsedPage = parseInt(req.query.page, 10)
     const parsedLimit = parseInt(req.query.limit, 10)
-    const page  = Math.max(1, isNaN(parsedPage)  ? 1  : parsedPage)
-    const limit = Math.min(   isNaN(parsedLimit) ? 50 : parsedLimit, 200)
-    const skip  = (page - 1) * limit
+    const page = Math.max(1, isNaN(parsedPage) ? 1 : parsedPage)
+    const limit = Math.min(isNaN(parsedLimit) ? 50 : parsedLimit, 5000)
+    const skip = (page - 1) * limit
 
     // Resolve jobId — id may be a UUID (jobId) or a MongoDB ObjectId
     const query = mongoose.Types.ObjectId.isValid(id)

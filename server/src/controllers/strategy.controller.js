@@ -20,6 +20,30 @@ async function listStrategies(req, res, next) {
   }
 }
 
+async function createStrategy(req, res, next) {
+  try {
+    const { name, description, sourceName, template } = req.body
+    const response = await engineClient.post('/strategies', {
+      name,
+      description,
+      sourceName,
+      template,
+    })
+
+    // The engine returns raw strategy metadata; use the Mongo ID if available.
+    const strategy = response.data.data.strategy
+    res.status(201).json(ApiResponse.created({ strategy }))
+  } catch (err) {
+    if (err.response?.status === 400) {
+      return next(new ApiError(400, 'BAD_REQUEST', err.response.data.detail || 'Invalid strategy payload'))
+    }
+    if (err.response?.status === 409) {
+      return next(new ApiError(409, 'CONFLICT', err.response.data.detail || 'Strategy already exists'))
+    }
+    next(err)
+  }
+}
+
 async function getStrategyCode(req, res, next) {
   try {
     const strategy = await Strategy.findById(req.params.id).lean()
@@ -28,6 +52,27 @@ async function getStrategyCode(req, res, next) {
     const response = await engineClient.get(`/strategies/${strategy.name}/code`)
     res.json(ApiResponse.success(response.data.data))
   } catch (err) {
+    if (err.response?.status === 404) {
+      return next(new ApiError(404, 'NOT_FOUND', 'Strategy file not found on engine'))
+    }
+    next(err)
+  }
+}
+
+async function updateStrategyCode(req, res, next) {
+  try {
+    const strategy = await Strategy.findById(req.params.id).lean()
+    if (!strategy) throw new ApiError(404, 'NOT_FOUND', 'Strategy not found')
+
+    const response = await engineClient.put(`/strategies/${strategy.name}/code`, {
+      code: req.body.code,
+    })
+
+    res.json(ApiResponse.success(response.data.data))
+  } catch (err) {
+    if (err.response?.status === 400) {
+      return next(new ApiError(400, 'BAD_REQUEST', err.response.data.detail || 'Invalid strategy code'))
+    }
     if (err.response?.status === 404) {
       return next(new ApiError(404, 'NOT_FOUND', 'Strategy file not found on engine'))
     }
@@ -54,4 +99,4 @@ async function getStrategyParams(req, res, next) {
   }
 }
 
-module.exports = { listStrategies, getStrategyCode, getStrategyParams }
+module.exports = { listStrategies, createStrategy, getStrategyCode, updateStrategyCode, getStrategyParams }

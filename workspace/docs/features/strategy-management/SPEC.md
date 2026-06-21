@@ -7,7 +7,7 @@
 
 ## What It Does
 
-Manages Python trading strategy files. Users can list all available strategies, view their source code, and extract their configurable parameters. Five built-in strategies are seeded on engine startup.
+Manages Python trading strategy files. Users can list all available strategies, view their source code, and extract their configurable parameters. Users can also create new strategies from a blank template or clone an existing strategy. Five built-in strategies are seeded on engine startup.
 
 ---
 
@@ -41,6 +41,16 @@ Server proxies to engine GET /strategies/{name}/params
 Engine dynamically imports strategy class, reflects PARAMS schema
         ↓
 Returns: { paramName: { type, default, min, max, description } }
+
+User creates or clones a strategy
+        ↓
+POST /api/v1/strategies  (Node server)
+        ↓
+Server proxies to engine POST /strategies
+        ↓
+Engine writes a new strategy file and upserts MongoDB metadata
+        ↓
+Returns: { strategy: Strategy }
 ```
 
 ---

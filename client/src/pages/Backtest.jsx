@@ -10,6 +10,7 @@ import {
   Loader2,
   ChevronRight,
   ChevronLeft,
+  Download,
 } from 'lucide-react'
 
 import PageWrapper from '../components/layout/PageWrapper'
@@ -22,6 +23,7 @@ const EquityCurve = lazy(() => import('../components/charts/EquityCurve'))
 import BacktestConfigForm from '../features/backtest/BacktestConfigForm'
 import BacktestHistory from '../features/backtest/BacktestHistory'
 import BacktestMetricCard from '../features/backtest/BacktestMetricCard'
+import BacktestCalendar from '../features/backtest/BacktestCalendar'
 
 import {
   useRunBacktest,
@@ -29,10 +31,13 @@ import {
   useBacktestResult,
   useCancelBacktest,
   useBacktestTrades,
+  useAllBacktestTrades,
 } from '../hooks/useBacktest'
+import api from '../lib/axios'
 import { formatQty, formatPrice, formatPct, formatSignedPct, formatPnl, formatIsoDate } from '../utils/formatters'
+import { exportTradesAsCSV, exportResultAsJSON } from '../utils/exporters'
 import socket from '../lib/socket'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQueryClient, useQueries } from '@tanstack/react-query'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs'
 
 function PerformanceTable({ bySide }) {
@@ -51,7 +56,8 @@ function PerformanceTable({ bySide }) {
     { label: 'Avg Win', key: 'averageWin', format: (val) => formatPnl(val).value, isPnl: true },
     { label: 'Avg Loss', key: 'averageLoss', format: (val) => formatPnl(val).value, isPnl: true },
     { label: 'Payoff Ratio (Win/Loss)', key: 'payoffRatio', format: (val) => parseFloat(val).toFixed(2) },
-    { label: 'Avg Holding Period', key: 'averageHoldingPeriod', format: (val) => {
+    {
+      label: 'Avg Holding Period', key: 'averageHoldingPeriod', format: (val) => {
         const secs = parseInt(val)
         if (secs >= 3600) return `${(secs / 3600).toFixed(1)}h`
         if (secs >= 60) return `${(secs / 60).toFixed(1)}m`
@@ -112,9 +118,98 @@ function PerformanceTable({ bySide }) {
   )
 }
 
+
+
+function ComparisonTable({ results }) {
+  const metricRows = [
+    { label: 'Net Profit', getValue: (r) => formatPrice(r.metrics?.netProfit ?? 0), isPnl: true },
+    { label: 'Net Profit %', getValue: (r) => formatSignedPct(r.metrics?.netProfitPct ?? 0), isPnl: true },
+    { label: 'Win Rate', getValue: (r) => formatPct((parseFloat(r.metrics?.winRate || 0) || 0) * 100) },
+    { label: 'Profit Factor', getValue: (r) => (r.metrics?.profitFactor ? parseFloat(r.metrics.profitFactor).toFixed(2) : '-'), isPF: true },
+    { label: 'Max Drawdown', getValue: (r) => formatPct(parseFloat(r.metrics?.maxDrawdown || 0)), isLoss: true },
+    { label: 'Sharpe', getValue: (r) => parseFloat(r.metrics?.sharpeRatio || 0).toFixed(2) },
+    { label: 'Sortino', getValue: (r) => parseFloat(r.metrics?.sortinoRatio || 0).toFixed(2) },
+    { label: 'Calmar', getValue: (r) => parseFloat(r.metrics?.calmarRatio || 0).toFixed(2) },
+    { label: 'Total Trades', getValue: (r) => r.metrics?.totalTrades ?? '-' },
+    { label: 'Win / Loss', getValue: (r) => `${r.metrics?.winningTrades ?? '-'} / ${r.metrics?.losingTrades ?? '-'}` },
+    { label: 'Expectancy', getValue: (r) => (r.metrics?.expectancy != null ? formatPnl(r.metrics.expectancy).value : '-'), isPnl: true },
+    { label: 'Capital', getValue: (r) => formatPrice(r.capital) },
+    { label: 'Leverage', getValue: (r) => `${r.leverage}x` },
+    { label: 'Fee Rate', getValue: (r) => `${((r.feeRate || 0) * 100).toFixed(2)}%` },
+    { label: 'Date Range', getValue: (r) => `${formatIsoDate(r.startDate)} → ${formatIsoDate(r.endDate)}` },
+  ]
+
+  const getValClass = (row, r) => {
+    const raw = row.getValue(r)
+    const n = parseFloat(raw)
+    if (row.isPnl) return n > 0 ? 'text-emerald-400' : n < 0 ? 'text-red-400' : 'text-gray-300'
+    if (row.isLoss) return 'text-red-400'
+    if (row.isPF) return n >= 1 ? 'text-emerald-400' : 'text-red-400'
+    return 'text-gray-300'
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Header cards */}
+      <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${results.length}, minmax(0, 1fr))` }}>
+        {results.map((r) => (
+          <div key={r.jobId} className="rounded-lg border border-gray-800 bg-gray-900/60 p-3">
+            <div className="text-sm font-semibold text-gray-100 truncate">{r.strategyName}</div>
+            <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+              <span className="text-[10px] font-mono text-gray-400 bg-gray-800 px-1.5 py-0.5 rounded">{r.symbol}</span>
+              <span className="text-[10px] font-mono text-gray-500 bg-gray-800/60 px-1.5 py-0.5 rounded">{r.timeframe}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Metric table */}
+      <div className="rounded-lg border border-gray-800 overflow-hidden">
+        <Table>
+          <TableHeader className="bg-gray-950">
+            <TableRow>
+              <TableHead className="w-[180px] text-gray-400 font-medium text-xs">Metric</TableHead>
+              {results.map((r) => (
+                <TableHead key={r.jobId} className="text-gray-200 font-semibold text-xs">
+                  <div className="truncate max-w-[140px]">{r.strategyName}</div>
+                  <div className="text-[10px] text-gray-500 font-normal">{r.symbol} · {r.timeframe}</div>
+                </TableHead>
+              ))}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {metricRows.map((row, idx) => (
+              <TableRow key={row.label} className={idx % 2 === 0 ? 'bg-gray-900/40 border-b border-gray-800/60' : 'bg-transparent border-b border-gray-800/60'}>
+                <TableCell className="text-gray-400 text-xs font-medium">{row.label}</TableCell>
+                {results.map((r) => (
+                  <TableCell key={`${r.jobId}-${row.label}`} className={`font-mono text-xs font-semibold ${getValClass(row, r)}`}>
+                    {row.getValue(r)}
+                  </TableCell>
+                ))}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
+  )
+}
+
 export default function Backtest() {
   const queryClient = useQueryClient()
-  const { data: listData, isLoading: loadingHistory, refetch: refetchHistory } = useBacktestsList(1, 20)
+  const [historyFilters, setHistoryFilters] = useState({
+    strategyName: '',
+    symbol: '',
+    timeframe: '',
+    status: '',
+    createdAfter: '',
+    createdBefore: '',
+  })
+
+  const [comparisonIds, setComparisonIds] = useState([])
+  const [compareError, setCompareError] = useState('')
+
+  const { data: listData, isLoading: loadingHistory, refetch: refetchHistory } = useBacktestsList(1, 20, historyFilters)
 
   const [activeJobId, setActiveJobId] = useState(null)
   const [progressPct, setProgressPct] = useState(0)
@@ -139,6 +234,25 @@ export default function Backtest() {
     tradePage,
     TRADES_PER_PAGE
   )
+
+  const { data: allTradesData, isLoading: loadingAllTrades } = useAllBacktestTrades(
+    selectedResultId || null
+  )
+
+  const comparisonQueries = useQueries({
+    queries: comparisonIds.map((id) => ({
+      queryKey: ['backtests', id],
+      queryFn: async () => {
+        const res = await api.get(`/api/v1/backtest/${id}`)
+        return res.data.data
+      },
+      enabled: !!id,
+      staleTime: Infinity,
+    })),
+  })
+
+  const comparisonResults = comparisonQueries.map((q) => q.data).filter(Boolean)
+  const comparisonLoading = comparisonQueries.some((q) => q.isLoading)
 
   // Auto-select deep-linked jobId or first completed run
   useEffect(() => {
@@ -246,6 +360,21 @@ export default function Backtest() {
     return 'text-gray-300'
   }
 
+  const toggleComparison = (jobId) => {
+    setComparisonIds((current) => {
+      if (current.includes(jobId)) {
+        setCompareError('')
+        return current.filter((id) => id !== jobId)
+      }
+      if (current.length >= 4) {
+        setCompareError('Maximum 4 runs can be compared at a time.')
+        return current
+      }
+      setCompareError('')
+      return [...current, jobId]
+    })
+  }
+
   return (
     <PageWrapper>
       <PageHeader
@@ -274,6 +403,11 @@ export default function Backtest() {
             onSelect={(id) => { setSelectedResultId(id); setTradePage(1) }}
             onRefresh={refetchHistory}
             isLoading={loadingHistory}
+            filters={historyFilters}
+            onApplyFilters={(nextFilters) => setHistoryFilters(nextFilters)}
+            onClearFilters={(nextFilters) => setHistoryFilters(nextFilters)}
+            comparisonIds={comparisonIds}
+            onToggleComparison={toggleComparison}
           />
         </div>
 
@@ -330,6 +464,14 @@ export default function Backtest() {
                   <TabsTrigger value="overview">Overview</TabsTrigger>
                   <TabsTrigger value="performance">Performance Summary</TabsTrigger>
                   <TabsTrigger value="trades">List of Trades</TabsTrigger>
+                  <TabsTrigger value="comparison" className="relative">
+                    Compare
+                    {comparisonIds.length > 0 && (
+                      <span className="ml-1.5 inline-flex items-center justify-center size-4 rounded-full bg-emerald-500 text-[9px] font-bold text-white">
+                        {comparisonIds.length}
+                      </span>
+                    )}
+                  </TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="overview" className="space-y-6">
@@ -397,14 +539,24 @@ export default function Backtest() {
                     </CardHeader>
                     <CardContent>
                       <Suspense fallback={<div className="h-48 flex items-center justify-center"><Loader2 className="size-6 animate-spin text-emerald-400" /></div>}>
-                        <EquityCurve 
-                          data={activeResult.equityCurve} 
+                        <EquityCurve
+                          data={activeResult.equityCurve}
                           startingCapital={activeResult.capital}
                           buyHoldReturnPct={activeResult.metrics?.buyHoldReturnPct || 0}
                         />
                       </Suspense>
                     </CardContent>
                   </Card>
+
+                  {allTradesData && allTradesData.length > 0 && (
+                    <BacktestCalendar
+                      trades={allTradesData}
+                      onSelectPeriod={(trades) => {
+                        // Optional: filter the trades list or charts based on selection
+                        // For now we just show the calendar
+                      }}
+                    />
+                  )}
 
                   <Card className="p-5">
                     <h4 className="text-gray-100 font-semibold mb-3">Simulation Config</h4>
@@ -452,6 +604,23 @@ export default function Backtest() {
                       )}
                     </div>
                   </Card>
+
+                  <Card className="p-5 bg-gray-900/50 border border-emerald-900/30">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h4 className="text-gray-100 font-semibold">Export Results</h4>
+                        <p className="text-gray-500 text-sm mt-1">Download backtest data for analysis and record-keeping</p>
+                      </div>
+                      <Button
+                        onClick={() => exportResultAsJSON(activeResult, activeResult.strategyName || 'backtest')}
+                        size="sm"
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-2"
+                      >
+                        <Download className="size-4" />
+                        Export as JSON
+                      </Button>
+                    </div>
+                  </Card>
                 </TabsContent>
 
                 <TabsContent value="performance">
@@ -475,10 +644,24 @@ export default function Backtest() {
                 <TabsContent value="trades">
                   <Card>
                     <CardHeader>
-                      <CardTitle>Execution Log</CardTitle>
-                      <CardDescription>
-                        Complete historical trade record ({tradesData?.pagination?.total || 0} trades)
-                      </CardDescription>
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <CardTitle>Execution Log</CardTitle>
+                          <CardDescription>
+                            Complete historical trade record ({tradesData?.pagination?.total || 0} trades)
+                          </CardDescription>
+                        </div>
+                        {tradesData?.trades && tradesData.trades.length > 0 && (
+                          <Button
+                            onClick={() => exportTradesAsCSV(tradesData.trades, activeResult.jobId, activeResult.strategyName || 'backtest')}
+                            size="sm"
+                            className="bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-2 flex-shrink-0"
+                          >
+                            <Download className="size-4" />
+                            Export CSV
+                          </Button>
+                        )}
+                      </div>
                     </CardHeader>
                     <CardContent>
                       {tradesData?.trades && tradesData.trades.length > 0 ? (() => {
@@ -579,11 +762,10 @@ export default function Backtest() {
                                         <button
                                           key={item}
                                           onClick={() => setTradePage(item)}
-                                          className={`min-w-[28px] h-7 px-1.5 rounded border text-xs font-medium transition-colors ${
-                                            tradePage === item
-                                              ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400'
-                                              : 'border-gray-800 text-gray-400 hover:text-gray-100 hover:border-gray-600'
-                                          }`}
+                                          className={`min-w-[28px] h-7 px-1.5 rounded border text-xs font-medium transition-colors ${tradePage === item
+                                            ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400'
+                                            : 'border-gray-800 text-gray-400 hover:text-gray-100 hover:border-gray-600'
+                                            }`}
                                         >
                                           {item}
                                         </button>
@@ -608,6 +790,45 @@ export default function Backtest() {
                       )}
                     </CardContent>
                   </Card>
+                </TabsContent>
+
+                <TabsContent value="comparison" className="space-y-3">
+                  {compareError && (
+                    <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-amber-500/10 border border-amber-500/25 text-amber-400 text-xs">
+                      <AlertTriangle className="size-3.5 shrink-0" />
+                      {compareError}
+                    </div>
+                  )}
+                  {comparisonIds.length < 2 ? (
+                    <Card>
+                      <CardContent className="py-16 text-center">
+                        <div className="flex flex-col items-center gap-3">
+                          <div className="size-12 rounded-full bg-gray-800 flex items-center justify-center">
+                            <Activity className="size-5 text-gray-600" />
+                          </div>
+                          <p className="text-gray-400 font-medium text-sm">Select runs to compare</p>
+                          <p className="text-gray-600 text-xs max-w-xs">
+                            Tick the checkbox on at least 2 completed runs in History to see a side-by-side breakdown here.
+                          </p>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ) : comparisonLoading ? (
+                    <Card className="flex justify-center items-center py-24">
+                      <div className="flex flex-col items-center gap-3">
+                        <Loader2 className="size-8 animate-spin text-emerald-400" />
+                        <span className="text-gray-400 text-sm">Loading comparison data…</span>
+                      </div>
+                    </Card>
+                  ) : comparisonResults.length >= 2 ? (
+                    <ComparisonTable results={comparisonResults} />
+                  ) : (
+                    <Card>
+                      <CardContent className="py-10 text-center text-gray-500 text-sm">
+                        Could not load data for the selected runs.
+                      </CardContent>
+                    </Card>
+                  )}
                 </TabsContent>
               </Tabs>
             </div>

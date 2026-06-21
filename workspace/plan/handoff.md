@@ -7,7 +7,18 @@ previous one stopped. Keep it current — stale handoffs are worse than none._
 
 ## Last Updated
 
-2026-06-21 — **Implementation: Narang strict Black-Box merger — ALL PHASES COMPLETE (code written; golden master pending).**
+2026-06-21 — **Symbol lock bug fixed + Phase 1 reporting merger completed.**
+
+Next session: Phase 2 strategy lab work is underway. Implemented a new Strategy Lab create/clone workflow:
+- Engine routes: `POST /strategies`, `PUT /strategies/{name}/code`.
+- Server proxies: `POST /api/v1/strategies`, `PUT /api/v1/strategies/:id/code`.
+- Client UI: Strategies page new strategy button, clone button on strategy cards, and a create dialog with blank/template selection and param preview.
+Files changed: `engine/routers/strategies.py`, `server/src/controllers/strategy.controller.js`, `server/src/routes/strategy.routes.js`, `client/src/hooks/useStrategies.js`, `client/src/pages/Strategies.jsx`, `client/src/features/strategies/StrategyCard.jsx`, `client/src/features/strategies/StrategyCreateDialog.jsx`, `workspace/docs/core/API_CONTRACTS.md`, `workspace/docs/features/strategy-management/SPEC.md`, `workspace/docs/state/CURRENT_STATE.md`.
+Open questions: Next step is code edit/save UX and strategy boundary/lint guidance before backtest live execution.
+
+---
+
+### Prior 2026-06-21 — **Implementation: Narang strict Black-Box merger — ALL PHASES COMPLETE (code written; golden master pending).**
 
 ### What was done
 Full implementation of `workspace/plan/modular_merger_plan.md` — every file listed in the Appendix A

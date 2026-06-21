@@ -14,11 +14,21 @@ export function useRunBacktest() {
   })
 }
 
-export function useBacktestsList(page = 1, limit = 20) {
+export function useBacktestsList(page = 1, limit = 20, filters = {}) {
   return useQuery({
-    queryKey: ['backtests', page, limit],
+    queryKey: ['backtests', page, limit, filters],
     queryFn: async () => {
-      const res = await api.get(`/api/v1/backtest?page=${page}&limit=${limit}`)
+      const params = new URLSearchParams()
+      params.set('page', page)
+      params.set('limit', limit)
+
+      Object.entries(filters).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') {
+          params.set(key, value)
+        }
+      })
+
+      const res = await api.get(`/api/v1/backtest?${params.toString()}`)
       return res.data.data
     },
   })
@@ -43,6 +53,18 @@ export function useBacktestTrades(id, page = 1, limit = 50) {
     queryFn: async () => {
       const res = await api.get(`/api/v1/backtest/${id}/trades?page=${page}&limit=${limit}`)
       return res.data.data
+    },
+    enabled: !!id,
+  })
+}
+
+export function useAllBacktestTrades(id) {
+  return useQuery({
+    queryKey: ['backtests', id, 'trades', 'all'],
+    queryFn: async () => {
+      // Use the newly increased limit to get up to 5000 trades
+      const res = await api.get(`/api/v1/backtest/${id}/trades?page=1&limit=5000`)
+      return res.data.data.trades
     },
     enabled: !!id,
   })
