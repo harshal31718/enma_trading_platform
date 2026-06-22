@@ -122,7 +122,7 @@ export default function AlgoTrading() {
       )}
 
       <Dialog open={showWizard} onOpenChange={(open) => { if (!open) setShowWizard(false) }}>
-        <DialogContent className="w-[720px] max-w-[95vw] max-h-[90vh] overflow-y-auto overflow-x-hidden bg-title-bg">
+        <DialogContent className="w-[920px] max-w-[95vw] max-h-[88vh] flex flex-col overflow-hidden gap-0 p-0 bg-title-bg">
           <NewSessionWizard
             onCancel={() => setShowWizard(false)}
             onSuccess={() => {
@@ -134,7 +134,7 @@ export default function AlgoTrading() {
       </Dialog>
 
       <Dialog open={showChaosWizard} onOpenChange={(open) => { if (!open) setShowChaosWizard(false) }}>
-        <DialogContent className="max-w-4xl w-[95vw] max-h-[90vh] overflow-y-auto overflow-x-hidden bg-title-bg border-slate-700/50">
+        <DialogContent className="w-[920px] max-w-[95vw] max-h-[88vh] flex flex-col overflow-hidden gap-0 p-0 bg-title-bg border-slate-700/50">
           <ChaosWizard
             onCancel={() => setShowChaosWizard(false)}
             onSuccess={() => {

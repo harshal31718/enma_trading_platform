@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { ChevronRight, ChevronLeft, AlertTriangle } from 'lucide-react'
+import { ChevronRight, ChevronLeft, AlertTriangle, X } from 'lucide-react'
 import { useStrategies } from '../../hooks/useStrategies'
 import { useSymbols } from '../../hooks/useCandles'
 import { useStrategyParams, useStartSession, useLockedSymbols } from '../../hooks/useAlgoSessions'
@@ -98,40 +98,78 @@ export default function NewSessionWizard({ onCancel, onSuccess }) {
   const logical = getLogicalStep(step)
 
   return (
-    <div className="w-full text-slate-200">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+    <div className="flex flex-col min-h-0 h-[640px] max-h-[88vh] text-slate-200">
+      {/* Row 1: title + close — pinned */}
+      <div className="flex items-center justify-between px-6 pt-6 pb-4 shrink-0">
         <h2 className="text-lg font-semibold text-gray-100">New Bot</h2>
-        <button onClick={onCancel} className="text-sm text-gray-400 hover:text-gray-200">
-          Cancel
+        <button
+          onClick={onCancel}
+          aria-label="Close"
+          className="text-gray-400 hover:text-gray-200 transition-colors"
+        >
+          <X size={18} />
         </button>
       </div>
 
-      {/* Step indicator */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mb-6">
-        {stepLabels.map((label, i) => (
-          <div key={i} className="flex items-center gap-2">
-            <div
-              className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium ${
-                i + 1 < step
-                  ? 'bg-emerald-600 text-white'
-                  : i + 1 === step
-                  ? 'bg-emerald-600/30 text-emerald-400 border border-emerald-500'
-                  : 'bg-gray-800 text-gray-500'
-              }`}
-            >
-              {i + 1}
+      {/* Row 2: Cancel/Prev · steps · Next/Submit — pinned */}
+      <div className="flex items-center justify-between gap-4 px-6 pb-5 shrink-0 border-b border-slate-700/40">
+        {/* Left: Cancel (step 1) / Back */}
+        <button
+          onClick={step === 1 ? onCancel : handleBack}
+          className="flex items-center gap-1 px-4 py-2 text-sm bg-[#060a0f] border border-slate-700/50 rounded-lg text-yellow-400 hover:text-yellow-300 hover:border-slate-600 transition-colors shrink-0"
+        >
+          <ChevronLeft size={16} />
+          {step === 1 ? 'Cancel' : 'Back'}
+        </button>
+
+        {/* Center: Steps */}
+        <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 flex-1 min-w-0">
+          {stepLabels.map((label, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <div
+                className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium ${
+                  i + 1 < step
+                    ? 'bg-emerald-600 text-white'
+                    : i + 1 === step
+                    ? 'bg-emerald-600/30 text-emerald-400 border border-emerald-500'
+                    : 'bg-gray-800 text-gray-500'
+                }`}
+              >
+                {i + 1}
+              </div>
+              <span className={`text-xs ${i + 1 === step ? 'text-gray-200' : 'text-gray-500'}`}>
+                {label}
+              </span>
+              {i < stepLabels.length - 1 && <ChevronRight size={14} className="text-gray-600" />}
             </div>
-            <span className={`text-xs ${i + 1 === step ? 'text-gray-200' : 'text-gray-500'}`}>
-              {label}
-            </span>
-            {i < stepLabels.length - 1 && <ChevronRight size={14} className="text-gray-600" />}
-          </div>
-        ))}
+          ))}
+        </div>
+
+        {/* Right: Next / Submit */}
+        {step < totalSteps ? (
+          <button
+            onClick={handleNext}
+            disabled={!canProceed()}
+            className="flex items-center gap-1 px-4 py-2 text-sm bg-[#060a0f] border border-slate-700/50 rounded-lg text-emerald-400 hover:text-emerald-300 hover:border-slate-600 disabled:text-gray-600 disabled:border-slate-800 disabled:cursor-not-allowed transition-colors shrink-0"
+          >
+            Next
+            <ChevronRight size={16} />
+          </button>
+        ) : (
+          <button
+            onClick={handleStart}
+            disabled={startSession.isPending}
+            className="px-6 py-2 text-sm bg-[#060a0f] border border-slate-700/50 rounded-lg text-emerald-400 hover:text-emerald-300 hover:border-slate-600 disabled:text-gray-600 disabled:border-slate-800 disabled:cursor-not-allowed transition-colors shrink-0"
+          >
+            {startSession.isPending ? 'Starting...' : 'Start Bot'}
+          </button>
+        )}
       </div>
 
+      {/* Scrollable content region */}
+      <div className="flex-1 min-h-0 overflow-y-auto px-6 py-5 space-y-4">
       {/* Step content */}
-      <div className="bg-[#0a0d13] border border-slate-700/40 rounded-lg p-6 mb-4">
+      <div className="bg-[#0a0d13] border border-slate-700/40 rounded-lg p-6">
         {/* Step 1: Pick Strategy */}
         {logical === 1 && (
           <div>
@@ -296,41 +334,12 @@ export default function NewSessionWizard({ onCancel, onSuccess }) {
         )}
       </div>
 
-      {/* Error banner */}
-      {error && (
-        <div className="flex items-start gap-2 bg-red-950/20 border border-red-800/40 rounded-lg p-3 mb-4 text-sm text-red-400">
-          <AlertTriangle size={16} className="mt-0.5 shrink-0" />
-          <span>{error}</span>
-        </div>
-      )}
-
-      {/* Navigation buttons */}
-      <div className="flex items-center justify-between">
-        <button
-          onClick={step === 1 ? onCancel : handleBack}
-          className="flex items-center gap-1 px-4 py-2 text-sm text-gray-400 hover:text-gray-200 transition-colors"
-        >
-          <ChevronLeft size={16} />
-          {step === 1 ? 'Cancel' : 'Back'}
-        </button>
-
-        {step < totalSteps ? (
-          <button
-            onClick={handleNext}
-            disabled={!canProceed()}
-            className="flex items-center gap-1 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm rounded-lg transition-colors"
-          >
-            Next
-            <ChevronRight size={16} />
-          </button>
-        ) : (
-          <button
-            onClick={handleStart}
-            disabled={startSession.isPending}
-            className="px-6 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm rounded-lg transition-colors"
-          >
-            {startSession.isPending ? 'Starting...' : 'Start Bot'}
-          </button>
+        {/* Error banner */}
+        {error && (
+          <div className="flex items-start gap-2 bg-red-950/20 border border-red-800/40 rounded-lg p-3 text-sm text-red-400">
+            <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+            <span>{error}</span>
+          </div>
         )}
       </div>
     </div>

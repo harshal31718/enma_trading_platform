@@ -39,15 +39,20 @@ export default function BacktestCalendar({ trades, onSelectPeriod }) {
     const getCellStyle = (pnl) => {
         const isWin = pnl >= 0;
         const max = isWin ? maxWin : Math.abs(maxLoss);
-        const intensity = max === 0 ? 0 : Math.min(Math.abs(pnl) / max, 1);
+        const raw = max === 0 ? 0 : Math.min(Math.abs(pnl) / max, 1);
+        // Ease with sqrt so even small P&L reads as a clear shade.
+        const t = Math.sqrt(raw);
 
-        // Base colors: Green-500 (#22c55e), Red-500 (#ef4444)
-        // Using emerald-400 as per AGENTS.md constraints
-        const baseColor = isWin ? '52, 211, 153' : '248, 113, 113';
+        // SOLID shades (no alpha) so cells look crisp, not cloudy:
+        // dark base → vivid by intensity. emerald for profit, red for loss.
+        const lerp = (a, b) => Math.round(a + (b - a) * t);
+        const [lo, hi, edge] = isWin
+            ? [[6, 50, 40], [5, 150, 105], '52, 211, 153']   // → emerald-600, emerald-400 border
+            : [[60, 16, 16], [220, 38, 38], '248, 113, 113']; // → red-600, red-400 border
 
         return {
-            backgroundColor: `rgba(${baseColor}, ${0.1 + (intensity * 0.4)})`,
-            borderColor: `rgba(${baseColor}, ${0.3 + (intensity * 0.5)})`,
+            backgroundColor: `rgb(${lerp(lo[0], hi[0])}, ${lerp(lo[1], hi[1])}, ${lerp(lo[2], hi[2])})`,
+            borderColor: `rgb(${edge})`,
         };
     };
 
@@ -108,18 +113,18 @@ export default function BacktestCalendar({ trades, onSelectPeriod }) {
                             )}
                         >
                             {/* Top Row: Date | Trades */}
-                            <div className="flex justify-between items-center text-[10px] font-bold text-gray-400 uppercase">
+                            <div className="flex justify-between items-center text-[10px] font-bold text-white/85 uppercase">
                                 <span className="truncate pr-1">{stat.label}</span>
-                                <span className="text-gray-500 font-mono flex-shrink-0">{stat.tradesCount}t</span>
+                                <span className="text-white/65 font-mono flex-shrink-0">{stat.tradesCount}t</span>
                             </div>
 
                             {/* Bottom Row: PnL | Win Rate (as %) */}
                             <div className="flex justify-between items-end mt-2">
-                                <div className={cn("text-sm font-black font-mono leading-none", stat.pnl >= 0 ? "text-emerald-400" : "text-red-400")}>
+                                <div className="text-sm font-black font-mono leading-none text-white [text-shadow:0_1px_2px_rgba(0,0,0,0.45)]">
                                     {stat.pnl >= 0 ? '+' : ''}{stat.pnl.toFixed(0)}
                                 </div>
                                 {stat.winRate > 0 && (
-                                    <div className="text-[10px] text-gray-500 font-mono font-bold">
+                                    <div className="text-[10px] text-white/70 font-mono font-bold">
                                         {(stat.winRate * 100).toFixed(0)}%
                                     </div>
                                 )}

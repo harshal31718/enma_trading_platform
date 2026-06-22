@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { ChevronRight, ChevronLeft, AlertTriangle, Zap, Check, Play, Settings as SettingsIcon } from 'lucide-react'
+import { ChevronRight, ChevronLeft, AlertTriangle, Zap, Check, Play, Settings as SettingsIcon, X } from 'lucide-react'
 import { useStrategies } from '../../hooks/useStrategies'
 import { useSymbols } from '../../hooks/useCandles'
 import { useStartChaos, useLockedSymbols, useChaosSymbols } from '../../hooks/useAlgoSessions'
@@ -301,7 +301,7 @@ export default function ChaosWizard({ onCancel, onSuccess }) {
 
   if (isLoading) {
     return (
-      <div className="flex flex-col items-center justify-center py-12">
+      <div className="flex flex-col items-center justify-center h-[640px] max-h-[88vh]">
         <div className="w-8 h-8 rounded-full border-2 border-purple-500 border-t-transparent animate-spin mb-4" />
         <p className="text-sm text-slate-400">Loading Chaos configurations...</p>
       </div>
@@ -309,9 +309,9 @@ export default function ChaosWizard({ onCancel, onSuccess }) {
   }
 
   return (
-    <div className="w-full text-slate-200">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+    <div className="flex flex-col min-h-0 h-[640px] max-h-[88vh] text-slate-200">
+      {/* Row 1: title + close — pinned */}
+      <div className="flex items-center justify-between px-6 pt-6 pb-4 shrink-0">
         <div className="flex items-center gap-2">
           <Zap size={18} className="text-purple-400" />
           <h2 className="text-lg font-bold text-gray-100">Chaos Mode</h2>
@@ -319,36 +319,78 @@ export default function ChaosWizard({ onCancel, onSuccess }) {
             Testnet Only
           </span>
         </div>
-        <button onClick={onCancel} className="text-sm text-gray-400 hover:text-gray-200 transition-colors">
-          Cancel
+        <button
+          onClick={onCancel}
+          aria-label="Close"
+          className="text-gray-400 hover:text-gray-200 transition-colors"
+        >
+          <X size={18} />
         </button>
       </div>
 
-      {/* Step indicator */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mb-6 border-b border-slate-800 pb-4">
-        {stepLabels.map((label, i) => (
-          <div key={i} className="flex items-center gap-2">
-            <div
-              className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-semibold ${
-                i + 1 < step
-                  ? 'bg-purple-600 text-white'
-                  : i + 1 === step
-                  ? 'bg-purple-600/30 text-purple-400 border border-purple-500'
-                  : 'bg-slate-800 text-slate-500'
-              }`}
-            >
-              {i + 1}
+      {/* Row 2: Cancel/Prev · steps · Next/Submit — pinned */}
+      <div className="flex items-center justify-between gap-4 px-6 pb-5 shrink-0 border-b border-slate-700/40">
+        {/* Left: Cancel (step 1) / Back */}
+        <button
+          type="button"
+          onClick={step === 1 ? onCancel : handleBack}
+          className="flex items-center gap-1 px-4 py-2 text-sm bg-[#060a0f] border border-slate-700/50 rounded-lg text-yellow-400 hover:text-yellow-300 hover:border-slate-600 transition-colors shrink-0"
+        >
+          <ChevronLeft size={16} />
+          {step === 1 ? 'Cancel' : 'Back'}
+        </button>
+
+        {/* Center: Steps */}
+        <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 flex-1 min-w-0">
+          {stepLabels.map((label, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <div
+                className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-semibold ${
+                  i + 1 < step
+                    ? 'bg-purple-600 text-white'
+                    : i + 1 === step
+                    ? 'bg-purple-600/30 text-purple-400 border border-purple-500'
+                    : 'bg-slate-800 text-slate-500'
+                }`}
+              >
+                {i + 1}
+              </div>
+              <span className={`text-xs ${i + 1 === step ? 'text-gray-200 font-medium' : 'text-slate-500'}`}>
+                {label}
+              </span>
+              {i < stepLabels.length - 1 && <ChevronRight size={14} className="text-slate-700" />}
             </div>
-            <span className={`text-xs ${i + 1 === step ? 'text-gray-200 font-medium' : 'text-slate-500'}`}>
-              {label}
-            </span>
-            {i < stepLabels.length - 1 && <ChevronRight size={14} className="text-slate-700" />}
-          </div>
-        ))}
+          ))}
+        </div>
+
+        {/* Right: Next / Activate */}
+        {step < 4 ? (
+          <button
+            type="button"
+            onClick={handleNext}
+            disabled={!canProceed()}
+            className="flex items-center gap-1 px-4 py-2 text-sm bg-[#060a0f] border border-slate-700/50 rounded-lg text-purple-400 hover:text-purple-300 hover:border-slate-600 disabled:text-gray-600 disabled:border-slate-800 disabled:cursor-not-allowed transition-colors shrink-0"
+          >
+            Next
+            <ChevronRight size={16} />
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={handleLaunch}
+            disabled={startChaos.isPending}
+            className="flex items-center gap-2 px-5 py-2 text-sm bg-[#060a0f] border border-purple-500/40 rounded-lg text-purple-300 hover:text-purple-200 hover:border-purple-500/60 disabled:text-gray-600 disabled:border-slate-800 disabled:cursor-not-allowed transition-colors shrink-0"
+          >
+            <Play size={14} className="fill-current" />
+            {startChaos.isPending ? 'Launching...' : 'Activate Chaos'}
+          </button>
+        )}
       </div>
 
+      {/* Scrollable content region */}
+      <div className="flex-1 min-h-0 overflow-y-auto px-6 py-5 space-y-4">
       {/* Step content */}
-      <div className="bg-[#0a0d13] border border-slate-700/40 rounded-xl p-6 mb-4 shadow-xl">
+      <div className="bg-[#0a0d13] border border-slate-700/40 rounded-xl p-6 shadow-xl">
         {/* Step 1: Select Strategies */}
         {step === 1 && (
           <div>
@@ -617,47 +659,15 @@ export default function ChaosWizard({ onCancel, onSuccess }) {
         )}
       </div>
 
-      {error && (
-        <div className="flex items-start gap-2 bg-red-950/20 border border-red-800/40 rounded-lg p-4 mb-4 text-sm text-red-400 shadow-lg">
-          <AlertTriangle size={16} className="mt-0.5 shrink-0" />
-          <div className="flex-1">
-            <span className="font-semibold block mb-0.5">Launch Error</span>
-            <span className="text-xs leading-relaxed">{error}</span>
+        {error && (
+          <div className="flex items-start gap-2 bg-red-950/20 border border-red-800/40 rounded-lg p-4 text-sm text-red-400 shadow-lg">
+            <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+            <div className="flex-1">
+              <span className="font-semibold block mb-0.5">Launch Error</span>
+              <span className="text-xs leading-relaxed">{error}</span>
+            </div>
+            <button onClick={() => setError(null)} className="text-red-400/50 hover:text-red-400 font-bold text-xs ml-2">✕</button>
           </div>
-          <button onClick={() => setError(null)} className="text-red-400/50 hover:text-red-400 font-bold text-xs ml-2">✕</button>
-        </div>
-      )}
-
-      <div className="flex items-center justify-between">
-        <button
-          type="button"
-          onClick={step === 1 ? onCancel : handleBack}
-          className="flex items-center gap-1 px-4 py-2 text-sm text-slate-400 hover:text-slate-200 transition-colors"
-        >
-          <ChevronLeft size={16} />
-          {step === 1 ? 'Cancel' : 'Back'}
-        </button>
-
-        {step < 4 ? (
-          <button
-            type="button"
-            onClick={handleNext}
-            disabled={!canProceed()}
-            className="flex items-center gap-1 px-5 py-2 bg-purple-700 hover:bg-purple-600 disabled:bg-slate-800 disabled:text-slate-600 text-white text-sm font-semibold rounded-lg shadow-lg transition-all"
-          >
-            Next
-            <ChevronRight size={16} />
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={handleLaunch}
-            disabled={startChaos.isPending}
-            className="flex items-center gap-2 px-6 py-2 bg-gradient-to-r from-purple-700 via-red-650 to-purple-800 hover:from-purple-600 hover:via-red-550 hover:to-purple-700 text-white text-sm font-semibold rounded-lg shadow-xl shadow-purple-950/30 transition-all"
-          >
-            <Play size={14} className="fill-current" />
-            {startChaos.isPending ? 'Launching Chaos...' : 'Activate Chaos Mode'}
-          </button>
         )}
       </div>
     </div>

@@ -381,7 +381,7 @@ export default function Backtest() {
             className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm rounded-lg transition-colors"
           >
             <Plus size={16} />
-            New Backtest
+            Run Backtest
           </button>
         }
       />
@@ -774,7 +774,7 @@ export default function Backtest() {
       </div>
 
       <Dialog open={showWizard} onOpenChange={(open) => { if (!open) setShowWizard(false) }}>
-        <DialogContent className="w-[720px] max-w-[95vw] max-h-[90vh] overflow-y-auto overflow-x-hidden bg-title-bg">
+        <DialogContent className="w-[920px] max-w-[95vw] max-h-[88vh] flex flex-col overflow-hidden gap-0 p-0 bg-title-bg">
           <NewBacktestWizard
             onCancel={() => setShowWizard(false)}
             onRun={(config) => {
