@@ -39,7 +39,7 @@ export default function BacktestHistory({
   const [draftFilters, setDraftFilters] = useState(filters)
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [histPage, setHistPage] = useState(1)
-  const HIST_PER_PAGE = 10
+  const HIST_PER_PAGE = 20
 
   useEffect(() => {
     setDraftFilters(filters)
@@ -169,7 +169,7 @@ export default function BacktestHistory({
       </div>
 
       {/* ── List ── */}
-      <div className="flex-1 overflow-y-auto px-3 py-2 space-y-1">
+      <div className="flex-1 overflow-y-auto">
         {isLoading ? (
           <div className="flex justify-center p-6">
             <Loader2 className="size-5 animate-spin text-gray-600" />
@@ -187,49 +187,50 @@ export default function BacktestHistory({
               <div
                 key={b.jobId}
                 className={cn(
-                  'group relative rounded-lg border transition-all duration-150',
+                  'group relative border h-11 transition-all duration-150',
                   isSelected
-                    ? 'border-emerald-500/50 bg-emerald-500/8 shadow-[0_0_0_1px_rgba(16,185,129,0.15)]'
+                    ? 'border-emerald-500/50 bg-emerald-500/8'
                     : isCompared
-                    ? 'border-emerald-900/60 bg-gray-900/60'
-                    : 'border-gray-800/60 bg-gray-900/30 hover:border-gray-700 hover:bg-gray-800/40'
+                    ? 'border-transparent border-b-emerald-900/60 bg-gray-900/60'
+                    : 'border-transparent border-b-slate-700/50 bg-transparent hover:bg-slate-800/20'
                 )}
               >
                 {/* Clickable main area */}
                 <button
                   onClick={() => onSelect(b.jobId)}
-                  className="w-full text-left p-3 pr-10"
+                  className="w-full h-full text-left px-3 pr-8 flex flex-col justify-center"
                 >
-                  {/* Strategy name */}
-                  <div className={cn(
-                    'text-xs font-semibold truncate leading-tight',
-                    isSelected ? 'text-emerald-300' : 'text-gray-200'
-                  )}>
-                    {b.strategyName}
+                  <div className="flex items-center justify-between w-full">
+                    {/* Strategy name */}
+                    <div className={cn(
+                      'text-xs font-semibold truncate leading-none',
+                      isSelected ? 'text-emerald-300' : 'text-gray-200'
+                    )}>
+                      {b.strategyName}
+                    </div>
+                    {/* Timestamp */}
+                    {b.createdAt && (
+                      <div className="text-[9px] text-gray-500 leading-none">
+                        {formatTime(b.createdAt)}
+                      </div>
+                    )}
                   </div>
 
                   {/* Meta row */}
-                  <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-                    <span className="text-[10px] font-mono text-gray-400 bg-gray-800 px-1.5 py-0.5 rounded">
+                  <div className="flex items-center gap-1.5 mt-1.5">
+                    <span className="text-[9px] font-mono text-gray-400 bg-gray-800 px-1 py-[1px] rounded leading-none">
                       {b.symbol}
                     </span>
-                    <span className="text-[10px] font-mono text-gray-500 bg-gray-800/60 px-1.5 py-0.5 rounded">
+                    <span className="text-[9px] font-mono text-gray-500 bg-gray-800/60 px-1 py-[1px] rounded leading-none">
                       {b.timeframe}
                     </span>
                     <span className={cn(
-                      'text-[10px] px-1.5 py-0.5 rounded border font-medium',
+                      'text-[9px] px-1 py-[1px] rounded border font-medium leading-none',
                       statusCfg.cls
                     )}>
                       {statusCfg.label}
                     </span>
                   </div>
-
-                  {/* Timestamp */}
-                  {b.createdAt && (
-                    <div className="text-[10px] text-gray-600 mt-1.5">
-                      {formatTime(b.createdAt)}
-                    </div>
-                  )}
                 </button>
 
                 {/* Compare toggle — absolute top-right */}
@@ -238,10 +239,10 @@ export default function BacktestHistory({
                     onClick={(e) => { e.stopPropagation(); onToggleComparison?.(b.jobId) }}
                     title={isCompared ? 'Remove from comparison' : 'Add to comparison'}
                     className={cn(
-                      'absolute top-2.5 right-2.5 p-1 rounded transition-all',
+                      'absolute right-1 top-1/2 -translate-y-1/2 p-1.5 rounded transition-colors',
                       isCompared
-                        ? 'text-emerald-400 bg-emerald-500/15 hover:bg-emerald-500/25'
-                        : 'text-gray-600 hover:text-gray-400 bg-transparent hover:bg-gray-700/50 opacity-0 group-hover:opacity-100'
+                        ? 'text-emerald-400 hover:bg-emerald-500/10'
+                        : 'text-gray-600 hover:text-gray-300 hover:bg-gray-800 opacity-0 group-hover:opacity-100'
                     )}
                   >
                     {isCompared
@@ -257,32 +258,30 @@ export default function BacktestHistory({
       </div>
 
       {/* ── Pagination footer ── */}
-      {totalHistPages > 1 && (
-        <div className="shrink-0 border-t border-slate-700/50 px-3 py-2 flex items-center justify-between">
-          <span className="text-[10px] text-gray-500 font-mono">
-            {(histPage - 1) * HIST_PER_PAGE + 1}–{Math.min(histPage * HIST_PER_PAGE, totalItems)} of {totalItems}
+      <div className="shrink-0 border-t border-slate-700/50 px-3 py-2 flex items-center justify-between">
+        <span className="text-[10px] text-gray-500 font-mono">
+          {totalItems === 0 ? 0 : (histPage - 1) * HIST_PER_PAGE + 1}–{Math.min(histPage * HIST_PER_PAGE, totalItems)} of {totalItems}
+        </span>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setHistPage((p) => Math.max(1, p - 1))}
+            disabled={histPage === 1}
+            className="p-1 rounded text-gray-500 hover:text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+          >
+            <ChevronLeft className="size-3.5" />
+          </button>
+          <span className="text-[10px] text-gray-500 font-mono min-w-[32px] text-center">
+            {histPage}/{totalHistPages}
           </span>
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => setHistPage((p) => Math.max(1, p - 1))}
-              disabled={histPage === 1}
-              className="p-1 rounded text-gray-500 hover:text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-            >
-              <ChevronLeft className="size-3.5" />
-            </button>
-            <span className="text-[10px] text-gray-500 font-mono min-w-[32px] text-center">
-              {histPage}/{totalHistPages}
-            </span>
-            <button
-              onClick={() => setHistPage((p) => Math.min(totalHistPages, p + 1))}
-              disabled={histPage >= totalHistPages}
-              className="p-1 rounded text-gray-500 hover:text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-            >
-              <ChevronRight className="size-3.5" />
-            </button>
-          </div>
+          <button
+            onClick={() => setHistPage((p) => Math.min(totalHistPages, p + 1))}
+            disabled={histPage >= totalHistPages}
+            className="p-1 rounded text-gray-500 hover:text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+          >
+            <ChevronRight className="size-3.5" />
+          </button>
         </div>
-      )}
+      </div>
     </div>
   )
 }

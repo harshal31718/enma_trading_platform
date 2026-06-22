@@ -87,10 +87,10 @@ function PerformanceTable({ bySide }) {
   }
 
   return (
-    <div className="bg-title-bg border border-slate-700/50 overflow-hidden">
-      <Table>
-        <TableHeader className="bg-title-bg title-fade">
-          <TableRow className="border-b border-slate-700/50 hover:bg-transparent">
+    <div className="h-full flex flex-col bg-title-bg border border-slate-700/50 overflow-hidden">
+      <Table wrapperClassName="flex-1 overflow-y-auto">
+        <TableHeader className="sticky top-0 z-10">
+          <TableRow className="h-11 shrink-0 bg-title-bg title-fade border-b border-slate-700/50">
             <TableHead className="w-[250px]">Metric</TableHead>
             <TableHead>All Trades</TableHead>
             <TableHead>Long Trades</TableHead>
@@ -155,25 +155,10 @@ function ComparisonTable({ results }) {
   }
 
   return (
-    <div className="space-y-4">
-      {/* Header cards */}
-      <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${results.length}, minmax(0, 1fr))` }}>
-        {results.map((r) => (
-          <div key={r.jobId} className="rounded-lg border border-gray-800 bg-gray-900/60 p-3">
-            <div className="text-sm font-semibold text-gray-100 truncate">{r.strategyName}</div>
-            <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-              <span className="text-[10px] font-mono text-gray-400 bg-gray-800 px-1.5 py-0.5 rounded">{r.symbol}</span>
-              <span className="text-[10px] font-mono text-gray-500 bg-gray-800/60 px-1.5 py-0.5 rounded">{r.timeframe}</span>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* Metric table */}
-      <div className="rounded-lg border border-gray-800 overflow-hidden">
-        <Table>
-          <TableHeader className="bg-title-bg title-fade">
-            <TableRow className="border-b border-slate-700/50 hover:bg-transparent">
+    <div className="flex-1 flex flex-col rounded-lg border-x-0 border-t-0 border-b border-gray-800 overflow-hidden bg-title-bg">
+        <Table wrapperClassName="flex-1 overflow-y-auto">
+          <TableHeader className="sticky top-0 z-10">
+            <TableRow className="h-11 shrink-0 bg-title-bg title-fade border-b border-slate-700/50">
               <TableHead className="w-[180px] text-gray-400 font-medium text-xs">Metric</TableHead>
               {results.map((r) => (
                 <TableHead key={r.jobId} className="text-gray-200 font-semibold text-xs">
@@ -185,7 +170,7 @@ function ComparisonTable({ results }) {
           </TableHeader>
           <TableBody>
             {metricRows.map((row, idx) => (
-              <TableRow key={row.label} className={idx % 2 === 0 ? 'bg-gray-900/40 border-b border-gray-800/60' : 'bg-transparent border-b border-gray-800/60'}>
+              <TableRow key={row.label}>
                 <TableCell className="text-gray-400 text-xs font-medium">{row.label}</TableCell>
                 {results.map((r) => (
                   <TableCell key={`${r.jobId}-${row.label}`} className={`font-mono text-xs font-semibold ${getValClass(row, r)}`}>
@@ -196,7 +181,6 @@ function ComparisonTable({ results }) {
             ))}
           </TableBody>
         </Table>
-      </div>
     </div>
   )
 }
@@ -490,9 +474,9 @@ export default function Backtest() {
               </div>
 
               {/* ── Scrollable content area ── */}
-              <div className="flex-1 overflow-y-auto">
+              <div className="flex-1 overflow-hidden flex flex-col relative">
                 {activeResult.status === 'failed' && (
-                  <div className="bg-red-950/20 border border-red-800/40 rounded-lg p-4 m-4 flex items-center gap-3 text-red-400 text-sm">
+                  <div className="bg-red-950/20 border border-red-800/40 rounded-lg p-4 m-4 flex items-center gap-3 text-red-400 text-sm shrink-0">
                     <AlertTriangle className="size-5 shrink-0" />
                     <div>
                       <span className="font-semibold">Execution Failed:</span>{' '}
@@ -501,20 +485,20 @@ export default function Backtest() {
                   </div>
                 )}
 
-                <TabsContent value="overview">
+                <TabsContent value="overview" className="h-full w-full m-0 outline-none data-[state=active]:block overflow-y-auto">
                   {activeResult.metrics && (() => {
                     const m = activeResult.metrics
                     const metrics = [
-                      { label: 'Net Profit',    value: formatPrice(m.netProfit),                            cls: getPnlClass(m.netProfit) },
-                      { label: 'Net P&L %',     value: formatSignedPct(m.netProfitPct),                    cls: getPnlClass(m.netProfit) },
-                      { label: 'Max Drawdown',  value: formatPct(m.maxDrawdown),                           cls: 'text-red-400' },
-                      { label: 'Win Rate',      value: formatPct(parseFloat(m.winRate) * 100),             cls: 'text-gray-100' },
-                      { label: 'Total Trades',  value: m.totalTrades ?? '-',                               cls: 'text-gray-100' },
+                      { label: 'Net Profit', value: formatPrice(m.netProfit), cls: getPnlClass(m.netProfit) },
+                      { label: 'Net P&L %', value: formatSignedPct(m.netProfitPct), cls: getPnlClass(m.netProfit) },
+                      { label: 'Max Drawdown', value: formatPct(m.maxDrawdown), cls: 'text-red-400' },
+                      { label: 'Win Rate', value: formatPct(parseFloat(m.winRate) * 100), cls: 'text-gray-100' },
+                      { label: 'Total Trades', value: m.totalTrades ?? '-', cls: 'text-gray-100' },
                       { label: 'Profit Factor', value: m.profitFactor ? parseFloat(m.profitFactor).toFixed(2) : '-', cls: m.profitFactor && parseFloat(m.profitFactor) >= 1 ? 'text-emerald-400' : 'text-red-400' },
-                      { label: 'Sharpe',        value: parseFloat(m.sharpeRatio || 0).toFixed(2),          cls: 'text-gray-100' },
-                      { label: 'Sortino',       value: parseFloat(m.sortinoRatio || 0).toFixed(2),         cls: 'text-gray-100' },
-                      { label: 'Calmar',        value: parseFloat(m.calmarRatio || 0).toFixed(2),          cls: 'text-gray-100' },
-                      { label: 'Expectancy',    value: m.expectancy ? formatPnl(m.expectancy).value : '-', cls: m.expectancy ? getPnlClass(m.expectancy) : 'text-gray-300' },
+                      { label: 'Sharpe', value: parseFloat(m.sharpeRatio || 0).toFixed(2), cls: 'text-gray-100' },
+                      { label: 'Sortino', value: parseFloat(m.sortinoRatio || 0).toFixed(2), cls: 'text-gray-100' },
+                      { label: 'Calmar', value: parseFloat(m.calmarRatio || 0).toFixed(2), cls: 'text-gray-100' },
+                      { label: 'Expectancy', value: m.expectancy ? formatPnl(m.expectancy).value : '-', cls: m.expectancy ? getPnlClass(m.expectancy) : 'text-gray-300' },
                     ]
                     return (
                       <div className="grid grid-cols-5 border-b border-slate-700/50 divide-x divide-y divide-slate-700/50">
@@ -549,7 +533,7 @@ export default function Backtest() {
                     <div className="border-b border-slate-700/50">
                       <BacktestCalendar
                         trades={allTradesData}
-                        onSelectPeriod={(trades) => {}}
+                        onSelectPeriod={(trades) => { }}
                       />
                     </div>
                   )}
@@ -619,7 +603,7 @@ export default function Backtest() {
                   </div>
                 </TabsContent>
 
-                <TabsContent value="performance">
+                <TabsContent value="performance" className="h-full w-full m-0 outline-none data-[state=active]:flex flex-col overflow-hidden">
                   {activeResult.metrics?.bySide ? (
                     <PerformanceTable bySide={activeResult.metrics.bySide} />
                   ) : (
@@ -630,8 +614,8 @@ export default function Backtest() {
                     </div>
                   )}
                 </TabsContent>
-                <TabsContent value="trades">
-                  <div className="bg-title-bg border border-slate-700/50 overflow-hidden">
+                <TabsContent value="trades" className="h-full w-full m-0 outline-none data-[state=active]:flex flex-col overflow-hidden">
+                  <div className="bg-title-bg border border-slate-700/50 overflow-hidden flex-1 flex flex-col">
                     {tradesData?.trades && tradesData.trades.length > 0 ? (() => {
                       const totalTrades = tradesData.pagination.total
                       const totalPages = tradesData.pagination.totalPages
@@ -640,10 +624,9 @@ export default function Backtest() {
 
                       return (
                         <>
-                          <Table>
-                            <TableHeader className="bg-title-bg title-fade">
-                              <TableRow className="border-b border-slate-700/50 hover:bg-transparent">
-                                <TableHead>ID</TableHead>
+                          <Table wrapperClassName="flex-1 overflow-y-auto">
+                            <TableHeader className="sticky top-0 z-10">
+                              <TableRow className="h-11 shrink-0 bg-title-bg title-fade border-b border-slate-700/50">
                                 <TableHead>Type</TableHead>
                                 <TableHead>Qty</TableHead>
                                 <TableHead>Entry Price</TableHead>
@@ -665,7 +648,6 @@ export default function Backtest() {
 
                                 return (
                                   <TableRow key={tr.id}>
-                                    <TableCell className="font-mono text-xs text-slate-500">{tr.id}</TableCell>
                                     <TableCell>
                                       <Badge variant={tr.type === 'long' ? 'profit' : 'destructive'}>
                                         {tr.type.toUpperCase()}
@@ -704,24 +686,27 @@ export default function Backtest() {
                           </Table>
 
                           {totalPages > 1 && (
-                            <div className="flex items-center justify-between px-4 py-3 border-t border-slate-700/50">
-                              <span className="text-sm text-slate-400">
-                                {totalTrades} trades · page {tradePage} of {totalPages}
+                            <div className="shrink-0 border-t border-slate-700/50 px-3 py-2 flex items-center justify-between">
+                              <span className="text-[10px] text-gray-500 font-mono">
+                                {(tradePage - 1) * TRADES_PER_PAGE + 1}–{Math.min(tradePage * TRADES_PER_PAGE, totalTrades)} of {totalTrades}
                               </span>
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-1">
                                 <button
                                   onClick={() => setTradePage((p) => Math.max(1, p - 1))}
                                   disabled={tradePage === 1}
-                                  className="p-1.5 rounded-lg text-slate-400 hover:text-gray-100 hover:bg-slate-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                                  className="p-1 rounded text-gray-500 hover:text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                                 >
-                                  <ChevronLeft className="size-4" />
+                                  <ChevronLeft className="size-3.5" />
                                 </button>
+                                <span className="text-[10px] text-gray-500 font-mono min-w-[32px] text-center">
+                                  {tradePage}/{totalPages}
+                                </span>
                                 <button
                                   onClick={() => setTradePage((p) => Math.min(totalPages, p + 1))}
                                   disabled={tradePage >= totalPages}
-                                  className="p-1.5 rounded-lg text-slate-400 hover:text-gray-100 hover:bg-slate-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                                  className="p-1 rounded text-gray-500 hover:text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                                 >
-                                  <ChevronRight className="size-4" />
+                                  <ChevronRight className="size-3.5" />
                                 </button>
                               </div>
                             </div>
@@ -736,9 +721,9 @@ export default function Backtest() {
                   </div>
                 </TabsContent>
 
-                <TabsContent value="comparison" className="space-y-3">
+                <TabsContent value="comparison" className="h-full w-full m-0 outline-none data-[state=active]:flex flex-col overflow-hidden">
                   {compareError && (
-                    <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-amber-500/10 border border-amber-500/25 text-amber-400 text-xs">
+                    <div className="shrink-0 mb-3 flex items-center gap-2 px-3 py-2 rounded-md bg-amber-500/10 border border-amber-500/25 text-amber-400 text-xs">
                       <AlertTriangle className="size-3.5 shrink-0" />
                       {compareError}
                     </div>
