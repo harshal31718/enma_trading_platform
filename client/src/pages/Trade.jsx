@@ -95,7 +95,7 @@ function TickerBar() {
   const isPositive = changePct >= 0
 
   return (
-    <div className="h-12 bg-[#0d1117] border-b border-slate-700/50 flex items-center px-4 gap-6 shrink-0">
+    <div className="h-12 bg-title-bg border-b border-slate-700/50 flex items-center px-4 gap-6 shrink-0">
       <div className="flex items-center gap-2 shrink-0">
         <SymbolSearchBar />
         <span className="text-[10px] text-slate-400 border border-slate-700/50 px-1.5 py-0.5 rounded">Perp</span>
@@ -252,7 +252,7 @@ function ChartContainer() {
   useBinanceWS(`${streamPrefix}@kline_${timeframe}`, onKline)
 
   return (
-    <div className="bg-[#0d1117] relative flex-1 min-h-0 overflow-hidden flex flex-col">
+    <div className="bg-title-bg relative flex-1 min-h-0 overflow-hidden flex flex-col">
       {/* Timeframe toolbar */}
       <div className="flex items-center gap-0.5 px-3 py-1.5 border-b border-slate-700/50 shrink-0">
         {TIMEFRAMES.map((tf) => (
@@ -343,7 +343,7 @@ function OrderBook() {
   const midPrice = bestAsk && bestBid ? ((bestAsk + bestBid) / 2).toFixed(1) : '—'
 
   return (
-    <div className="bg-[#0d1117] border-r border-slate-700/50 flex flex-col min-h-0 flex-1">
+    <div className="bg-title-bg border-r border-slate-700/50 flex flex-col min-h-0 flex-1">
       <div className="px-3 py-2 border-b border-slate-700/50 shrink-0 title-fade">
         <span className="text-xs font-semibold text-gray-200">Order Book</span>
       </div>
@@ -410,7 +410,7 @@ function RecentTrades() {
   useBinanceWS(`${streamPrefix}@aggTrade`, onTrade)
 
   return (
-    <div className="bg-[#0d1117] border-r border-slate-700/50 flex flex-col min-h-0 h-[240px]">
+    <div className="bg-title-bg border-r border-slate-700/50 flex flex-col min-h-0 h-[240px]">
       <div className="px-3 py-2 border-b border-slate-700/50 shrink-0 title-fade">
         <span className="text-xs font-semibold text-gray-200">Trades</span>
       </div>
@@ -540,7 +540,7 @@ function TpSlModal({ position, onClose }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
       <div
-        className="bg-[#0d1117] border border-slate-700/50 rounded-xl w-80 flex flex-col shadow-2xl"
+        className="bg-title-bg border border-slate-700/50 rounded-xl w-80 flex flex-col shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -1144,7 +1144,7 @@ function BottomPanel({ ocoToast, ocoBanner, onDismissBanner }) {
   }, [])
 
   return (
-    <div className="bg-[#0d1117] border-t border-slate-700/50 flex flex-col shrink-0 h-[200px]">
+    <div className="bg-title-bg border-t border-slate-700/50 flex flex-col shrink-0 h-[200px]">
       <div className="flex border-b border-slate-700/50 shrink-0">
         {[
           { key: 'Positions', label: `Positions(${posCount})` },
@@ -1217,7 +1217,7 @@ function LeverageModal({ current, onConfirm, onClose, isLoading }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="bg-[#0d1117] border border-slate-700/50 rounded-xl p-5 w-72 flex flex-col gap-4">
+      <div className="bg-title-bg border border-slate-700/50 rounded-xl p-5 w-72 flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <span className="text-sm font-semibold text-gray-100">Adjust Leverage</span>
           <button onClick={onClose} className="text-slate-400 hover:text-gray-300 text-sm leading-none">✕</button>
@@ -1436,7 +1436,7 @@ function OrderForm() {
         />
       )}
 
-      <div className="flex flex-col min-h-0 flex-1 bg-[#0d1117]">
+      <div className="flex flex-col min-h-0 flex-1 bg-title-bg">
         {/* Margin type + Leverage row */}
         <div className="flex items-center justify-between px-3 py-2 border-b border-slate-700/50">
           <div className={`flex rounded overflow-hidden border text-xs ${isConfigBusy ? 'opacity-50' : 'border-slate-700/50'}`}>
@@ -1621,7 +1621,7 @@ function TradeInner() {
 
       {/* Short-lived toast notification */}
       {ocoToast && (
-        <div className="absolute top-20 right-4 z-50 bg-[#0d1117] border border-slate-700/50 rounded-lg px-4 py-2.5 text-xs text-gray-100 shadow-2xl max-w-xs animate-fade-in">
+        <div className="absolute top-20 right-4 z-50 bg-title-bg border border-slate-700/50 rounded-lg px-4 py-2.5 text-xs text-gray-100 shadow-2xl max-w-xs animate-fade-in">
           {ocoToast}
         </div>
       )}

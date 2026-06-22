@@ -15,7 +15,7 @@ import {
 
 import PageWrapper from '../components/layout/PageWrapper'
 import PageHeader from '../components/ui/PageHeader'
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/card'
+import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../components/ui/table'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
@@ -532,7 +532,6 @@ export default function Backtest() {
                   <Card>
                     <CardHeader>
                       <CardTitle>Performance Charts</CardTitle>
-                      <CardDescription>Visualizing balance history, drawdowns, and benchmark over time</CardDescription>
                     </CardHeader>
                     <CardContent>
                       <Suspense fallback={<div className="h-48 flex items-center justify-center"><Loader2 className="size-6 animate-spin text-emerald-400" /></div>}>
@@ -624,7 +623,6 @@ export default function Backtest() {
                   <Card>
                     <CardHeader>
                       <CardTitle>Performance Breakdown</CardTitle>
-                      <CardDescription>Directional strategy performance side-by-side comparison</CardDescription>
                     </CardHeader>
                     <CardContent>
                       {activeResult.metrics?.bySide ? (
@@ -644,9 +642,6 @@ export default function Backtest() {
                       <div className="flex items-center justify-between">
                         <div>
                           <CardTitle>Execution Log</CardTitle>
-                          <CardDescription>
-                            Complete historical trade record ({tradesData?.pagination?.total || 0} trades)
-                          </CardDescription>
                         </div>
                         {tradesData?.trades && tradesData.trades.length > 0 && (
                           <Button

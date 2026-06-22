@@ -98,17 +98,17 @@ export default function NewSessionWizard({ onCancel, onSuccess }) {
   const logical = getLogicalStep(step)
 
   return (
-    <div className="max-w-2xl mx-auto">
+    <div className="w-full text-slate-200">
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-lg font-semibold text-gray-100">New Bot Session</h2>
+        <h2 className="text-lg font-semibold text-gray-100">New Bot</h2>
         <button onClick={onCancel} className="text-sm text-gray-400 hover:text-gray-200">
           Cancel
         </button>
       </div>
 
       {/* Step indicator */}
-      <div className="flex items-center gap-2 mb-6">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mb-6">
         {stepLabels.map((label, i) => (
           <div key={i} className="flex items-center gap-2">
             <div
@@ -131,11 +131,11 @@ export default function NewSessionWizard({ onCancel, onSuccess }) {
       </div>
 
       {/* Step content */}
-      <div className="bg-gray-900 border border-gray-800 rounded-lg p-6 mb-4">
+      <div className="bg-[#0a0d13] border border-slate-700/40 rounded-lg p-6 mb-4">
         {/* Step 1: Pick Strategy */}
         {logical === 1 && (
           <div>
-            <h3 className="text-sm font-medium text-gray-300 mb-3">Select a strategy</h3>
+            <h3 className="text-sm font-medium text-gray-300 mb-4">Select Strategy</h3>
             {loadingStrategies ? (
               <div className="space-y-2">
                 {[1, 2, 3].map((i) => (
@@ -169,7 +169,7 @@ export default function NewSessionWizard({ onCancel, onSuccess }) {
         {/* Step 2 (if hasParams): Configure Parameters */}
         {logical === 2 && hasParams && (
           <div>
-            <h3 className="text-sm font-medium text-gray-300 mb-3">Strategy parameters</h3>
+            <h3 className="text-sm font-medium text-gray-300 mb-4">Strategy Parameters</h3>
             <ParamsForm
               params={paramsSchema}
               values={params}
@@ -181,9 +181,7 @@ export default function NewSessionWizard({ onCancel, onSuccess }) {
         {/* Step 3: Select Symbols */}
         {logical === 3 && (
           <div>
-            <h3 className="text-sm font-medium text-gray-300 mb-3">
-              Select symbols ({selectedSymbols.length} selected)
-            </h3>
+            <h3 className="text-sm font-medium text-gray-300 mb-4">Select Symbols</h3>
             <SymbolPicker
               symbols={futuresSymbols}
               selected={selectedSymbols}
@@ -196,7 +194,7 @@ export default function NewSessionWizard({ onCancel, onSuccess }) {
         {/* Step 4: Configure Session */}
         {logical === 4 && (
           <div className="space-y-4">
-            <h3 className="text-sm font-medium text-gray-300 mb-3">Session settings</h3>
+            <h3 className="text-sm font-medium text-gray-300 mb-4">Session Settings</h3>
             <div>
               <label className="block text-sm text-gray-300 mb-1">Timeframe</label>
               <select
@@ -249,7 +247,7 @@ export default function NewSessionWizard({ onCancel, onSuccess }) {
         {/* Step 5: Review */}
         {logical === 5 && (
           <div>
-            <h3 className="text-sm font-medium text-gray-300 mb-4">Review & Start</h3>
+            <h3 className="text-sm font-medium text-gray-300 mb-4">Review Bot</h3>
             <div className="space-y-3 text-sm">
               <div className="flex justify-between py-2 border-b border-gray-800">
                 <span className="text-gray-400">Strategy</span>

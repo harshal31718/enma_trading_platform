@@ -74,8 +74,8 @@ export function useDeleteAllStopped() {
 export function useStartChaos() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async () => {
-      const res = await api.post('/api/v1/algo/chaos')
+    mutationFn: async (config = {}) => {
+      const res = await api.post('/api/v1/algo/chaos', config)
       return res.data.data
     },
     onSuccess: () => {
@@ -92,6 +92,17 @@ export function useLockedSymbols() {
       return res.data.data.locked
     },
     staleTime: 5000,
+  })
+}
+
+export function useChaosSymbols() {
+  return useQuery({
+    queryKey: ['algo', 'symbols', 'chaos'],
+    queryFn: async () => {
+      const res = await api.get('/api/v1/algo/chaos/symbols')
+      return res.data.data.tieredSymbols
+    },
+    staleTime: 1000 * 60 * 60, // 1 hour (curated list)
   })
 }
 

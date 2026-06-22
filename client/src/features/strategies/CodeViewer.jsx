@@ -7,7 +7,7 @@ export default function CodeViewer({ strategyId, strategyName, open, onClose }) 
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-3xl max-h-[80vh] bg-[#0d1117] border-slate-700/50 flex flex-col">
+      <DialogContent className="max-w-3xl max-h-[80vh] bg-title-bg border-slate-700/50 flex flex-col">
         <DialogHeader>
           <DialogTitle className="text-gray-100">{strategyName}</DialogTitle>
         </DialogHeader>

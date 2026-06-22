@@ -62,7 +62,7 @@ export default function BacktestCalendar({ trades, onSelectPeriod }) {
     };
 
     return (
-        <div className="flex flex-col h-full bg-gray-900/50 border border-gray-800 rounded-lg p-4 overflow-hidden">
+        <div className="flex flex-col h-full bg-title-bg border border-slate-700/50 rounded-lg p-4 overflow-hidden">
             {/* Header / Tabs */}
             <div className="flex items-center justify-between -mx-4 -mt-4 px-4 pt-4 pb-3 mb-4 title-fade">
                 <div className="flex items-center gap-2 text-gray-200 font-semibold">

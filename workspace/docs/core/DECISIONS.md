@@ -148,3 +148,8 @@ Calling `flip_position()` from `update_position()` records a pending flip (`_pen
 
 **Rationale:** The session doc already stored only aggregate `totalTrades`/`pnl`; per-symbol breakdown had no home. Deriving it client-side from live socket events would reset on every reload and miss trades that happened before a card was opened. Aggregating the authoritative `tradeRecords` on close is cheap (once per trade, not per render), persistent, and keeps the single-writer boundary intact. Live unrealized PnL stays client-side (Binance ticker WS) since it must update faster than the engine's periodic push and needs no persistence.
 
+
+## 16. Configurable Chaos Mode Wizard
+**Decision:** Upgrade Chaos Mode from a fire-and-forget, hardcoded launch to a guided 4-step wizard. Add a dedicated "Chaos Setting (testnet)" section on the Settings page to persist and validate caps (`chaosMaxStrategies` default 10, `chaosMaxManualSymbols` default 5) and launch defaults (capital, leverage, timeframe).
+Expose the volume-tiered list of curated symbols via `GET /api/v1/algo/chaos/symbols` to maintain a single source of truth and avoid duplication of symbol arrays in the client codebase.
+**Rationale:** Allows single-user stress-test sessions to be fully configured without code edits. Enforces uniqueness across manual picks, skips locked symbols, and provides live client-side preview calculations of H/M/L volume-tiered symbol distribution before starting. Ensures the client and server agree on the curated symbol metadata dynamically.

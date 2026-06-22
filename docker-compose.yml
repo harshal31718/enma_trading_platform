@@ -49,8 +49,7 @@ services:
     build: ./engine
     ports:
       - "8000:8000"
-    volumes:
-      - ./engine:/app
+    volumes: []
     env_file:
       - ./engine/.env
     depends_on:
@@ -66,13 +65,23 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+    develop:
+      watch:
+        - action: sync
+          path: ./engine
+          target: /app
+          ignore:
+            - __pycache__
+            - "*.pyc"
+            - .pytest_cache
+        - action: rebuild
+          path: ./engine/requirements.txt
 
   server:
     build: ./server
     ports:
       - "5000:5000"
     volumes:
-      - ./server:/app
       - enma_server_node_modules:/app/node_modules
     env_file:
       - ./server/.env
@@ -89,19 +98,35 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+    develop:
+      watch:
+        - action: sync
+          path: ./server/src
+          target: /app/src
+        - action: rebuild
+          path: ./server/package.json
 
   client:
     build: ./client
     ports:
       - "5173:5173"
     volumes:
-      - ./client:/app
       - enma_client_node_modules:/app/node_modules
     env_file:
       - ./client/.env
     depends_on:
       server:
         condition: service_healthy
+    develop:
+      watch:
+        - action: sync
+          path: ./client/src
+          target: /app/src
+        - action: sync
+          path: ./client/public
+          target: /app/public
+        - action: rebuild
+          path: ./client/package.json
 
 volumes:
   enma_mongo_data:

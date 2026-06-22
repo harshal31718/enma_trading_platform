@@ -40,6 +40,9 @@
     --title-fade-strength: 0.50;         /* left-edge opacity — target band 45–55% */
     --title-fade-strength-hover: 0.60;   /* deepened for interactive title rows */
     --title-fade-reach: 55%;             /* fades to transparent by ~55% across */
+
+    /* Global base shade for title blocks, navbar, cards, and dialogs */
+    --title-bg: #0d1117;
   }
 }
 

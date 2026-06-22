@@ -1,5 +1,5 @@
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../../components/ui/table'
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../../components/ui/card'
+import { Card, CardHeader, CardTitle, CardContent } from '../../components/ui/card'
 import { formatPrice, formatPct } from '../../utils/formatters'
 
 export default function StrategyLeaderboard({ data }) {
@@ -7,7 +7,6 @@ export default function StrategyLeaderboard({ data }) {
     <Card>
       <CardHeader>
         <CardTitle>Strategy Leaderboard</CardTitle>
-        <CardDescription>Aggregated performance per strategy (completed runs)</CardDescription>
       </CardHeader>
       <CardContent>
         {!data || data.length === 0 ? (

@@ -9,6 +9,7 @@ const ApiResponse = require('../utils/ApiResponse')
 const { lockSymbol, releaseSymbolLock, getAllLockedSymbols, isSymbolFree, getSymbolLock } = require('../services/symbolLock')
 const { getIO } = require('../config/socket')
 const { resolveModelParams } = require('../utils/risk')
+const { allocateChaosSymbols } = require('../utils/chaosAllocator')
 
 // POST /api/v1/algo/sessions
 async function startSession(req, res, next) {
@@ -430,14 +431,20 @@ async function handleAlgoGetPosition(req, res) {
 
 // ── Chaos Mode ──────────────────────────────────────────────────────────────
 // POST /api/v1/algo/chaos
-// Launches all 5 strategies simultaneously with maximally-volatile params on 1m
-// timeframe for pipeline stress testing.  Every strategy gets its own disjoint
-// symbol set so the one-session-per-symbol lock is never tripped.
+// Guided wizard launch — accepts an optional JSON body; empty body reproduces
+// the original fire-and-forget behaviour (auto-select all strategies, full pool).
 // Testnet-only by construction (sessions are created with mode:'paper').
-
-const CHAOS_LEVERAGE = 50    // requested — clamped per-symbol by the engine
-const CHAOS_CAPITAL  = '500' // per session (disposable testnet money)
-const CHAOS_TF       = '1m'
+//
+// Body schema (all optional):
+// {
+//   "timeframe": "1m",
+//   "strategies": [
+//     { "name": "MicroScalper", "symbols": ["BTCUSDT","ETHUSDT"] },
+//     { "name": "AdaptiveTrend" }
+//   ],
+//   "risk": { "capital": "500", "leverage": 50, "riskReward": 1.5,
+//             "maxDrawdown": 25, "riskPct": 1, "minEdgeMult": 1 }
+// }
 
 const CHAOS_LAUNCH_LIST = [
   {
@@ -527,136 +534,217 @@ const CHAOS_LAUNCH_LIST = [
   },
 ]
 
+const CHAOS_SUPPORTED_TIMEFRAMES = ['1m','3m','5m','15m','30m','1h','2h','4h','6h','8h','12h','1d']
+
 async function startChaos(req, res, next) {
   try {
-    const allStrategies = await Strategy.find({}).lean();
-    const strategyMap = Object.fromEntries(allStrategies.map(s => [s.name, String(s._id)]));
+    // ── 1. Load settings & known strategies ─────────────────────────────────
+    const savedSettings = await Settings.findById('global').lean() || {}
+    const feeRate = savedSettings.takerFee ?? 0.0005
+    const riskParams = resolveModelParams(savedSettings, null)
 
-    const savedSettings = await Settings.findById('global').lean() || {};
-    const feeRate = savedSettings.takerFee ?? 0.0005;
-    const riskParams = resolveModelParams(savedSettings, null);
+    const maxStrategies    = savedSettings.chaosMaxStrategies    ?? 10
+    const maxManualSymbols = savedSettings.chaosMaxManualSymbols ?? 5
+    const defaultCapital   = savedSettings.chaosDefaultCapital   ?? 500
+    const defaultLeverage  = savedSettings.chaosDefaultLeverage  ?? 50
+    const defaultTF        = savedSettings.chaosDefaultTimeframe ?? '1m'
 
-    const created = [];
-    const errors = [];
+    const allStrategies = await Strategy.find({}).sort({ updatedAt: -1, createdAt: -1 }).lean()
+    const strategyMap = new Map(allStrategies.map(s => [s.name, s]))
 
-    // ---- Symbol pool preparation ----
-    const symbolPool = [...TOP_SYMBOLS];
-    // Fisher‑Yates shuffle
-    for (let i = symbolPool.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [symbolPool[i], symbolPool[j]] = [symbolPool[j], symbolPool[i]];
+    // ── 2. Parse + validate request body ────────────────────────────────────
+    const body = req.body || {}
+
+    // timeframe
+    const timeframe = body.timeframe ?? defaultTF
+    if (!CHAOS_SUPPORTED_TIMEFRAMES.includes(timeframe)) {
+      throw new ApiError(400, 'VALIDATION_ERROR',
+        `timeframe "${timeframe}" is not supported. Must be one of: ${CHAOS_SUPPORTED_TIMEFRAMES.join(', ')}`)
     }
-    const strategyCount = CHAOS_LAUNCH_LIST.length;
-    const baseCount = Math.floor(symbolPool.length / strategyCount);
-    let remainder = symbolPool.length % strategyCount;
 
-    for (let idx = 0; idx < CHAOS_LAUNCH_LIST.length; idx++) {
-      const entry = CHAOS_LAUNCH_LIST[idx];
-      const strategyId = strategyMap[entry.name];
-      if (!strategyId) {
-        errors.push({ strategy: entry.name, error: 'Strategy not found in MongoDB — run engine to seed' });
-        continue;
-      }
+    // risk override (capital + leverage come from body.risk or settings defaults)
+    const riskBody = body.risk || {}
+    const capital  = String(riskBody.capital  ?? defaultCapital)
+    const leverage = Number(riskBody.leverage ?? defaultLeverage)
+    // Per-run risk model override (riskReward, maxDrawdown, riskPct, minEdgeMult)
+    const riskOverride = {}
+    if (riskBody.riskReward  != null) riskOverride.riskRewardRatio    = riskBody.riskReward
+    if (riskBody.maxDrawdown != null) riskOverride.maxSessionDrawdown = riskBody.maxDrawdown / 100
+    if (riskBody.riskPct     != null) riskOverride.riskPct            = riskBody.riskPct / 100
+    if (riskBody.minEdgeMult != null) riskOverride.minEdgeMult        = riskBody.minEdgeMult
+    const resolvedRisk = resolveModelParams(savedSettings, Object.keys(riskOverride).length ? riskOverride : null)
 
-      // Allocate symbols for this strategy
-      const take = baseCount + (remainder > 0 ? 1 : 0);
-      if (remainder > 0) remainder--;
-      const symbols = symbolPool.splice(0, take);
-      if (symbols.length === 0) {
-        console.warn(`[AlgoBot] No symbols left to allocate for strategy ${entry.name}. Falling back to empty list.`);
-      }
+    // strategies body: array of { name, symbols? }
+    const strategiesBody = body.strategies || []
+    if (!Array.isArray(strategiesBody)) {
+      throw new ApiError(400, 'VALIDATION_ERROR', '"strategies" must be an array')
+    }
 
-      // 2. Ensure all allocated symbols are free
-      const blockedSymbols = [];
-      for (const symbol of symbols) {
-        if (!(await isSymbolFree(symbol))) {
-          const locks = await getAllLockedSymbols();
-          blockedSymbols.push({ symbol, lock: locks[symbol] });
+    // ── 3. Resolve active strategies (D2) ───────────────────────────────────
+    let activeNames
+    if (strategiesBody.length === 0) {
+      // Auto-select: most-recent up to cap
+      activeNames = allStrategies.slice(0, maxStrategies).map(s => s.name)
+    } else {
+      // Validate names
+      const knownNames = new Set(allStrategies.map(s => s.name))
+      for (const entry of strategiesBody) {
+        if (!knownNames.has(entry.name)) {
+          throw new ApiError(400, 'VALIDATION_ERROR', `Strategy "${entry.name}" not found in the database.`)
         }
+      }
+      if (strategiesBody.length > maxStrategies) {
+        throw new ApiError(400, 'VALIDATION_ERROR',
+          `Too many strategies selected (${strategiesBody.length}). Max is ${maxStrategies}.`)
+      }
+      activeNames = strategiesBody.map(e => e.name)
+    }
+
+    if (activeNames.length === 0) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'No strategies available to run.')
+    }
+
+    // Build manualPicks map { strategyName: [symbols] }
+    const manualPicks = {}
+    for (const entry of strategiesBody) {
+      if (entry.symbols && entry.symbols.length > 0) {
+        manualPicks[entry.name] = entry.symbols
+      }
+    }
+
+    // ── 4. Read current symbol locks ────────────────────────────────────────
+    const locksSnapshot = await getAllLockedSymbols()
+    const lockedSymbols = Object.keys(locksSnapshot)
+
+    // ── 5. Allocate symbols via the pure allocator ───────────────────────────
+    let assignments, dropped
+    try {
+      const result = allocateChaosSymbols({
+        activeStrategies: activeNames,
+        manualPicks,
+        lockedSymbols,
+        curatedSymbols: TOP_SYMBOLS,
+        maxManualSymbols,
+      })
+      assignments = result.assignments
+      dropped = result.dropped
+    } catch (allocErr) {
+      // allocator throws { status, code, message } for validation failures
+      if (allocErr.status) {
+        throw new ApiError(allocErr.status, allocErr.code, allocErr.message)
+      }
+      throw allocErr
+    }
+
+    // ── 6. Launch each strategy (existing loop — lock → create → engine → rollback) ──
+    const created = []
+    const errors  = []
+
+    for (const stratName of activeNames) {
+      const strategy = strategyMap.get(stratName)
+      if (!strategy) {
+        errors.push({ strategy: stratName, error: 'Strategy not found in MongoDB — run engine to seed' })
+        continue
+      }
+
+      const symbols = assignments[stratName] || []
+      if (symbols.length === 0) {
+        errors.push({ strategy: stratName, error: 'No symbols allocated (all locked or pool exhausted)' })
+        continue
+      }
+
+      // Find matching chaos params (fall back to empty if not in CHAOS_LAUNCH_LIST)
+      const launchEntry = CHAOS_LAUNCH_LIST.find(e => e.name === stratName)
+      const params = launchEntry?.params || {}
+
+      // a. Check all symbols still free (race-condition guard)
+      const blockedSymbols = []
+      for (const sym of symbols) {
+        if (!(await isSymbolFree(sym))) blockedSymbols.push(sym)
       }
       if (blockedSymbols.length) {
-        errors.push({
-          strategy: entry.name,
-          error: `Symbols locked: ${blockedSymbols.map(b => b.symbol).join(', ')} — stop existing sessions first`,
-        });
-        // Return symbols to pool for next strategies
-        symbolPool.unshift(...symbols);
-        continue;
+        errors.push({ strategy: stratName, error: `Symbols locked: ${blockedSymbols.join(', ')} — stop existing sessions first` })
+        continue
       }
 
-      // 3. Create session in MongoDB
-      let session;
+      // b. Create session in MongoDB
+      let session
       try {
         session = await LiveSession.create({
-          strategyId,
-          strategyName: entry.name,
+          strategyId:   String(strategy._id),
+          strategyName: stratName,
           symbols,
-          timeframe: CHAOS_TF,
-          params: entry.params,
-          capital: CHAOS_CAPITAL,
-          leverage: CHAOS_LEVERAGE,
-          riskParams,
-          status: 'starting',
-          mode: 'paper',
-        });
+          timeframe,
+          params,
+          capital:    String(capital),
+          leverage:   Number(leverage),
+          riskParams: resolvedRisk,
+          status:     'starting',
+          mode:       'paper',
+        })
       } catch (dbErr) {
-        errors.push({ strategy: entry.name, error: `DB create failed: ${dbErr.message}` });
-        // Return symbols to pool before next iteration
-        symbolPool.unshift(...symbols);
-        continue;
+        errors.push({ strategy: stratName, error: `DB create failed: ${dbErr.message}` })
+        continue
       }
 
-      // 4. Lock all symbols for this session
-      const lockedSoFar = [];
-      let lockFailed = false;
+      // c. Lock all symbols for this session
+      const lockedSoFar = []
+      let lockFailed = false
       try {
-        for (const symbol of symbols) {
-          await lockSymbol(symbol, 'bot', String(session._id));
-          lockedSoFar.push(symbol);
+        for (const sym of symbols) {
+          await lockSymbol(sym, 'bot', String(session._id))
+          lockedSoFar.push(sym)
         }
       } catch (lockErr) {
-        for (const s of lockedSoFar) await releaseSymbolLock(s, String(session._id)).catch(() => {});
-        await LiveSession.findByIdAndDelete(session._id);
-        errors.push({ strategy: entry.name, error: `Symbol lock failed: ${lockErr.message}` });
-        // Return symbols to pool for remaining strategies
-        symbolPool.unshift(...symbols);
-        lockFailed = true;
+        for (const s of lockedSoFar) await releaseSymbolLock(s, String(session._id)).catch(() => {})
+        await LiveSession.findByIdAndDelete(session._id)
+        errors.push({ strategy: stratName, error: `Symbol lock failed: ${lockErr.message}` })
+        lockFailed = true
       }
-      if (lockFailed) continue;
+      if (lockFailed) continue
 
-      // 5. Call engine to start the session
+      // d. Call engine to start the session
       try {
         await engineClient.post('/algo/sessions', {
-          session_id: String(session._id),
-          strategy_name: entry.name,
+          session_id:    String(session._id),
+          strategy_name: stratName,
           symbols,
-          timeframe: CHAOS_TF,
-          params: entry.params,
-          capital: CHAOS_CAPITAL,
-          leverage: CHAOS_LEVERAGE,
-          fee_rate: feeRate,
-          risk_params: riskParams,
-        });
-        await LiveSession.findByIdAndUpdate(session._id, { status: 'running' });
-        created.push({ strategy: entry.name, sessionId: String(session._id), symbols, status: 'running' });
+          timeframe,
+          params,
+          capital:       String(capital),
+          leverage:      Number(leverage),
+          fee_rate:      feeRate,
+          risk_params:   resolvedRisk,
+        })
+        await LiveSession.findByIdAndUpdate(session._id, { status: 'running' })
+        created.push({ strategy: stratName, sessionId: String(session._id), symbols, status: 'running' })
       } catch (engineErr) {
-        for (const symbol of symbols) await releaseSymbolLock(symbol, String(session._id)).catch(() => {});
-        await LiveSession.findByIdAndUpdate(session._id, { status: 'error', errorMessage: engineErr.message });
-        errors.push({ strategy: entry.name, error: `Engine start failed: ${engineErr.message}` });
-        // Return symbols to pool for next strategies (they were already released)
-        symbolPool.unshift(...symbols);
+        for (const sym of symbols) await releaseSymbolLock(sym, String(session._id)).catch(() => {})
+        await LiveSession.findByIdAndUpdate(session._id, { status: 'error', errorMessage: engineErr.message })
+        errors.push({ strategy: stratName, error: `Engine start failed: ${engineErr.message}` })
       }
     }
 
-    // 6. Respond
-    const statusCode = errors.length && created.length === 0 ? 502 : 207;
+    // ── 7. Respond ──────────────────────────────────────────────────────────
+    const statusCode = errors.length && created.length === 0 ? 502 : 207
     res.status(statusCode).json(ApiResponse.success({
       launched: created,
       errors,
+      dropped,
       note: '⚡ Chaos Mode — testnet-only. All sessions run on Binance Testnet (mode:paper). Stop with DELETE /api/v1/algo/sessions.',
-    }));
+    }))
   } catch (err) {
-    next(err);
+    next(err)
+  }
+}
+
+// GET /api/v1/algo/chaos/symbols
+async function getChaosSymbols(req, res, next) {
+  try {
+    const { TIERED_SYMBOLS } = require('../constants/top_symbols')
+    res.json(ApiResponse.success({ tieredSymbols: TIERED_SYMBOLS }))
+  } catch (err) {
+    next(err)
   }
 }
 
@@ -675,6 +763,7 @@ module.exports = {
   deleteSession,
   deleteAllStopped,
   startChaos,
+  getChaosSymbols,
 }
 
 // ── Internal handlers for real Binance order placement ──────────────────────

@@ -10,10 +10,12 @@ const {
   deleteSession,
   deleteAllStopped,
   startChaos,
+  getChaosSymbols,
 } = require('../controllers/algo.controller')
 
 router.post('/sessions', startSession)
 router.post('/chaos', startChaos)
+router.get('/chaos/symbols', getChaosSymbols)
 router.get('/sessions', listSessions)
 router.delete('/sessions', deleteAllStopped)
 router.get('/sessions/:id', getSession)

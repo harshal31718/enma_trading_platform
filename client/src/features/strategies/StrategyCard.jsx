@@ -18,7 +18,7 @@ export default function StrategyCard({ strategy, onClone }) {
 
   return (
     <>
-      <div className="bg-[#0d1117] border border-slate-700/50 rounded-xl p-5 flex flex-col gap-3 overflow-hidden hover:border-slate-600/70 hover:shadow-2xl hover:shadow-black/20 transition-all duration-300">
+      <div className="bg-title-bg border border-slate-700/50 rounded-xl p-5 flex flex-col gap-3 overflow-hidden hover:border-slate-600/70 hover:shadow-2xl hover:shadow-black/20 transition-all duration-300">
         <div className="flex items-start justify-between -mx-5 -mt-5 px-5 pt-5 pb-3 title-fade">
           <div className="flex items-center gap-2">
             <Code2 className="size-5 text-emerald-400" />

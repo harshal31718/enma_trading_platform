@@ -100,7 +100,7 @@ export default function OrderHistory() {
         </div>
       )}
 
-      <div className="bg-[#0d1117] border border-slate-700/50 rounded-xl overflow-hidden">
+      <div className="bg-title-bg border border-slate-700/50 rounded-xl overflow-hidden">
         <Table>
           <TableHeader>
             <TableRow>

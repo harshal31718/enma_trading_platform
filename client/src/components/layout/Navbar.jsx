@@ -25,7 +25,7 @@ export default function Navbar() {
   const runningCount = algoSessions.filter((s) => s.status === 'running').length
 
   return (
-    <header className="fixed top-0 left-0 right-0 h-14 bg-[#0a0d13] title-fade border-b border-slate-700/50 flex items-center z-50">
+    <header className="fixed top-0 left-0 right-0 h-14 bg-title-bg title-fade border-b border-slate-700/50 flex items-center z-50">
       <div className="pl-6 w-[180px] shrink-0">
         <span className="text-emerald-400 font-medium text-lg">Enma</span>
       </div>

@@ -1,7 +1,7 @@
 import { useNavigate } from 'react-router-dom'
 import { ChevronRight } from 'lucide-react'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../../components/ui/table'
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../../components/ui/card'
+import { Card, CardHeader, CardTitle, CardContent } from '../../components/ui/card'
 import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
 import { formatPnl, formatPct, formatSignedPct } from '../../utils/formatters'
@@ -30,7 +30,6 @@ export default function RecentActivityTable({ data }) {
     <Card>
       <CardHeader>
         <CardTitle>Recent Activity</CardTitle>
-        <CardDescription>Last 5 backtest execution runs</CardDescription>
       </CardHeader>
       <CardContent>
         {!data || data.length === 0 ? (

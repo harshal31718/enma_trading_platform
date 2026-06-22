@@ -40,7 +40,7 @@ const fmtNum = (v) => {
 }
 
 const StatTile = ({ label, value, color = 'text-gray-100' }) => (
-  <div className="bg-[#0d1117] border border-slate-700/40 rounded-lg px-2.5 py-2">
+  <div className="bg-title-bg border border-slate-700/40 rounded-lg px-2.5 py-2">
     <div className="text-[10px] text-slate-400 mb-0.5 truncate">{label}</div>
     <div className={`text-sm font-bold tabular-nums ${color}`}>{value}</div>
   </div>
@@ -273,7 +273,7 @@ export default function SessionCard({ session, onStop, stopping }) {
   const maxAllowedDrawdown = (session.riskParams?.max_session_dd ?? 0.20) * 100
 
   return (
-    <div className="bg-[#0d1117] border border-slate-700/50 rounded-xl overflow-hidden shadow-2xl hover:border-slate-600/70 transition-all duration-300">
+    <div className="w-full overflow-hidden transition-all duration-300 hover:bg-slate-900/40">
 
       {/* ── Header row ── */}
       <div
@@ -298,23 +298,27 @@ export default function SessionCard({ session, onStop, stopping }) {
           </div>
         </div>
 
-        {/* Inline stats — order: Started · Capital · Leverage · Trades */}
-        <div className="hidden md:flex items-center gap-6 shrink-0">
-          <div className="text-center">
-            <div className="text-xs text-slate-400 mb-0.5">{isStopped ? 'Stopped' : 'Started'}</div>
+        {/* Inline stats — order: Start Time · Symbol Count · Capital · Leverage · Trades */}
+        <div className="hidden md:flex items-center gap-6 shrink-0 text-center">
+          <div className="w-36 text-center">
+            <div className="text-xs text-slate-400 mb-0.5">{isStopped ? 'Stopped' : 'Start Time'}</div>
             <div className="text-sm font-semibold text-gray-200 whitespace-nowrap">
               {formatStarted(isStopped ? (session.stoppedAt || session.updatedAt) : session.createdAt)}
             </div>
           </div>
-          <div className="text-center">
+          <div className="w-24 text-center">
+            <div className="text-xs text-slate-400 mb-0.5">Symbol Count</div>
+            <div className="text-sm font-semibold text-gray-100">{session.symbols?.length || 0}</div>
+          </div>
+          <div className="w-24 text-center">
             <div className="text-xs text-slate-400 mb-0.5">Capital</div>
             <div className="text-sm font-semibold text-gray-100">${parseFloat(session.capital || 0).toLocaleString()}</div>
           </div>
-          <div className="text-center">
+          <div className="w-20 text-center">
             <div className="text-xs text-slate-400 mb-0.5">Leverage</div>
             <div className="text-sm font-semibold text-gray-100">{session.leverage}x</div>
           </div>
-          <div className="text-center">
+          <div className="w-28 text-center">
             <div className="text-xs text-slate-400 mb-0.5">Trades</div>
             <div className="text-sm font-semibold whitespace-nowrap">
               <span className={openTrades > 0 ? 'text-emerald-400' : 'text-gray-100'}>{openTrades}</span>
@@ -326,8 +330,8 @@ export default function SessionCard({ session, onStop, stopping }) {
         </div>
 
         {/* P&L + actions — PnL: realised + live (unrealized) of open trades */}
-        <div className="flex items-center gap-3 shrink-0">
-          <div className="text-right">
+        <div className="flex items-center gap-4 shrink-0">
+          <div className="text-right w-36">
             <div className={`text-lg font-bold tracking-tight ${barPositive ? 'text-emerald-400' : 'text-red-400'}`}>
               {barPositive ? '+' : '-'}${Math.abs(barPnl).toFixed(2)}
               <span className="text-xs font-semibold ml-1 opacity-80">
@@ -337,29 +341,31 @@ export default function SessionCard({ session, onStop, stopping }) {
             <div className="text-[10px] text-slate-400 uppercase tracking-wider">P&L</div>
           </div>
 
-          {session.status === 'running' && (
-            <button
-              onClick={(e) => { e.stopPropagation(); onStop() }}
-              disabled={stopping}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-medium rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-            >
-              <Square size={12} className={stopping ? 'animate-pulse' : ''} />
-              {stopping ? 'Stopping' : 'Stop'}
-            </button>
-          )}
-          {isStopped && (
-            <button
-              onClick={(e) => { e.stopPropagation(); deleteSession.mutate(String(session._id)) }}
-              disabled={deleteSession.isPending}
-              className="p-1.5 hover:bg-red-500/10 text-gray-600 hover:text-red-400 rounded-lg border border-transparent hover:border-red-500/20 disabled:opacity-40 transition-all"
-              title="Delete session"
-            >
-              <Trash2 size={14} />
-            </button>
-          )}
+          <div className="w-24 flex justify-end">
+            {session.status === 'running' && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onStop() }}
+                disabled={stopping}
+                className="flex items-center justify-center gap-1.5 w-full py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-medium rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+              >
+                <Square size={12} className={stopping ? 'animate-pulse' : ''} />
+                {stopping ? 'Stopping' : 'Stop'}
+              </button>
+            )}
+            {isStopped && (
+              <button
+                onClick={(e) => { e.stopPropagation(); deleteSession.mutate(String(session._id)) }}
+                disabled={deleteSession.isPending}
+                className="p-1.5 hover:bg-red-500/10 text-gray-600 hover:text-red-400 rounded-lg border border-transparent hover:border-red-500/20 disabled:opacity-40 transition-all flex items-center justify-center"
+                title="Delete session"
+              >
+                <Trash2 size={14} />
+              </button>
+            )}
+          </div>
           <button
             onClick={(e) => { e.stopPropagation(); setExpanded(!expanded) }}
-            className="p-1.5 bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white rounded-lg transition-colors"
+            className="p-1.5 bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white rounded-lg transition-colors shrink-0"
           >
             {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
           </button>

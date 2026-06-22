@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { Play, Square, Loader2, Calendar } from 'lucide-react'
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../../components/ui/card'
+import { Card, CardHeader, CardTitle, CardContent } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { Select } from '../../components/ui/select'
@@ -94,7 +94,6 @@ export default function BacktestConfigForm({ isRunning, onSubmit, onCancel }) {
     <Card>
       <CardHeader>
         <CardTitle>Configuration</CardTitle>
-        <CardDescription>Set parameters for simulation</CardDescription>
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit} className="space-y-4">

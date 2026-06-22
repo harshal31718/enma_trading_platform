@@ -73,7 +73,7 @@ export default function StrategyCreateDialog({
 
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="max-w-2xl bg-[#0d1117] border border-slate-700/50">
+            <DialogContent className="max-w-2xl bg-title-bg border border-slate-700/50">
                 <DialogHeader>
                     <DialogTitle>Create New Strategy</DialogTitle>
                     <DialogDescription>
@@ -138,7 +138,7 @@ export default function StrategyCreateDialog({
                                 <p className="text-sm text-gray-100 font-medium">Parameter preview for {sourceStrategy.name}</p>
                                 <div className="grid gap-2 mt-3">
                                     {Object.entries(sourceParams).map(([key, meta]) => (
-                                        <div key={key} className="rounded-lg border border-slate-700/40 bg-[#0d1117] p-3">
+                                        <div key={key} className="rounded-lg border border-slate-700/40 bg-title-bg p-3">
                                             <div className="text-sm text-gray-200 font-medium">{meta.label || key}</div>
                                             <div className="text-xs text-gray-400 mt-1">default: {String(meta.default)}{meta.min !== undefined ? ` | min: ${meta.min}` : ''}{meta.max !== undefined ? ` | max: ${meta.max}` : ''}</div>
                                         </div>

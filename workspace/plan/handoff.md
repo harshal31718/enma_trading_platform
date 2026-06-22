@@ -1,4 +1,80 @@
 ---
+## 2026-06-22 — Title Block Shades, Dialog Widths, and Title Descriptions COMPLETE
+
+**Goal:** Standardize background shades to `#0d1117` via `--title-bg`, enforce fixed widths for Chaos & New Bot wizard dialogs, remove section descriptions, and fix any build errors.
+
+**Done this session:**
+- **Standardized background shades:** Defined global `--title-bg` CSS variable mapping to `#0d1117` in `index.css` and registered color `'title-bg'` in `tailwind.config.js`. Updated `Navbar`, `card.jsx`, `dialog.jsx`, `SessionCard`, `StrategyCard`, `StrategyCreateDialog`, `CodeViewer`, `BacktestCalendar`, `OrderHistory`, `Settings`, and `Trade` components to use `bg-title-bg` consistently.
+- **Fixed Width Dialogs:** Locked wizard dialog containers to `w-[720px] max-w-[95vw]` with `overflow-x-hidden` in [AlgoTrading.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/pages/AlgoTrading.jsx) to prevent resizing/shifting across step tabs.
+- **Removed descriptions:** Stripped CardDescription subheadings app-wide (Recent Activity, Strategy Leaderboard, Cache Tables, Backtest configuration, and chart subheadings).
+- **Vite/Babel Syntax Fix:** Fixed mismatched closing div tags in `ChaosWizard.jsx` around step 2 / live preview containers. Verified production build compiles successfully on host and inside the client container.
+
+**Files changed:**
+- [index.css](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/index.css)
+- [tailwind.config.js](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/tailwind.config.js)
+- [Navbar.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/components/layout/Navbar.jsx)
+- [card.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/components/ui/card.jsx)
+- [dialog.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/components/ui/dialog.jsx)
+- [SessionCard.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/components/algo/SessionCard.jsx)
+- [StrategyCard.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/features/strategies/StrategyCard.jsx)
+- [StrategyCreateDialog.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/features/strategies/StrategyCreateDialog.jsx)
+- [CodeViewer.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/features/strategies/CodeViewer.jsx)
+- [BacktestCalendar.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/features/backtest/BacktestCalendar.jsx)
+- [OrderHistory.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/pages/OrderHistory.jsx)
+- [Settings.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/pages/Settings.jsx)
+- [Trade.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/pages/Trade.jsx)
+- [ChaosWizard.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/components/algo/ChaosWizard.jsx)
+- [NewSessionWizard.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/components/algo/NewSessionWizard.jsx)
+
+**Next session:**
+- None. (Task complete).
+
+---
+## 2026-06-22 — Wizard Dialog Layout Width Fix COMPLETE
+
+**Goal:** Fix layout shifting and resizing of "Chaos Mode" and "New Bot" wizard dialogs during step navigation and allocation toggles.
+
+**Done this session:**
+- **Fixed Width Dialogs:** Enforced a fixed width of `w-full md:w-[672px] md:max-w-2xl` on both `DialogContent` wrappers in [AlgoTrading.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/pages/AlgoTrading.jsx).
+- **Verified Build:** Built the client production build to confirm everything compiles correctly.
+
+**Files changed:**
+- [AlgoTrading.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/pages/AlgoTrading.jsx)
+
+**Next session:**
+- None. (Task complete).
+
+---
+## 2026-06-22 — Configurable Chaos Mode Wizard COMPLETE
+
+**Goal:** Turn Chaos Mode into a configurable launch wizard (matching the New-Bot NewSessionWizard pattern) to control active strategies, manual/auto symbol picks, capital/leverage defaults, and shared risk parameters.
+
+**Done this session:**
+- **Tiered symbols & Allocator:** Created `server/src/utils/chaosAllocator.js` (pure symbol allocator) and updated `server/src/constants/top_symbols.js` with 80 tiered symbols (high, mid, low volume).
+- **Chaos Settings:** Added 5 configuration fields to the Settings database model, controller validation, and the frontend Settings UI page ("Chaos Setting (testnet)").
+- **StartChaos Rework:** Updated `POST /api/v1/algo/chaos` route to accept and validate timeframe, custom strategies selection, manual symbol lists, and risk overrides.
+- **ChaosWizard Component:** Implemented `client/src/components/algo/ChaosWizard.jsx` (4-step dialog wizard) with strategies select, auto/manual symbol picker with cap checks, live client-side allocation previews (counts & tiers), risk configs, and review before launch.
+- **Wired Frontend:** Integrated `ChaosWizard` modal into the "Chaos Mode" button in `client/src/pages/AlgoTrading.jsx`.
+- **Docs updated:** Updated `workspace/docs/state/CURRENT_STATE.md` and `workspace/docs/core/API_CONTRACTS.md`.
+
+**Files changed:**
+- [top_symbols.js](file:///c:/Users/harsh/Desktop/enma_trading_platform/server/src/constants/top_symbols.js)
+- [chaosAllocator.js](file:///c:/Users/harsh/Desktop/enma_trading_platform/server/src/utils/chaosAllocator.js)
+- [Settings.js](file:///c:/Users/harsh/Desktop/enma_trading_platform/server/src/models/Settings.js)
+- [settings.controller.js](file:///c:/Users/harsh/Desktop/enma_trading_platform/server/src/controllers/settings.controller.js)
+- [Settings.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/pages/Settings.jsx)
+- [algo.controller.js](file:///c:/Users/harsh/Desktop/enma_trading_platform/server/src/controllers/algo.controller.js)
+- [algo.routes.js](file:///c:/Users/harsh/Desktop/enma_trading_platform/server/src/routes/algo.routes.js)
+- [useAlgoSessions.js](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/hooks/useAlgoSessions.js)
+- [ChaosWizard.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/components/algo/ChaosWizard.jsx) (New)
+- [AlgoTrading.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/pages/AlgoTrading.jsx)
+- [CURRENT_STATE.md](file:///c:/Users/harsh/Desktop/enma_trading_platform/workspace/docs/state/CURRENT_STATE.md)
+- [API_CONTRACTS.md](file:///c:/Users/harsh/Desktop/enma_trading_platform/workspace/docs/core/API_CONTRACTS.md)
+
+**Next session:**
+- Perform manual validation and testing in the Docker dev stack.
+
+---
 ## 2026-06-22 — UI restyle to UI_STYLE_GUIDE.md — Phase 1 (foundation + chrome) COMPLETE; pages STAGED
 
 **Goal:** Migrate the whole client to the midnight-blue trading-terminal palette in

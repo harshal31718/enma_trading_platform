@@ -1,22 +1,22 @@
 import { useState, useCallback } from 'react'
 import { Plus, Trash2, Bot, Zap } from 'lucide-react'
-import { useAlgoSessions, useStopSession, useDeleteAllStopped, useStartChaos } from '../hooks/useAlgoSessions'
+import { useAlgoSessions, useStopSession, useDeleteAllStopped } from '../hooks/useAlgoSessions'
 import { useSocket } from '../hooks/useSocket'
 import { useQueryClient } from '@tanstack/react-query'
 import SessionCard from '../components/algo/SessionCard'
 import NewSessionWizard from '../components/algo/NewSessionWizard'
+import ChaosWizard from '../components/algo/ChaosWizard'
 import PageWrapper from '../components/layout/PageWrapper'
 import PageHeader from '../components/ui/PageHeader'
 import { Dialog, DialogContent } from '../components/ui/dialog'
 
 export default function AlgoTrading() {
   const [showWizard, setShowWizard] = useState(false)
+  const [showChaosWizard, setShowChaosWizard] = useState(false)
   const [chaosError, setChaosError] = useState(null)
-  const [showChaosConfirm, setShowChaosConfirm] = useState(false)
   const { data: sessions = [], isLoading } = useAlgoSessions()
   const stopSession = useStopSession()
   const deleteAllStopped = useDeleteAllStopped()
-  const startChaos = useStartChaos()
   const qc = useQueryClient()
 
   const hasStopped = sessions.some(s => s.status === 'stopped' || s.status === 'error')
@@ -49,19 +49,6 @@ export default function AlgoTrading() {
     }
   }
 
-  const handleChaosConfirm = async () => {
-    setShowChaosConfirm(false)
-    setChaosError(null)
-    try {
-      const result = await startChaos.mutateAsync()
-      if (result.errors?.length && !result.launched?.length) {
-        setChaosError(`Chaos launch failed: ${result.errors.map(e => e.error).join('; ')}`)
-      }
-    } catch (err) {
-      setChaosError(err?.response?.data?.message || err.message || 'Chaos launch failed')
-    }
-  }
-
   return (
     <PageWrapper>
       <PageHeader
@@ -80,13 +67,12 @@ export default function AlgoTrading() {
               </button>
             )}
             <button
-              onClick={() => setShowChaosConfirm(true)}
-              disabled={startChaos.isPending || showChaosConfirm}
-              className="flex items-center gap-2 px-3 py-2 bg-gradient-to-r from-purple-600 via-red-500 to-blue-600 hover:from-purple-500 hover:via-red-400 hover:to-blue-500 text-white text-sm rounded-lg shadow-lg disabled:opacity-40 transition-all"
+              onClick={() => setShowChaosWizard(true)}
+              className="flex items-center gap-2 px-3 py-2 bg-gradient-to-r from-purple-600 via-red-500 to-blue-600 hover:from-purple-500 hover:via-red-400 hover:to-blue-500 text-white text-sm rounded-lg shadow-lg transition-all font-semibold"
               title="Launch all strategies in stress-test mode (Binance Testnet only)"
             >
               <Zap size={14} />
-              {startChaos.isPending ? 'Launching…' : 'Chaos Mode'}
+              Chaos Mode
             </button>
             <button
               onClick={() => setShowWizard(true)}
@@ -98,31 +84,6 @@ export default function AlgoTrading() {
           </div>
         }
       />
-
-      {/* Chaos Mode confirm panel — inline, non-blocking */}
-      {showChaosConfirm && (
-        <div className="mb-4 bg-amber-950/20 border border-amber-500/30 rounded-lg px-4 py-3">
-          <p className="text-amber-300 text-sm font-medium mb-1">⚡ Chaos Mode — Binance Testnet Only</p>
-          <p className="text-gray-400 text-xs mb-3">
-            Launches all 5 strategies with high-volatility params on 1m timeframe.
-            Symbols BTC, ETH, SOL, BNB, XRP, DOGE, ADA will be locked for manual trading until stopped.
-          </p>
-          <div className="flex gap-2">
-            <button
-              onClick={handleChaosConfirm}
-              className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 text-xs rounded border border-amber-500/40 transition-colors"
-            >
-              Launch
-            </button>
-            <button
-              onClick={() => setShowChaosConfirm(false)}
-              className="px-3 py-1.5 text-gray-400 hover:text-gray-200 text-xs rounded border border-gray-700 hover:border-gray-600 transition-colors"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* Chaos error banner */}
       {chaosError && (
@@ -145,7 +106,7 @@ export default function AlgoTrading() {
           <p className="text-sm">No bots created yet. Click "New Bot" to get started.</p>
         </div>
       ) : (
-        <div className="space-y-3">
+        <div className="bg-title-bg border border-slate-700/50 rounded-xl overflow-hidden divide-y divide-slate-700/40 shadow-2xl">
           {sessions.map((session) => (
             <SessionCard
               key={String(session._id)}
@@ -161,11 +122,23 @@ export default function AlgoTrading() {
       )}
 
       <Dialog open={showWizard} onOpenChange={(open) => { if (!open) setShowWizard(false) }}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="w-[720px] max-w-[95vw] max-h-[90vh] overflow-y-auto overflow-x-hidden bg-title-bg">
           <NewSessionWizard
             onCancel={() => setShowWizard(false)}
             onSuccess={() => {
               setShowWizard(false)
+              qc.invalidateQueries({ queryKey: ['algo', 'sessions'] })
+            }}
+          />
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showChaosWizard} onOpenChange={(open) => { if (!open) setShowChaosWizard(false) }}>
+        <DialogContent className="max-w-4xl w-[95vw] max-h-[90vh] overflow-y-auto overflow-x-hidden bg-title-bg border-slate-700/50">
+          <ChaosWizard
+            onCancel={() => setShowChaosWizard(false)}
+            onSuccess={() => {
+              setShowChaosWizard(false)
               qc.invalidateQueries({ queryKey: ['algo', 'sessions'] })
             }}
           />

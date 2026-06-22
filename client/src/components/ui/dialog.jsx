@@ -22,21 +22,25 @@ export const DialogOverlay = React.forwardRef(({ className, ...props }, ref) => 
 ))
 DialogOverlay.displayName = DialogPrimitive.Overlay.displayName
 
-export const DialogContent = React.forwardRef(({ className, children, ...props }, ref) => (
-  <DialogPortal>
-    <DialogOverlay />
-    <DialogPrimitive.Content
-      ref={ref}
-      className={cn(
-        "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border border-slate-700/50 bg-[#0d1117] p-6 shadow-2xl duration-200 sm:rounded-xl",
-        className
-      )}
-      {...props}
-    >
-      {children}
-    </DialogPrimitive.Content>
-  </DialogPortal>
-))
+export const DialogContent = React.forwardRef(({ className, children, ...props }, ref) => {
+  const hasMaxWidth = className && className.split(' ').some(cls => cls.startsWith('max-w-') || cls.includes(':max-w-'));
+  return (
+    <DialogPortal>
+      <DialogOverlay />
+      <DialogPrimitive.Content
+        ref={ref}
+        className={cn(
+          "fixed left-[50%] top-[50%] z-50 grid w-full translate-x-[-50%] translate-y-[-50%] gap-4 border border-slate-700/50 bg-title-bg p-6 shadow-2xl duration-200 sm:rounded-xl",
+          !hasMaxWidth && "max-w-lg",
+          className
+        )}
+        {...props}
+      >
+        {children}
+      </DialogPrimitive.Content>
+    </DialogPortal>
+  );
+})
 DialogContent.displayName = DialogPrimitive.Content.displayName
 
 export const DialogHeader = ({ className, ...props }) => (

@@ -9,24 +9,34 @@ const EXCHANGE_FIELDS = [
   'defaultCapital', 'defaultLeverage',
   'defaultBotCapital', 'defaultBotLeverage',
   'riskPct', 'riskRewardRatio', 'maxSessionDrawdown', 'liqBufferPct', 'minEdgeMult',
+  // Chaos Mode settings (D5)
+  'chaosMaxStrategies', 'chaosMaxManualSymbols', 'chaosDefaultCapital', 'chaosDefaultLeverage',
+  'chaosDefaultTimeframe',
 ]
 
 // Validation ranges matching the Mongoose schema
 const FIELD_RULES = {
-  takerFee:           { min: 0,      max: 0.01  },
-  makerFee:           { min: 0,      max: 0.01  },
-  slippagePct:        { min: 0,      max: 0.05  },
-  fundingRate:        { min: 0,      max: 0.01  },
-  defaultCapital:     { min: 1                  },
-  defaultLeverage:    { min: 1,      max: 125   },
-  defaultBotCapital:  { min: 1                  },
-  defaultBotLeverage: { min: 1,      max: 125   },
-  riskPct:            { min: 0.0001, max: 1     },
-  riskRewardRatio:    { min: 0.1,    max: 100   },
-  maxSessionDrawdown: { min: 0.01,   max: 1     },
-  liqBufferPct:       { min: 0,      max: 0.5   },
-  minEdgeMult:        { min: 0,      max: 10    },
+  takerFee:              { min: 0,      max: 0.01  },
+  makerFee:              { min: 0,      max: 0.01  },
+  slippagePct:           { min: 0,      max: 0.05  },
+  fundingRate:           { min: 0,      max: 0.01  },
+  defaultCapital:        { min: 1                  },
+  defaultLeverage:       { min: 1,      max: 125   },
+  defaultBotCapital:     { min: 1                  },
+  defaultBotLeverage:    { min: 1,      max: 125   },
+  riskPct:               { min: 0.0001, max: 1     },
+  riskRewardRatio:       { min: 0.1,    max: 100   },
+  maxSessionDrawdown:    { min: 0.01,   max: 1     },
+  liqBufferPct:          { min: 0,      max: 0.5   },
+  minEdgeMult:           { min: 0,      max: 10    },
+  // Chaos Mode fields (numeric; chaosDefaultTimeframe handled separately)
+  chaosMaxStrategies:    { min: 1,      max: 20    },
+  chaosMaxManualSymbols: { min: 0,      max: 20    },
+  chaosDefaultCapital:   { min: 1                  },
+  chaosDefaultLeverage:  { min: 1,      max: 125   },
 }
+
+const CHAOS_TIMEFRAME_ALLOWLIST = ['1m','3m','5m','15m','30m','1h','2h','4h','6h','8h','12h','1d']
 
 async function _getOrCreate() {
   let settings = await Settings.findById('global')
@@ -56,6 +66,7 @@ async function updateExchangeSettings(req, res, next) {
 
       const val = req.body[field]
 
+      // ── Boolean special-case ─────────────────────────────────────────────────
       if (field === 'fundingEnabled') {
         if (typeof val !== 'boolean') {
           throw new ApiError(400, 'VALIDATION_ERROR', `${field} must be a boolean`)
@@ -64,6 +75,17 @@ async function updateExchangeSettings(req, res, next) {
         continue
       }
 
+      // ── String allowlist special-case (chaosDefaultTimeframe) ───────────────
+      if (field === 'chaosDefaultTimeframe') {
+        if (!CHAOS_TIMEFRAME_ALLOWLIST.includes(val)) {
+          throw new ApiError(400, 'VALIDATION_ERROR',
+            `chaosDefaultTimeframe must be one of: ${CHAOS_TIMEFRAME_ALLOWLIST.join(', ')}`)
+        }
+        updates[field] = val
+        continue
+      }
+
+      // ── Numeric fields ───────────────────────────────────────────────────────
       const num = Number(val)
       if (!isFinite(num)) {
         throw new ApiError(400, 'VALIDATION_ERROR', `${field} must be a number`)
@@ -75,7 +97,7 @@ async function updateExchangeSettings(req, res, next) {
       if (rules.max !== undefined && num > rules.max) {
         throw new ApiError(400, 'VALIDATION_ERROR', `${field} must be <= ${rules.max}`)
       }
-      if (['defaultLeverage', 'defaultBotLeverage'].includes(field) && !Number.isInteger(num)) {
+      if (['defaultLeverage', 'defaultBotLeverage', 'chaosMaxStrategies', 'chaosMaxManualSymbols', 'chaosDefaultLeverage'].includes(field) && !Number.isInteger(num)) {
         throw new ApiError(400, 'VALIDATION_ERROR', `${field} must be an integer`)
       }
       updates[field] = num

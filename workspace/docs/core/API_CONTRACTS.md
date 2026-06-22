@@ -84,7 +84,8 @@ type LiveSession = { _id: string, strategyId: string, strategyName: string, symb
 type SymbolLock = { reason: "bot"|"manual", sessionId: string|null, lockedAt: string }
 ```
 - **`POST /api/v1/algo/sessions`** -> Req: `{ strategyId, symbols, timeframe, params, capital, leverage }` -> `{ sessionId, status }`
-- **`POST /api/v1/algo/chaos`** -> No body required -> `{ launched: { strategy, sessionId, symbols, status }[], errors: { strategy, error }[], note: string }` — testnet-only; launches all 5 strategies with max-volatility params on 1m TF, dynamically allocating symbols from a Fisher-Yates–shuffled pool of the 70 top Binance Futures symbols (`server/src/constants/top_symbols.js`) — locked symbols are skipped and returned to the pool. HTTP 207 if partial success, 502 if all failed.
+- **`POST /api/v1/algo/chaos`** -> Req (optional): `{ timeframe?, strategies?: { name, symbols? }[], risk?: { capital?, leverage?, riskReward?, maxDrawdown?, riskPct?, minEdgeMult? } }` -> `{ launched: { strategy, sessionId, symbols, status }[], errors: { strategy, error }[], dropped: string[], note: string }` — testnet-only; launches the specified strategies (or fallback recent strategies up to `chaosMaxStrategies` cap) on Binance Testnet. Each strategy's manual symbol picks are guaranteed, and the remaining pool of curated symbols is round-robin partitioned equally per volume tier (high/mid/low). HTTP 207 if partial/complete success, 502 if all failed.
+- **`GET /api/v1/algo/chaos/symbols`** -> `{ tieredSymbols: { symbol, tier: "high"|"mid"|"low" }[] }`
 - **`GET /api/v1/algo/sessions`** -> `{ sessions: LiveSession[] }`
 - **`GET /api/v1/algo/sessions/:id`** -> `{ session: LiveSession }`
 - **`GET /api/v1/algo/sessions/:id/equity`** -> `{ equity: string, pnl: string }`

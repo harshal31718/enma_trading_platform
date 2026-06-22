@@ -1,5 +1,5 @@
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../../components/ui/table'
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../../components/ui/card'
+import { Card, CardHeader, CardTitle, CardContent } from '../../components/ui/card'
 import { Badge } from '../../components/ui/badge'
 
 function formatDate(dateStr) {
@@ -16,7 +16,6 @@ export default function CachedCandlesTable({ data }) {
     <Card>
       <CardHeader>
         <CardTitle>TimescaleDB Cache</CardTitle>
-        <CardDescription>Locally cached historical candle ranges</CardDescription>
       </CardHeader>
       <CardContent>
         {!data || data.length === 0 ? (
