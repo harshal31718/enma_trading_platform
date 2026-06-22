@@ -9,7 +9,7 @@ import {
 import { Calendar as CalendarIcon } from "lucide-react";
 
 export default function BacktestCalendar({ trades, onSelectPeriod }) {
-    const [view, setView] = useState('ALL');
+    const [view, setView] = useState('QUARTERLY');
     const [selectedId, setSelectedId] = useState(null);
 
     // Compute stats based on current view
@@ -19,7 +19,7 @@ export default function BacktestCalendar({ trades, onSelectPeriod }) {
             case 'DAILY': return getDailyStats(trades);
             case 'WEEKLY': return getWeeklyStats(trades);
             case 'MONTHLY': return getMonthlyStats(trades);
-            case 'ALL': return getQuarterlyStats(trades); // Default ALL to Quarterly view
+            case 'QUARTERLY': return getQuarterlyStats(trades);
             default: return [];
         }
     }, [view, trades]);
@@ -71,10 +71,10 @@ export default function BacktestCalendar({ trades, onSelectPeriod }) {
                 </div>
 
                 <div className="flex bg-gray-950 rounded-lg p-0.5 border border-gray-800">
-                    {['ALL', 'MONTHLY', 'WEEKLY', 'DAILY'].map(t => (
+                    {['QUARTERLY', 'MONTHLY', 'WEEKLY', 'DAILY'].map(t => (
                         <button
                             key={t}
-                            onClick={() => { setView(t); setSelectedId(null); if (onSelectPeriod) onSelectPeriod(null); }}
+                            onClick={() => { setView(t); setSelectedId(null); if (onSelectPeriod) onSelectPeriod(null) }}
                             className={cn(
                                 "px-3 py-1 text-[10px] font-bold rounded-md transition-all",
                                 view === t
@@ -82,7 +82,7 @@ export default function BacktestCalendar({ trades, onSelectPeriod }) {
                                     : "text-gray-500 hover:text-gray-300 hover:bg-white/5"
                             )}
                         >
-                            {t === 'ALL' ? 'QUARTERLY' : t}
+                            {t}
                         </button>
                     ))}
                 </div>
@@ -92,7 +92,7 @@ export default function BacktestCalendar({ trades, onSelectPeriod }) {
             <div className="max-h-[500px] overflow-y-auto pr-1">
                 <div className={cn(
                     "grid gap-2 content-start",
-                    view === 'ALL' && "grid-cols-2 md:grid-cols-4",
+                    view === 'QUARTERLY' && "grid-cols-2 md:grid-cols-4",
                     view === 'MONTHLY' && "grid-cols-2 md:grid-cols-4",
                     view === 'WEEKLY' && "grid-cols-2 md:grid-cols-4",
                     view === 'DAILY' && "grid-cols-4 md:grid-cols-7"

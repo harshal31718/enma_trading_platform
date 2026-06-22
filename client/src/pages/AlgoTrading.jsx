@@ -24,11 +24,17 @@ export default function AlgoTrading() {
   const handleSessionUpdate = useCallback((data) => {
     qc.setQueryData(['algo', 'sessions'], (prev) => {
       if (!prev) return prev
-      return prev.map((s) =>
-        String(s._id) === data.sessionId
-          ? { ...s, status: data.status, pnl: data.pnl, openPositions: data.openPositions }
-          : s
-      )
+      return prev.map((s) => {
+        if (String(s._id) !== data.sessionId) return s
+        // Merge only the fields present on this event — some updates carry just
+        // symbolStats (per-symbol aggregation), others just status/pnl/positions.
+        const next = { ...s }
+        if (data.status !== undefined) next.status = data.status
+        if (data.pnl !== undefined) next.pnl = data.pnl
+        if (data.openPositions !== undefined) next.openPositions = data.openPositions
+        if (data.symbolStats !== undefined) next.symbolStats = data.symbolStats
+        return next
+      })
     })
   }, [qc])
 
@@ -90,7 +96,7 @@ export default function AlgoTrading() {
             <button
               onClick={() => setShowChaosConfirm(true)}
               disabled={startChaos.isPending || showChaosConfirm}
-              className="flex items-center gap-2 px-3 py-2 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 hover:text-amber-300 text-sm rounded-lg border border-amber-500/30 hover:border-amber-500/50 disabled:opacity-40 transition-all"
+              className="flex items-center gap-2 px-3 py-2 bg-gradient-to-r from-purple-600 via-red-500 to-blue-600 hover:from-purple-500 hover:via-red-400 hover:to-blue-500 text-white text-sm rounded-lg shadow-lg disabled:opacity-40 transition-all"
               title="Launch all strategies in stress-test mode (Binance Testnet only)"
             >
               <Zap size={14} />

@@ -43,6 +43,11 @@ async def seed_strategies():
     """
     db = get_database()
 
+    # Remove any stale documents for strategies that no longer exist on disk.
+    result = await db.strategies.delete_many({"name": {"$nin": [s["name"] for s in DEFAULT_STRATEGIES]}})
+    if result.deleted_count:
+        logger.info("Seeder pruned %d stale strategy document(s) from MongoDB", result.deleted_count)
+
     for strategy in DEFAULT_STRATEGIES:
         name = strategy["name"]
         strategy_dir = os.path.join(STRATEGIES_DIR, name)

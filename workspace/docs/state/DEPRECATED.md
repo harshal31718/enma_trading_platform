@@ -89,6 +89,19 @@ Candles in TimescaleDB are permanent and were **not** touched.
 | `server/src/services/liveQueue.js` | Never implemented | Live bot sessions are managed directly by engine; no BullMQ queue needed | N/A |
 | `server/src/workers/live.worker.js` | Never implemented | Same reason as liveQueue.js | N/A |
 
+### Client Auth Scaffolding (removed 2026-06-22)
+
+The orphaned client-side auth scaffolding (never wired to any login UI on this single-user platform) was deleted:
+
+| Item | Status | Why | Replacement |
+|------|--------|-----|-------------|
+| `client/src/store/useAuthStore.js` | **Deleted** | Zustand auth store consumed by no login UI | N/A — single-user, no auth |
+| `client/src/lib/axios.js` JWT interceptors | **Removed** | Request `Authorization: Bearer` injector + 401→`/login` redirect referenced the deleted store; no token ever issued | Plain axios instance (baseURL only) |
+| `bcryptjs` dependency | **Removed** from `server/package.json` | No server code hashed passwords | N/A |
+| `jsonwebtoken` dependency | **Removed** from `server/package.json` | No server code signed/verified JWTs | N/A |
+
+Do not reintroduce these unless multi-user support is actually built (see `CURRENT_STATE.md` → Planned → Authentication).
+
 ---
 
 ## Removed Agent / Workflow Infrastructure

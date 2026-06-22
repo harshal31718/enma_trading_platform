@@ -7,6 +7,7 @@ import RiskParamsFields, { RISK_DEFAULTS, riskDefaultsFromSettings, riskFieldsTo
 
 export default function Settings() {
   const [showComingSoon, setShowComingSoon] = useState(false)
+  const comingSoonTimerRef = useRef(null)
 
   // ── Exchange settings form state ──────────────────────────────────────────
   const [takerFee, setTakerFee] = useState('')
@@ -24,6 +25,13 @@ export default function Settings() {
 
   const { data: exchangeSettings, isLoading: settingsLoading } = useExchangeSettings()
   const updateMutation = useUpdateExchangeSettings()
+
+  useEffect(() => {
+    return () => {
+      if (comingSoonTimerRef.current) clearTimeout(comingSoonTimerRef.current)
+      if (successTimerRef.current) clearTimeout(successTimerRef.current)
+    }
+  }, [])
 
   useEffect(() => {
     if (exchangeSettings) {
@@ -72,8 +80,9 @@ export default function Settings() {
   const skeletonCls = 'h-10 w-full bg-gray-800 rounded animate-pulse'
 
   function handleMainnetClick() {
+    if (comingSoonTimerRef.current) clearTimeout(comingSoonTimerRef.current)
     setShowComingSoon(true)
-    setTimeout(() => setShowComingSoon(false), 4000)
+    comingSoonTimerRef.current = setTimeout(() => setShowComingSoon(false), 4000)
   }
 
   return (

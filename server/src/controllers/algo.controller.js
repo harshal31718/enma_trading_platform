@@ -1,7 +1,9 @@
 const LiveSession = require('../models/LiveSession')
+const TradeRecord = require('../models/TradeRecord')
 const Strategy = require('../models/Strategy')
 const Settings = require('../models/Settings')
 const engineClient = require('../services/engineClient')
+const { TOP_SYMBOLS } = require('../constants/top_symbols')
 const ApiError = require('../utils/ApiError')
 const ApiResponse = require('../utils/ApiResponse')
 const { lockSymbol, releaseSymbolLock, getAllLockedSymbols, isSymbolFree, getSymbolLock } = require('../services/symbolLock')
@@ -205,6 +207,36 @@ async function getSessionEquity(req, res, next) {
   }
 }
 
+// Re-derive per-symbol aggregates for a session from the tradeRecords
+// collection (the engine is the sole writer). Returns a { symbol: {...} } map.
+async function computeSymbolStats(sessionId) {
+  const rows = await TradeRecord.aggregate([
+    { $match: { sessionId: String(sessionId) } },
+    { $sort: { exitTime: 1 } },
+    {
+      $group: {
+        _id: '$symbol',
+        trades: { $sum: 1 },
+        qty: { $sum: { $toDouble: '$qty' } },
+        notional: { $sum: { $multiply: [{ $toDouble: '$qty' }, { $toDouble: '$entryPrice' }] } },
+        realisedPnl: { $sum: { $toDouble: '$netPnl' } },
+        leverage: { $last: '$leverage' },
+      },
+    },
+  ])
+  const stats = {}
+  for (const r of rows) {
+    stats[r._id] = {
+      trades: r.trades,
+      qty: r.qty,
+      notional: r.notional,
+      realisedPnl: r.realisedPnl,
+      leverage: r.leverage || null,
+    }
+  }
+  return stats
+}
+
 // PATCH /internal/algo/sessions/:id/stats (called by Engine)
 async function handleEngineStats(req, res, next) {
   try {
@@ -279,6 +311,16 @@ async function handleEngineStats(req, res, next) {
           }
         })
 
+        // Re-derive per-symbol aggregates from the now-recorded trade and push
+        // them to clients so the Open Positions panel updates live.
+        try {
+          const symbolStats = await computeSymbolStats(id)
+          await LiveSession.findByIdAndUpdate(id, { symbolStats })
+          io.emit('algo:session:update', { sessionId: id, symbolStats })
+        } catch (statsErr) {
+          console.error('[AlgoBot] symbolStats aggregation failed:', statsErr.message)
+        }
+
         // NOTE: Symbol lock is intentionally NOT released here.
         // The lock persists for the entire bot session to allow multiple trades on the same symbol.
         // Lock is released only when the session stops or encounters an error.
@@ -314,6 +356,16 @@ async function handleEngineStats(req, res, next) {
       }
 
       if (event === 'stopped') {
+        // Final per-symbol aggregation — captures positions force-closed during
+        // the stop sequence (which emit no position:close event).
+        try {
+          const symbolStats = await computeSymbolStats(id)
+          await LiveSession.findByIdAndUpdate(id, { symbolStats })
+          io.emit('algo:session:update', { sessionId: id, symbolStats })
+        } catch (statsErr) {
+          console.error('[AlgoBot] symbolStats aggregation (stop) failed:', statsErr.message)
+        }
+
         // Release all remaining locks for this session
         const session2 = await LiveSession.findById(id).lean()
         if (session2?.symbols) {
@@ -387,30 +439,27 @@ const CHAOS_LEVERAGE = 50    // requested — clamped per-symbol by the engine
 const CHAOS_CAPITAL  = '500' // per session (disposable testnet money)
 const CHAOS_TF       = '1m'
 
-// Disjoint symbol assignment: MicroScalper gets the biggest chunk (most trades).
 const CHAOS_LAUNCH_LIST = [
   {
     name: 'MicroScalper',
-    symbols: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'],
     params: {
       fast_period:    2,
-      slow_period:    3,    // > fast_period invariant
+      slow_period:    3,
       atr_period:     5,
-      atr_multiplier: 0.0,  // 0 = volatility gate OFF → every crossover trades
+      atr_multiplier: 0.0,
       sl_atr_mult:    0.1,
-      tp_atr_mult:    0.2,  // > sl_atr_mult invariant
+      tp_atr_mult:    0.2,
     },
   },
   {
     name: 'AdaptiveTrend',
-    symbols: ['BNBUSDT'],
     params: {
       trend_period:   50,
       slope_lookback: 1,
       fast_period:    3,
-      slow_period:    10,   // > fast_period invariant
+      slow_period:    10,
       atr_period:     5,
-      atr_floor_mult: 0.0,  // 0 = volatility gate OFF
+      atr_floor_mult: 0.0,
       sl_atr_mult:    0.5,
       trail_atr_mult: 0.5,
       breakeven_r:    0.0,
@@ -421,22 +470,20 @@ const CHAOS_LAUNCH_LIST = [
   },
   {
     name: 'BestSupertrend',
-    symbols: ['XRPUSDT'],
     params: {
       order_type:        'Longs+Shorts',
       fast_length:       1,
-      slow_length:       2,  // > fast_length invariant
+      slow_length:       2,
       factor:            1.0,
       pd:                1,
       sl_atr_mult:       0.5,
       atr_period:        5,
-      tf:                '1h', // lower HTF = more HTF signals
+      tf:                '1h',
       position_size_pct: 1.0,
     },
   },
   {
     name: 'MicroMacroRSIDivergence',
-    symbols: ['DOGEUSDT'],
     params: {
       rsi_period:                  2,
       micro_pivot:                 1,
@@ -457,10 +504,9 @@ const CHAOS_LAUNCH_LIST = [
   },
   {
     name: 'MultiDivergence',
-    symbols: ['ADAUSDT'],
     params: {
       piv_len:        2,
-      min_confluence: 1, // any single source fires a trade
+      min_confluence: 1,
       sl_atr_mult:    0.1,
       tp_atr_mult:    0.1,
       use_custom_sl:  0,
@@ -483,105 +529,134 @@ const CHAOS_LAUNCH_LIST = [
 
 async function startChaos(req, res, next) {
   try {
-    // 1. Build strategy {name: id} map
-    const allStrategies = await Strategy.find({}).lean()
-    const strategyMap = Object.fromEntries(allStrategies.map(s => [s.name, String(s._id)]))
+    const allStrategies = await Strategy.find({}).lean();
+    const strategyMap = Object.fromEntries(allStrategies.map(s => [s.name, String(s._id)]));
 
-    const savedSettings = await Settings.findById('global').lean() || {}
-    const feeRate = savedSettings.takerFee ?? 0.0005
-    const riskParams = resolveModelParams(savedSettings, null)
+    const savedSettings = await Settings.findById('global').lean() || {};
+    const feeRate = savedSettings.takerFee ?? 0.0005;
+    const riskParams = resolveModelParams(savedSettings, null);
 
-    const created = []
-    const errors  = []
+    const created = [];
+    const errors = [];
 
-    for (const entry of CHAOS_LAUNCH_LIST) {
-      const strategyId = strategyMap[entry.name]
+    // ---- Symbol pool preparation ----
+    const symbolPool = [...TOP_SYMBOLS];
+    // Fisher‑Yates shuffle
+    for (let i = symbolPool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [symbolPool[i], symbolPool[j]] = [symbolPool[j], symbolPool[i]];
+    }
+    const strategyCount = CHAOS_LAUNCH_LIST.length;
+    const baseCount = Math.floor(symbolPool.length / strategyCount);
+    let remainder = symbolPool.length % strategyCount;
+
+    for (let idx = 0; idx < CHAOS_LAUNCH_LIST.length; idx++) {
+      const entry = CHAOS_LAUNCH_LIST[idx];
+      const strategyId = strategyMap[entry.name];
       if (!strategyId) {
-        errors.push({ strategy: entry.name, error: 'Strategy not found in MongoDB — run engine to seed' })
-        continue
+        errors.push({ strategy: entry.name, error: 'Strategy not found in MongoDB — run engine to seed' });
+        continue;
       }
 
-      // Check all symbols for this entry are free
-      const blockedSymbols = []
-      for (const symbol of entry.symbols) {
+      // Allocate symbols for this strategy
+      const take = baseCount + (remainder > 0 ? 1 : 0);
+      if (remainder > 0) remainder--;
+      const symbols = symbolPool.splice(0, take);
+      if (symbols.length === 0) {
+        console.warn(`[AlgoBot] No symbols left to allocate for strategy ${entry.name}. Falling back to empty list.`);
+      }
+
+      // 2. Ensure all allocated symbols are free
+      const blockedSymbols = [];
+      for (const symbol of symbols) {
         if (!(await isSymbolFree(symbol))) {
-          const locks = await getAllLockedSymbols()
-          blockedSymbols.push({ symbol, lock: locks[symbol] })
+          const locks = await getAllLockedSymbols();
+          blockedSymbols.push({ symbol, lock: locks[symbol] });
         }
       }
       if (blockedSymbols.length) {
         errors.push({
           strategy: entry.name,
           error: `Symbols locked: ${blockedSymbols.map(b => b.symbol).join(', ')} — stop existing sessions first`,
-        })
-        continue
+        });
+        // Return symbols to pool for next strategies
+        symbolPool.unshift(...symbols);
+        continue;
       }
 
-      // Create session
-      let session
+      // 3. Create session in MongoDB
+      let session;
       try {
         session = await LiveSession.create({
           strategyId,
           strategyName: entry.name,
-          symbols:      entry.symbols,
-          timeframe:    CHAOS_TF,
-          params:       entry.params,
-          capital:      CHAOS_CAPITAL,
-          leverage:     CHAOS_LEVERAGE,
+          symbols,
+          timeframe: CHAOS_TF,
+          params: entry.params,
+          capital: CHAOS_CAPITAL,
+          leverage: CHAOS_LEVERAGE,
           riskParams,
           status: 'starting',
-          mode:   'paper',
-        })
+          mode: 'paper',
+        });
       } catch (dbErr) {
-        errors.push({ strategy: entry.name, error: `DB create failed: ${dbErr.message}` })
-        continue
+        errors.push({ strategy: entry.name, error: `DB create failed: ${dbErr.message}` });
+        // Return symbols to pool before next iteration
+        symbolPool.unshift(...symbols);
+        continue;
       }
 
-      // Lock symbols
-      const lockedSoFar = []
-      let lockFailed = false
+      // 4. Lock all symbols for this session
+      const lockedSoFar = [];
+      let lockFailed = false;
       try {
-        for (const symbol of entry.symbols) {
-          await lockSymbol(symbol, 'bot', String(session._id))
-          lockedSoFar.push(symbol)
+        for (const symbol of symbols) {
+          await lockSymbol(symbol, 'bot', String(session._id));
+          lockedSoFar.push(symbol);
         }
       } catch (lockErr) {
-        for (const s of lockedSoFar) await releaseSymbolLock(s, String(session._id)).catch(() => {})
-        await LiveSession.findByIdAndDelete(session._id)
-        errors.push({ strategy: entry.name, error: `Symbol lock failed: ${lockErr.message}` })
-        lockFailed = true
+        for (const s of lockedSoFar) await releaseSymbolLock(s, String(session._id)).catch(() => {});
+        await LiveSession.findByIdAndDelete(session._id);
+        errors.push({ strategy: entry.name, error: `Symbol lock failed: ${lockErr.message}` });
+        // Return symbols to pool for remaining strategies
+        symbolPool.unshift(...symbols);
+        lockFailed = true;
       }
-      if (lockFailed) continue
+      if (lockFailed) continue;
 
-      // Call engine
+      // 5. Call engine to start the session
       try {
         await engineClient.post('/algo/sessions', {
-          session_id:    String(session._id),
+          session_id: String(session._id),
           strategy_name: entry.name,
-          symbols:       entry.symbols,
-          timeframe:     CHAOS_TF,
-          params:        entry.params,
-          capital:       CHAOS_CAPITAL,
-          leverage:      CHAOS_LEVERAGE,
-          fee_rate:      feeRate,
-          risk_params:   riskParams,
-        })
-        await LiveSession.findByIdAndUpdate(session._id, { status: 'running' })
-        created.push({ strategy: entry.name, sessionId: String(session._id), symbols: entry.symbols, status: 'running' })
+          symbols,
+          timeframe: CHAOS_TF,
+          params: entry.params,
+          capital: CHAOS_CAPITAL,
+          leverage: CHAOS_LEVERAGE,
+          fee_rate: feeRate,
+          risk_params: riskParams,
+        });
+        await LiveSession.findByIdAndUpdate(session._id, { status: 'running' });
+        created.push({ strategy: entry.name, sessionId: String(session._id), symbols, status: 'running' });
       } catch (engineErr) {
-        for (const symbol of entry.symbols) await releaseSymbolLock(symbol, String(session._id)).catch(() => {})
-        await LiveSession.findByIdAndUpdate(session._id, { status: 'error', errorMessage: engineErr.message })
-        errors.push({ strategy: entry.name, error: `Engine start failed: ${engineErr.message}` })
+        for (const symbol of symbols) await releaseSymbolLock(symbol, String(session._id)).catch(() => {});
+        await LiveSession.findByIdAndUpdate(session._id, { status: 'error', errorMessage: engineErr.message });
+        errors.push({ strategy: entry.name, error: `Engine start failed: ${engineErr.message}` });
+        // Return symbols to pool for next strategies (they were already released)
+        symbolPool.unshift(...symbols);
       }
     }
 
-    res.status(errors.length && !created.length ? 502 : 207).json(ApiResponse.success({
+    // 6. Respond
+    const statusCode = errors.length && created.length === 0 ? 502 : 207;
+    res.status(statusCode).json(ApiResponse.success({
       launched: created,
       errors,
       note: '⚡ Chaos Mode — testnet-only. All sessions run on Binance Testnet (mode:paper). Stop with DELETE /api/v1/algo/sessions.',
-    }))
+    }));
   } catch (err) {
-    next(err)
+    next(err);
   }
 }
 

@@ -554,9 +554,19 @@ class LiveBotManager:
                         "takeProfit": tp_price,
                     }
                 )
+            # Verify order response contains success flag and order identifier
             if not resp.get("success"):
-                raise Exception(resp.get("error", "Unknown order error"))
-            logger.info(f"[AlgoBot] Testnet {direction} order placed: {symbol} qty={qty}")
+                logger.error(f"[AlgoBot] Order placement failed for {symbol}: {resp.get('error', 'Unknown error')}")
+                await self._notify_node(session_id, {
+                    "event": "log",
+                    "eventData": {"type": "error", "message": f"Order failed {symbol}: {resp.get('error', 'Unknown error')}"}
+                })
+                strategy.buy = None
+                strategy.sell = None
+                return
+            if not resp.get("orderId"):
+                logger.warning(f"[AlgoBot] Order placed but no orderId returned for {symbol}, assuming fill succeeded.")
+            logger.info(f"[AlgoBot] Testnet {direction} order placed: {symbol} qty={qty}, orderId={resp.get('orderId')}")
         except Exception as e:
             logger.error(f"[AlgoBot] Testnet order failed for {symbol}: {e}")
             await self._notify_node(session_id, {
@@ -579,6 +589,7 @@ class LiveBotManager:
             "side": direction,
             "qty": str(qty),
             "price": str(fill_price),
+            "leverage": strategy.leverage,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         session["open_positions"][symbol] = pos_info
@@ -755,6 +766,10 @@ class LiveBotManager:
         strategy._pending_flip = None
         session["open_positions"].pop(symbol, None)
 
+        # Persist the trade record BEFORE notifying Node so the server's
+        # per-symbol aggregation (computeSymbolStats) sees this closed trade.
+        await record_trade(trade_record)
+
         await self._notify_node(session_id, {
             "pnl": str(round(session["pnl"], 2)),
             "openPositions": list(session["open_positions"].keys()),
@@ -762,8 +777,6 @@ class LiveBotManager:
             "event": "position:close",
             "eventData": event_data,
         })
-
-        await record_trade(trade_record)
 
         logger.info(f"[AlgoBot] Position closed: {symbol} pnl={realized_pnl:.2f} reason={reason}")
 
@@ -874,6 +887,7 @@ class LiveBotManager:
                 "side": direction,
                 "qty": str(qty),
                 "price": str(entry_price),
+                "leverage": strategy.leverage,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
             session["open_positions"][symbol] = pos_info

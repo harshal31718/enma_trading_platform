@@ -3,14 +3,14 @@
 **Authority:** This is the single source of truth for what ENMA currently does.
 Read this before starting any work. If this conflicts with chat history, this document wins.
 
-Last updated: 2026-06-21
+Last updated: 2026-06-22
 
 ---
 
 ## Implemented Features
 
 ### Settings & Credentials
-- **No authentication layer.** This is a single-user, self-hosted platform — there are no register/login endpoints, no auth middleware, and `/api/v1/auth/*` is never mounted (see `DEPRECATED.md` → "Removed Server Modules"). The `bcryptjs`/`jsonwebtoken` deps in `server/package.json` are currently unused; `client/src/store/useAuthStore.js` is orphaned scaffolding (no login UI consumes it).
+- **No authentication layer.** This is a single-user, self-hosted platform — there are no register/login endpoints, no auth middleware, and `/api/v1/auth/*` is never mounted (see `DEPRECATED.md` → "Removed Server Modules"). The previously-orphaned auth scaffolding has now been **fully removed (2026-06-22)**: `bcryptjs` + `jsonwebtoken` deleted from `server/package.json`, `client/src/store/useAuthStore.js` deleted, and the JWT request / 401-redirect interceptors stripped from `client/src/lib/axios.js`.
 - Binance API key storage: AES-256 encrypted, stored in MongoDB `Settings` collection
 - Key verification against Binance Testnet on save
 - **Exchange Settings**: Centralized configuration for trading fees, backtest defaults, bot defaults, simulation parameters (slippage, funding), and **risk-model defaults** (risk % per trade, reward:risk ratio, max session drawdown, liquidation buffer). All values stored as variables — no hardcoded numbers. Accessible via GET/PUT `/api/v1/settings/exchange`. Forms pre-fill from saved defaults.
@@ -21,10 +21,10 @@ Last updated: 2026-06-21
 - Clone an existing strategy into a new name
 - View strategy source code (read-only modal)
 - Extract strategy params (dynamic from Python file inspection)
-- 5 strategies seeded on startup — each ported to the Narang Black-Box architecture (defines `forecast()`, binds specific risk/portfolio model, does not own `go_long`/`go_short`/`update_position`):
+- 5 strategies seeded on startup — each ported to the Narang Black-Box architecture (defines `forecast()`, binds specific risk/portfolio model, does not own `go_long`/`go_short`/`update_position`). The seeder also prunes any MongoDB strategy documents whose name is not in `DEFAULT_STRATEGIES` (e.g., stale `PnlFixer` remnant):
   - `MicroScalper` — `AtrBracketRiskModel` + `RiskBudgetPortfolio`; volatility-gated momentum crossover; flips while holding
   - `AdaptiveTrend` — `ChandelierRiskModel` + `RiskBudgetPortfolio`; regime-aware trend follower with chandelier trailing exit
-  - `BestSupertrend` — `SignalExitRiskModel` + `NotionalPortfolio`; multi-timeframe Supertrend + SMA crossovers; closes via `_close_at_open` (intentional behavioral change from prior `liquidate()`)
+  - `BestSupertrend` — `SignalExitRiskModel` + `NotionalPortfolio`; multi-timeframe Supertrend + SMA crossovers; closes via `_close_at_open` (intentional behavioral change from prior `liquidate()`); has `_safe_sma()` helper to guard against `period > data_length` TA errors
   - `MicroMacroRSIDivergence` — `AtrBracketRiskModel` + `RiskBudgetPortfolio`; RSI divergence with micro+macro pivot confluence; optional opposite-divergence exit
   - `MultiDivergence` — `AtrBracketRiskModel` + `RiskBudgetPortfolio`; multi-oscillator divergence confluence (9 sources: RSI, MFI, Stochastic, Z-Score, ADX, MACD, OBV, price-action, swing-volume)
 
@@ -92,8 +92,11 @@ Last updated: 2026-06-21
 - **UI-configurable risk model**: NewSessionWizard exposes the 4 risk fields (pre-filled from global defaults, overridable per session). The server resolves and forwards them as `risk_params` to the engine, which injects them onto each per-symbol strategy instance in `live_bot_manager._run_symbol_loop` (slippage left at default — live uses real fills). Persisted on the `liveSessions` doc
 - **Unified Decision Pipeline**: Live sessions evaluate signals through `pipeline.evaluate()`, running the canonical Alpha → Risk → Portfolio → Cost → Execution quant pipeline, enabling live drawdown-breaker and cost gating.
 - **Per-symbol leverage clamping** (`engine/utils/symbols.py → clamp_leverage()`): applies `min(requested, symbol_max)` on every execution path — live bot (signed `/fapi/v1/leverageBracket` fetch + cache, logs when reduced), manual `POST /leverage` (returns `effectiveLeverage` in response), backtest (offline hardcoded fallback map, silent, deterministic for golden master).
-- **Chaos Mode** (testnet-only stress tool): `POST /api/v1/algo/chaos` launches all 5 strategies simultaneously on 1m timeframe with maximally-volatile params and disjoint symbol sets (MicroScalper: BTC/ETH/SOL, AdaptiveTrend: BNB, BestSupertrend: XRP, MicroMacroRSIDivergence: DOGE, MultiDivergence: ADA). `engine/scripts/chaos_runner.py` is a thin console client with a live status table and `--stop` teardown. The Algo Trading page has a "Chaos Mode" button (amber, Zap icon) with a testnet-only confirm dialog and error banner.
+- **Chaos Mode** (testnet-only stress tool): `POST /api/v1/algo/chaos` launches all 5 strategies simultaneously on 1m timeframe with maximally-volatile params. Symbols are dynamically allocated: 70 top Binance Futures symbols (`server/src/constants/top_symbols.js`) are Fisher-Yates shuffled then distributed evenly across the 5 strategies (~14 each). If a symbol is locked by another session it is skipped and returned to the pool. Previously used hardcoded per-strategy symbol lists — now fully dynamic. `engine/scripts/chaos_runner.py` is a thin console client with a live status table and `--stop` teardown. The Algo Trading page has a "Chaos Mode" button (amber, Zap icon) with a testnet-only confirm dialog and error banner.
 - Stop a running session
+- **Resilient order placement**: failed testnet orders in `live_bot_manager._execute_entry()` now log the error, emit a Socket.IO notification, clear pending `buy`/`sell` signals, and return gracefully — no longer propagates as an unhandled exception that could crash the symbol loop
+- **Per-symbol live session stats** (`LiveSession.symbolStats`): on each position close (and on session stop) the server re-aggregates the `tradeRecords` collection by symbol — `trades`, `qty`, `notional`, `realisedPnl`, `leverage` (`computeSymbolStats` in `algo.controller.js`, reads via the `TradeRecord` model) — persists it on the session doc, and pushes it via a partial `algo:session:update` emit. The engine remains the sole writer of `tradeRecords`; the server reads/aggregates only. The engine writes `record_trade()` **before** notifying Node on close so the aggregation sees the just-closed trade, and the `position:open` event now carries the per-symbol clamped `leverage`.
+- **Live bot session cards** (`client/src/components/algo/SessionCard.jsx`): collapsed bar shows Started · Capital · Leverage · Trades (open/closed, live) · P&L (realised + live-unrealized, value + % of initial capital). Expanded view: Equity Curve, a compact Session Stats grid (open/closed trades, win rate, avg PnL, live PnL, realised PnL, and drawdown as current/max), Activity Log, and a redesigned Open Positions panel — per-symbol rows bucket-ordered Open → Traded → Remaining, showing side/leverage/live-PnL plus cumulative trades, qty, margin/notional, and realised PnL. Live PnL streams from the Binance ticker WS; cumulative columns come from `symbolStats`.
 
 ### Order History (Trade Recorder)
 - Engine writes every completed round-trip trade to MongoDB `tradeRecords` collection via `engine/services/trade_recorder.py → record_trade()` (best-effort, never blocks the position-close path). Called by both `live_bot_manager` close paths (normal close + session stop).
@@ -105,6 +108,7 @@ Last updated: 2026-06-21
 - **Implemented:** `ema`, `sma`, `rsi`, `atr`, `donchian`, `macd`, `bollinger_bands`, `adx`, `stochastic`, `mfi`, `obv`, `pivot_high`, `pivot_low` (the last two are library-agnostic swing-pivot detectors — TradingView `ta.pivothigh`/`pivotlow` — usable on any candle column; the shared `_compute_pivots` primitive also detects pivots on arbitrary indicator series)
 - All indicators: `sequential=False` (default, returns latest float / tuple of floats), `sequential=True` (full NaN-padded array / tuple of arrays)
 - **Pluggable provider architecture** (DECISIONS.md #12): strategies call the convenience functions (`import engine.indicators as ta`); calls route through a swappable `IndicatorProvider`. **TA-Lib** is the default backend; **pandas-ta** is a pure-Python fallback (optional dependency, lazily imported). Switch the whole engine with `ENMA_INDICATOR_LIBRARY=talib|pandas_ta`; if the chosen backend fails to load, the engine auto-falls-back (`ENMA_INDICATOR_FALLBACK`, default on). No strategy changes needed to swap libraries.
+- **SMA robustness** (`talib_adapter.py`): `sma()` now wraps the TA-Lib call in try/except; if `period > data_length` (or any other error), returns `np.full(shape, np.nan)` for sequential mode or `np.nan` for scalar mode — avoids crashes during warmup.
 - Files: `base.py` (interface + convenience fns), `config.py` (backend selection), `adapters/talib_adapter.py`, `adapters/pandas_ta_adapter.py`
 
 ### UI / Navigation
@@ -149,9 +153,7 @@ None.
 
 ## Known Technical Debt
 
-| Item | Detail |
-|------|--------|
-| Unused auth deps | `bcryptjs` + `jsonwebtoken` are in `server/package.json` but no server code uses them; `client/src/store/useAuthStore.js` is orphaned. Remove if multi-user is never planned. |
+None.
 
 ---
 

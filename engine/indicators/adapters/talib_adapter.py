@@ -12,6 +12,7 @@ which the configuration factory catches to fall back to pandas-ta.
 
 from __future__ import annotations
 
+import numpy as np
 from ..base import CLOSE, HIGH, LOW, VOLUME, IndicatorProvider, pivots_from_candles
 
 try:  # TA-Lib is the primary backend (built inside the engine Docker image).
@@ -38,7 +39,13 @@ class TalibIndicatorProvider(IndicatorProvider):
 
     def sma(self, candles, period=20, sequential=False):
         close = candles[:, CLOSE].astype(float)
-        result = _talib.SMA(close, timeperiod=period)
+        try:
+            result = _talib.SMA(close, timeperiod=period)
+        except Exception:
+            # Return NaNs when period is larger than data length or other errors
+            if sequential:
+                return np.full(close.shape, np.nan, dtype=float)
+            return np.nan
         return result if sequential else float(result[-1])
 
     def rsi(self, candles, period=14, sequential=False):

@@ -12,7 +12,6 @@
 - Socket.IO 4 (server)
 - BullMQ 5 + ioredis
 - Mongoose 7
-- jsonwebtoken + bcryptjs
 - express-validator (installed but not used as standalone middleware — validation inline in controllers)
 - express-rate-limit (inline in `app.js`)
 - Helmet.js
@@ -31,6 +30,8 @@ server/
     ├── config/
     │   ├── redis.js        ← ioredis client singleton (shared by BullMQ + pub/sub)
     │   └── socket.js       ← Socket.IO server setup
+    ├── constants/
+    │   └── top_symbols.js  ← 70 top Binance Futures symbols (TOP_SYMBOLS) — Chaos Mode pool
     ├── middleware/
     │   ├── errorHandler.js          ← global error handler
     │   └── requireBinanceCredentials.js ← validates X-Binance headers on trade routes

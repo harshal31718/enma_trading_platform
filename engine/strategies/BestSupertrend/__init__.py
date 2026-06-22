@@ -133,6 +133,16 @@ class BestSupertrend(BaseStrategy):
         self.risk_model      = AtrBracketRiskModel()
         self.portfolio_model = NotionalPortfolio()
 
+    def _safe_sma(self, candles: np.ndarray, period: int) -> np.ndarray:
+        """Return SMA series or NaNs when not enough data to avoid TA errors.
+        The underlying indicator may raise a Bad Parameter error if period > data length.
+        This helper returns an array of NaNs matching the candle length in such cases.
+        """
+        if len(candles) < period:
+            return np.full(len(candles), np.nan, dtype=float)
+        return ta.sma(candles, period=period, sequential=True)
+
+
     def _is_same_timeframe(self) -> bool:
         mapped = self.TF_MAP.get(self.tf.lower())
         if mapped is None:
@@ -230,8 +240,9 @@ class BestSupertrend(BaseStrategy):
         if len(self.candles) < max(self.fast_length, self.slow_length) + 1:
             return False, False, False, False
 
-        sma_fast_series = ta.sma(self.candles, period=self.fast_length, sequential=True)
-        sma_slow_series = ta.sma(self.candles, period=self.slow_length, sequential=True)
+        # Use safe SMA to avoid errors when insufficient data
+        sma_fast_series = self._safe_sma(self.candles, self.fast_length)
+        sma_slow_series = self._safe_sma(self.candles, self.slow_length)
 
         if np.isnan(sma_fast_series[-1]) or np.isnan(sma_slow_series[-1]):
             return False, False, False, False

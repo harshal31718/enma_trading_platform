@@ -84,7 +84,7 @@ type LiveSession = { _id: string, strategyId: string, strategyName: string, symb
 type SymbolLock = { reason: "bot"|"manual", sessionId: string|null, lockedAt: string }
 ```
 - **`POST /api/v1/algo/sessions`** -> Req: `{ strategyId, symbols, timeframe, params, capital, leverage }` -> `{ sessionId, status }`
-- **`POST /api/v1/algo/chaos`** -> No body required -> `{ launched: { strategy, sessionId, symbols, status }[], errors: { strategy, error }[], note: string }` — testnet-only; launches all 5 strategies with max-volatility params on 1m TF using hardcoded disjoint symbol sets. HTTP 207 if partial success, 502 if all failed.
+- **`POST /api/v1/algo/chaos`** -> No body required -> `{ launched: { strategy, sessionId, symbols, status }[], errors: { strategy, error }[], note: string }` — testnet-only; launches all 5 strategies with max-volatility params on 1m TF, dynamically allocating symbols from a Fisher-Yates–shuffled pool of the 70 top Binance Futures symbols (`server/src/constants/top_symbols.js`) — locked symbols are skipped and returned to the pool. HTTP 207 if partial success, 502 if all failed.
 - **`GET /api/v1/algo/sessions`** -> `{ sessions: LiveSession[] }`
 - **`GET /api/v1/algo/sessions/:id`** -> `{ session: LiveSession }`
 - **`GET /api/v1/algo/sessions/:id/equity`** -> `{ equity: string, pnl: string }`
@@ -115,8 +115,8 @@ type TradeRecord = { tradeId: string, source: "bot"|"manual", executedBy: string
 - Envelope: `{ event: string, data: any }`
 - `backtest:progress` -> `{ jobId, pct, message }`
 - `backtest:complete` -> `{ jobId, resultId }`
-- `algo:session:update` -> `{ sessionId, status, pnl, openPositions }`
-- `algo:position:open` -> `{ sessionId, symbol, side, qty, price, timestamp }`
+- `algo:session:update` -> `{ sessionId, status?, pnl?, openPositions?, symbolStats? }` — **partial**: clients merge only the fields present. Most emits carry `status`/`pnl`/`openPositions`; the per-symbol aggregation emits carry only `symbolStats` (a `{ [symbol]: { trades, qty, notional, realisedPnl, leverage } }` map re-derived from `tradeRecords` on each close and on session stop; also persisted on the `LiveSession` doc).
+- `algo:position:open` -> `{ sessionId, symbol, side, qty, price, leverage, timestamp }` (`leverage` = per-symbol clamped value)
 - `algo:position:close` -> `{ sessionId, symbol, pnl, exitPrice, exitReason, timestamp }`
 
 ## Error Codes

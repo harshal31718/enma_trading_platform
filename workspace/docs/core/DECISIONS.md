@@ -135,3 +135,16 @@ Calling `flip_position()` from `update_position()` records a pending flip (`_pen
 
 **Rationale:** Binance rejects `POST /fapi/v1/leverage` with error `-4028 "leverage too large"` when the requested value exceeds the symbol's bracket cap. Previously this caused live bot startup failures and manual trade 400 errors for any symbol with a cap below the user-configured leverage. Clamping in the engine silently uses the highest allowed value, eliminating the rejection without requiring per-symbol user configuration. The offline fallback for the backtest worker keeps backtests deterministic (reproducible without network calls), consistent with the existing `core/margin.py` philosophy of using documented static Binance approximations.
 
+## 15. Per-Symbol Live Bot Stats Derived Server-Side from `tradeRecords`
+**Decision:** Surface per-symbol cumulative stats (trades, qty, notional, realised PnL, leverage) in the live-bot UI by **aggregating the engine-written `tradeRecords` collection on the server**, rather than maintaining a separate per-symbol counter in the engine or deriving the numbers client-side from socket events.
+
+**What this introduces:**
+- **`computeSymbolStats(sessionId)`** (`server/src/controllers/algo.controller.js`) — a MongoDB aggregation grouping `tradeRecords` by `symbol` for the session. Runs on every `position:close` and once more on session `stopped` (to capture positions force-closed during the stop sequence, which emit no `position:close`).
+- **`LiveSession.symbolStats`** — an `Object` field persisting the latest `{ [symbol]: { trades, qty, notional, realisedPnl, leverage } }` map, so it survives reloads and is returned by the normal session list/get endpoints.
+- **Partial `algo:session:update` emit** — the aggregation is pushed carrying only `symbolStats`; the client's socket handler merges only the fields present (so a stats-only emit never clobbers `status`/`pnl`/`openPositions`).
+- **Engine ordering change** — `record_trade()` now runs **before** `_notify_node()` on the normal close path so the aggregation query sees the just-closed trade. The `position:open` event gained a `leverage` field (per-symbol clamped value) for active-position display.
+
+**Data ownership:** unchanged and reinforced — the **engine remains the sole writer** of `tradeRecords` (rule: engine owns trade data); the **server reads/aggregates only** (via a read-only `TradeRecord` Mongoose model) for presentation. No new persistence of derived trade data beyond the convenience `symbolStats` cache on the session doc.
+
+**Rationale:** The session doc already stored only aggregate `totalTrades`/`pnl`; per-symbol breakdown had no home. Deriving it client-side from live socket events would reset on every reload and miss trades that happened before a card was opened. Aggregating the authoritative `tradeRecords` on close is cheap (once per trade, not per render), persistent, and keeps the single-writer boundary intact. Live unrealized PnL stays client-side (Binance ticker WS) since it must update faster than the engine's periodic push and needs no persistence.
+

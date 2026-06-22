@@ -27,6 +27,10 @@ const liveSessionSchema = new mongoose.Schema({
     type: [{ timestamp: { type: Date }, balance: { type: String } }],
     default: [],
   },
+  // Per-symbol aggregates, re-derived from the tradeRecords collection on each
+  // position close. Keyed by symbol → { trades, qty, notional, realisedPnl,
+  // leverage }. Margin is derived (notional / leverage) on the client.
+  symbolStats: { type: Object, default: {} },
   logs: {
     type: [
       {
