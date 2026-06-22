@@ -68,7 +68,6 @@ export default function OrderHistory() {
     <PageWrapper>
       <PageHeader
         title="Order History"
-        description="Completed round-trip trades from bot sessions"
         actions={
           <div className="flex items-center gap-3">
             <input
@@ -76,13 +75,13 @@ export default function OrderHistory() {
               value={filters.symbol}
               onChange={handleFilterChange}
               placeholder="Symbol (e.g. BTCUSDT)"
-              className="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-gray-600 w-44"
+              className="bg-[#0a0d13] border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-gray-100 placeholder-slate-600 focus:outline-none focus:border-emerald-500 w-44 transition-colors"
             />
             <select
               name="side"
               value={filters.side}
               onChange={handleFilterChange}
-              className="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-gray-600"
+              className="bg-[#0a0d13] border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-emerald-500 transition-colors"
             >
               <option value="">All sides</option>
               <option value="long">Long</option>
@@ -101,7 +100,7 @@ export default function OrderHistory() {
         </div>
       )}
 
-      <div className="bg-gray-900 border border-gray-800 rounded-lg">
+      <div className="bg-[#0d1117] border border-slate-700/50 rounded-xl overflow-hidden">
         <Table>
           <TableHeader>
             <TableRow>
@@ -125,7 +124,7 @@ export default function OrderHistory() {
                 <TableRow key={i}>
                   {Array.from({ length: 12 }).map((__, j) => (
                     <TableCell key={j}>
-                      <div className="h-4 bg-gray-800 rounded animate-pulse w-20" />
+                      <div className="h-4 bg-slate-800/50 rounded animate-pulse w-20" />
                     </TableCell>
                   ))}
                 </TableRow>
@@ -133,7 +132,7 @@ export default function OrderHistory() {
 
             {!isLoading && records.length === 0 && (
               <TableRow>
-                <TableCell colSpan={12} className="text-center text-gray-500 py-16">
+                <TableCell colSpan={12} className="text-center text-slate-400 py-16">
                   No trades recorded yet.
                 </TableCell>
               </TableRow>
@@ -142,7 +141,7 @@ export default function OrderHistory() {
             {!isLoading &&
               records.map((r) => (
                 <TableRow key={r.tradeId}>
-                  <TableCell className="font-mono text-xs text-gray-500">
+                  <TableCell className="font-mono tabular-nums text-xs text-slate-500">
                     {r.tradeId.replace('trade_', '')}
                   </TableCell>
                   <TableCell className="font-medium text-gray-100">{r.symbol}</TableCell>
@@ -167,7 +166,7 @@ export default function OrderHistory() {
                   <TableCell>
                     <PnlCell value={r.netPnl} />
                   </TableCell>
-                  <TableCell className="text-right text-gray-500 text-xs">
+                  <TableCell className="text-right text-slate-500 text-xs font-mono tabular-nums">
                     {formatIsoDate(r.exitTime)}
                   </TableCell>
                 </TableRow>
@@ -176,22 +175,22 @@ export default function OrderHistory() {
         </Table>
 
         {!isLoading && pagination.totalPages > 1 && (
-          <div className="flex items-center justify-between px-4 py-3 border-t border-gray-800">
-            <span className="text-sm text-gray-500">
+          <div className="flex items-center justify-between px-4 py-3 border-t border-slate-700/50">
+            <span className="text-sm text-slate-400">
               {pagination.total} trades · page {pagination.page} of {pagination.totalPages}
             </span>
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
                 disabled={page <= 1}
-                className="p-1.5 rounded text-gray-400 hover:text-gray-100 hover:bg-gray-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-gray-100 hover:bg-slate-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
               >
                 <ChevronLeft size={16} />
               </button>
               <button
                 onClick={() => setPage((p) => Math.min(pagination.totalPages, p + 1))}
                 disabled={page >= pagination.totalPages}
-                className="p-1.5 rounded text-gray-400 hover:text-gray-100 hover:bg-gray-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-gray-100 hover:bg-slate-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
               >
                 <ChevronRight size={16} />
               </button>

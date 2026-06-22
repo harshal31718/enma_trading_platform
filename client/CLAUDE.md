@@ -195,16 +195,16 @@ WebSocket stream (`@kline_<interval>`) — only the initial REST fetch is affect
 
 ## Layout rules
 
-- **Navbar:** fixed top, full width, 56px tall, `bg-gray-900 border-b border-gray-800`
+- **Navbar:** fixed top, full width, 56px tall, `bg-[#0a0d13] border-b border-slate-700/50`
   - Logo: "Enma" text, `text-emerald-400 font-medium`, left-aligned
   - Nav items: horizontal, left-aligned after logo — **Dashboard, Strategies, Backtest, Trade, AlgoTrading, Settings** (6 items; Import Candles is removed permanently)
-  - Nav item default: `text-gray-400`, transparent bg
-  - Nav item hover: `text-gray-100`, `bg-gray-800`
-  - Nav item active: `text-emerald-400`, `bg-emerald-500/10`, `border-b-2 border-emerald-500`
+  - Nav item default: `text-slate-400`, transparent bg
+  - Nav item hover: `text-gray-100`, `bg-slate-800/50`
+  - Nav item active: `text-emerald-400`, `bg-emerald-400/10`, `border-b-2 border-emerald-400`
   - Desktop only — no mobile hamburger menu
-- **PageWrapper:** `pt-[56px]` to clear navbar, `bg-gray-950`, full width — no `ml-[240px]`
+- **PageWrapper:** `pt-[56px]` to clear navbar, `bg-[#060a0f]` (deepest layer), full width — no `ml-[240px]`
 - **Page content padding:** `p-6`
-- **Cards:** `bg-gray-900 border border-gray-800 rounded-lg`
+- **Cards:** `bg-[#0d1117] border border-slate-700/50 rounded-xl shadow-2xl hover:border-slate-600/70 transition-all duration-300` (the `Card` component in `components/ui/card.jsx` already encodes this — prefer it over hand-rolling)
 - **No Sidebar component** — Sidebar.jsx is removed; all navigation lives in the top navbar (TopBar.jsx or Navbar.jsx)
 
 ## Dashboard page spec
@@ -217,8 +217,8 @@ The Dashboard (`/`) is a simulation metrics hub. It has no live trading data —
 - Props: `title` (string), `value` (string | number), `subtitle` (string, optional)
 - Grid layout: 4 cards in one row (`grid grid-cols-4 gap-4`)
 - Cards: **Total Runs** (totalRuns), **Best Strategy** (bestStrategy name), **Avg Win Rate** (averageWinRate as %, 1 decimal), **Cached Symbols** (count of distinct rows in CachedCandlesTable)
-- Style: `bg-gray-900 border border-gray-800 rounded-lg p-4`
-- Value text: `text-2xl font-semibold text-gray-100`; title: `text-sm text-gray-400`
+- Style: `bg-[#0d1117] border border-slate-700/50 rounded-xl p-4` (uses the shared `Card` component)
+- Value text: `text-2xl font-semibold tabular-nums text-gray-100`; title: `text-[11px] uppercase tracking-wider text-slate-400`
 
 **CachedCandlesTable** — table of OHLCV ranges currently stored in TimescaleDB.
 - Data source: `GET /api/v1/candles/cached` via `useCachedCandles()` hook
@@ -288,17 +288,29 @@ Both hooks follow the standard TanStack Query pattern used by all other hooks in
 
 ## Styling rules
 
+> **Single source of truth:** `workspace/docs/core/UI_STYLE_GUIDE.md` — the canonical
+> midnight-blue trading-terminal palette, typography, component patterns, and the full
+> **What to Avoid** list. Read it before writing or changing any `className`. To restyle an
+> existing component/page to the guide, run the **`/restyle-ui`** skill. The rules below are the
+> condensed working set; if they ever disagree with the guide, the guide wins.
+
 - Dark theme by default — the app is a trading dashboard, always dark
-- Color palette (use these Tailwind classes consistently):
-  - Background: `bg-gray-950`, `bg-gray-900`, `bg-gray-800`
-  - Borders: `border-gray-700`, `border-gray-800`
-  - Text primary: `text-gray-100`
-  - Text muted: `text-gray-400`
+- Color palette (use these Tailwind classes consistently — midnight blue, not warm gray):
+  - Page / deepest layer: `bg-[#060a0f]` (also terminal/log boxes)
+  - Panel rows: `bg-[#080b10]` (row 1) / `bg-[#0a0d13]` (row 2, inputs/selects)
+  - Card / panel base: `bg-[#0d1117]`
+  - Borders: cards/dividers `border-slate-700/50`; inner tiles `border-slate-700/40`; table rows `border-slate-700/30`
+  - Text primary / values: `text-gray-100`
+  - Text secondary labels: `text-slate-400`; muted/supporting: `text-slate-500`; section titles: `text-gray-300`
   - Profit/positive P&L: `text-emerald-400`, `bg-emerald-400/10` — **never `text-green-400`**
   - Loss/negative P&L: `text-red-400`, `bg-red-400/10`
-  - Primary action: `bg-emerald-600`, `text-emerald-400`
-  - Warning: `text-yellow-400`
-- **Favorites & Highlights:** Stars and interactive favorites elements follow standard highlighting (yellow when selected; e.g., `text-yellow-400`). P&L coloring rules (`text-green-400` / `text-red-400`) apply to green/red ticker price feeds only.
+  - Primary action: `bg-emerald-600 hover:bg-emerald-700`; destructive: `bg-red-600 hover:bg-red-700`
+  - Warning / caution: `text-amber-400`, `bg-amber-400/10`
+  - Monospaced data (prices, qty, timestamps): `font-mono tabular-nums`
+- **Avoid** `bg-gray-900`/`bg-gray-800` panel backgrounds (too warm), `text-gray-500` labels
+  (use `text-slate-400`), glass buttons for primary/destructive actions, `opacity-50` to dim rows,
+  and inline styles. See the guide's "What to Avoid".
+- **Favorites & Highlights:** Stars and interactive favorites elements follow standard highlighting (yellow when selected; e.g., `text-yellow-400`). P&L coloring rules (`text-emerald-400` / `text-red-400`) apply to green/red ticker price feeds only.
 
 ---
 
@@ -307,7 +319,10 @@ Both hooks follow the standard TanStack Query pattern used by all other hooks in
 - Equity curve: `LineChart` with `CartesianGrid`, `Tooltip`, `ResponsiveContainer`
 - Drawdown: `AreaChart` with negative fill
 - Trade distribution: `BarChart`
-- All charts use dark theme colors matching the palette above
+- All charts use dark theme colors matching the palette above:
+  - Axis ticks `fill: '#94a3b8'` (slate-400), axis/grid stroke `#1e293b` (slate-800)
+  - Baseline reference line `stroke="#4B5563" strokeDasharray="3 3"`
+  - Equity line `#34d399` (emerald-400) when positive, `#f87171` (red-400) when negative
 - Chart wrappers live in `src/components/charts/`
 - Never use chart libraries other than Recharts
 

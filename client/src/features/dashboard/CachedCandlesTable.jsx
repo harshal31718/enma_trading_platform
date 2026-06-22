@@ -20,7 +20,7 @@ export default function CachedCandlesTable({ data }) {
       </CardHeader>
       <CardContent>
         {!data || data.length === 0 ? (
-          <p className="text-gray-500 text-sm text-center py-6">No historical candle data cached locally yet.</p>
+          <p className="text-slate-400 text-sm text-center py-6">No historical candle data cached locally yet.</p>
         ) : (
           <Table>
             <TableHeader>

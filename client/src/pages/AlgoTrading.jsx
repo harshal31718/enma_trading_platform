@@ -7,6 +7,7 @@ import SessionCard from '../components/algo/SessionCard'
 import NewSessionWizard from '../components/algo/NewSessionWizard'
 import PageWrapper from '../components/layout/PageWrapper'
 import PageHeader from '../components/ui/PageHeader'
+import { Dialog, DialogContent } from '../components/ui/dialog'
 
 export default function AlgoTrading() {
   const [showWizard, setShowWizard] = useState(false)
@@ -61,25 +62,10 @@ export default function AlgoTrading() {
     }
   }
 
-  if (showWizard) {
-    return (
-      <PageWrapper>
-        <NewSessionWizard
-          onCancel={() => setShowWizard(false)}
-          onSuccess={() => {
-            setShowWizard(false)
-            qc.invalidateQueries({ queryKey: ['algo', 'sessions'] })
-          }}
-        />
-      </PageWrapper>
-    )
-  }
-
   return (
     <PageWrapper>
       <PageHeader
         title="Algo Trading"
-        description="Automated trading bots · Binance Testnet"
         actions={
           <div className="flex items-center gap-2">
             {hasStopped && (
@@ -173,6 +159,18 @@ export default function AlgoTrading() {
           ))}
         </div>
       )}
+
+      <Dialog open={showWizard} onOpenChange={(open) => { if (!open) setShowWizard(false) }}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <NewSessionWizard
+            onCancel={() => setShowWizard(false)}
+            onSuccess={() => {
+              setShowWizard(false)
+              qc.invalidateQueries({ queryKey: ['algo', 'sessions'] })
+            }}
+          />
+        </DialogContent>
+      </Dialog>
     </PageWrapper>
   )
 }

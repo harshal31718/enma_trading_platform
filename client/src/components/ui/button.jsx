@@ -1,12 +1,12 @@
 import { cn } from '@/lib/utils'
 
 const variantClasses = {
-  default:   'bg-emerald-600 text-white hover:bg-emerald-500',
-  secondary: 'bg-gray-800 text-gray-100 hover:bg-gray-700',
-  outline:   'border border-gray-700 bg-transparent text-gray-300 hover:bg-gray-800 hover:text-gray-100',
-  ghost:     'bg-transparent text-gray-300 hover:bg-gray-800 hover:text-gray-100',
-  danger:    'bg-red-600 text-white hover:bg-red-500',
-  warning:   'bg-yellow-500 text-gray-950 hover:bg-yellow-400',
+  default:   'bg-emerald-600 text-white hover:bg-emerald-700',
+  secondary: 'bg-slate-800 text-gray-100 hover:bg-slate-700',
+  outline:   'border border-slate-700 bg-transparent text-slate-300 hover:bg-slate-800 hover:text-gray-100',
+  ghost:     'bg-transparent text-slate-400 hover:bg-white/5 hover:text-gray-100',
+  danger:    'bg-red-600 text-white hover:bg-red-700',
+  warning:   'bg-amber-500 text-gray-950 hover:bg-amber-400',
 }
 
 const sizeClasses = {
@@ -20,7 +20,7 @@ export function Button({ className, variant = 'default', size = 'default', child
   return (
     <button
       className={cn(
-        'inline-flex items-center justify-center gap-1.5 rounded font-medium transition-colors',
+        'inline-flex items-center justify-center gap-1.5 rounded-lg font-medium transition-colors',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500',
         'disabled:pointer-events-none disabled:opacity-50',
         variantClasses[variant],

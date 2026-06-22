@@ -95,10 +95,10 @@ function TickerBar() {
   const isPositive = changePct >= 0
 
   return (
-    <div className="h-12 bg-gray-900 border-b border-gray-800 flex items-center px-4 gap-6 shrink-0">
+    <div className="h-12 bg-[#0d1117] border-b border-slate-700/50 flex items-center px-4 gap-6 shrink-0">
       <div className="flex items-center gap-2 shrink-0">
         <SymbolSearchBar />
-        <span className="text-[10px] text-gray-500 border border-gray-700 px-1.5 py-0.5 rounded">Perp</span>
+        <span className="text-[10px] text-slate-400 border border-slate-700/50 px-1.5 py-0.5 rounded">Perp</span>
       </div>
 
       <div className="flex items-center gap-1 shrink-0">
@@ -110,7 +110,7 @@ function TickerBar() {
         </span>
       </div>
 
-      <div className="h-6 w-px bg-gray-800 shrink-0" />
+      <div className="h-6 w-px bg-slate-700/50 shrink-0" />
 
       <div className="flex items-center gap-6 text-xs overflow-x-auto">
         {[
@@ -120,7 +120,7 @@ function TickerBar() {
           { label: `24h Vol(${quote})`, value: ticker ? fmtQty(ticker.quoteVolume, 0) : '—' },
         ].map(({ label, value }) => (
           <div key={label} className="flex flex-col shrink-0">
-            <span className="text-gray-500 text-[10px]">{label}</span>
+            <span className="text-slate-400 text-[10px]">{label}</span>
             <span className="text-gray-200 tabular-nums">{value}</span>
           </div>
         ))}
@@ -180,17 +180,17 @@ function ChartContainer() {
     const chart = createChart(containerRef.current, {
       autoSize: true,
       layout: {
-        background: { color: 'rgb(17, 24, 39)' },
-        textColor: 'rgb(156, 163, 175)',
+        background: { color: '#0d1117' },
+        textColor: '#94a3b8',
       },
       grid: {
-        vertLines: { color: 'rgba(31, 41, 55, 0.4)' },
-        horzLines: { color: 'rgba(31, 41, 55, 0.4)' },
+        vertLines: { color: 'rgba(30, 41, 59, 0.4)' },
+        horzLines: { color: 'rgba(30, 41, 59, 0.4)' },
       },
       crosshair: { mode: 1 },
-      rightPriceScale: { borderColor: 'rgba(31, 41, 55, 0.8)' },
+      rightPriceScale: { borderColor: 'rgba(30, 41, 59, 0.8)' },
       timeScale: {
-        borderColor: 'rgba(31, 41, 55, 0.8)',
+        borderColor: 'rgba(30, 41, 59, 0.8)',
         timeVisible: true,
         secondsVisible: false,
       },
@@ -252,9 +252,9 @@ function ChartContainer() {
   useBinanceWS(`${streamPrefix}@kline_${timeframe}`, onKline)
 
   return (
-    <div className="bg-gray-900 relative flex-1 min-h-0 overflow-hidden flex flex-col">
+    <div className="bg-[#0d1117] relative flex-1 min-h-0 overflow-hidden flex flex-col">
       {/* Timeframe toolbar */}
-      <div className="flex items-center gap-0.5 px-3 py-1.5 border-b border-gray-800 shrink-0">
+      <div className="flex items-center gap-0.5 px-3 py-1.5 border-b border-slate-700/50 shrink-0">
         {TIMEFRAMES.map((tf) => (
           <button
             key={tf.interval}
@@ -262,15 +262,15 @@ function ChartContainer() {
             className={[
               'px-3 py-1 text-xs rounded transition-colors font-medium',
               timeframe === tf.interval
-                ? 'bg-gray-700 text-gray-100'
-                : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800',
+                ? 'bg-slate-700 text-gray-100'
+                : 'text-slate-400 hover:text-gray-300 hover:bg-slate-800',
             ].join(' ')}
           >
             {tf.label}
           </button>
         ))}
         {loading && (
-          <span className="ml-2 inline-block w-3 h-3 border-2 border-gray-600 border-t-emerald-400 rounded-full animate-spin" />
+          <span className="ml-2 inline-block w-3 h-3 border-2 border-slate-600 border-t-emerald-400 rounded-full animate-spin" />
         )}
       </div>
 
@@ -293,7 +293,7 @@ const BookRow = memo(function BookRow({ price, qty, maxQty, side }) {
   const barPct = Math.min((qty / maxQty) * 100, 100)
   const isAsk = side === 'ask'
   return (
-    <div className="relative flex items-center justify-between text-[11px] py-[3px] px-2 hover:bg-gray-800/60 cursor-default">
+    <div className="relative flex items-center justify-between text-[11px] py-[3px] px-2 hover:bg-slate-800/40 cursor-default">
       <div
         className={`absolute inset-y-0 right-0 opacity-[0.12] ${isAsk ? 'bg-red-500' : 'bg-emerald-500'}`}
         style={{ width: `${barPct}%` }}
@@ -343,21 +343,21 @@ function OrderBook() {
   const midPrice = bestAsk && bestBid ? ((bestAsk + bestBid) / 2).toFixed(1) : '—'
 
   return (
-    <div className="bg-gray-900 border-r border-gray-800 flex flex-col min-h-0 flex-1">
-      <div className="px-3 py-2 border-b border-gray-800 shrink-0">
+    <div className="bg-[#0d1117] border-r border-slate-700/50 flex flex-col min-h-0 flex-1">
+      <div className="px-3 py-2 border-b border-slate-700/50 shrink-0 title-fade">
         <span className="text-xs font-semibold text-gray-200">Order Book</span>
       </div>
 
       <div className="flex justify-between px-2 py-1 shrink-0">
-        <span className="text-[10px] text-gray-600">Price (USDT)</span>
-        <span className="text-[10px] text-gray-600">Size (BTC)</span>
+        <span className="text-[10px] text-slate-500">Price (USDT)</span>
+        <span className="text-[10px] text-slate-500">Size (BTC)</span>
       </div>
 
       {/* Asks reversed — lowest ask closest to spread */}
       <div className="flex flex-col-reverse flex-1 min-h-0 overflow-hidden">
         {book.asks.length === 0
           ? Array.from({ length: BOOK_ROWS }).map((_, i) => (
-              <div key={i} className="h-[22px] mx-2 my-px bg-gray-800/60 rounded animate-pulse" />
+              <div key={i} className="h-[22px] mx-2 my-px bg-slate-800/40 rounded animate-pulse" />
             ))
           : book.asks.slice(0, BOOK_ROWS).map((row, i) => (
               <BookRow key={i} price={row.price} qty={row.qty} maxQty={maxQty} side="ask" />
@@ -365,16 +365,16 @@ function OrderBook() {
       </div>
 
       {/* Mid price / spread row */}
-      <div className="flex items-center justify-between px-2 py-1.5 border-y border-gray-800 shrink-0">
+      <div className="flex items-center justify-between px-2 py-1.5 border-y border-slate-700/50 shrink-0">
         <span className="text-sm font-bold text-gray-100 tabular-nums">{midPrice}</span>
-        <span className="text-[10px] text-gray-500">Spread: {spread}</span>
+        <span className="text-[10px] text-slate-400">Spread: {spread}</span>
       </div>
 
       {/* Bids */}
       <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
         {book.bids.length === 0
           ? Array.from({ length: BOOK_ROWS }).map((_, i) => (
-              <div key={i} className="h-[22px] mx-2 my-px bg-gray-800/60 rounded animate-pulse" />
+              <div key={i} className="h-[22px] mx-2 my-px bg-slate-800/40 rounded animate-pulse" />
             ))
           : book.bids.slice(0, BOOK_ROWS).map((row, i) => (
               <BookRow key={i} price={row.price} qty={row.qty} maxQty={maxQty} side="bid" />
@@ -410,33 +410,33 @@ function RecentTrades() {
   useBinanceWS(`${streamPrefix}@aggTrade`, onTrade)
 
   return (
-    <div className="bg-gray-900 border-r border-gray-800 flex flex-col min-h-0 h-[240px]">
-      <div className="px-3 py-2 border-b border-gray-800 shrink-0">
+    <div className="bg-[#0d1117] border-r border-slate-700/50 flex flex-col min-h-0 h-[240px]">
+      <div className="px-3 py-2 border-b border-slate-700/50 shrink-0 title-fade">
         <span className="text-xs font-semibold text-gray-200">Trades</span>
       </div>
       <div className="flex justify-between px-2 py-1 shrink-0">
-        <span className="text-[10px] text-gray-600">Price (USDT)</span>
-        <span className="text-[10px] text-gray-600">Amount (BTC)</span>
-        <span className="text-[10px] text-gray-600">Time</span>
+        <span className="text-[10px] text-slate-500">Price (USDT)</span>
+        <span className="text-[10px] text-slate-500">Amount (BTC)</span>
+        <span className="text-[10px] text-slate-500">Time</span>
       </div>
       <div className="flex-1 overflow-hidden min-h-0">
         {trades.length === 0 ? (
           <div className="flex flex-col gap-1 p-2">
             {Array.from({ length: 10 }).map((_, i) => (
-              <div key={i} className="h-3 bg-gray-800/60 rounded animate-pulse" />
+              <div key={i} className="h-3 bg-slate-800/40 rounded animate-pulse" />
             ))}
           </div>
         ) : (
           trades.map((t) => (
             <div
               key={t.id}
-              className="flex justify-between px-2 py-[2px] text-[11px] hover:bg-gray-800/40"
+              className="flex justify-between px-2 py-[2px] text-[11px] hover:bg-slate-800/20"
             >
               <span className={`tabular-nums ${t.isBuyerMaker ? 'text-red-400' : 'text-emerald-400'}`}>
                 {t.price.toFixed(1)}
               </span>
               <span className="text-gray-400 tabular-nums">{t.qty.toFixed(3)}</span>
-              <span className="text-gray-600 tabular-nums">{t.time}</span>
+              <span className="text-slate-500 tabular-nums">{t.time}</span>
             </div>
           ))
         )}
@@ -452,7 +452,7 @@ function SkeletonRow({ cols }) {
     <tr>
       {cols.map((_, i) => (
         <td key={i} className="py-2 pr-4">
-          <div className="h-3 bg-gray-800 rounded w-full animate-pulse" />
+          <div className="h-3 bg-slate-800/50 rounded w-full animate-pulse" />
         </td>
       ))}
     </tr>
@@ -462,7 +462,7 @@ function SkeletonRow({ cols }) {
 function EmptyRow({ message }) {
   return (
     <tr>
-      <td colSpan={99} className="py-8 text-center text-gray-600 text-xs">
+      <td colSpan={99} className="py-8 text-center text-slate-500 text-xs">
         {message}
       </td>
     </tr>
@@ -540,39 +540,39 @@ function TpSlModal({ position, onClose }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
       <div
-        className="bg-gray-900 border border-gray-700 rounded-xl w-80 flex flex-col shadow-2xl"
+        className="bg-[#0d1117] border border-slate-700/50 rounded-xl w-80 flex flex-col shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700/50">
           <span className="text-sm font-semibold text-gray-100">Take Profit / Stop Loss</span>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 transition-colors text-base leading-none">✕</button>
+          <button onClick={onClose} className="text-slate-400 hover:text-gray-300 transition-colors text-base leading-none">✕</button>
         </div>
 
         {/* Direction indicator (read-only, matches position) */}
         <div className="flex mx-4 mt-3 rounded-lg overflow-hidden text-xs font-semibold">
-          <div className={`flex-1 py-2 text-center rounded-l-lg ${isLong ? 'bg-emerald-600 text-white' : 'bg-gray-800 text-gray-500'}`}>
+          <div className={`flex-1 py-2 text-center rounded-l-lg ${isLong ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-500'}`}>
             Buy / Long
           </div>
-          <div className={`flex-1 py-2 text-center rounded-r-lg ${!isLong ? 'bg-red-600 text-white' : 'bg-gray-800 text-gray-500'}`}>
+          <div className={`flex-1 py-2 text-center rounded-r-lg ${!isLong ? 'bg-red-600 text-white' : 'bg-slate-800 text-slate-500'}`}>
             Sell / Short
           </div>
         </div>
 
         <div className="flex flex-col px-4 pt-3 pb-1">
-          <div className="text-[10px] text-gray-600 mb-2 tabular-nums">
+          <div className="text-[10px] text-slate-500 mb-2 tabular-nums">
             Mark: {fmtPriceForSymbol(markPrice, position.symbol)} · Entry: {fmtPriceForSymbol(entryPrice, position.symbol)} · Qty: {fmtQtyForSymbol(quantity, position.symbol)} {position.symbol.replace('USDT', '')}
           </div>
 
           {/* Take Profit section */}
-          <div className="flex flex-col gap-2 py-3 border-b border-gray-800">
+          <div className="flex flex-col gap-2 py-3 border-b border-slate-700/50">
             <label
               className="flex items-center gap-2.5 cursor-pointer select-none"
               onClick={() => { setTpEnabled((v) => !v); setTpPrice('') }}
             >
               <div className={[
                 'w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 transition-colors',
-                tpEnabled ? 'bg-emerald-500 border-emerald-500' : 'border-gray-600 bg-transparent',
+                tpEnabled ? 'bg-emerald-400 border-emerald-400' : 'border-slate-600 bg-transparent',
               ].join(' ')}>
                 {tpEnabled && <span className="text-white text-[9px] font-bold leading-none">✓</span>}
               </div>
@@ -589,14 +589,14 @@ function TpSlModal({ position, onClose }) {
                   autoFocus
                   disabled={isPending}
                   className={[
-                    'w-full bg-gray-800 border rounded-lg px-3 py-2 text-sm text-gray-100 placeholder-gray-600',
+                    'w-full bg-[#0a0d13] border rounded-lg px-3 py-2 text-sm text-gray-100 placeholder-slate-600',
                     'focus:outline-none tabular-nums transition-colors disabled:opacity-50',
-                    tpError ? 'border-red-500 focus:border-red-500' : 'border-gray-700 focus:border-gray-500',
+                    tpError ? 'border-red-500 focus:border-red-500' : 'border-slate-700/50 focus:border-emerald-400',
                   ].join(' ')}
                 />
                 {tpError && <span className="text-[11px] text-red-400">{tpError}</span>}
                 {!tpError && tpPrice && (
-                  <span className="text-[10px] text-gray-500">
+                  <span className="text-[10px] text-slate-400">
                     When Mark Price reaches <span className="text-gray-300 tabular-nums">{fmtPrice(tpPrice)} USDT</span>, a Market order will be triggered to close the position.
                   </span>
                 )}
@@ -612,7 +612,7 @@ function TpSlModal({ position, onClose }) {
             >
               <div className={[
                 'w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 transition-colors',
-                slEnabled ? 'bg-emerald-500 border-emerald-500' : 'border-gray-600 bg-transparent',
+                slEnabled ? 'bg-emerald-400 border-emerald-400' : 'border-slate-600 bg-transparent',
               ].join(' ')}>
                 {slEnabled && <span className="text-white text-[9px] font-bold leading-none">✓</span>}
               </div>
@@ -628,14 +628,14 @@ function TpSlModal({ position, onClose }) {
                   placeholder="Trigger Price"
                   disabled={isPending}
                   className={[
-                    'w-full bg-gray-800 border rounded-lg px-3 py-2 text-sm text-gray-100 placeholder-gray-600',
+                    'w-full bg-[#0a0d13] border rounded-lg px-3 py-2 text-sm text-gray-100 placeholder-slate-600',
                     'focus:outline-none tabular-nums transition-colors disabled:opacity-50',
-                    slError ? 'border-red-500 focus:border-red-500' : 'border-gray-700 focus:border-gray-500',
+                    slError ? 'border-red-500 focus:border-red-500' : 'border-slate-700/50 focus:border-emerald-400',
                   ].join(' ')}
                 />
                 {slError && <span className="text-[11px] text-red-400">{slError}</span>}
                 {!slError && slPrice && (
-                  <span className="text-[10px] text-gray-500">
+                  <span className="text-[10px] text-slate-400">
                     When Mark Price reaches <span className="text-gray-300 tabular-nums">{fmtPrice(slPrice)} USDT</span>, a Market order will be triggered to close the position.
                   </span>
                 )}
@@ -658,8 +658,8 @@ function TpSlModal({ position, onClose }) {
             className={[
               'w-full py-3 rounded-lg text-sm font-semibold transition-colors',
               canConfirm
-                ? 'bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer'
-                : 'bg-gray-800 text-gray-600 cursor-not-allowed',
+                ? 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer'
+                : 'bg-slate-800 text-slate-600 cursor-not-allowed',
             ].join(' ')}
           >
             {isPending ? 'Confirming…' : 'Confirm'}
@@ -720,7 +720,7 @@ function PositionsTable({ data, isLoading, account }) {
 
       <table className="w-full text-xs">
         <thead>
-          <tr className="text-gray-500 border-b border-gray-800">
+          <tr className="text-gray-400 border-b border-slate-700/50">
             {cols.map((c) => <th key={c} className="text-left py-2 pr-6 font-medium whitespace-nowrap">{c}</th>)}
           </tr>
         </thead>
@@ -760,14 +760,14 @@ function PositionsTable({ data, isLoading, account }) {
                     onClick={() => handleRowClick(p.symbol)}
                     title="View chart"
                     className={[
-                      'border-b border-gray-800/30 cursor-pointer transition-colors',
-                      isActive ? 'bg-gray-800/40 border-l-2 border-emerald-500' : 'hover:bg-gray-800/20',
+                      'border-b border-slate-700/30 cursor-pointer transition-colors',
+                      isActive ? 'bg-slate-800/40 border-l-2 border-emerald-400' : 'hover:bg-slate-800/20',
                     ].join(' ')}
                   >
                     <td className="py-2 pr-6 whitespace-nowrap">
                       <div className="flex items-center gap-2">
                         <span className="text-gray-100">{p.symbol.replace('USDT', '-USDT')}</span>
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${side === 'Long' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>{side}</span>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${side === 'Long' ? 'bg-emerald-400/10 text-emerald-400' : 'bg-red-400/10 text-red-400'}`}>{side}</span>
                       </div>
                     </td>
                     <td className="py-2 pr-6 tabular-nums">{fmtQtyForSymbol(Math.abs(size), p.symbol)}</td>
@@ -786,15 +786,15 @@ function PositionsTable({ data, isLoading, account }) {
                           className={[
                             'px-3 py-1 text-[10px] rounded border transition-colors whitespace-nowrap',
                             isClosing
-                              ? 'border-gray-700 text-gray-600 cursor-not-allowed'
-                              : 'border-gray-600 text-gray-300 hover:bg-gray-700/50 cursor-pointer',
+                              ? 'border-slate-700/50 text-slate-500 cursor-not-allowed'
+                              : 'border-slate-600 text-gray-300 hover:bg-slate-700/50 cursor-pointer',
                           ].join(' ')}
                         >
                           {isClosing ? 'Closing…' : 'Close Position'}
                         </button>
                         <button
                           onClick={(e) => { e.stopPropagation(); setTpslPosition(p) }}
-                          className="px-3 py-1 text-[10px] rounded border border-gray-600 text-gray-400 hover:bg-gray-700/50 hover:border-yellow-600/40 hover:text-yellow-400 transition-colors whitespace-nowrap cursor-pointer"
+                          className="px-3 py-1 text-[10px] rounded border border-slate-600 text-gray-400 hover:bg-slate-700/50 hover:border-yellow-600/40 hover:text-yellow-400 transition-colors whitespace-nowrap cursor-pointer"
                         >
                           TP/SL
                         </button>
@@ -838,18 +838,18 @@ function OpenOrdersTable({ data, isLoading, onOcoBannerEvent }) {
   return (
     <div className="w-full">
       {/* Cancel All button in table header */}
-      <div className="flex items-center justify-end px-2 py-1 border-b border-gray-800/40">
+      <div className="flex items-center justify-end px-2 py-1 border-b border-slate-700/40">
         <button
           disabled={cancelAllPending || !data?.length}
           onClick={() => execCancelAll({ symbol }, { onSuccess: () => onOcoBannerEvent?.('All orders cancelled.') })}
-          className="px-3 py-1 text-[10px] rounded border border-gray-600 text-gray-400 hover:bg-gray-700/50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          className="px-3 py-1 text-[10px] rounded border border-slate-600 text-gray-400 hover:bg-slate-700/50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
           {cancelAllPending ? 'Cancelling…' : 'Cancel All'}
         </button>
       </div>
       <table className="w-full text-xs">
         <thead>
-          <tr className="text-gray-500 border-b border-gray-800">
+          <tr className="text-gray-400 border-b border-slate-700/50">
             {cols.map((c) => <th key={c} className="text-left py-2 pr-6 font-medium whitespace-nowrap">{c}</th>)}
           </tr>
         </thead>
@@ -866,7 +866,7 @@ function OpenOrdersTable({ data, isLoading, onOcoBannerEvent }) {
               const isCancelling = cancelPending && cancelVars?.orderId === o.orderId
               const ocoId = extractOcoId(o.clientOrderId)
               return (
-                <tr key={o.orderId} className="border-b border-gray-800/30 hover:bg-gray-800/20">
+                <tr key={o.orderId} className="border-b border-slate-700/30 hover:bg-slate-800/20">
                   <td className="py-2 pr-6 text-gray-100 whitespace-nowrap">{o.symbol.replace('USDT', '-USDT')}</td>
                   <td className="py-2 pr-6">{o.type}</td>
                   <td className={`py-2 pr-6 font-medium ${o.side === 'BUY' ? 'text-emerald-400' : 'text-red-400'}`}>{o.side}</td>
@@ -880,7 +880,7 @@ function OpenOrdersTable({ data, isLoading, onOcoBannerEvent }) {
                         {ocoId}
                       </span>
                     ) : (
-                      <span className="text-gray-700">—</span>
+                      <span className="text-slate-600">—</span>
                     )}
                   </td>
                   <td className="py-2">
@@ -891,8 +891,8 @@ function OpenOrdersTable({ data, isLoading, onOcoBannerEvent }) {
                         className={[
                           'px-3 py-1 text-[10px] rounded border transition-colors',
                           isCancelling
-                            ? 'border-gray-700 text-gray-600 cursor-not-allowed'
-                            : 'border-gray-600 text-gray-400 hover:bg-gray-700/50 cursor-pointer',
+                            ? 'border-slate-700/50 text-slate-500 cursor-not-allowed'
+                            : 'border-slate-600 text-gray-400 hover:bg-slate-700/50 cursor-pointer',
                         ].join(' ')}
                       >
                         {isCancelling ? 'Cancelling…' : 'Cancel'}
@@ -924,7 +924,7 @@ function AssetsTable({ data, isLoading }) {
   return (
     <table className="w-full text-xs">
       <thead>
-        <tr className="text-gray-500 border-b border-gray-800">
+        <tr className="text-gray-400 border-b border-slate-700/50">
           {cols.map((c) => <th key={c} className="text-left py-2 pr-6 font-medium">{c}</th>)}
         </tr>
       </thead>
@@ -940,7 +940,7 @@ function AssetsTable({ data, isLoading }) {
           assets.map((a) => {
             const pnl = parseFloat(a.unrealizedProfit)
             return (
-              <tr key={a.asset} className="border-b border-gray-800/30 hover:bg-gray-800/20">
+              <tr key={a.asset} className="border-b border-slate-700/30 hover:bg-slate-800/20">
                 <td className="py-2 pr-6 text-gray-100 font-medium">{a.asset}</td>
                 <td className="py-2 pr-6 tabular-nums">{parseFloat(a.walletBalance).toFixed(4)}</td>
                 <td className="py-2 pr-6 tabular-nums">{parseFloat(a.availableBalance).toFixed(4)}</td>
@@ -969,7 +969,7 @@ function OrderHistoryTable({ data, isLoading, synced = true }) {
       {!synced && !isLoading && <SyncWarningBanner />}
       <table className="w-full text-xs">
         <thead>
-          <tr className="text-gray-500 border-b border-gray-800">
+          <tr className="text-gray-400 border-b border-slate-700/50">
             {cols.map((c) => <th key={c} className="text-left py-2 pr-6 font-medium whitespace-nowrap">{c}</th>)}
           </tr>
         </thead>
@@ -988,8 +988,8 @@ function OrderHistoryTable({ data, isLoading, synced = true }) {
               const isCanceled = o.status === 'CANCELED'
               const isNew = o.status === 'NEW'
               return (
-                <tr key={o.orderId} className="border-b border-gray-800/30 hover:bg-gray-800/20">
-                  <td className="py-2 pr-6 whitespace-nowrap text-gray-500">{new Date(o.time).toLocaleString()}</td>
+                <tr key={o.orderId} className="border-b border-slate-700/30 hover:bg-slate-800/20">
+                  <td className="py-2 pr-6 whitespace-nowrap text-slate-400">{new Date(o.time).toLocaleString()}</td>
                   <td className="py-2 pr-6 whitespace-nowrap text-gray-100">{o.symbol.replace('USDT', '-USDT')}</td>
                   <td className="py-2 pr-6 whitespace-nowrap">{o.type}</td>
                   <td className={`py-2 pr-6 whitespace-nowrap font-medium ${side === 'BUY' ? 'text-emerald-400' : 'text-red-400'}`}>{side}</td>
@@ -1000,7 +1000,7 @@ function OrderHistoryTable({ data, isLoading, synced = true }) {
                   <td className="py-2 pr-6 whitespace-nowrap">{o.reduceOnly ? 'Yes' : 'No'}</td>
                   <td className="py-2 pr-6 whitespace-nowrap">{o.postOnly ? 'Yes' : 'No'}</td>
                   <td className="py-2 pr-6 whitespace-nowrap tabular-nums">{o.stopPrice && parseFloat(o.stopPrice) > 0 ? fmtPrice(o.stopPrice) : '—'}</td>
-                  <td className={`py-2 pr-6 whitespace-nowrap font-medium ${isFilled ? 'text-emerald-400' : isCanceled ? 'text-gray-500' : isNew ? 'text-yellow-400' : 'text-gray-300'}`}>{o.status}</td>
+                  <td className={`py-2 pr-6 whitespace-nowrap font-medium ${isFilled ? 'text-emerald-400' : isCanceled ? 'text-slate-400' : isNew ? 'text-yellow-400' : 'text-gray-300'}`}>{o.status}</td>
                 </tr>
               )
             })
@@ -1018,7 +1018,7 @@ function TradeHistoryTable({ data, isLoading, synced = true }) {
       {!synced && !isLoading && <SyncWarningBanner />}
       <table className="w-full text-xs">
         <thead>
-          <tr className="text-gray-500 border-b border-gray-800">
+          <tr className="text-gray-400 border-b border-slate-700/50">
             {cols.map((c) => <th key={c} className="text-left py-2 pr-6 font-medium whitespace-nowrap">{c}</th>)}
           </tr>
         </thead>
@@ -1035,14 +1035,14 @@ function TradeHistoryTable({ data, isLoading, synced = true }) {
               const side = t.side.toUpperCase()
               const pnl = parseFloat(t.realizedPnl || '0')
               return (
-                <tr key={t.id} className="border-b border-gray-800/30 hover:bg-gray-800/20">
-                  <td className="py-2 pr-6 whitespace-nowrap text-gray-500 tabular-nums">{t.orderId}</td>
-                  <td className="py-2 pr-6 whitespace-nowrap text-gray-500">{new Date(t.time).toLocaleString()}</td>
+                <tr key={t.id} className="border-b border-slate-700/30 hover:bg-slate-800/20">
+                  <td className="py-2 pr-6 whitespace-nowrap text-slate-400 tabular-nums">{t.orderId}</td>
+                  <td className="py-2 pr-6 whitespace-nowrap text-slate-400">{new Date(t.time).toLocaleString()}</td>
                   <td className="py-2 pr-6 whitespace-nowrap text-gray-100">{t.symbol.replace('USDT', '-USDT')}</td>
                   <td className={`py-2 pr-6 whitespace-nowrap font-medium ${side === 'BUY' ? 'text-emerald-400' : 'text-red-400'}`}>{side}</td>
                   <td className="py-2 pr-6 whitespace-nowrap tabular-nums">{fmtPrice(t.price)}</td>
                   <td className="py-2 pr-6 whitespace-nowrap tabular-nums">{fmtQty(t.qty)}</td>
-                  <td className="py-2 pr-6 whitespace-nowrap text-gray-500 tabular-nums">{t.commission ? `${fmtQty(t.commission)} ${t.commissionAsset || 'USDT'}` : '—'}</td>
+                  <td className="py-2 pr-6 whitespace-nowrap text-slate-400 tabular-nums">{t.commission ? `${fmtQty(t.commission)} ${t.commissionAsset || 'USDT'}` : '—'}</td>
                   <td className="py-2 pr-6 whitespace-nowrap">{t.maker ? 'Maker' : 'Taker'}</td>
                   <td className={`py-2 pr-6 whitespace-nowrap font-medium tabular-nums ${pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                     {pnl >= 0 ? '+' : ''}{pnl.toFixed(4)} USDT
@@ -1064,7 +1064,7 @@ function TransactionHistoryTable({ data, isLoading, synced = true }) {
       {!synced && !isLoading && <SyncWarningBanner />}
       <table className="w-full text-xs">
         <thead>
-          <tr className="text-gray-500 border-b border-gray-800">
+          <tr className="text-gray-400 border-b border-slate-700/50">
             {cols.map((c) => <th key={c} className="text-left py-2 pr-6 font-medium whitespace-nowrap">{c}</th>)}
           </tr>
         </thead>
@@ -1080,8 +1080,8 @@ function TransactionHistoryTable({ data, isLoading, synced = true }) {
             data.map((tx) => {
               const income = parseFloat(tx.income || '0')
               return (
-                <tr key={tx.tranId} className="border-b border-gray-800/30 hover:bg-gray-800/20">
-                  <td className="py-2 pr-6 whitespace-nowrap text-gray-500">{new Date(tx.time).toLocaleString()}</td>
+                <tr key={tx.tranId} className="border-b border-slate-700/30 hover:bg-slate-800/20">
+                  <td className="py-2 pr-6 whitespace-nowrap text-slate-400">{new Date(tx.time).toLocaleString()}</td>
                   <td className="py-2 pr-6 whitespace-nowrap">{tx.incomeType}</td>
                   <td className={`py-2 pr-6 whitespace-nowrap font-medium tabular-nums ${income >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                     {income >= 0 ? '+' : ''}{parseFloat(tx.income).toFixed(4)}
@@ -1144,8 +1144,8 @@ function BottomPanel({ ocoToast, ocoBanner, onDismissBanner }) {
   }, [])
 
   return (
-    <div className="bg-gray-900 border-t border-gray-800 flex flex-col shrink-0 h-[200px]">
-      <div className="flex border-b border-gray-800 shrink-0">
+    <div className="bg-[#0d1117] border-t border-slate-700/50 flex flex-col shrink-0 h-[200px]">
+      <div className="flex border-b border-slate-700/50 shrink-0">
         {[
           { key: 'Positions', label: `Positions(${posCount})` },
           { key: 'Open Orders', label: `Open Orders(${ordCount})` },
@@ -1160,8 +1160,8 @@ function BottomPanel({ ocoToast, ocoBanner, onDismissBanner }) {
             className={[
               'px-4 py-2 text-xs font-medium transition-colors whitespace-nowrap',
               activeTab === key
-                ? 'text-gray-100 border-b-2 border-emerald-500 -mb-px'
-                : 'text-gray-500 hover:text-gray-300',
+                ? 'text-gray-100 border-b-2 border-emerald-400 -mb-px'
+                : 'text-slate-400 hover:text-gray-300',
             ].join(' ')}
           >
             {label}
@@ -1217,10 +1217,10 @@ function LeverageModal({ current, onConfirm, onClose, isLoading }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="bg-gray-900 border border-gray-700 rounded-lg p-5 w-72 flex flex-col gap-4">
+      <div className="bg-[#0d1117] border border-slate-700/50 rounded-xl p-5 w-72 flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <span className="text-sm font-semibold text-gray-100">Adjust Leverage</span>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-sm leading-none">✕</button>
+          <button onClick={onClose} className="text-slate-400 hover:text-gray-300 text-sm leading-none">✕</button>
         </div>
 
         <div className="flex items-center justify-center">
@@ -1237,7 +1237,7 @@ function LeverageModal({ current, onConfirm, onClose, isLoading }) {
           className="w-full accent-yellow-400"
         />
 
-        <div className="flex justify-between text-[10px] text-gray-600">
+        <div className="flex justify-between text-[10px] text-slate-500">
           <span>1x</span>
           <span>25x</span>
           <span>50x</span>
@@ -1436,11 +1436,11 @@ function OrderForm() {
         />
       )}
 
-      <div className="flex flex-col min-h-0 flex-1 bg-gray-900">
+      <div className="flex flex-col min-h-0 flex-1 bg-[#0d1117]">
         {/* Margin type + Leverage row */}
-        <div className="flex items-center justify-between px-3 py-2 border-b border-gray-800">
-          <div className={`flex rounded overflow-hidden border text-xs ${isConfigBusy ? 'opacity-50' : 'border-gray-700'}`}>
-            <span className="px-3 py-1.5 bg-gray-800 text-gray-300 text-xs font-medium">
+        <div className="flex items-center justify-between px-3 py-2 border-b border-slate-700/50">
+          <div className={`flex rounded overflow-hidden border text-xs ${isConfigBusy ? 'opacity-50' : 'border-slate-700/50'}`}>
+            <span className="px-3 py-1.5 bg-slate-800 text-slate-300 text-xs font-medium">
               {marginPending ? '…' : 'Isolated'}
             </span>
           </div>
@@ -1454,7 +1454,7 @@ function OrderForm() {
         </div>
 
         {/* Order type tabs */}
-        <div className="flex items-center border-b border-gray-800 px-3">
+        <div className="flex items-center border-b border-slate-700/50 px-3">
           {['Limit', 'Market'].map((type) => (
             <button
               key={type}
@@ -1462,8 +1462,8 @@ function OrderForm() {
               className={[
                 'py-2 px-2 mr-2 text-xs font-medium transition-colors',
                 orderType === type
-                  ? 'text-gray-100 border-b-2 border-emerald-500 -mb-px'
-                  : 'text-gray-500 hover:text-gray-300',
+                  ? 'text-gray-100 border-b-2 border-emerald-400 -mb-px'
+                  : 'text-slate-400 hover:text-gray-300',
               ].join(' ')}
             >
               {type}
@@ -1480,14 +1480,14 @@ function OrderForm() {
 
           {/* Available */}
           <div className="flex justify-between text-[11px]">
-            <span className="text-gray-500">Available</span>
+            <span className="text-slate-400">Available</span>
             <span className="text-gray-300 tabular-nums">
               {availableBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT
             </span>
           </div>
 
           {/* Symbol limits badge */}
-          <div className="flex justify-between text-[10px] text-gray-500 border-t border-gray-800/40 pt-1.5 mt-0.5 shrink-0">
+          <div className="flex justify-between text-[10px] text-slate-400 border-t border-slate-700/40 pt-1.5 mt-0.5 shrink-0">
             <span>Min Size: <span className="text-gray-400 font-medium tabular-nums">{activeRules.minQty} {base}</span></span>
             <span>Min Value: <span className="text-gray-400 font-medium tabular-nums">{activeRules.minNotional} USDT</span></span>
           </div>
@@ -1495,31 +1495,31 @@ function OrderForm() {
           {/* Price — only for Limit */}
           {orderType === 'Limit' && (
             <div className="flex flex-col gap-1">
-              <label className="text-[11px] text-gray-500">Price (USDT)</label>
+              <label className="text-[11px] text-slate-400">Price (USDT)</label>
               <input
                 type="number"
                 value={price}
                 onChange={(e) => setPrice(e.target.value)}
                 placeholder="0.00"
                 disabled={orderPending}
-                className="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-xs text-gray-100 placeholder-gray-600 focus:outline-none focus:border-gray-600 disabled:opacity-50 tabular-nums"
+                className="bg-[#0a0d13] border border-slate-700/50 rounded-lg px-3 py-2 text-xs text-gray-100 placeholder-slate-600 focus:outline-none focus:border-emerald-400 disabled:opacity-50 tabular-nums"
               />
             </div>
           )}
 
           {/* Quantity */}
           <div className="flex flex-col gap-1">
-            <label className="text-[11px] text-gray-500">Size</label>
-            <div className="flex border border-gray-700 rounded overflow-hidden">
+            <label className="text-[11px] text-slate-400">Size</label>
+            <div className="flex border border-slate-700/50 rounded overflow-hidden">
               <input
                 type="number"
                 value={qty}
                 onChange={(e) => { setQty(e.target.value); setPct(null) }}
                 placeholder="0.000"
                 disabled={orderPending}
-                className="flex-1 bg-gray-800 px-3 py-2 text-xs text-gray-100 placeholder-gray-600 focus:outline-none min-w-0 disabled:opacity-50 tabular-nums"
+                className="flex-1 bg-[#0a0d13] px-3 py-2 text-xs text-gray-100 placeholder-slate-600 focus:outline-none min-w-0 disabled:opacity-50 tabular-nums"
               />
-              <div className="flex shrink-0 border-l border-gray-700">
+              <div className="flex shrink-0 border-l border-slate-700/50">
                 {[base, quote].map((unit) => (
                   <button
                     key={unit}
@@ -1528,8 +1528,8 @@ function OrderForm() {
                     className={[
                       'px-2.5 text-xs transition-colors font-medium',
                       qtyUnit === unit
-                        ? 'bg-gray-700 text-gray-100'
-                        : 'bg-gray-800 text-gray-500 hover:text-gray-300',
+                        ? 'bg-slate-700 text-gray-100'
+                        : 'bg-slate-800 text-slate-500 hover:text-gray-300',
                     ].join(' ')}
                   >
                     {unit}
@@ -1549,8 +1549,8 @@ function OrderForm() {
                 className={[
                   'flex-1 py-1.5 text-xs rounded transition-colors border',
                   pct === p
-                    ? 'bg-gray-700 border-gray-600 text-gray-100'
-                    : 'border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600',
+                    ? 'bg-slate-700 border-slate-600 text-gray-100'
+                    : 'border-slate-700/50 text-slate-400 hover:text-gray-300 hover:border-slate-600',
                 ].join(' ')}
               >
                 {p}%
@@ -1563,7 +1563,7 @@ function OrderForm() {
             <button
               onClick={() => handleSubmit('BUY')}
               disabled={orderPending}
-              className="flex-1 py-3 rounded text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center"
+              className="flex-1 py-3 rounded text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center"
             >
               {orderPending
                 ? <span className="inline-block w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -1572,7 +1572,7 @@ function OrderForm() {
             <button
               onClick={() => handleSubmit('SELL')}
               disabled={orderPending}
-              className="flex-1 py-3 rounded text-xs font-semibold bg-red-600 hover:bg-red-500 text-white transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center"
+              className="flex-1 py-3 rounded text-xs font-semibold bg-red-600 hover:bg-red-700 text-white transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center"
             >
               {orderPending
                 ? <span className="inline-block w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -1580,7 +1580,7 @@ function OrderForm() {
             </button>
           </div>
 
-          <p className="text-[10px] text-gray-600 text-center mt-1">
+          <p className="text-[10px] text-slate-500 text-center mt-1">
             Set TP/SL on open positions in the Positions tab below
           </p>
         </div>
@@ -1616,12 +1616,12 @@ function TradeInner() {
   useOcoMonitor({ symbol, onEvent: handleTpSlEvent })
 
   return (
-    <div className="bg-gray-950 text-gray-100 flex flex-col h-[calc(100vh-56px)] overflow-hidden mt-14">
+    <div className="bg-[#060a0f] text-gray-100 flex flex-col h-[calc(100vh-56px)] overflow-hidden mt-14">
       <TickerBar />
 
       {/* Short-lived toast notification */}
       {ocoToast && (
-        <div className="absolute top-20 right-4 z-50 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-xs text-gray-100 shadow-xl max-w-xs animate-fade-in">
+        <div className="absolute top-20 right-4 z-50 bg-[#0d1117] border border-slate-700/50 rounded-lg px-4 py-2.5 text-xs text-gray-100 shadow-2xl max-w-xs animate-fade-in">
           {ocoToast}
         </div>
       )}
@@ -1630,7 +1630,7 @@ function TradeInner() {
       <div className="flex flex-1 min-h-0">
 
         {/* Left col — chart + bottom panel (fills remaining width) */}
-        <div className="flex flex-col flex-1 min-w-0 min-h-0 border-r border-gray-800">
+        <div className="flex flex-col flex-1 min-w-0 min-h-0 border-r border-slate-700/50">
           <ChartContainer />
           <BottomPanel
             ocoBanner={ocoBanner}
@@ -1639,13 +1639,13 @@ function TradeInner() {
         </div>
 
         {/* Middle col — order book + recent trades, fixed width */}
-        <div className="flex flex-col min-h-0 shrink-0" style={{ width: '200px' }}>
+        <div className="flex flex-col min-h-0 shrink-0 w-[200px]">
           <OrderBook />
           <RecentTrades />
         </div>
 
         {/* Right col — order form, fixed width */}
-        <div className="flex flex-col min-h-0 shrink-0" style={{ width: '260px' }}>
+        <div className="flex flex-col min-h-0 shrink-0 w-[260px]">
           <OrderForm />
         </div>
 

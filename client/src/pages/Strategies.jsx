@@ -30,10 +30,7 @@ export default function Strategies() {
     <PageWrapper>
       <div className="flex flex-col gap-6">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-          <PageHeader
-            title="Strategies"
-            description="Python trading strategies available for backtesting and live trading"
-          />
+          <PageHeader title="Strategies" />
           <Button variant="default" size="sm" onClick={openNewStrategy}>
             <Plus className="h-4 w-4" />
             New strategy
@@ -44,7 +41,7 @@ export default function Strategies() {
           {isLoading && (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {Array.from({ length: 3 }).map((_, i) => (
-                <Skeleton key={i} className="h-44 rounded-lg bg-gray-800" />
+                <Skeleton key={i} className="h-44 rounded-lg bg-slate-800/50" />
               ))}
             </div>
           )}
@@ -55,7 +52,7 @@ export default function Strategies() {
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <Code2 className="w-10 h-10 text-gray-600 mb-3" />
               <p className="text-gray-100 font-medium">No strategies found</p>
-              <p className="text-gray-400 text-sm mt-1">Default strategies will appear here after engine startup.</p>
+              <p className="text-slate-400 text-sm mt-1">Default strategies will appear here after engine startup.</p>
             </div>
           )}
           {strategies?.length > 0 && (

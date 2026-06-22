@@ -277,7 +277,7 @@ export default function SessionCard({ session, onStop, stopping }) {
 
       {/* ── Header row ── */}
       <div
-        className="px-5 py-4 flex items-center gap-4 cursor-pointer bg-gradient-to-r from-slate-800/30 via-transparent to-transparent hover:from-slate-800/40 transition-all"
+        className="px-5 py-4 flex items-center gap-4 cursor-pointer title-fade title-fade-hover transition-all"
         onClick={() => setExpanded(!expanded)}
       >
         {/* Strategy name + badges + symbols */}

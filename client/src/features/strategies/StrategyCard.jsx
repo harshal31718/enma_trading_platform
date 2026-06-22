@@ -18,17 +18,17 @@ export default function StrategyCard({ strategy, onClone }) {
 
   return (
     <>
-      <div className="bg-gray-900 border border-gray-800 rounded-lg p-5 flex flex-col gap-3 hover:border-gray-700 hover:shadow-lg hover:shadow-black/20 transition-all duration-200">
-        <div className="flex items-start justify-between">
+      <div className="bg-[#0d1117] border border-slate-700/50 rounded-xl p-5 flex flex-col gap-3 overflow-hidden hover:border-slate-600/70 hover:shadow-2xl hover:shadow-black/20 transition-all duration-300">
+        <div className="flex items-start justify-between -mx-5 -mt-5 px-5 pt-5 pb-3 title-fade">
           <div className="flex items-center gap-2">
             <Code2 className="size-5 text-emerald-400" />
-            <h3 className="text-gray-100 font-medium">{strategy.name}</h3>
+            <h3 className="text-gray-100 font-semibold tracking-tight">{strategy.name}</h3>
           </div>
           <Badge variant={type.variant}>{type.label}</Badge>
         </div>
-        <p className="text-gray-400 text-sm leading-relaxed">{strategy.description}</p>
+        <p className="text-slate-400 text-sm leading-relaxed">{strategy.description}</p>
         <div className="flex items-center justify-between mt-1 gap-2">
-          <span className="text-gray-600 text-xs">
+          <span className="text-slate-500 text-xs">
             {new Date(strategy.createdAt).toLocaleDateString('en-US', {
               year: 'numeric', month: 'short', day: 'numeric'
             })}

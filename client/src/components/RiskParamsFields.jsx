@@ -44,8 +44,8 @@ export function riskFieldsToPayload(v = {}) {
 export default function RiskParamsFields({ values = RISK_DEFAULTS, onChange, inputClassName, labelClassName }) {
   const inputCls =
     inputClassName ||
-    'h-10 w-full rounded border border-gray-800 bg-gray-950 px-3 text-sm text-gray-100 focus:outline-none focus:border-emerald-500 transition-colors'
-  const labelCls = labelClassName || 'text-gray-400 text-xs font-medium'
+    'h-10 w-full rounded-lg border border-slate-700/50 bg-[#0a0d13] px-3 text-sm text-gray-100 focus:outline-none focus:border-emerald-500 transition-colors'
+  const labelCls = labelClassName || 'text-slate-400 text-xs font-medium'
   const set = (key) => (e) => onChange({ ...values, [key]: e.target.value })
 
   return (
@@ -61,7 +61,7 @@ export default function RiskParamsFields({ values = RISK_DEFAULTS, onChange, inp
             onChange={set(f.key)}
             className={inputCls}
           />
-          <p className="text-gray-600 text-[10px]">{f.hint}</p>
+          <p className="text-slate-500 text-[10px]">{f.hint}</p>
         </div>
       ))}
     </div>

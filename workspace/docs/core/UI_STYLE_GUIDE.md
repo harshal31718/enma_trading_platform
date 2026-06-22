@@ -94,6 +94,33 @@ hover:from-slate-800/40 transition-all
 ```
 The left-fade gradient creates subtle depth without a visible border.
 
+### Title-row fade (general)
+The same left-fade is applied to **title rows only** across the app — panel/card headers,
+section title bars, and the nav bar — never to descriptions, data rows, content, tabs, or stat tiles.
+
+It is a **single global class** — do not hand-roll `bg-gradient-*` utilities per element. Add the
+`title-fade` class; interactive title rows (collapsible triggers) also add `title-fade-hover`:
+```jsx
+<div className="… title-fade">…</div>                 {/* static title row */}
+<div className="… title-fade title-fade-hover transition-all">…</div>  {/* interactive */}
+```
+Defined once in `client/src/index.css` (`@layer components`) and driven by CSS variables in `:root`
+— tune these to restyle every title bar app-wide, no per-file edits:
+```css
+--title-fade-rgb: 30 41 59;          /* slate-800 */
+--title-fade-strength: 0.50;         /* left-edge opacity (current: 50%) */
+--title-fade-strength-hover: 0.60;   /* interactive hover */
+--title-fade-reach: 55%;             /* fades to transparent by ~55% across */
+```
+`title-fade` sets `background-image` only, so any existing `bg-*` color underneath is preserved.
+Application notes:
+- The shared `CardHeader` (`components/ui/card.jsx`) carries `title-fade` (with `rounded-t-xl` to
+  keep the card's top corners clean), so every `Card`-based panel title inherits it automatically.
+- On a plain panel `<div>`, bleed the title bar to the panel edges with matched
+  negative-margin + padding (e.g. `-mx-5 -mt-5 px-5 pt-5 pb-3`) and add `overflow-hidden`
+  to the panel so the gradient respects rounded corners.
+- On a solid bar (e.g. nav) keep the base color class and add `title-fade`: `bg-[#0a0d13] title-fade`.
+
 ### Expanded body — top border
 ```
 border-t border-slate-700/50

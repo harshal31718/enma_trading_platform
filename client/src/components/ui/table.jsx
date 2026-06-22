@@ -12,7 +12,7 @@ export function Table({ className, ...props }) {
 }
 
 export function TableHeader({ className, ...props }) {
-  return <thead className={cn('[&_tr]:border-b border-gray-800', className)} {...props} />
+  return <thead className={cn('[&_tr]:border-b border-slate-700/50', className)} {...props} />
 }
 
 export function TableBody({ className, ...props }) {
@@ -28,7 +28,7 @@ export function TableRow({ className, ...props }) {
   return (
     <tr
       className={cn(
-        'border-b border-gray-800 transition-colors hover:bg-gray-800/30 data-[state=selected]:bg-gray-800',
+        'border-b border-slate-700/30 transition-colors hover:bg-slate-800/20 data-[state=selected]:bg-slate-800/40',
         className
       )}
       {...props}
@@ -40,7 +40,7 @@ export function TableHead({ className, ...props }) {
   return (
     <th
       className={cn(
-        'h-10 px-4 text-left align-middle font-medium text-gray-400 [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]',
+        'h-10 px-4 text-left align-middle text-[10px] font-semibold uppercase tracking-wider text-gray-400 [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]',
         className
       )}
       {...props}

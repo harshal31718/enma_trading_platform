@@ -377,10 +377,7 @@ export default function Backtest() {
 
   return (
     <PageWrapper>
-      <PageHeader
-        title="Backtest"
-        description="Test strategy rules against historical candle data with full metrics and charts"
-      />
+      <PageHeader title="Backtest" />
 
       {errorMessage && (
         <div className="mt-4 bg-red-950/20 border border-red-800/40 rounded-lg p-3 flex items-center gap-2 text-red-400 text-sm">

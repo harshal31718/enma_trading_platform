@@ -73,7 +73,7 @@ export default function StrategyCreateDialog({
 
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="max-w-2xl bg-gray-900 border border-gray-800">
+            <DialogContent className="max-w-2xl bg-[#0d1117] border border-slate-700/50">
                 <DialogHeader>
                     <DialogTitle>Create New Strategy</DialogTitle>
                     <DialogDescription>
@@ -85,7 +85,7 @@ export default function StrategyCreateDialog({
                     <div className="grid gap-3 sm:grid-cols-2">
                         <button
                             type="button"
-                            className={`rounded-lg border p-3 text-left ${mode === 'blank' ? 'border-emerald-500 bg-emerald-500/10' : 'border-gray-800 bg-gray-950 hover:border-gray-700'}`}
+                            className={`rounded-lg border p-3 text-left ${mode === 'blank' ? 'border-emerald-400 bg-emerald-400/10' : 'border-slate-700/50 bg-[#0a0d13] hover:border-slate-600'}`}
                             onClick={() => setMode('blank')}
                         >
                             <div className="text-sm font-medium text-gray-100">Blank template</div>
@@ -93,7 +93,7 @@ export default function StrategyCreateDialog({
                         </button>
                         <button
                             type="button"
-                            className={`rounded-lg border p-3 text-left ${mode === 'clone' ? 'border-emerald-500 bg-emerald-500/10' : 'border-gray-800 bg-gray-950 hover:border-gray-700'}`}
+                            className={`rounded-lg border p-3 text-left ${mode === 'clone' ? 'border-emerald-400 bg-emerald-400/10' : 'border-slate-700/50 bg-[#0a0d13] hover:border-slate-600'}`}
                             onClick={() => setMode('clone')}
                         >
                             <div className="text-sm font-medium text-gray-100">Clone existing strategy</div>
@@ -134,11 +134,11 @@ export default function StrategyCreateDialog({
                         )}
 
                         {mode === 'clone' && sourceStrategy && sourceParams && (
-                            <div className="rounded-lg border border-gray-800 bg-gray-950 p-4">
+                            <div className="rounded-lg border border-slate-700/50 bg-[#0a0d13] p-4">
                                 <p className="text-sm text-gray-100 font-medium">Parameter preview for {sourceStrategy.name}</p>
                                 <div className="grid gap-2 mt-3">
                                     {Object.entries(sourceParams).map(([key, meta]) => (
-                                        <div key={key} className="rounded border border-gray-800 bg-gray-900 p-3">
+                                        <div key={key} className="rounded-lg border border-slate-700/40 bg-[#0d1117] p-3">
                                             <div className="text-sm text-gray-200 font-medium">{meta.label || key}</div>
                                             <div className="text-xs text-gray-400 mt-1">default: {String(meta.default)}{meta.min !== undefined ? ` | min: ${meta.min}` : ''}{meta.max !== undefined ? ` | max: ${meta.max}` : ''}</div>
                                         </div>
@@ -150,9 +150,9 @@ export default function StrategyCreateDialog({
                             </div>
                         )}
 
-                        <div className="rounded-lg border border-gray-800 bg-gray-950 p-4 text-sm text-gray-400">
+                        <div className="rounded-lg border border-slate-700/50 bg-[#0a0d13] p-4 text-sm text-slate-400">
                             <p className="font-medium text-gray-100">Authoring guidance</p>
-                            <p className="mt-2">New strategies should implement <code className="rounded bg-gray-900 px-1 py-0.5">forecast()</code> only and avoid direct order writes inside the strategy body. The engine owns execution, risk, portfolio sizing, and stop/target planning.</p>
+                            <p className="mt-2">New strategies should implement <code className="rounded bg-slate-800 px-1 py-0.5">forecast()</code> only and avoid direct order writes inside the strategy body. The engine owns execution, risk, portfolio sizing, and stop/target planning.</p>
                         </div>
 
                         {errorMessage && (

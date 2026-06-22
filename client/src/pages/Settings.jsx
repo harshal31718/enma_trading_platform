@@ -75,9 +75,9 @@ export default function Settings() {
   }
 
   const inputCls =
-    'h-10 w-full rounded border border-gray-800 bg-gray-950 px-3 text-sm text-gray-100 focus:outline-none focus:border-emerald-500 transition-colors'
-  const labelCls = 'text-gray-400 text-xs font-medium'
-  const skeletonCls = 'h-10 w-full bg-gray-800 rounded animate-pulse'
+    'h-10 w-full rounded-lg border border-slate-700/50 bg-[#0a0d13] px-3 text-sm text-gray-100 focus:outline-none focus:border-emerald-500 transition-colors'
+  const labelCls = 'text-slate-400 text-xs font-medium'
+  const skeletonCls = 'h-10 w-full bg-slate-800/50 rounded animate-pulse'
 
   function handleMainnetClick() {
     if (comingSoonTimerRef.current) clearTimeout(comingSoonTimerRef.current)
@@ -87,10 +87,7 @@ export default function Settings() {
 
   return (
     <PageWrapper>
-      <PageHeader
-        title="Settings"
-        description="Configure the active trading environment"
-      />
+      <PageHeader title="Settings" />
 
       {/* Coming Soon Toast */}
       {showComingSoon && (
@@ -120,7 +117,7 @@ export default function Settings() {
       `}</style>
 
       <div className="mx-auto max-w-5xl grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+        <div className="bg-[#0d1117] border border-slate-700/50 rounded-xl p-6">
           {/* Header */}
           <div className="flex items-center justify-between mb-1">
             <h2 className="text-gray-100 text-sm font-medium">Environment Configuration</h2>
@@ -129,9 +126,9 @@ export default function Settings() {
               Testnet / Demo
             </span>
           </div>
-          <p className="text-gray-500 text-xs mb-6">
+          <p className="text-slate-400 text-xs mb-6">
             Select the active Binance environment. Credentials are configured in{' '}
-            <code className="text-gray-400 bg-gray-800 px-1 rounded">server/.env</code>.
+            <code className="text-slate-300 bg-slate-800 px-1 rounded">server/.env</code>.
           </p>
 
           <div className="grid grid-cols-2 gap-3">
@@ -145,9 +142,9 @@ export default function Settings() {
                 <span className="text-sm font-medium text-yellow-400">Testnet / Demo</span>
                 <CheckCircle2 size={12} className="text-yellow-400 ml-auto" />
               </div>
-              <p className="text-xs text-gray-500 leading-relaxed">
+              <p className="text-xs text-slate-400 leading-relaxed">
                 Paper trading on Binance Futures Demo. No real funds at risk. Uses{' '}
-                <code className="text-gray-400">BINANCE_TESTNET_API_KEY</code>.
+                <code className="text-slate-300">BINANCE_TESTNET_API_KEY</code>.
               </p>
             </button>
 
@@ -155,34 +152,34 @@ export default function Settings() {
             <button
               type="button"
               onClick={handleMainnetClick}
-              className="relative flex flex-col items-start gap-2 rounded-lg border p-4 text-left border-gray-700 bg-gray-800/30 hover:border-gray-600 transition-colors group"
+              className="relative flex flex-col items-start gap-2 rounded-lg border p-4 text-left border-slate-700/50 bg-[#0a0d13] hover:border-slate-600 transition-colors group"
             >
               {/* Coming soon badge */}
               <span className="absolute top-2 right-2 text-[9px] font-bold uppercase tracking-wider text-amber-400 bg-amber-400/10 border border-amber-400/20 rounded-full px-2 py-0.5">
                 Soon
               </span>
               <div className="flex items-center gap-2">
-                <Zap size={15} className="text-gray-500 group-hover:text-gray-400 transition-colors" />
-                <span className="text-sm font-medium text-gray-500 group-hover:text-gray-400 transition-colors">
+                <Zap size={15} className="text-slate-500 group-hover:text-slate-400 transition-colors" />
+                <span className="text-sm font-medium text-slate-500 group-hover:text-slate-400 transition-colors">
                   Live / Mainnet
                 </span>
               </div>
-              <p className="text-xs text-gray-600 leading-relaxed">
+              <p className="text-xs text-slate-600 leading-relaxed">
                 Real trades on Binance Futures Mainnet. Requires{' '}
-                <code className="text-gray-500">BINANCE_MAINNET_API_KEY</code>.
+                <code className="text-slate-500">BINANCE_MAINNET_API_KEY</code>.
               </p>
             </button>
           </div>
 
-          <p className="mt-5 text-[11px] text-gray-600">
-            Binance API keys are read from <code className="text-gray-500">server/.env</code> and are never stored in the database.
+          <p className="mt-5 text-[11px] text-slate-600">
+            Binance API keys are read from <code className="text-slate-500">server/.env</code> and are never stored in the database.
           </p>
         </div>
 
         {/* ── Exchange Settings ─────────────────────────────────────────────── */}
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+        <div className="bg-[#0d1117] border border-slate-700/50 rounded-xl p-6">
           <h2 className="text-gray-100 text-sm font-medium mb-1">Exchange Settings</h2>
-          <p className="text-gray-500 text-xs mb-6">
+          <p className="text-slate-400 text-xs mb-6">
             Trading fees, simulation parameters, and default form values. All values are stored as variables — no hardcoded numbers.
           </p>
 
@@ -212,7 +209,7 @@ export default function Settings() {
                   ? <div className={skeletonCls} />
                   : <input type="number" step="0.001" min="0" max="1" value={takerFee}
                       onChange={(e) => setTakerFee(e.target.value)} className={inputCls} required />}
-                <p className="text-gray-600 text-[10px] mt-1">e.g. 0.05 = 0.05%</p>
+                <p className="text-slate-500 text-[10px] mt-1">e.g. 0.05 = 0.05%</p>
               </div>
               <div>
                 <label className={labelCls}>Maker Fee %</label>
@@ -220,12 +217,12 @@ export default function Settings() {
                   ? <div className={skeletonCls} />
                   : <input type="number" step="0.001" min="0" max="1" value={makerFee}
                       onChange={(e) => setMakerFee(e.target.value)} className={inputCls} required />}
-                <p className="text-gray-600 text-[10px] mt-1">e.g. 0.02 = 0.02%</p>
+                <p className="text-slate-500 text-[10px] mt-1">e.g. 0.02 = 0.02%</p>
               </div>
             </div>
 
             {/* ── Backtest Defaults ────────────────────────────────────────── */}
-            <div className="border-t border-gray-800 pt-5 mt-5">
+            <div className="border-t border-slate-700/50 pt-5 mt-5">
               <p className="text-gray-300 text-xs font-semibold mb-3">Backtest Defaults</p>
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -246,7 +243,7 @@ export default function Settings() {
             </div>
 
             {/* ── Bot Defaults ─────────────────────────────────────────────── */}
-            <div className="border-t border-gray-800 pt-5 mt-5">
+            <div className="border-t border-slate-700/50 pt-5 mt-5">
               <p className="text-gray-300 text-xs font-semibold mb-3">Bot Defaults</p>
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -267,18 +264,18 @@ export default function Settings() {
             </div>
 
             {/* ── Risk Management Defaults ─────────────────────────────────── */}
-            <div className="border-t border-gray-800 pt-5 mt-5">
+            <div className="border-t border-slate-700/50 pt-5 mt-5">
               <p className="text-gray-300 text-xs font-semibold mb-3">Risk Management Defaults</p>
               {settingsLoading
                 ? <div className="grid grid-cols-2 gap-3">{[0, 1, 2, 3].map((i) => <div key={i} className={skeletonCls} />)}</div>
                 : <RiskParamsFields values={risk} onChange={setRisk} inputClassName={inputCls} labelClassName={labelCls} />}
-              <p className="text-gray-600 text-[10px] mt-2">
+              <p className="text-slate-500 text-[10px] mt-2">
                 Pre-fills the backtest form and bot wizard. Each run can override these.
               </p>
             </div>
 
             {/* ── Simulation Realism ───────────────────────────────────────── */}
-            <div className="border-t border-gray-800 pt-5 mt-5">
+            <div className="border-t border-slate-700/50 pt-5 mt-5">
               <p className="text-gray-300 text-xs font-semibold mb-3">Simulation Realism</p>
               <div className="space-y-4">
                 <div>
@@ -287,7 +284,7 @@ export default function Settings() {
                     ? <div className={skeletonCls} />
                     : <input type="number" step="0.001" min="0" max="5" value={slippagePct}
                         onChange={(e) => setSlippagePct(e.target.value)} className={inputCls} required />}
-                  <p className="text-gray-600 text-[10px] mt-1">Adverse slippage applied to every market fill</p>
+                  <p className="text-slate-500 text-[10px] mt-1">Adverse slippage applied to every market fill</p>
                 </div>
 
                 <div className="flex items-center gap-3">
@@ -297,7 +294,7 @@ export default function Settings() {
                     aria-checked={fundingEnabled}
                     onClick={() => setFundingEnabled((v) => !v)}
                     className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none ${
-                      fundingEnabled ? 'bg-emerald-600' : 'bg-gray-700'
+                      fundingEnabled ? 'bg-emerald-600' : 'bg-slate-700'
                     }`}
                   >
                     <span
@@ -307,7 +304,7 @@ export default function Settings() {
                     />
                   </button>
                   <span className={labelCls}>Funding Enabled</span>
-                  <span className="text-gray-600 text-[10px]">Charge funding every 8h during simulation</span>
+                  <span className="text-slate-500 text-[10px]">Charge funding every 8h during simulation</span>
                 </div>
 
                 {fundingEnabled && (
@@ -317,7 +314,7 @@ export default function Settings() {
                       ? <div className={skeletonCls} />
                       : <input type="number" step="0.001" min="0" max="1" value={fundingRate}
                           onChange={(e) => setFundingRate(e.target.value)} className={inputCls} required />}
-                    <p className="text-gray-600 text-[10px] mt-1">Per-8h rate, e.g. 0.01 = 0.01%</p>
+                    <p className="text-slate-500 text-[10px] mt-1">Per-8h rate, e.g. 0.01 = 0.01%</p>
                   </div>
                 )}
               </div>
@@ -327,7 +324,7 @@ export default function Settings() {
               <button
                 type="submit"
                 disabled={updateMutation.isPending || settingsLoading}
-                className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium px-4 py-2 rounded transition-colors"
+                className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
               >
                 {updateMutation.isPending ? 'Saving…' : 'Save Exchange Settings'}
               </button>

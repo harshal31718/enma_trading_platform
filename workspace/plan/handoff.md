@@ -1,4 +1,28 @@
 ---
+## 2026-06-22 — UI restyle to UI_STYLE_GUIDE.md — Phase 1 (foundation + chrome) COMPLETE; pages STAGED
+
+**Goal:** Migrate the whole client to the midnight-blue trading-terminal palette in
+`workspace/docs/core/UI_STYLE_GUIDE.md`. Reference impl (AlgoTrading.jsx + SessionCard.jsx) was
+already on-style — the guide was derived from them.
+
+**Done this session:**
+- **Foundation layer migrated** (cascades to every page): `components/ui/{card,button,badge,input,select,table,dialog,tabs,skeleton}.jsx`, `layout/{Navbar,PageWrapper}.jsx`, `ui/PageHeader.jsx`, `features/dashboard/StatCard.jsx`, `components/RiskParamsFields.jsx`. Swaps: `bg-gray-900/950`→`bg-[#0d1117]`/`bg-[#060a0f]`/`bg-[#0a0d13]`, `border-gray-800`→`border-slate-700/50`, `text-gray-500`→`text-slate-400`, `rounded`→`rounded-lg`/`rounded-xl`, emerald-500/15→emerald-400/10.
+- **Fully restyled pages:** Dashboard, Strategies, Settings, OrderHistory (+ their feature components: RecentActivityTable, StrategyLeaderboard, CachedCandlesTable, StrategyCard, CodeViewer, StrategyCreateDialog).
+- **Page chrome only:** Trade.jsx root bg → `bg-[#060a0f]`; Backtest.jsx already uses PageWrapper/PageHeader (chrome free).
+- **New skill:** `.claude/commands/restyle-ui.md` (`/restyle-ui`) — reads the guide + cheat-sheet and restyles any file on request.
+- **Docs:** `client/CLAUDE.md` Layout/Styling/Chart/StatCard sections rewritten to the new palette and pointed at the guide as single source of truth.
+- Verified: `npm run build` passes clean (8.9s, only pre-existing chunk-size warning).
+
+**Next session — restyle remaining heavy internals (use `/restyle-ui`):**
+- `pages/Trade.jsx` (~79 bespoke panels — bg-gray-900 boxes, order form, orderbook, chart panel, position table)
+- `pages/Backtest.jsx` (~30 — inner panels, TableHeader bg-gray-950, progress bar) + `features/backtest/{BacktestConfigForm,BacktestHistory,BacktestCalendar,BacktestMetricCard}.jsx`
+- `components/algo/{NewSessionWizard,SymbolPicker,ParamsForm}.jsx`, `components/SymbolSearchBar.jsx`
+- `components/charts/EquityCurve.jsx` — apply chart-axis tokens (fill #94a3b8, stroke #1e293b, baseline #4B5563, line #34d399/#f87171)
+- NOTE: `bg-gray-700/50` in AlgoTrading.jsx/SessionCard.jsx is the guide's sanctioned "stopped" status color — NOT a violation, leave it.
+
+**Open questions:** None. Approach (foundation-first, pages staged; CLAUDE.md updated) confirmed with user.
+
+---
 ## 2026-06-21 — Chaos Mode feature (feature.md) — Phases 1 + 2 COMPLETE
 
 **Done:**

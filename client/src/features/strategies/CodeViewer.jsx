@@ -7,7 +7,7 @@ export default function CodeViewer({ strategyId, strategyName, open, onClose }) 
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-3xl max-h-[80vh] bg-gray-900 border-gray-800 flex flex-col">
+      <DialogContent className="max-w-3xl max-h-[80vh] bg-[#0d1117] border-slate-700/50 flex flex-col">
         <DialogHeader>
           <DialogTitle className="text-gray-100">{strategyName}</DialogTitle>
         </DialogHeader>
@@ -15,7 +15,7 @@ export default function CodeViewer({ strategyId, strategyName, open, onClose }) 
           {isLoading && (
             <div className="space-y-2 p-1">
               {Array.from({ length: 12 }).map((_, i) => (
-                <Skeleton key={i} className="h-4 w-full bg-gray-800" />
+                <Skeleton key={i} className="h-4 w-full bg-slate-800/50" />
               ))}
             </div>
           )}
@@ -23,7 +23,7 @@ export default function CodeViewer({ strategyId, strategyName, open, onClose }) 
             <p className="text-red-400 text-sm p-2">Failed to load strategy code.</p>
           )}
           {code && (
-            <pre className="text-gray-300 text-sm font-mono leading-relaxed whitespace-pre-wrap bg-gray-950 rounded p-4">
+            <pre className="text-gray-300 text-sm font-mono leading-relaxed whitespace-pre-wrap bg-[#060a0f] border border-slate-700/30 rounded-lg p-4">
               {code}
             </pre>
           )}

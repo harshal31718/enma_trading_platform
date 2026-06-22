@@ -33,6 +33,34 @@
     --ring: 160 84% 39%;
 
     --radius: 0.5rem;
+
+    /* Title-row left-fade (see UI_STYLE_GUIDE.md → Title-row fade).
+       Tune these once to restyle every title bar app-wide. */
+    --title-fade-rgb: 30 41 59;          /* slate-800 */
+    --title-fade-strength: 0.50;         /* left-edge opacity — target band 45–55% */
+    --title-fade-strength-hover: 0.60;   /* deepened for interactive title rows */
+    --title-fade-reach: 55%;             /* fades to transparent by ~55% across */
+  }
+}
+
+@layer components {
+  /* Subtle left→right fade applied to TITLE ROWS ONLY (panel/card headers,
+     section title bars, nav). Sets background-image only, so any existing
+     bg-color utility on the element is preserved underneath. */
+  .title-fade {
+    background-image: linear-gradient(
+      to right,
+      rgb(var(--title-fade-rgb) / var(--title-fade-strength)),
+      transparent var(--title-fade-reach)
+    );
+  }
+  /* Add alongside .title-fade on interactive title rows (collapsible triggers). */
+  .title-fade-hover:hover {
+    background-image: linear-gradient(
+      to right,
+      rgb(var(--title-fade-rgb) / var(--title-fade-strength-hover)),
+      transparent var(--title-fade-reach)
+    );
   }
 }
 

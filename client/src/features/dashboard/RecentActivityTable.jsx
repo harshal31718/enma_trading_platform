@@ -34,7 +34,7 @@ export default function RecentActivityTable({ data }) {
       </CardHeader>
       <CardContent>
         {!data || data.length === 0 ? (
-          <p className="text-gray-500 text-sm text-center py-6">No simulation history found.</p>
+          <p className="text-slate-400 text-sm text-center py-6">No simulation history found.</p>
         ) : (
           <Table>
             <TableHeader>
@@ -66,7 +66,7 @@ export default function RecentActivityTable({ data }) {
                           {pnl.value} ({formatSignedPct(run.metrics.netProfitPct)})
                         </span>
                       ) : (
-                        <span className="text-gray-500">—</span>
+                        <span className="text-slate-500">—</span>
                       )}
                     </TableCell>
                     <TableCell className="text-right">
@@ -76,7 +76,7 @@ export default function RecentActivityTable({ data }) {
                         onClick={() => navigate(`/backtest?jobId=${run.jobId}`)}
                         className="h-8 w-8 p-0"
                       >
-                        <ChevronRight className="size-4 text-gray-500 hover:text-emerald-400" />
+                        <ChevronRight className="size-4 text-slate-500 hover:text-emerald-400" />
                       </Button>
                     </TableCell>
                   </TableRow>

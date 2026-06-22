@@ -11,7 +11,7 @@ export default function StrategyLeaderboard({ data }) {
       </CardHeader>
       <CardContent>
         {!data || data.length === 0 ? (
-          <p className="text-gray-500 text-sm text-center py-6">No performance statistics available.</p>
+          <p className="text-slate-400 text-sm text-center py-6">No performance statistics available.</p>
         ) : (
           <Table>
             <TableHeader>
@@ -33,7 +33,7 @@ export default function StrategyLeaderboard({ data }) {
                         idx === 0 ? 'text-emerald-400' :
                         idx === 1 ? 'text-gray-300' :
                         idx === 2 ? 'text-gray-400' :
-                        'text-gray-600'
+                        'text-slate-600'
                       }`}>#{idx + 1}</span>
                       {item.strategyName}
                     </TableCell>
