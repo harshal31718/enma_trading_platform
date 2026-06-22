@@ -6,12 +6,14 @@ const {
   listBacktests,
   cancelBacktest,
   getBacktestTrades,
+  getBacktestBenchmark,
 } = require('../controllers/backtest.controller')
 
 router.post('/', runBacktest)
 router.get('/', listBacktests)
 router.get('/:id', getBacktest)
 router.get('/:id/trades', getBacktestTrades)
+router.get('/:id/benchmark', getBacktestBenchmark)
 router.post('/:id/cancel', cancelBacktest)
 
 module.exports = router

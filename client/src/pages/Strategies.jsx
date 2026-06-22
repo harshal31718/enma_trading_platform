@@ -5,7 +5,6 @@ import PageHeader from '../components/ui/PageHeader'
 import StrategyCard from '../features/strategies/StrategyCard'
 import StrategyCreateDialog from '../features/strategies/StrategyCreateDialog'
 import { Skeleton } from '../components/ui/skeleton'
-import { Button } from '../components/ui/button'
 import { useStrategies } from '../hooks/useStrategies'
 
 export default function Strategies() {
@@ -28,20 +27,25 @@ export default function Strategies() {
 
   return (
     <PageWrapper>
-      <div className="flex flex-col gap-6">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-          <PageHeader title="Strategies" />
-          <Button variant="default" size="sm" onClick={openNewStrategy}>
-            <Plus className="h-4 w-4" />
-            New strategy
-          </Button>
-        </div>
+      <div className="flex flex-col gap-0">
+        <PageHeader
+          title="Strategies"
+          actions={
+            <button
+              onClick={openNewStrategy}
+              className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm rounded-lg transition-colors"
+            >
+              <Plus size={16} />
+              New strategy
+            </button>
+          }
+        />
 
-        <div className="mt-6">
+        <div>
           {isLoading && (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-0">
               {Array.from({ length: 3 }).map((_, i) => (
-                <Skeleton key={i} className="h-44 rounded-lg bg-slate-800/50" />
+                <Skeleton key={i} className="h-44 bg-slate-800/50" />
               ))}
             </div>
           )}
@@ -56,7 +60,7 @@ export default function Strategies() {
             </div>
           )}
           {strategies?.length > 0 && (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-0">
               {strategies.map((strategy) => (
                 <StrategyCard
                   key={strategy.id}

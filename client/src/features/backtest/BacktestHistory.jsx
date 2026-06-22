@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react'
-import { RefreshCw, Loader2, Filter, X, GitCompareArrows, CheckSquare, Square } from 'lucide-react'
-import { Card, CardHeader, CardTitle, CardContent } from '../../components/ui/card'
+import { RefreshCw, Loader2, Filter, X, GitCompareArrows, CheckSquare, Square, ChevronLeft, ChevronRight } from 'lucide-react'
 import { Badge } from '../../components/ui/badge'
 import { Input } from '../../components/ui/input'
 import { Select } from '../../components/ui/select'
@@ -39,25 +38,32 @@ export default function BacktestHistory({
 }) {
   const [draftFilters, setDraftFilters] = useState(filters)
   const [filtersOpen, setFiltersOpen] = useState(false)
+  const [histPage, setHistPage] = useState(1)
+  const HIST_PER_PAGE = 10
 
   useEffect(() => {
     setDraftFilters(filters)
+    setHistPage(1)
   }, [filters])
+
+  useEffect(() => {
+    setHistPage(1)
+  }, [data])
 
   const hasActiveFilters = Object.values(filters).some(Boolean)
   const compareCount = comparisonIds.length
 
+  const totalItems = data?.length ?? 0
+  const totalHistPages = Math.max(1, Math.ceil(totalItems / HIST_PER_PAGE))
+  const pagedData = data?.slice((histPage - 1) * HIST_PER_PAGE, histPage * HIST_PER_PAGE) ?? []
+
   return (
-    <Card className="flex flex-col overflow-hidden">
+    <div className="flex flex-col h-full">
       {/* ── Header ── */}
-      <CardHeader className="pb-2 shrink-0">
-        <div className="flex items-center justify-between">
+      <div className="shrink-0 border-b border-slate-700/50">
+        <div className="h-11 bg-title-bg title-fade flex items-center justify-between px-4">
           <div>
-            <CardTitle className="text-sm font-semibold">Run History</CardTitle>
-            <p className="text-xs text-gray-500 mt-0.5">
-              {data?.length ?? 0} result{data?.length !== 1 ? 's' : ''}
-              {hasActiveFilters && ' · filtered'}
-            </p>
+            <span className="text-sm font-semibold text-gray-100">Backtest History</span>
           </div>
           <div className="flex items-center gap-1">
             <button
@@ -160,10 +166,10 @@ export default function BacktestHistory({
             </div>
           </div>
         )}
-      </CardHeader>
+      </div>
 
       {/* ── List ── */}
-      <CardContent className="overflow-y-auto px-3 pb-3 max-h-[520px] space-y-1">
+      <div className="flex-1 overflow-y-auto px-3 py-2 space-y-1">
         {isLoading ? (
           <div className="flex justify-center p-6">
             <Loader2 className="size-5 animate-spin text-gray-600" />
@@ -171,7 +177,7 @@ export default function BacktestHistory({
         ) : !data || data.length === 0 ? (
           <p className="text-gray-500 text-xs text-center py-8">No backtest runs yet.</p>
         ) : (
-          data.map((b) => {
+          pagedData.map((b) => {
             const isSelected = selectedId === b.jobId
             const isCompared = comparisonIds.includes(b.jobId)
             const isCompleted = b.status === 'completed'
@@ -248,7 +254,35 @@ export default function BacktestHistory({
             )
           })
         )}
-      </CardContent>
-    </Card>
+      </div>
+
+      {/* ── Pagination footer ── */}
+      {totalHistPages > 1 && (
+        <div className="shrink-0 border-t border-slate-700/50 px-3 py-2 flex items-center justify-between">
+          <span className="text-[10px] text-gray-500 font-mono">
+            {(histPage - 1) * HIST_PER_PAGE + 1}–{Math.min(histPage * HIST_PER_PAGE, totalItems)} of {totalItems}
+          </span>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setHistPage((p) => Math.max(1, p - 1))}
+              disabled={histPage === 1}
+              className="p-1 rounded text-gray-500 hover:text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            >
+              <ChevronLeft className="size-3.5" />
+            </button>
+            <span className="text-[10px] text-gray-500 font-mono min-w-[32px] text-center">
+              {histPage}/{totalHistPages}
+            </span>
+            <button
+              onClick={() => setHistPage((p) => Math.min(totalHistPages, p + 1))}
+              disabled={histPage >= totalHistPages}
+              className="p-1 rounded text-gray-500 hover:text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            >
+              <ChevronRight className="size-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   )
 }

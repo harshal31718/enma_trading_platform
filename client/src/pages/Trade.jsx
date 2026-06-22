@@ -95,7 +95,7 @@ function TickerBar() {
   const isPositive = changePct >= 0
 
   return (
-    <div className="h-12 bg-title-bg border-b border-slate-700/50 flex items-center px-4 gap-6 shrink-0">
+    <div className="h-12 bg-title-bg title-fade border-b border-slate-700/50 flex items-center pl-2 pr-4 gap-6 shrink-0">
       <div className="flex items-center gap-2 shrink-0">
         <SymbolSearchBar />
         <span className="text-[10px] text-slate-400 border border-slate-700/50 px-1.5 py-0.5 rounded">Perp</span>
@@ -164,14 +164,13 @@ function fetchKlines(symbol, timeframe, series, chart, signal) {
     })
 }
 
-function ChartContainer() {
+function ChartContainer({ timeframe, setTimeframe }) {
   const { symbol, streamPrefix } = useCurrentSymbol()
   const containerRef = useRef(null)
   const chartRef = useRef(null)
   const seriesRef = useRef(null)
   const fetchingRef = useRef(false)
   const [chartError, setChartError] = useState(null)
-  const [timeframe, setTimeframe] = useState('1m')
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
@@ -253,34 +252,37 @@ function ChartContainer() {
 
   return (
     <div className="bg-title-bg relative flex-1 min-h-0 overflow-hidden flex flex-col">
-      {/* Timeframe toolbar */}
-      <div className="flex items-center gap-0.5 px-3 py-1.5 border-b border-slate-700/50 shrink-0">
-        {TIMEFRAMES.map((tf) => (
-          <button
-            key={tf.interval}
-            onClick={() => setTimeframe(tf.interval)}
-            className={[
-              'px-3 py-1 text-xs rounded transition-colors font-medium',
-              timeframe === tf.interval
-                ? 'bg-slate-700 text-gray-100'
-                : 'text-slate-400 hover:text-gray-300 hover:bg-slate-800',
-            ].join(' ')}
-          >
-            {tf.label}
-          </button>
-        ))}
-        {loading && (
-          <span className="ml-2 inline-block w-3 h-3 border-2 border-slate-600 border-t-emerald-400 rounded-full animate-spin" />
-        )}
-      </div>
+      {loading && (
+        <div className="absolute top-2 left-3 z-10 flex items-center gap-1.5 pointer-events-none">
+          <span className="inline-block w-3 h-3 border-2 border-slate-600 border-t-emerald-400 rounded-full animate-spin" />
+        </div>
+      )}
 
       {chartError && (
-        <div className="absolute top-12 left-2 right-2 z-10 bg-red-900/20 text-red-400 p-2 rounded text-xs">
+        <div className="absolute top-2 left-2 right-2 z-10 bg-red-900/20 text-red-400 p-2 rounded text-xs">
           {chartError}
         </div>
       )}
 
       <div ref={containerRef} className="flex-1 min-h-0" />
+
+      {/* Timeframe buttons — absolute overlay, aligned with TradingView logo */}
+      <div className="absolute bottom-8 left-12 z-10 flex items-center gap-0.5">
+        {TIMEFRAMES.map((tf) => (
+          <button
+            key={tf.interval}
+            onClick={() => setTimeframe(tf.interval)}
+            className={[
+              'px-2.5 py-1 text-xs rounded transition-colors font-medium',
+              timeframe === tf.interval
+                ? 'border border-yellow-500/70 bg-[#0d1117] text-yellow-400'
+                : 'text-slate-400 hover:text-yellow-400 bg-transparent border border-transparent',
+            ].join(' ')}
+          >
+            {tf.label}
+          </button>
+        ))}
+      </div>
     </div>
   )
 }
@@ -344,7 +346,7 @@ function OrderBook() {
 
   return (
     <div className="bg-title-bg border-r border-slate-700/50 flex flex-col min-h-0 flex-1">
-      <div className="px-3 py-2 border-b border-slate-700/50 shrink-0 title-fade">
+      <div className="px-3 h-10 flex items-center border-b border-slate-700/50 shrink-0 title-fade">
         <span className="text-xs font-semibold text-gray-200">Order Book</span>
       </div>
 
@@ -451,7 +453,7 @@ function SkeletonRow({ cols }) {
   return (
     <tr>
       {cols.map((_, i) => (
-        <td key={i} className="py-2 pr-4">
+        <td key={i} className={`py-2 pr-4 ${i === 0 ? 'pl-2' : ''}`}>
           <div className="h-3 bg-slate-800/50 rounded w-full animate-pulse" />
         </td>
       ))}
@@ -720,8 +722,10 @@ function PositionsTable({ data, isLoading, account }) {
 
       <table className="w-full text-xs">
         <thead>
-          <tr className="text-gray-400 border-b border-slate-700/50">
-            {cols.map((c) => <th key={c} className="text-left py-2 pr-6 font-medium whitespace-nowrap">{c}</th>)}
+          <tr className="text-gray-400 border-b border-slate-700/50 bg-title-bg title-fade">
+            {cols.map((c, i) => (
+              <th key={c} className={`text-left py-2 pr-6 font-medium whitespace-nowrap ${i === 0 ? 'pl-2' : ''}`}>{c}</th>
+            ))}
           </tr>
         </thead>
         <tbody className="text-gray-400">
@@ -764,7 +768,7 @@ function PositionsTable({ data, isLoading, account }) {
                       isActive ? 'bg-slate-800/40 border-l-2 border-emerald-400' : 'hover:bg-slate-800/20',
                     ].join(' ')}
                   >
-                    <td className="py-2 pr-6 whitespace-nowrap">
+                    <td className="py-2 pr-6 whitespace-nowrap pl-2">
                       <div className="flex items-center gap-2">
                         <span className="text-gray-100">{p.symbol.replace('USDT', '-USDT')}</span>
                         <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${side === 'Long' ? 'bg-emerald-400/10 text-emerald-400' : 'bg-red-400/10 text-red-400'}`}>{side}</span>
@@ -837,20 +841,27 @@ function OpenOrdersTable({ data, isLoading, onOcoBannerEvent }) {
 
   return (
     <div className="w-full">
-      {/* Cancel All button in table header */}
-      <div className="flex items-center justify-end px-2 py-1 border-b border-slate-700/40">
-        <button
-          disabled={cancelAllPending || !data?.length}
-          onClick={() => execCancelAll({ symbol }, { onSuccess: () => onOcoBannerEvent?.('All orders cancelled.') })}
-          className="px-3 py-1 text-[10px] rounded border border-slate-600 text-gray-400 hover:bg-slate-700/50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-        >
-          {cancelAllPending ? 'Cancelling…' : 'Cancel All'}
-        </button>
-      </div>
       <table className="w-full text-xs">
         <thead>
-          <tr className="text-gray-400 border-b border-slate-700/50">
-            {cols.map((c) => <th key={c} className="text-left py-2 pr-6 font-medium whitespace-nowrap">{c}</th>)}
+          <tr className="text-gray-400 border-b border-slate-700/50 bg-title-bg title-fade">
+            {cols.map((c, i) => {
+              if (i === cols.length - 1) {
+                return (
+                  <th key="cancel-all" className="pr-2 text-right align-middle">
+                    <button
+                      disabled={cancelAllPending || !data?.length}
+                      onClick={() => execCancelAll({ symbol }, { onSuccess: () => onOcoBannerEvent?.('All orders cancelled.') })}
+                      className="px-3 py-1 text-[10px] rounded border border-slate-600 text-gray-400 hover:bg-slate-700/50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors font-medium"
+                    >
+                      {cancelAllPending ? 'Cancelling…' : 'Cancel All'}
+                    </button>
+                  </th>
+                )
+              }
+              return (
+                <th key={c} className={`text-left py-2 pr-6 font-medium whitespace-nowrap ${i === 0 ? 'pl-2' : ''}`}>{c}</th>
+              )
+            })}
           </tr>
         </thead>
         <tbody className="text-gray-400">
@@ -867,7 +878,7 @@ function OpenOrdersTable({ data, isLoading, onOcoBannerEvent }) {
               const ocoId = extractOcoId(o.clientOrderId)
               return (
                 <tr key={o.orderId} className="border-b border-slate-700/30 hover:bg-slate-800/20">
-                  <td className="py-2 pr-6 text-gray-100 whitespace-nowrap">{o.symbol.replace('USDT', '-USDT')}</td>
+                  <td className="py-2 pr-6 text-gray-100 whitespace-nowrap pl-2">{o.symbol.replace('USDT', '-USDT')}</td>
                   <td className="py-2 pr-6">{o.type}</td>
                   <td className={`py-2 pr-6 font-medium ${o.side === 'BUY' ? 'text-emerald-400' : 'text-red-400'}`}>{o.side}</td>
                   <td className="py-2 pr-6 tabular-nums">{fmtPrice(o.price)}</td>
@@ -924,8 +935,10 @@ function AssetsTable({ data, isLoading }) {
   return (
     <table className="w-full text-xs">
       <thead>
-        <tr className="text-gray-400 border-b border-slate-700/50">
-          {cols.map((c) => <th key={c} className="text-left py-2 pr-6 font-medium">{c}</th>)}
+        <tr className="text-gray-400 border-b border-slate-700/50 bg-title-bg title-fade">
+          {cols.map((c, i) => (
+            <th key={c} className={`text-left py-2 pr-6 font-medium ${i === 0 ? 'pl-2' : ''}`}>{c}</th>
+          ))}
         </tr>
       </thead>
       <tbody className="text-gray-400">
@@ -941,7 +954,7 @@ function AssetsTable({ data, isLoading }) {
             const pnl = parseFloat(a.unrealizedProfit)
             return (
               <tr key={a.asset} className="border-b border-slate-700/30 hover:bg-slate-800/20">
-                <td className="py-2 pr-6 text-gray-100 font-medium">{a.asset}</td>
+                <td className="py-2 pr-6 text-gray-100 font-medium pl-2">{a.asset}</td>
                 <td className="py-2 pr-6 tabular-nums">{parseFloat(a.walletBalance).toFixed(4)}</td>
                 <td className="py-2 pr-6 tabular-nums">{parseFloat(a.availableBalance).toFixed(4)}</td>
                 <td className={`py-2 pr-6 tabular-nums ${pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
@@ -969,8 +982,10 @@ function OrderHistoryTable({ data, isLoading, synced = true }) {
       {!synced && !isLoading && <SyncWarningBanner />}
       <table className="w-full text-xs">
         <thead>
-          <tr className="text-gray-400 border-b border-slate-700/50">
-            {cols.map((c) => <th key={c} className="text-left py-2 pr-6 font-medium whitespace-nowrap">{c}</th>)}
+          <tr className="text-gray-400 border-b border-slate-700/50 bg-title-bg title-fade">
+            {cols.map((c, i) => (
+              <th key={c} className={`text-left py-2 pr-6 font-medium whitespace-nowrap ${i === 0 ? 'pl-2' : ''}`}>{c}</th>
+            ))}
           </tr>
         </thead>
         <tbody className="text-gray-400">
@@ -989,7 +1004,7 @@ function OrderHistoryTable({ data, isLoading, synced = true }) {
               const isNew = o.status === 'NEW'
               return (
                 <tr key={o.orderId} className="border-b border-slate-700/30 hover:bg-slate-800/20">
-                  <td className="py-2 pr-6 whitespace-nowrap text-slate-400">{new Date(o.time).toLocaleString()}</td>
+                  <td className="py-2 pr-6 whitespace-nowrap text-slate-400 pl-2">{new Date(o.time).toLocaleString()}</td>
                   <td className="py-2 pr-6 whitespace-nowrap text-gray-100">{o.symbol.replace('USDT', '-USDT')}</td>
                   <td className="py-2 pr-6 whitespace-nowrap">{o.type}</td>
                   <td className={`py-2 pr-6 whitespace-nowrap font-medium ${side === 'BUY' ? 'text-emerald-400' : 'text-red-400'}`}>{side}</td>
@@ -1018,8 +1033,10 @@ function TradeHistoryTable({ data, isLoading, synced = true }) {
       {!synced && !isLoading && <SyncWarningBanner />}
       <table className="w-full text-xs">
         <thead>
-          <tr className="text-gray-400 border-b border-slate-700/50">
-            {cols.map((c) => <th key={c} className="text-left py-2 pr-6 font-medium whitespace-nowrap">{c}</th>)}
+          <tr className="text-gray-400 border-b border-slate-700/50 bg-title-bg title-fade">
+            {cols.map((c, i) => (
+              <th key={c} className={`text-left py-2 pr-6 font-medium whitespace-nowrap ${i === 0 ? 'pl-2' : ''}`}>{c}</th>
+            ))}
           </tr>
         </thead>
         <tbody className="text-gray-400">
@@ -1036,7 +1053,7 @@ function TradeHistoryTable({ data, isLoading, synced = true }) {
               const pnl = parseFloat(t.realizedPnl || '0')
               return (
                 <tr key={t.id} className="border-b border-slate-700/30 hover:bg-slate-800/20">
-                  <td className="py-2 pr-6 whitespace-nowrap text-slate-400 tabular-nums">{t.orderId}</td>
+                  <td className="py-2 pr-6 whitespace-nowrap text-slate-400 tabular-nums pl-2">{t.orderId}</td>
                   <td className="py-2 pr-6 whitespace-nowrap text-slate-400">{new Date(t.time).toLocaleString()}</td>
                   <td className="py-2 pr-6 whitespace-nowrap text-gray-100">{t.symbol.replace('USDT', '-USDT')}</td>
                   <td className={`py-2 pr-6 whitespace-nowrap font-medium ${side === 'BUY' ? 'text-emerald-400' : 'text-red-400'}`}>{side}</td>
@@ -1064,8 +1081,10 @@ function TransactionHistoryTable({ data, isLoading, synced = true }) {
       {!synced && !isLoading && <SyncWarningBanner />}
       <table className="w-full text-xs">
         <thead>
-          <tr className="text-gray-400 border-b border-slate-700/50">
-            {cols.map((c) => <th key={c} className="text-left py-2 pr-6 font-medium whitespace-nowrap">{c}</th>)}
+          <tr className="text-gray-400 border-b border-slate-700/50 bg-title-bg title-fade">
+            {cols.map((c, i) => (
+              <th key={c} className={`text-left py-2 pr-6 font-medium whitespace-nowrap ${i === 0 ? 'pl-2' : ''}`}>{c}</th>
+            ))}
           </tr>
         </thead>
         <tbody className="text-gray-400">
@@ -1081,7 +1100,7 @@ function TransactionHistoryTable({ data, isLoading, synced = true }) {
               const income = parseFloat(tx.income || '0')
               return (
                 <tr key={tx.tranId} className="border-b border-slate-700/30 hover:bg-slate-800/20">
-                  <td className="py-2 pr-6 whitespace-nowrap text-slate-400">{new Date(tx.time).toLocaleString()}</td>
+                  <td className="py-2 pr-6 whitespace-nowrap text-slate-400 pl-2">{new Date(tx.time).toLocaleString()}</td>
                   <td className="py-2 pr-6 whitespace-nowrap">{tx.incomeType}</td>
                   <td className={`py-2 pr-6 whitespace-nowrap font-medium tabular-nums ${income >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                     {income >= 0 ? '+' : ''}{parseFloat(tx.income).toFixed(4)}
@@ -1145,7 +1164,7 @@ function BottomPanel({ ocoToast, ocoBanner, onDismissBanner }) {
 
   return (
     <div className="bg-title-bg border-t border-slate-700/50 flex flex-col shrink-0 h-[200px]">
-      <div className="flex border-b border-slate-700/50 shrink-0">
+      <div className="flex border-b border-slate-700/50 shrink-0 title-fade bg-title-bg">
         {[
           { key: 'Positions', label: `Positions(${posCount})` },
           { key: 'Open Orders', label: `Open Orders(${ordCount})` },
@@ -1153,12 +1172,12 @@ function BottomPanel({ ocoToast, ocoBanner, onDismissBanner }) {
           { key: 'Trade History', label: 'Trade History' },
           { key: 'Transaction History', label: 'Transaction History' },
           { key: 'Assets', label: 'Assets' },
-        ].map(({ key, label }) => (
+        ].map(({ key, label }, i) => (
           <button
             key={key}
             onClick={() => setActiveTab(key)}
             className={[
-              'px-4 py-2 text-xs font-medium transition-colors whitespace-nowrap',
+              `${i === 0 ? 'pl-2 pr-4' : 'px-4'} py-2 text-xs font-medium transition-colors whitespace-nowrap`,
               activeTab === key
                 ? 'text-gray-100 border-b-2 border-emerald-400 -mb-px'
                 : 'text-slate-400 hover:text-gray-300',
@@ -1182,7 +1201,7 @@ function BottomPanel({ ocoToast, ocoBanner, onDismissBanner }) {
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto px-2 min-h-0">
+      <div className="flex-1 overflow-y-auto min-h-0">
         {activeTab === 'Positions' && (
           <PositionsTable data={positions} isLoading={posLoading} account={account} />
         )}
@@ -1438,7 +1457,7 @@ function OrderForm() {
 
       <div className="flex flex-col min-h-0 flex-1 bg-title-bg">
         {/* Margin type + Leverage row */}
-        <div className="flex items-center justify-between px-3 py-2 border-b border-slate-700/50">
+        <div className="flex items-center justify-between px-3 h-10 border-b border-slate-700/50">
           <div className={`flex rounded overflow-hidden border text-xs ${isConfigBusy ? 'opacity-50' : 'border-slate-700/50'}`}>
             <span className="px-3 py-1.5 bg-slate-800 text-slate-300 text-xs font-medium">
               {marginPending ? '…' : 'Isolated'}
@@ -1593,6 +1612,7 @@ function OrderForm() {
 
 function TradeInner() {
   const { symbol } = useCurrentSymbol()
+  const [timeframe, setTimeframe] = useState('1m')
   const [ocoToast, setOcoToast] = useState(null)
   const [ocoBanner, setOcoBanner] = useState(null)
   const toastTimerRef = useRef(null)
@@ -1631,7 +1651,7 @@ function TradeInner() {
 
         {/* Left col — chart + bottom panel (fills remaining width) */}
         <div className="flex flex-col flex-1 min-w-0 min-h-0 border-r border-slate-700/50">
-          <ChartContainer />
+          <ChartContainer timeframe={timeframe} setTimeframe={setTimeframe} />
           <BottomPanel
             ocoBanner={ocoBanner}
             onDismissBanner={() => setOcoBanner(null)}

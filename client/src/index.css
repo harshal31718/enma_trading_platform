@@ -32,7 +32,7 @@
     --input: 217 33% 17%;
     --ring: 160 84% 39%;
 
-    --radius: 0.5rem;
+    --radius: 0px;
 
     /* Title-row left-fade (see UI_STYLE_GUIDE.md → Title-row fade).
        Tune these once to restyle every title bar app-wide. */
@@ -73,5 +73,26 @@
   }
   body {
     @apply bg-background text-foreground;
+  }
+
+  /* Hide scrollbars while maintaining smooth scroll functionality */
+  html {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  /* Hide webkit scrollbars (Chrome, Safari, Edge) */
+  ::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Ensure all scrollable elements hide scrollbars */
+  * {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  *::-webkit-scrollbar {
+    display: none;
   }
 }

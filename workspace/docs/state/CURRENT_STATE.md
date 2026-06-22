@@ -40,7 +40,7 @@ Last updated: 2026-06-22
 - **Configurable simulation parameters**: Trading fees (taker/maker %), slippage %, funding rate, and capital/leverage defaults are all stored in MongoDB Settings (Exchange Settings form), not hardcoded. Defaults: taker 0.05%, maker 0.02%, slippage 0.05%, funding off
 - Stop-loss / take-profit checked on every candle's high/low
 - Real-time progress streaming: engine → Redis pub/sub → Node → Socket.IO → client
-- Equity curve stored (downsampled to ≤1,000 points) with client-side Buy & Hold benchmark overlay
+- Equity curve stored (downsampled to ≤1,000 points) with a **true Buy & Hold benchmark overlay** — `GET /api/v1/backtest/:id/benchmark` re-reads the same TimescaleDB OHLCV candles the run used and returns the actual price path normalized to starting capital (`capital × close/firstClose`), aligned 1:1 to the saved equity-curve timestamps; the result is fetched via `useBacktestBenchmark` and passed as `benchmark` prop to `<EquityCurve>`. Chart falls back to the old straight-line approximation only while the request is in-flight. Sharing the equity dollar scale removes any price-range/log-axis concern. **Equity line color is dynamic**: emerald-400 for profitable runs, red-400 for losing runs. Chart titles are "Equity" and "Drawdown %"
 - Trades stored in `backtestTrades` collection (split to avoid BSON limits, batch-inserted in groups of 500), including per-trade run-up (MFE), drawdown (MAE), and bars held
 - Paginated trade history in result view, showing Run-up, Drawdown, and Bars columns
 - Cancel in-progress backtest (Redis cancel flag)
@@ -48,7 +48,7 @@ Last updated: 2026-06-22
 - Vectorized metric calculations using NumPy (drawdown, Sharpe, Sortino, Calmar, gross profit/loss, profit factor, expectancy, payoff ratio, streaks, and buy & hold benchmark)
 - Detailed tabbed report UI: Overview (Headline cards + Equity/Drawdown/Benchmark chart + Config summary + Performance Calendar), Performance Summary (comparative All / Long / Short table), and List of Trades (log table with excursions)
 - **Performance Calendar**: Visualizes backtest results by Day, Week, Month, or Quarter in the Overview tab. Color-coded by P&L intensity (emerald-400 for profit, red-400 for loss). Supported by `backtest-analytics.js` utility and `useAllBacktestTrades` hook.
-- BacktestConfigForm pre-fills capital and leverage from Exchange Settings defaults
+- Backtests are launched from a multi-step dialog wizard (`NewBacktestWizard`, opened by a "New Backtest" button in the page header — mirrors the AlgoTrading "New Bot" pipeline). Steps: Strategy → Parameters (skipped when the strategy has no PARAMS) → Market → Settings → Review. The Backtest page left column is now Run History only (the inline `BacktestConfigForm` was removed). The wizard pre-fills capital/leverage/fee/risk from Exchange Settings defaults and supports per-run strategy `alphaParams` overrides (forwarded server → engine).
 
 ### Dashboard
 - Total runs, best strategy, average win rate stats

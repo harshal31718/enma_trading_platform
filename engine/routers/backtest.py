@@ -7,6 +7,7 @@ import logging
 
 from services.backtest_runner import run_backtest_simulation
 from config.mongo import get_database
+from config.timescale import get_pool
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -99,6 +100,71 @@ async def run_backtest(req: BacktestRequest):
         )
 
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{job_id}/benchmark")
+async def get_backtest_benchmark(job_id: str):
+    """Buy & Hold benchmark series for a completed run.
+
+    Reads the same TimescaleDB OHLCV candles the backtest used and returns a
+    Buy & Hold equity path normalized to the run's starting capital
+    (capital * close / first_close). The series is aligned 1:1 with the saved
+    (downsampled) equity-curve timestamps so the client can overlay it directly,
+    and it shares the equity dollar scale — no price-range/log handling needed.
+    """
+    db = get_database()
+    result = await db.backtestResults.find_one({"jobId": job_id})
+    if not result:
+        raise HTTPException(status_code=404, detail="Backtest result not found")
+
+    equity_curve = result.get("equityCurve") or []
+    capital = float(result.get("capital") or 0)
+    if not equity_curve or capital <= 0:
+        return {"success": True, "data": {"benchmark": []}}
+
+    # startDate/endDate stored on the doc are the actual first/last candle times,
+    # so this window selects exactly the candle set the simulation replayed.
+    start_dt = datetime.fromisoformat(result["startDate"])
+    end_dt = datetime.fromisoformat(result["endDate"])
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT time, close
+            FROM candles
+            WHERE exchange = $1 AND symbol = $2 AND timeframe = $3
+              AND time >= $4 AND time <= $5
+            ORDER BY time ASC
+            """,
+            result["exchange"], result["symbol"], result["timeframe"],
+            start_dt, end_dt,
+        )
+
+    if not rows:
+        return {"success": True, "data": {"benchmark": []}}
+
+    # Equity-curve timestamps are candle times (same TimescaleDB source), so an
+    # isoformat keyed lookup aligns the two series exactly.
+    close_by_ts = {r["time"].isoformat(): float(r["close"]) for r in rows}
+
+    # Reference = close at the first equity-curve point (matches the
+    # buyHoldReturnPct reference in metrics: the first post-warmup close).
+    first_close = close_by_ts.get(equity_curve[0]["timestamp"]) or float(rows[0]["close"])
+    if first_close <= 0:
+        return {"success": True, "data": {"benchmark": []}}
+
+    benchmark = []
+    last_val = capital
+    for point in equity_curve:
+        close = close_by_ts.get(point["timestamp"])
+        if close is not None:
+            last_val = capital * (close / first_close)
+        # carry the last known value forward if a candle is ever missing,
+        # keeping the series length identical to the equity curve
+        benchmark.append({"timestamp": point["timestamp"], "buyHold": f"{last_val:.2f}"})
+
+    return {"success": True, "data": {"benchmark": benchmark}}
 
 
 @router.post("/cancel")

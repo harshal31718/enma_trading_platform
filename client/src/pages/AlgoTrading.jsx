@@ -95,9 +95,9 @@ export default function AlgoTrading() {
 
       {/* Sessions list */}
       {isLoading ? (
-        <div className="space-y-3">
+        <div className="border border-slate-700/50">
           {[1, 2, 3].map((i) => (
-            <div key={i} className="bg-gray-900 border border-gray-800 rounded-lg p-4 animate-pulse h-24" />
+            <div key={i} className="bg-gray-900 border-b border-gray-800 p-4 animate-pulse h-24" />
           ))}
         </div>
       ) : sessions.length === 0 ? (

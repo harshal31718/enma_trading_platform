@@ -9,6 +9,25 @@ The UI targets a **professional trading terminal aesthetic** — dark, dense, an
 
 ---
 
+## Global Layout Rules (Non-Negotiable)
+
+### Rule 1 — No Rounded Corners
+All `borderRadius` values are overridden to `0px` in `tailwind.config.js` (theme-level, not extend). The CSS variable `--radius` is also `0px`. **Never add `rounded-*` classes.** Every div, panel, button, input, badge, and card renders as a sharp rectangle.
+
+### Rule 2 — Connected Panels (No Inter-Section Gaps)
+Panels and sections must be **flush against each other** — no margins or gaps between major layout blocks. Reference: the Trade page, where TickerBar, Chart, BottomPanel, OrderBook, and OrderForm touch each other with only a shared `border-*` separating them.
+
+- Panel grids: always `gap-0` (not `gap-4` or `gap-6`)
+- Section stacks: always `space-y-0` (not `space-y-6` or `space-y-4` at panel level)
+- No `mt-6` between content sections
+- `PageWrapper` has no padding — pages are edge-to-edge
+- `PageHeader` is a full-width bar with `border-b border-slate-700/50` and `title-fade`
+- Use `border-r` / `border-b` / `divide-*` utilities for visual separation between connected panels
+
+Small inline gaps (`gap-2`, `gap-3`) inside component internals (icon+text, form field grids) are still allowed.
+
+---
+
 ## Color Palette
 
 ### Backgrounds (darkest → lightest, use in layers)
@@ -82,9 +101,10 @@ The UI targets a **professional trading terminal aesthetic** — dark, dense, an
 
 ### Outer card wrapper
 ```
-bg-[#0d1117] border border-slate-700/50 rounded-xl overflow-hidden shadow-2xl
+bg-[#0d1117] border border-slate-700/50 overflow-hidden shadow-2xl
 hover:border-slate-600/70 transition-all duration-300
 ```
+No `rounded-*` — all border-radius is globally zeroed to 0.
 
 ### Card header row (collapsible trigger)
 ```
@@ -286,6 +306,10 @@ Equity line color: `#34d399` (emerald-400) when positive, `#f87171` (red-400) wh
 
 ## What to Avoid
 
+- `rounded-*` classes — all border-radius is globally zeroed; these are dead no-ops and add noise
+- `gap-4`, `gap-6`, `space-y-6` at panel/section level — use `gap-0`, `space-y-0`; separation is via borders
+- `mb-6` or `mt-6` between major content sections — sections are flush
+- `p-6` in `PageWrapper` — the wrapper has no padding; pages are edge-to-edge
 - `bg-gray-900` / `bg-gray-800` as panel backgrounds — too warm, breaks the midnight-blue depth
 - `text-gray-500` for labels — use `text-slate-400` for cooler tone
 - `text-green-400` for profit — always `text-emerald-400`

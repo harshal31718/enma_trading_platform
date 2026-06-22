@@ -33,7 +33,7 @@ function buildTicks(timestamps, count = 6) {
   )
 }
 
-export default function EquityCurve({ data = [], startingCapital, buyHoldReturnPct = 0 }) {
+export default function EquityCurve({ data = [], startingCapital, buyHoldReturnPct = 0, benchmark = null }) {
   if (!data || data.length === 0) {
     return (
       <div className="h-64 flex items-center justify-center border border-gray-800 rounded bg-gray-950 text-gray-500">
@@ -45,16 +45,27 @@ export default function EquityCurve({ data = [], startingCapital, buyHoldReturnP
   const startCap = startingCapital ? parseFloat(startingCapital) : (data.length > 0 ? parseFloat(data[0].balance) : 10000)
   const buyHoldPct = parseFloat(buyHoldReturnPct || 0)
 
+  // Real Buy & Hold path: server returns the actual price curve normalized to
+  // starting capital, keyed by timestamp and aligned to the equity curve.
+  // When it isn't available yet (loading / older runs), fall back to the
+  // straight-line approximation from the headline buy-&-hold return.
+  const benchMap = (benchmark && benchmark.length)
+    ? new Map(benchmark.map((b) => [b.timestamp, parseFloat(b.buyHold)]))
+    : null
+
   // Format data and calculate running drawdown
   let maxBalance = -1e9
   const chartData = data.map((d, index) => {
     const balance = parseFloat(d.balance)
     if (balance > maxBalance) maxBalance = balance
     const drawdownPct = maxBalance > 0 ? ((balance - maxBalance) / maxBalance) * 100 : 0
-    
-    // Linear approximation of Buy & Hold path
-    const progress = data.length > 1 ? index / (data.length - 1) : 0
-    const buyHold = startCap * (1 + (buyHoldPct / 100) * progress)
+
+    let buyHold = benchMap?.get(d.timestamp)
+    if (buyHold == null) {
+      // Linear approximation of Buy & Hold path (fallback)
+      const progress = data.length > 1 ? index / (data.length - 1) : 0
+      buyHold = startCap * (1 + (buyHoldPct / 100) * progress)
+    }
 
     return {
       time: d.timestamp,   // keep raw ISO — tick/tooltip formatters handle display
@@ -66,11 +77,15 @@ export default function EquityCurve({ data = [], startingCapital, buyHoldReturnP
 
   const ticks = buildTicks(chartData.map((d) => d.time))
 
+  // Dynamic equity color: emerald for profit, red-400 for loss
+  const finalBalance = chartData.length > 0 ? chartData[chartData.length - 1].balance : startCap
+  const equityColor = finalBalance >= startCap ? '#10b981' : '#f87171'
+
   return (
     <div className="space-y-6">
       {/* Equity Line Chart */}
       <div>
-        <h4 className="text-gray-400 text-xs font-semibold uppercase tracking-wider mb-2">Equity Growth vs Buy & Hold Benchmark</h4>
+        <h4 className="text-gray-400 text-xs font-semibold uppercase tracking-wider mb-2">Equity</h4>
         <div className="h-[260px] w-full">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={chartData} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
@@ -107,7 +122,7 @@ export default function EquityCurve({ data = [], startingCapital, buyHoldReturnP
                 type="monotone"
                 dataKey="balance"
                 name="balance"
-                stroke="#10b981"
+                stroke={equityColor}
                 strokeWidth={2}
                 dot={false}
                 activeDot={{ r: 4 }}
@@ -128,7 +143,7 @@ export default function EquityCurve({ data = [], startingCapital, buyHoldReturnP
 
       {/* Drawdown Area Chart */}
       <div>
-        <h4 className="text-gray-400 text-xs font-semibold uppercase tracking-wider mb-2">Relative Drawdown (%)</h4>
+        <h4 className="text-gray-400 text-xs font-semibold uppercase tracking-wider mb-2">Drawdown %</h4>
         <div className="h-[120px] w-full">
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={chartData} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>

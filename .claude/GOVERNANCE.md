@@ -76,6 +76,7 @@ Enforced by the completion gate in `/sync-spec` (and every scaffolding command).
 - Reference a file in docs that doesn't exist in the repo
 - Update documentation without verifying against the source of truth hierarchy
 - Report a task as complete without running `/sync-spec`
+- Run git commands that discard or revert uncommitted changes (`git checkout --`, `git restore`, `git reset --hard`, `git clean`, `git stash` to hide work) without explicit user instruction in the same message — all post-last-commit work is live user work and must be preserved (see Rule H in `CLAUDE.md`)
 
 ---
 

@@ -45,7 +45,7 @@ client/
 │   │   └── SymbolSearchBar.jsx       ← global symbol search (uses all-ticker WS when open)
 │   ├── features/        ← feature-specific components
 │   │   ├── backtest/
-│   │   │   ├── BacktestConfigForm.jsx  ← form fields + submit/cancel logic
+│   │   │   ├── NewBacktestWizard.jsx   ← multi-step dialog wizard for launching a backtest (strategy → params → market → settings → review)
 │   │   │   ├── BacktestHistory.jsx     ← history sidebar list with emerald highlight
 │   │   │   └── BacktestMetricCard.jsx  ← single reusable KPI stat card (replaces 6 inline copies)
 │   │   ├── dashboard/
@@ -61,7 +61,7 @@ client/
 │   │   ├── useSocket.js           ← subscribe/unsubscribe to Socket.IO events with cleanup
 │   │   ├── useCandles.js          ← TanStack Query hooks: useSymbols() only
 │   │   ├── useDashboard.js        ← TanStack Query hooks: useDashboardStats(), useCachedCandles()
-│   │   ├── useBacktest.js         ← TanStack Query hooks: useRunBacktest(), useBacktestsList(), useBacktestResult(id), useBacktestTrades(id, page, limit), useCancelBacktest()
+│   │   ├── useBacktest.js         ← TanStack Query hooks: useRunBacktest(), useBacktestsList(), useBacktestResult(id), useBacktestTrades(id, page, limit), useAllBacktestTrades(id), useBacktestBenchmark(id), useCancelBacktest()
 │   │   ├── useStrategies.js       ← TanStack Query hooks: useStrategies(), useStrategyCode(id)
 │   │   ├── useTrade.js            ← TanStack Query hooks: useTradeAccount(), useTradePositions(), useTradeOpenOrders(), useTradeSymbolConfig(symbol), useChangeLeverage(), useChangeMarginType(), usePlaceOrder(), usePlaceOrderWithTpSl(), useCancelOrder(), useClosePosition(), useCancelAllOrders()
 │   │   ├── useAlgoSessions.js     ← TanStack Query hooks for /api/v1/algo/* endpoints (includes useStartChaos)
@@ -202,9 +202,12 @@ WebSocket stream (`@kline_<interval>`) — only the initial REST fetch is affect
   - Nav item hover: `text-gray-100`, `bg-slate-800/50`
   - Nav item active: `text-emerald-400`, `bg-emerald-400/10`, `border-b-2 border-emerald-400`
   - Desktop only — no mobile hamburger menu
-- **PageWrapper:** `pt-[56px]` to clear navbar, `bg-[#060a0f]` (deepest layer), full width — no `ml-[240px]`
-- **Page content padding:** `p-6`
-- **Cards:** `bg-[#0d1117] border border-slate-700/50 rounded-xl shadow-2xl hover:border-slate-600/70 transition-all duration-300` (the `Card` component in `components/ui/card.jsx` already encodes this — prefer it over hand-rolling)
+- **PageWrapper:** `pt-[56px]` to clear navbar, `bg-[#060a0f]` (deepest layer), full width, **no padding** — content is edge-to-edge
+- **PageHeader:** full-width bar with `px-6 py-3 border-b border-slate-700/50 bg-title-bg title-fade` — not a floating title, it's a connected header row
+- **Page content padding:** none — panels go edge-to-edge; use `border-r`/`border-b`/`divide-*` for separation
+- **Cards:** `bg-[#0d1117] border border-slate-700/50 shadow-2xl hover:border-slate-600/70 transition-all duration-300` — **no `rounded-xl`** (global borderRadius is 0px)
+- **Panel grids:** always `gap-0` — sections are connected, not floating
+- **No Rounded Corners (global):** All `borderRadius` values are `0px` via `tailwind.config.js` theme override. Never write `rounded-*` classes.
 - **No Sidebar component** — Sidebar.jsx is removed; all navigation lives in the top navbar (TopBar.jsx or Navbar.jsx)
 
 ## Dashboard page spec
@@ -215,9 +218,9 @@ The Dashboard (`/`) is a simulation metrics hub. It has no live trading data —
 
 **StatCard** — generic display card for a single numeric metric.
 - Props: `title` (string), `value` (string | number), `subtitle` (string, optional)
-- Grid layout: 4 cards in one row (`grid grid-cols-4 gap-4`)
+- Grid layout: 4 cards in one row (`grid grid-cols-4 gap-0`)
 - Cards: **Total Runs** (totalRuns), **Best Strategy** (bestStrategy name), **Avg Win Rate** (averageWinRate as %, 1 decimal), **Cached Symbols** (count of distinct rows in CachedCandlesTable)
-- Style: `bg-[#0d1117] border border-slate-700/50 rounded-xl p-4` (uses the shared `Card` component)
+- Style: `bg-[#0d1117] border border-slate-700/50 p-4` (uses the shared `Card` component — no rounded corners)
 - Value text: `text-2xl font-semibold tabular-nums text-gray-100`; title: `text-[11px] uppercase tracking-wider text-slate-400`
 
 **CachedCandlesTable** — table of OHLCV ranges currently stored in TimescaleDB.
@@ -263,8 +266,9 @@ Both hooks follow the standard TanStack Query pattern used by all other hooks in
 
 ## Backtest page spec
 
-- `Backtest.jsx` is state management + layout wiring only. Form, history list, and KPI cards are extracted to `features/backtest/`.
-- `BacktestConfigForm.jsx` — owns all form inputs, submit handler, cancel handler
+- `Backtest.jsx` is state management + layout wiring only. The launch wizard, history list, and KPI cards are extracted to `features/backtest/`.
+- **Launch flow:** a "New Backtest" button in the `PageHeader` opens `NewBacktestWizard` in a `Dialog` (mirrors the AlgoTrading "New Bot" pipeline). The wizard steps through Strategy → Parameters (skipped when the strategy exposes no PARAMS) → Market → Settings → Review, then calls `onRun(config)` which closes the dialog and triggers `handleRun`. There is no longer an inline config form; the left column is Run History only. While a run is active the "New Backtest" button is disabled and a "Cancel Backtest" button renders inside the running progress card.
+- `NewBacktestWizard.jsx` — owns all config inputs (incl. per-run strategy `alphaParams`) and the multi-step UI; emits the full run config via `onRun`
 - `BacktestHistory.jsx` — owns the history sidebar list with emerald `border-l-2 border-emerald-500` highlight for selected item
 - `BacktestMetricCard.jsx` — single reusable KPI card; replaces 6 inline copies; props: `label`, `value`, `subtext`, `icon`
 - KPI cards: 3 per row, 2 rows (grid-cols-3) — not 6 in one row

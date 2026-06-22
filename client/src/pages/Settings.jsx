@@ -153,65 +153,165 @@ export default function Settings() {
         }
       `}</style>
 
-      <div className="mx-auto max-w-5xl grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
-        <div className="bg-title-bg border border-slate-700/50 rounded-xl p-6">
-          {/* Header */}
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-gray-100 text-sm font-medium">Environment Configuration</h2>
-            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold border bg-yellow-500/10 text-yellow-400 border-yellow-500/20">
-              <span className="h-1.5 w-1.5 rounded-full bg-yellow-400 animate-pulse" />
-              Testnet / Demo
-            </span>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            {/* Testnet — active / locked on */}
-            <button
-              type="button"
-              className="flex flex-col items-start gap-2 rounded-lg border p-4 text-left cursor-default border-yellow-500/40 bg-yellow-500/5"
-            >
-              <div className="flex items-center gap-2">
-                <Server size={15} className="text-yellow-400" />
-                <span className="text-sm font-medium text-yellow-400">Testnet / Demo</span>
-                <CheckCircle2 size={12} className="text-yellow-400 ml-auto" />
-              </div>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                Paper trading on Binance Futures Demo. No real funds at risk. Uses{' '}
-                <code className="text-slate-300">BINANCE_TESTNET_API_KEY</code>.
-              </p>
-            </button>
-
-            {/* Mainnet — disabled, shows coming soon */}
-            <button
-              type="button"
-              onClick={handleMainnetClick}
-              className="relative flex flex-col items-start gap-2 rounded-lg border p-4 text-left border-slate-700/50 bg-[#0a0d13] hover:border-slate-600 transition-colors group"
-            >
-              {/* Coming soon badge */}
-              <span className="absolute top-2 right-2 text-[9px] font-bold uppercase tracking-wider text-amber-400 bg-amber-400/10 border border-amber-400/20 rounded-full px-2 py-0.5">
-                Soon
+      <div className="mx-auto max-w-6xl grid grid-cols-1 lg:grid-cols-2 gap-0 items-start">
+        <div className="space-y-0">
+          <div className="bg-title-bg border border-slate-700/50 rounded-xl p-6">
+            {/* Header */}
+            <div className="flex items-center justify-between -mx-6 -mt-6 px-6 py-4 mb-4 rounded-t-xl title-fade border-b border-slate-700/50">
+              <h2 className="text-gray-100 text-sm font-medium">Environment Configuration</h2>
+              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold border bg-yellow-500/10 text-yellow-400 border-yellow-500/20">
+                <span className="h-1.5 w-1.5 rounded-full bg-yellow-400 animate-pulse" />
+                Testnet / Demo
               </span>
-              <div className="flex items-center gap-2">
-                <Zap size={15} className="text-slate-500 group-hover:text-slate-400 transition-colors" />
-                <span className="text-sm font-medium text-slate-500 group-hover:text-slate-400 transition-colors">
-                  Live / Mainnet
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              {/* Testnet — active / locked on */}
+              <button
+                type="button"
+                className="flex flex-col items-start gap-2 rounded-lg border p-4 text-left cursor-default border-yellow-500/40 bg-yellow-500/5"
+              >
+                <div className="flex items-center gap-2">
+                  <Server size={15} className="text-yellow-400" />
+                  <span className="text-sm font-medium text-yellow-400">Testnet / Demo</span>
+                  <CheckCircle2 size={12} className="text-yellow-400 ml-auto" />
+                </div>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  Paper trading on Binance Futures Demo. No real funds at risk. Uses{' '}
+                  <code className="text-slate-300">BINANCE_TESTNET_API_KEY</code>.
+                </p>
+              </button>
+
+              {/* Mainnet — disabled, shows coming soon */}
+              <button
+                type="button"
+                onClick={handleMainnetClick}
+                className="relative flex flex-col items-start gap-2 rounded-lg border p-4 text-left border-slate-700/50 bg-[#0a0d13] hover:border-slate-600 transition-colors group"
+              >
+                {/* Coming soon badge */}
+                <span className="absolute top-2 right-2 text-[9px] font-bold uppercase tracking-wider text-amber-400 bg-amber-400/10 border border-amber-400/20 rounded-full px-2 py-0.5">
+                  Soon
                 </span>
-              </div>
-              <p className="text-xs text-slate-600 leading-relaxed">
-                Real trades on Binance Futures Mainnet. Requires{' '}
-                <code className="text-slate-500">BINANCE_MAINNET_API_KEY</code>.
-              </p>
-            </button>
+                <div className="flex items-center gap-2">
+                  <Zap size={15} className="text-slate-500 group-hover:text-slate-400 transition-colors" />
+                  <span className="text-sm font-medium text-slate-500 group-hover:text-slate-400 transition-colors">
+                    Live / Mainnet
+                  </span>
+                </div>
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  Real trades on Binance Futures Mainnet. Requires{' '}
+                  <code className="text-slate-500">BINANCE_MAINNET_API_KEY</code>.
+                </p>
+              </button>
+            </div>
+
+            <p className="mt-5 text-[11px] text-slate-600">
+              Binance API keys are read from <code className="text-slate-500">server/.env</code> and are never stored in the database.
+            </p>
           </div>
 
-          <p className="mt-5 text-[11px] text-slate-600">
-            Binance API keys are read from <code className="text-slate-500">server/.env</code> and are never stored in the database.
-          </p>
+          {/* ── Chaos Setting (testnet) ─────────────────────────────────────────── */}
+          <div className="bg-title-bg border border-purple-700/30 rounded-xl p-6">
+            {/* Header */}
+            <div className="flex items-center justify-between -mx-6 -mt-6 px-6 py-4 mb-4 rounded-t-xl title-fade border-b border-slate-700/50">
+              <h2 className="text-gray-100 text-sm font-medium flex items-center gap-2">
+                <Zap size={15} className="text-purple-400" />
+                Chaos Settings
+              </h2>
+              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold border bg-purple-500/10 text-purple-400 border-purple-500/20">
+                <span className="h-1.5 w-1.5 rounded-full bg-purple-400 animate-pulse" />
+                Stress Test
+              </span>
+            </div>
+
+            {updateMutation.isError && (
+              <div className="flex items-start gap-2 bg-red-950/20 border border-red-800/40 rounded-lg p-3 mb-4">
+                <AlertTriangle size={14} className="text-red-400 mt-0.5 shrink-0" />
+                <p className="text-red-400 text-xs">
+                  {updateMutation.error?.response?.data?.message ?? updateMutation.error?.message ?? 'Failed to save settings.'}
+                </p>
+              </div>
+            )}
+
+            {chaosSaveSuccess && (
+              <div className="bg-purple-950/20 border border-purple-800/40 rounded-lg p-3 mb-4">
+                <p className="text-purple-400 text-xs">Chaos settings saved.</p>
+              </div>
+            )}
+
+            <form onSubmit={handleChaosSubmit} noValidate>
+              {/* ── Caps ──────────────────────────────────────────────────────── */}
+              <p className="text-gray-300 text-xs font-semibold mb-3">Caps</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className={labelCls}>Max Strategies per Run (1–20)</label>
+                  {settingsLoading
+                    ? <div className={skeletonCls} />
+                    : <input type="number" min="1" max="20" value={chaosMaxStrategies}
+                        onChange={(e) => setChaosMaxStrategies(e.target.value)} className={inputCls} required />}
+                  <p className="text-slate-500 text-[10px] mt-1">Hard cap; 0 selected → auto-pick up to this many</p>
+                </div>
+                <div>
+                  <label className={labelCls}>Max Manual Symbols per Strategy (0–20)</label>
+                  {settingsLoading
+                    ? <div className={skeletonCls} />
+                    : <input type="number" min="0" max="20" value={chaosMaxManualSymbols}
+                        onChange={(e) => setChaosMaxManualSymbols(e.target.value)} className={inputCls} required />}
+                  <p className="text-slate-500 text-[10px] mt-1">0 = all auto; the rest are distributed from the pool</p>
+                </div>
+              </div>
+
+              {/* ── Launch defaults ───────────────────────────────────────────── */}
+              <div className="border-t border-slate-700/50 pt-5 mt-5">
+                <p className="text-gray-300 text-xs font-semibold mb-3">Launch Defaults</p>
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className={labelCls}>Capital / Strategy ($)</label>
+                    {settingsLoading
+                      ? <div className={skeletonCls} />
+                      : <input type="number" min="1" value={chaosDefaultCapital}
+                          onChange={(e) => setChaosDefaultCapital(e.target.value)} className={inputCls} required />}
+                  </div>
+                  <div>
+                    <label className={labelCls}>Leverage (1–125)</label>
+                    {settingsLoading
+                      ? <div className={skeletonCls} />
+                      : <input type="number" min="1" max="125" value={chaosDefaultLeverage}
+                          onChange={(e) => setChaosDefaultLeverage(e.target.value)} className={inputCls} required />}
+                  </div>
+                  <div>
+                    <label className={labelCls}>Timeframe</label>
+                    {settingsLoading
+                      ? <div className={skeletonCls} />
+                      : <select value={chaosDefaultTimeframe}
+                          onChange={(e) => setChaosDefaultTimeframe(e.target.value)}
+                          className={inputCls}>
+                          {['1m','3m','5m','15m','30m','1h','2h','4h','6h','8h','12h','1d'].map((tf) => (
+                            <option key={tf} value={tf}>{tf}</option>
+                          ))}
+                        </select>}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-6">
+                <button
+                  type="submit"
+                  disabled={updateMutation.isPending || settingsLoading}
+                  className="bg-purple-700 hover:bg-purple-800 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+                >
+                  {updateMutation.isPending ? 'Saving…' : 'Save Chaos Settings'}
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
 
         {/* ── Exchange Settings ─────────────────────────────────────────────── */}
         <div className="bg-title-bg border border-slate-700/50 rounded-xl p-6">
-          <h2 className="text-gray-100 text-sm font-medium mb-4">Exchange Settings</h2>
+          <div className="flex items-center justify-between -mx-6 -mt-6 px-6 py-4 mb-4 rounded-t-xl title-fade border-b border-slate-700/50">
+            <h2 className="text-gray-100 text-sm font-medium">Exchange Settings</h2>
+          </div>
 
           {updateMutation.isError && (
             <div className="flex items-start gap-2 bg-red-950/20 border border-red-800/40 rounded-lg p-3 mb-4">
@@ -357,104 +457,6 @@ export default function Settings() {
                 className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
               >
                 {updateMutation.isPending ? 'Saving…' : 'Save Exchange Settings'}
-              </button>
-            </div>
-          </form>
-        </div>
-      </div>
-
-      {/* ── Chaos Setting (testnet) ─────────────────────────────────────────── */}
-      <div className="mx-auto max-w-5xl mt-6">
-        <div className="bg-title-bg border border-purple-700/30 rounded-xl p-6">
-          {/* Header */}
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-gray-100 text-sm font-medium flex items-center gap-2">
-              <Zap size={15} className="text-purple-400" />
-              Chaos Settings
-            </h2>
-            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold border bg-purple-500/10 text-purple-400 border-purple-500/20">
-              <span className="h-1.5 w-1.5 rounded-full bg-purple-400 animate-pulse" />
-              Stress Test
-            </span>
-          </div>
-
-          {updateMutation.isError && (
-            <div className="flex items-start gap-2 bg-red-950/20 border border-red-800/40 rounded-lg p-3 mb-4">
-              <AlertTriangle size={14} className="text-red-400 mt-0.5 shrink-0" />
-              <p className="text-red-400 text-xs">
-                {updateMutation.error?.response?.data?.message ?? updateMutation.error?.message ?? 'Failed to save settings.'}
-              </p>
-            </div>
-          )}
-
-          {chaosSaveSuccess && (
-            <div className="bg-purple-950/20 border border-purple-800/40 rounded-lg p-3 mb-4">
-              <p className="text-purple-400 text-xs">Chaos settings saved.</p>
-            </div>
-          )}
-
-          <form onSubmit={handleChaosSubmit} noValidate>
-            {/* ── Caps ──────────────────────────────────────────────────────── */}
-            <p className="text-gray-300 text-xs font-semibold mb-3">Caps</p>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className={labelCls}>Max Strategies per Run (1–20)</label>
-                {settingsLoading
-                  ? <div className={skeletonCls} />
-                  : <input type="number" min="1" max="20" value={chaosMaxStrategies}
-                      onChange={(e) => setChaosMaxStrategies(e.target.value)} className={inputCls} required />}
-                <p className="text-slate-500 text-[10px] mt-1">Hard cap; 0 selected → auto-pick up to this many</p>
-              </div>
-              <div>
-                <label className={labelCls}>Max Manual Symbols per Strategy (0–20)</label>
-                {settingsLoading
-                  ? <div className={skeletonCls} />
-                  : <input type="number" min="0" max="20" value={chaosMaxManualSymbols}
-                      onChange={(e) => setChaosMaxManualSymbols(e.target.value)} className={inputCls} required />}
-                <p className="text-slate-500 text-[10px] mt-1">0 = all auto; the rest are distributed from the pool</p>
-              </div>
-            </div>
-
-            {/* ── Launch defaults ───────────────────────────────────────────── */}
-            <div className="border-t border-slate-700/50 pt-5 mt-5">
-              <p className="text-gray-300 text-xs font-semibold mb-3">Launch Defaults</p>
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className={labelCls}>Capital / Strategy ($)</label>
-                  {settingsLoading
-                    ? <div className={skeletonCls} />
-                    : <input type="number" min="1" value={chaosDefaultCapital}
-                        onChange={(e) => setChaosDefaultCapital(e.target.value)} className={inputCls} required />}
-                </div>
-                <div>
-                  <label className={labelCls}>Leverage (1–125)</label>
-                  {settingsLoading
-                    ? <div className={skeletonCls} />
-                    : <input type="number" min="1" max="125" value={chaosDefaultLeverage}
-                        onChange={(e) => setChaosDefaultLeverage(e.target.value)} className={inputCls} required />}
-                </div>
-                <div>
-                  <label className={labelCls}>Timeframe</label>
-                  {settingsLoading
-                    ? <div className={skeletonCls} />
-                    : <select value={chaosDefaultTimeframe}
-                        onChange={(e) => setChaosDefaultTimeframe(e.target.value)}
-                        className={inputCls}>
-                        {['1m','3m','5m','15m','30m','1h','2h','4h','6h','8h','12h','1d'].map((tf) => (
-                          <option key={tf} value={tf}>{tf}</option>
-                        ))}
-                      </select>}
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-6">
-              <button
-                type="submit"
-                disabled={updateMutation.isPending || settingsLoading}
-                className="bg-purple-700 hover:bg-purple-800 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
-              >
-                {updateMutation.isPending ? 'Saving…' : 'Save Chaos Settings'}
               </button>
             </div>
           </form>

@@ -14,12 +14,13 @@ Executes a full strategy simulation against historical OHLCV candle data. Produc
 ## Data Flow
 
 ```
-Client submits BacktestConfigForm
-  → Form pre-filled from Exchange Settings (defaultCapital, defaultLeverage, takerFee)
+Client submits NewBacktestWizard (multi-step dialog launched from the "New Backtest" header button)
+  → Wizard pre-filled from Exchange Settings (defaultCapital, defaultLeverage, takerFee, risk)
+  → Optional per-run strategy alphaParams collected on the Parameters step
         ↓
 POST /api/v1/backtest  (Node server)
   → Reads Exchange Settings (takerFee, slippagePct, fundingEnabled, fundingRate)
-  → Injects into BullMQ job payload
+  → Injects into BullMQ job payload (incl. alphaParams forwarded to the engine)
         ↓
 BacktestResult created in MongoDB (status: queued)
 Job enqueued on bull:backtest via BullMQ
@@ -131,6 +132,6 @@ Any backtest result is addressable via `?jobId=<id>` on the Backtest page. On mo
 | `engine/services/progress.py` | Publishes progress to Redis |
 | `client/src/hooks/useBacktest.js` | TanStack Query hooks for backtest |
 | `client/src/hooks/useExchangeSettings.js` | Fetch/update exchange settings |
-| `client/src/features/backtest/BacktestConfigForm.jsx` | Form with pre-filled capital/leverage from settings |
+| `client/src/features/backtest/NewBacktestWizard.jsx` | Multi-step launch wizard (dialog) with pre-filled capital/leverage/fee/risk from settings + per-run alphaParams |
 | `client/src/features/backtest/BacktestHistory.jsx` | History sidebar |
 | `client/src/features/backtest/BacktestMetricCard.jsx` | KPI card component |

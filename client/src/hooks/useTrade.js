@@ -28,6 +28,7 @@ function invalidateOrderState(queryClient) {
   queryClient.invalidateQueries({ queryKey: ['trade', 'positions'] })
   queryClient.invalidateQueries({ queryKey: ['trade', 'open-orders'] })
   queryClient.invalidateQueries({ queryKey: ['trade', 'account'] })
+  queryClient.invalidateQueries({ queryKey: ['trade', 'symbol-config'] })
 }
 
 export function useTradeAccount(options = {}) {
@@ -74,9 +75,16 @@ export function useTradeOpenOrders(options = {}) {
 
 export function useTradeSymbolConfig(symbol) {
   return useQuery({
-    queryKey: ['trade', 'positions'],
-    select: (positions) => positions?.find((p) => p.symbol === symbol) ?? null,
+    queryKey: ['trade', 'symbol-config', symbol],
+    queryFn: async () => {
+      const { data } = await api.get('/api/v1/trade/positions', { params: { symbol } })
+      const positions = data.data || []
+      return positions.find((p) => p.symbol === symbol) ?? null
+    },
     enabled: !!symbol,
+    refetchInterval: 15000,
+    staleTime: 12000,
+    retry: false,
   })
 }
 

@@ -16,6 +16,9 @@ const BacktestResultSchema = new mongoose.Schema(
     // Risk model params this run used (snake_case keys, e.g. risk_pct, rrr).
     // Server-owned config input — not an engine-written result field.
     riskParams: { type: mongoose.Schema.Types.Mixed },
+    // Strategy alpha params (Tier 3) this run used — keyed by PARAMS name.
+    // Server-owned config input — not an engine-written result field.
+    alphaParams: { type: mongoose.Schema.Types.Mixed },
     status: { type: String, enum: ['queued', 'running', 'completed', 'failed', 'cancelled'], default: 'queued' },
     error: { type: String },
     tradeCount: { type: Number },

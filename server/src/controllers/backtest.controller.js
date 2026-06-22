@@ -26,6 +26,7 @@ async function runBacktest(req, res, next) {
       leverage,
       feeRate,
       riskParams: riskOverride,
+      alphaParams,
     } = req.body
 
     if (!strategyId || !exchange || !symbol || !timeframe || !startDate || !endDate || !capital) {
@@ -72,6 +73,10 @@ async function runBacktest(req, res, next) {
       throw new ApiError(404, 'NOT_FOUND', 'Strategy not found')
     }
 
+    // Strategy alpha params (Tier 3) — keyed by PARAMS name, clamped by the engine runner.
+    // Optional per-run override; defaults to {} so the engine uses each PARAM's default.
+    const alphaParamsObj = (alphaParams && typeof alphaParams === 'object') ? alphaParams : {}
+
     // Accept a pre-generated UUID from the client so the client can join the socket
     // room before the POST lands, eliminating the completion-event race condition.
     const jobId = (clientJobId && UUID_RE.test(clientJobId)) ? clientJobId : uuidv4()
@@ -89,6 +94,7 @@ async function runBacktest(req, res, next) {
       leverage: leverageNum,
       feeRate: feeRateNum,
       riskParams,
+      alphaParams: alphaParamsObj,
       status: 'queued',
     })
 
@@ -107,6 +113,7 @@ async function runBacktest(req, res, next) {
       fundingEnabled: defaultFunding,
       fundingRate: defaultFundingRate,
       riskParams,
+      alphaParams: alphaParamsObj,
     }, { jobId })
 
     res.status(202).json(ApiResponse.success({ jobId, status: 'queued' }))
@@ -243,6 +250,26 @@ async function getBacktestTrades(req, res, next) {
   }
 }
 
+// GET /api/v1/backtest/:id/benchmark
+// Proxies the engine's normalized Buy & Hold series (computed from the same
+// TimescaleDB candles the run used). Pure proxy — no computation here.
+async function getBacktestBenchmark(req, res, next) {
+  try {
+    const { id } = req.params
+    const query = mongoose.Types.ObjectId.isValid(id)
+      ? { $or: [{ _id: id }, { jobId: id }] }
+      : { jobId: id }
+
+    const backtest = await BacktestResult.findOne(query).select('jobId').lean()
+    if (!backtest) throw new ApiError(404, 'NOT_FOUND', 'Backtest result not found')
+
+    const response = await engineClient.get(`/backtest/${backtest.jobId}/benchmark`)
+    res.json(ApiResponse.success(response.data.data))
+  } catch (err) {
+    next(err)
+  }
+}
+
 async function cancelBacktest(req, res, next) {
   try {
     const { id } = req.params
@@ -265,5 +292,6 @@ module.exports = {
   getBacktest,
   listBacktests,
   getBacktestTrades,
+  getBacktestBenchmark,
   cancelBacktest,
 }

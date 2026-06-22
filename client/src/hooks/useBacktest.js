@@ -70,6 +70,20 @@ export function useAllBacktestTrades(id) {
   })
 }
 
+// Normalized Buy & Hold series (capital × close/firstClose) aligned 1:1 with the
+// equity curve. Derived from immutable saved candle data → cache indefinitely.
+export function useBacktestBenchmark(id) {
+  return useQuery({
+    queryKey: ['backtests', id, 'benchmark'],
+    queryFn: async () => {
+      const res = await api.get(`/api/v1/backtest/${id}/benchmark`)
+      return res.data.data.benchmark
+    },
+    enabled: !!id,
+    staleTime: Infinity,
+  })
+}
+
 export function useCancelBacktest() {
   const queryClient = useQueryClient()
   return useMutation({

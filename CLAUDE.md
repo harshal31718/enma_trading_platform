@@ -102,6 +102,16 @@ For multi-phase work:
   ```
 This ensures any future AI session can resume exactly where this one stopped.
 
+### H — Git Safety (No Silent Reverts)
+**Never** run any git command that discards or reverts uncommitted changes unless the user explicitly instructs it in the same message. This includes but is not limited to:
+- `git checkout -- <path>` / `git checkout .`
+- `git restore <path>` / `git restore .`
+- `git reset --hard`
+- `git clean -f` / `git clean -fd`
+- `git stash` (when used to hide in-progress work without asking)
+
+All work done after the last commit — staged or unstaged — is live user work and must be preserved unless the user explicitly says to discard it.
+
 ---
 
 ## What NOT to Do
@@ -111,3 +121,4 @@ This ensures any future AI session can resume exactly where this one stopped.
 - Do not touch database configurations directly; all queries must go through existing Mongoose models (Node) or motor/asyncpg (Engine).
 - Do not make direct Binance calls from server/ or client/ folders.
 - Do not modify `.env` files.
+- **Do not run git commands that revert or discard post-last-commit changes** (staged or unstaged) without explicit user instruction. See Rule H above.

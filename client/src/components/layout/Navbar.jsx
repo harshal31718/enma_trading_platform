@@ -12,9 +12,9 @@ import { useAlgoSessions } from '../../hooks/useAlgoSessions'
 
 const navItems = [
   { label: 'Dashboard', icon: LayoutDashboard, to: '/' },
+  { label: 'Trade', icon: Activity, to: '/trade' },
   { label: 'Strategies', icon: Code2, to: '/strategies' },
   { label: 'Backtest', icon: FlaskConical, to: '/backtest' },
-  { label: 'Trade', icon: Activity, to: '/trade' },
   { label: 'AlgoTrading', icon: Bot, to: '/algo' },
   { label: 'Order History', icon: History, to: '/order-history' },
   { label: 'Settings', icon: Settings, to: '/settings' },
@@ -27,7 +27,7 @@ export default function Navbar() {
   return (
     <header className="fixed top-0 left-0 right-0 h-14 bg-title-bg title-fade border-b border-slate-700/50 flex items-center z-50">
       <div className="pl-6 w-[180px] shrink-0">
-        <span className="text-emerald-400 font-medium text-lg">Enma</span>
+        <span className="text-emerald-400 font-medium text-lg">ENMA</span>
       </div>
 
       <nav className="flex items-center gap-1">
@@ -40,7 +40,7 @@ export default function Navbar() {
               [
                 'inline-flex items-center gap-2 px-4 py-3 text-sm transition-colors rounded',
                 isActive
-                  ? 'text-emerald-400 bg-emerald-400/10 border-b-2 border-emerald-400'
+                  ? 'text-emerald-400 bg-emerald-400/10'
                   : 'text-slate-400 hover:text-gray-100 hover:bg-slate-800/50',
               ].join(' ')
             }

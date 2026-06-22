@@ -11,6 +11,8 @@ import {
   ChevronRight,
   ChevronLeft,
   Download,
+  Plus,
+  Square,
 } from 'lucide-react'
 
 import PageWrapper from '../components/layout/PageWrapper'
@@ -19,8 +21,9 @@ import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../components/ui/table'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
+import { Dialog, DialogContent } from '../components/ui/dialog'
 const EquityCurve = lazy(() => import('../components/charts/EquityCurve'))
-import BacktestConfigForm from '../features/backtest/BacktestConfigForm'
+import NewBacktestWizard from '../features/backtest/NewBacktestWizard'
 import BacktestHistory from '../features/backtest/BacktestHistory'
 import BacktestMetricCard from '../features/backtest/BacktestMetricCard'
 import BacktestCalendar from '../features/backtest/BacktestCalendar'
@@ -32,10 +35,11 @@ import {
   useCancelBacktest,
   useBacktestTrades,
   useAllBacktestTrades,
+  useBacktestBenchmark,
 } from '../hooks/useBacktest'
 import api from '../lib/axios'
 import { formatQty, formatPrice, formatPct, formatSignedPct, formatPnl, formatIsoDate } from '../utils/formatters'
-import { exportTradesAsCSV, exportResultAsJSON } from '../utils/exporters'
+import { exportResultAsJSON } from '../utils/exporters'
 import socket from '../lib/socket'
 import { useQueryClient, useQueries } from '@tanstack/react-query'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs'
@@ -83,38 +87,40 @@ function PerformanceTable({ bySide }) {
   }
 
   return (
-    <Table className="border border-gray-800 rounded-lg overflow-hidden">
-      <TableHeader className="bg-gray-950">
-        <TableRow>
-          <TableHead className="w-[250px] font-semibold text-gray-200">Metric</TableHead>
-          <TableHead className="font-semibold text-gray-200">All Trades</TableHead>
-          <TableHead className="font-semibold text-gray-200">Long Trades</TableHead>
-          <TableHead className="font-semibold text-gray-200">Short Trades</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {rows.map((row, index) => {
-          const allVal = bySide.all?.[row.key] ?? '-'
-          const longVal = bySide.long?.[row.key] ?? '-'
-          const shortVal = bySide.short?.[row.key] ?? '-'
+    <div className="bg-title-bg border border-slate-700/50 overflow-hidden">
+      <Table>
+        <TableHeader className="bg-title-bg title-fade">
+          <TableRow className="border-b border-slate-700/50 hover:bg-transparent">
+            <TableHead className="w-[250px]">Metric</TableHead>
+            <TableHead>All Trades</TableHead>
+            <TableHead>Long Trades</TableHead>
+            <TableHead>Short Trades</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map((row) => {
+            const allVal = bySide.all?.[row.key] ?? '-'
+            const longVal = bySide.long?.[row.key] ?? '-'
+            const shortVal = bySide.short?.[row.key] ?? '-'
 
-          return (
-            <TableRow key={row.key} className={index % 2 === 0 ? 'bg-gray-900/40 border-b border-gray-800/60' : 'bg-transparent border-b border-gray-800/60'}>
-              <TableCell className="font-medium text-gray-300">{row.label}</TableCell>
-              <TableCell className={row.isPnl ? getPnlClass(allVal) : row.highlightPF ? getPFClass(allVal) : 'text-gray-400 font-mono text-sm'}>
-                {allVal !== '-' ? row.format(allVal, bySide.all) : '-'}
-              </TableCell>
-              <TableCell className={row.isPnl ? getPnlClass(longVal) : row.highlightPF ? getPFClass(longVal) : 'text-gray-400 font-mono text-sm'}>
-                {longVal !== '-' ? row.format(longVal, bySide.long) : '-'}
-              </TableCell>
-              <TableCell className={row.isPnl ? getPnlClass(shortVal) : row.highlightPF ? getPFClass(shortVal) : 'text-gray-400 font-mono text-sm'}>
-                {shortVal !== '-' ? row.format(shortVal, bySide.short) : '-'}
-              </TableCell>
-            </TableRow>
-          )
-        })}
-      </TableBody>
-    </Table>
+            return (
+              <TableRow key={row.key}>
+                <TableCell className="font-medium text-gray-300">{row.label}</TableCell>
+                <TableCell className={row.isPnl ? getPnlClass(allVal) : row.highlightPF ? getPFClass(allVal) : 'text-gray-400 font-mono text-sm'}>
+                  {allVal !== '-' ? row.format(allVal, bySide.all) : '-'}
+                </TableCell>
+                <TableCell className={row.isPnl ? getPnlClass(longVal) : row.highlightPF ? getPFClass(longVal) : 'text-gray-400 font-mono text-sm'}>
+                  {longVal !== '-' ? row.format(longVal, bySide.long) : '-'}
+                </TableCell>
+                <TableCell className={row.isPnl ? getPnlClass(shortVal) : row.highlightPF ? getPFClass(shortVal) : 'text-gray-400 font-mono text-sm'}>
+                  {shortVal !== '-' ? row.format(shortVal, bySide.short) : '-'}
+                </TableCell>
+              </TableRow>
+            )
+          })}
+        </TableBody>
+      </Table>
+    </div>
   )
 }
 
@@ -166,8 +172,8 @@ function ComparisonTable({ results }) {
       {/* Metric table */}
       <div className="rounded-lg border border-gray-800 overflow-hidden">
         <Table>
-          <TableHeader className="bg-gray-950">
-            <TableRow>
+          <TableHeader className="bg-title-bg title-fade">
+            <TableRow className="border-b border-slate-700/50 hover:bg-transparent">
               <TableHead className="w-[180px] text-gray-400 font-medium text-xs">Metric</TableHead>
               {results.map((r) => (
                 <TableHead key={r.jobId} className="text-gray-200 font-semibold text-xs">
@@ -208,6 +214,7 @@ export default function Backtest() {
 
   const [comparisonIds, setComparisonIds] = useState([])
   const [compareError, setCompareError] = useState('')
+  const [showWizard, setShowWizard] = useState(false)
 
   const { data: listData, isLoading: loadingHistory, refetch: refetchHistory } = useBacktestsList(1, 20, historyFilters)
 
@@ -236,6 +243,10 @@ export default function Backtest() {
   )
 
   const { data: allTradesData, isLoading: loadingAllTrades } = useAllBacktestTrades(
+    selectedResultId || null
+  )
+
+  const { data: benchmarkData } = useBacktestBenchmark(
     selectedResultId || null
   )
 
@@ -377,23 +388,30 @@ export default function Backtest() {
 
   return (
     <PageWrapper>
-      <PageHeader title="Backtest" />
+      <PageHeader
+        title="Backtest"
+        actions={
+          <button
+            onClick={() => setShowWizard(true)}
+            disabled={!!activeJobId}
+            className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm rounded-lg transition-colors"
+          >
+            <Plus size={16} />
+            New Backtest
+          </button>
+        }
+      />
 
       {errorMessage && (
-        <div className="mt-4 bg-red-950/20 border border-red-800/40 rounded-lg p-3 flex items-center gap-2 text-red-400 text-sm">
+        <div className="bg-red-950/20 border border-red-800/40 rounded-lg p-3 flex items-center gap-2 text-red-400 text-sm">
           <AlertTriangle className="size-4 shrink-0" />
           {errorMessage}
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mt-6">
-        {/* Left Column */}
-        <div className="lg:col-span-1 space-y-6">
-          <BacktestConfigForm
-            isRunning={!!activeJobId}
-            onSubmit={handleRun}
-            onCancel={handleCancel}
-          />
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-0 h-[calc(100vh-100px)] overflow-hidden">
+        {/* Left Column — Run History */}
+        <div className="lg:col-span-1 border-r border-slate-700/50 h-full overflow-hidden">
           <BacktestHistory
             data={listData?.backtests}
             selectedId={selectedResultId}
@@ -409,7 +427,7 @@ export default function Backtest() {
         </div>
 
         {/* Right Column */}
-        <div className="lg:col-span-3 space-y-6">
+        <div className="lg:col-span-3 h-full overflow-hidden flex flex-col">
           {activeJobId ? (
             <Card className="h-fit flex flex-col items-center justify-start py-12 px-6">
               <div className="space-y-6 text-center max-w-md w-full">
@@ -435,6 +453,14 @@ export default function Backtest() {
                     />
                   </div>
                 </div>
+                <Button
+                  variant="danger"
+                  className="flex items-center justify-center gap-2"
+                  onClick={handleCancel}
+                  disabled={cancelMutation.isPending}
+                >
+                  <Square className="size-4" /> Cancel Backtest
+                </Button>
               </div>
             </Card>
           ) : loadingResult ? (
@@ -445,19 +471,10 @@ export default function Backtest() {
               </div>
             </Card>
           ) : activeResult ? (
-            <div className="space-y-6">
-              {activeResult.status === 'failed' && (
-                <div className="bg-red-950/20 border border-red-800/40 rounded-lg p-4 flex items-center gap-3 text-red-400 text-sm">
-                  <AlertTriangle className="size-5 shrink-0" />
-                  <div>
-                    <span className="font-semibold">Execution Failed:</span>{' '}
-                    {activeResult.error || 'Unknown error occurred.'}
-                  </div>
-                </div>
-              )}
-
-              <Tabs defaultValue="overview" className="w-full">
-                <TabsList className="mb-6 bg-gray-900 border border-gray-800">
+            <Tabs defaultValue="overview" className="w-full h-full flex flex-col">
+              {/* ── Tabs header bar — matches BacktestHistory header height ── */}
+              <div className="h-11 shrink-0 bg-title-bg title-fade border-b border-slate-700/50 flex items-center px-2 gap-1">
+                <TabsList className="h-full bg-transparent border-none gap-0 p-0">
                   <TabsTrigger value="overview">Overview</TabsTrigger>
                   <TabsTrigger value="performance">Performance Summary</TabsTrigger>
                   <TabsTrigger value="trades">List of Trades</TabsTrigger>
@@ -470,92 +487,76 @@ export default function Backtest() {
                     )}
                   </TabsTrigger>
                 </TabsList>
+              </div>
 
-                <TabsContent value="overview" className="space-y-6">
-                  {activeResult.metrics && (
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                      <BacktestMetricCard
-                        title="Net Profit"
-                        value={formatPrice(activeResult.metrics.netProfit)}
-                        subtext={formatSignedPct(activeResult.metrics.netProfitPct)}
-                        icon={DollarSign}
-                        valueClassName={getPnlClass(activeResult.metrics.netProfit)}
-                      />
-                      <BacktestMetricCard
-                        title="Max Drawdown"
-                        value={formatPct(activeResult.metrics.maxDrawdown)}
-                        subtext="Peak equity drop"
-                        icon={Percent}
-                        valueClassName="text-red-400"
-                      />
-                      <BacktestMetricCard
-                        title="Win Rate"
-                        value={formatPct(parseFloat(activeResult.metrics.winRate) * 100)}
-                        subtext={`${activeResult.metrics.winningTrades} of ${activeResult.metrics.totalTrades} trades`}
-                        icon={TrendingUp}
-                      />
-                      <BacktestMetricCard
-                        title="Profit Factor"
-                        value={activeResult.metrics.profitFactor ? parseFloat(activeResult.metrics.profitFactor).toFixed(2) : '-'}
-                        subtext="Gross Profit / Loss"
-                        icon={Activity}
-                        valueClassName={activeResult.metrics.profitFactor && parseFloat(activeResult.metrics.profitFactor) >= 1 ? 'text-emerald-400' : 'text-red-400'}
-                      />
-                      <BacktestMetricCard
-                        title="Sharpe Ratio"
-                        value={parseFloat(activeResult.metrics.sharpeRatio || 0).toFixed(2)}
-                        subtext="Risk-adjusted return"
-                        icon={Activity}
-                      />
-                      <BacktestMetricCard
-                        title="Sortino Ratio"
-                        value={parseFloat(activeResult.metrics.sortinoRatio || 0).toFixed(2)}
-                        subtext="Downside adjusted"
-                        icon={Activity}
-                      />
-                      <BacktestMetricCard
-                        title="Calmar Ratio"
-                        value={parseFloat(activeResult.metrics.calmarRatio || 0).toFixed(2)}
-                        subtext="Return/DD ratio"
-                        icon={Activity}
-                      />
-                      <BacktestMetricCard
-                        title="Expectancy"
-                        value={activeResult.metrics.expectancy ? formatPnl(activeResult.metrics.expectancy).value : '-'}
-                        subtext="Avg profit per trade"
-                        icon={DollarSign}
-                        valueClassName={activeResult.metrics.expectancy ? getPnlClass(activeResult.metrics.expectancy) : 'text-gray-300'}
-                      />
+              {/* ── Scrollable content area ── */}
+              <div className="flex-1 overflow-y-auto">
+                {activeResult.status === 'failed' && (
+                  <div className="bg-red-950/20 border border-red-800/40 rounded-lg p-4 m-4 flex items-center gap-3 text-red-400 text-sm">
+                    <AlertTriangle className="size-5 shrink-0" />
+                    <div>
+                      <span className="font-semibold">Execution Failed:</span>{' '}
+                      {activeResult.error || 'Unknown error occurred.'}
                     </div>
-                  )}
+                  </div>
+                )}
 
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>Performance Charts</CardTitle>
-                    </CardHeader>
-                    <CardContent>
+                <TabsContent value="overview">
+                  {activeResult.metrics && (() => {
+                    const m = activeResult.metrics
+                    const metrics = [
+                      { label: 'Net Profit',    value: formatPrice(m.netProfit),                            cls: getPnlClass(m.netProfit) },
+                      { label: 'Net P&L %',     value: formatSignedPct(m.netProfitPct),                    cls: getPnlClass(m.netProfit) },
+                      { label: 'Max Drawdown',  value: formatPct(m.maxDrawdown),                           cls: 'text-red-400' },
+                      { label: 'Win Rate',      value: formatPct(parseFloat(m.winRate) * 100),             cls: 'text-gray-100' },
+                      { label: 'Total Trades',  value: m.totalTrades ?? '-',                               cls: 'text-gray-100' },
+                      { label: 'Profit Factor', value: m.profitFactor ? parseFloat(m.profitFactor).toFixed(2) : '-', cls: m.profitFactor && parseFloat(m.profitFactor) >= 1 ? 'text-emerald-400' : 'text-red-400' },
+                      { label: 'Sharpe',        value: parseFloat(m.sharpeRatio || 0).toFixed(2),          cls: 'text-gray-100' },
+                      { label: 'Sortino',       value: parseFloat(m.sortinoRatio || 0).toFixed(2),         cls: 'text-gray-100' },
+                      { label: 'Calmar',        value: parseFloat(m.calmarRatio || 0).toFixed(2),          cls: 'text-gray-100' },
+                      { label: 'Expectancy',    value: m.expectancy ? formatPnl(m.expectancy).value : '-', cls: m.expectancy ? getPnlClass(m.expectancy) : 'text-gray-300' },
+                    ]
+                    return (
+                      <div className="grid grid-cols-5 border-b border-slate-700/50 divide-x divide-y divide-slate-700/50">
+                        {metrics.map(({ label, value, cls }) => (
+                          <div key={label} className="flex flex-col justify-center px-3 h-11 bg-title-bg">
+                            <span className="text-[9px] uppercase tracking-wider text-gray-500 leading-none mb-1">{label}</span>
+                            <span className={`text-sm font-bold leading-none ${cls}`}>{value}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  })()}
+
+                  {/* Performance Charts */}
+                  <div className="border-b border-slate-700/50">
+                    <div className="h-11 bg-title-bg title-fade flex items-center px-4 border-b border-slate-700/30">
+                      <span className="text-sm font-semibold text-gray-100">Performance Charts</span>
+                    </div>
+                    <div className="p-4">
                       <Suspense fallback={<div className="h-48 flex items-center justify-center"><Loader2 className="size-6 animate-spin text-emerald-400" /></div>}>
                         <EquityCurve
                           data={activeResult.equityCurve}
                           startingCapital={activeResult.capital}
                           buyHoldReturnPct={activeResult.metrics?.buyHoldReturnPct || 0}
+                          benchmark={benchmarkData ?? null}
                         />
                       </Suspense>
-                    </CardContent>
-                  </Card>
+                    </div>
+                  </div>
 
                   {allTradesData && allTradesData.length > 0 && (
-                    <BacktestCalendar
-                      trades={allTradesData}
-                      onSelectPeriod={(trades) => {
-                        // Optional: filter the trades list or charts based on selection
-                        // For now we just show the calendar
-                      }}
-                    />
+                    <div className="border-b border-slate-700/50">
+                      <BacktestCalendar
+                        trades={allTradesData}
+                        onSelectPeriod={(trades) => {}}
+                      />
+                    </div>
                   )}
 
-                  <Card className="p-5">
-                    <h4 className="text-gray-100 font-semibold mb-3">Simulation Config</h4>
+                  {/* Simulation Config */}
+                  <div className="border-b border-slate-700/50 px-5 py-4">
+                    <h4 className="text-gray-100 font-semibold mb-3 text-sm">Simulation Config</h4>
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                       <div>
                         <span className="text-gray-500 block">Date Range</span>
@@ -599,189 +600,140 @@ export default function Backtest() {
                         </div>
                       )}
                     </div>
-                  </Card>
+                  </div>
 
-                  <Card className="p-5 bg-gray-900/50 border border-emerald-900/30">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <h4 className="text-gray-100 font-semibold">Export Results</h4>
-                        <p className="text-gray-500 text-sm mt-1">Download backtest data for analysis and record-keeping</p>
-                      </div>
-                      <Button
-                        onClick={() => exportResultAsJSON(activeResult, activeResult.strategyName || 'backtest')}
-                        size="sm"
-                        className="bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-2"
-                      >
-                        <Download className="size-4" />
-                        Export as JSON
-                      </Button>
+                  {/* Export Results */}
+                  <div className="px-5 py-4 flex items-center justify-between">
+                    <div>
+                      <h4 className="text-gray-100 font-semibold text-sm">Export Results</h4>
+                      <p className="text-gray-500 text-xs mt-0.5">Download backtest data for analysis</p>
                     </div>
-                  </Card>
+                    <Button
+                      onClick={() => exportResultAsJSON(activeResult, activeResult.strategyName || 'backtest')}
+                      size="sm"
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-2"
+                    >
+                      <Download className="size-4" />
+                      Export as JSON
+                    </Button>
+                  </div>
                 </TabsContent>
 
                 <TabsContent value="performance">
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>Performance Breakdown</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      {activeResult.metrics?.bySide ? (
-                        <PerformanceTable bySide={activeResult.metrics.bySide} />
-                      ) : (
-                        <div className="text-center text-gray-500 py-6">
-                          Long/Short breakdown metrics not available for this run.
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
+                  {activeResult.metrics?.bySide ? (
+                    <PerformanceTable bySide={activeResult.metrics.bySide} />
+                  ) : (
+                    <div className="bg-title-bg border border-slate-700/50 overflow-hidden">
+                      <p className="text-center text-gray-500 py-6 text-sm">
+                        Long/Short breakdown metrics not available for this run.
+                      </p>
+                    </div>
+                  )}
                 </TabsContent>
-
                 <TabsContent value="trades">
-                  <Card>
-                    <CardHeader>
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <CardTitle>Execution Log</CardTitle>
-                        </div>
-                        {tradesData?.trades && tradesData.trades.length > 0 && (
-                          <Button
-                            onClick={() => exportTradesAsCSV(tradesData.trades, activeResult.jobId, activeResult.strategyName || 'backtest')}
-                            size="sm"
-                            className="bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-2 flex-shrink-0"
-                          >
-                            <Download className="size-4" />
-                            Export CSV
-                          </Button>
-                        )}
-                      </div>
-                    </CardHeader>
-                    <CardContent>
-                      {tradesData?.trades && tradesData.trades.length > 0 ? (() => {
-                        const totalTrades = tradesData.pagination.total
-                        const totalPages = tradesData.pagination.totalPages
-                        const startIdx = (tradePage - 1) * TRADES_PER_PAGE
-                        const pageTrades = tradesData.trades
+                  <div className="bg-title-bg border border-slate-700/50 overflow-hidden">
+                    {tradesData?.trades && tradesData.trades.length > 0 ? (() => {
+                      const totalTrades = tradesData.pagination.total
+                      const totalPages = tradesData.pagination.totalPages
+                      const startIdx = (tradePage - 1) * TRADES_PER_PAGE
+                      const pageTrades = tradesData.trades
 
-                        return (
-                          <div className="space-y-4">
-                            <Table>
-                              <TableHeader>
-                                <TableRow>
-                                  <TableHead>ID</TableHead>
-                                  <TableHead>Type</TableHead>
-                                  <TableHead>Qty</TableHead>
-                                  <TableHead>Entry Price</TableHead>
-                                  <TableHead>Exit Price</TableHead>
-                                  <TableHead>Entry Time</TableHead>
-                                  <TableHead>Run-up (MFE)</TableHead>
-                                  <TableHead>Drawdown (MAE)</TableHead>
-                                  <TableHead>Bars</TableHead>
-                                  <TableHead>Reason</TableHead>
-                                  <TableHead className="text-right">Net P&L</TableHead>
-                                </TableRow>
-                              </TableHeader>
-                              <TableBody>
-                                {pageTrades.map((tr) => {
-                                  const pnl = formatPnl(tr.pnl)
-                                  const runUp = tr.runUpPct ? `${tr.runUpPct}%` : '-'
-                                  const drawdown = tr.drawdownPct ? `${tr.drawdownPct}%` : '-'
-                                  const bars = tr.barsHeld ?? '-'
+                      return (
+                        <>
+                          <Table>
+                            <TableHeader className="bg-title-bg title-fade">
+                              <TableRow className="border-b border-slate-700/50 hover:bg-transparent">
+                                <TableHead>ID</TableHead>
+                                <TableHead>Type</TableHead>
+                                <TableHead>Qty</TableHead>
+                                <TableHead>Entry Price</TableHead>
+                                <TableHead>Exit Price</TableHead>
+                                <TableHead>Entry Time</TableHead>
+                                <TableHead>Run-up (MFE)</TableHead>
+                                <TableHead>Drawdown (MAE)</TableHead>
+                                <TableHead>Bars</TableHead>
+                                <TableHead>Reason</TableHead>
+                                <TableHead className="text-right">Net P&L</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {pageTrades.map((tr) => {
+                                const pnl = formatPnl(tr.pnl)
+                                const runUp = tr.runUpPct ? `${tr.runUpPct}%` : '-'
+                                const drawdown = tr.drawdownPct ? `${tr.drawdownPct}%` : '-'
+                                const bars = tr.barsHeld ?? '-'
 
-                                  return (
-                                    <TableRow key={tr.id}>
-                                      <TableCell className="font-mono text-xs">{tr.id}</TableCell>
-                                      <TableCell>
-                                        <Badge variant={tr.type === 'long' ? 'profit' : 'destructive'}>
-                                          {tr.type.toUpperCase()}
-                                        </Badge>
-                                      </TableCell>
-                                      <TableCell className="font-mono text-xs">{formatQty(tr.qty)}</TableCell>
-                                      <TableCell className="font-mono text-xs">{formatPrice(tr.entryPrice)}</TableCell>
-                                      <TableCell className="font-mono text-xs">{formatPrice(tr.exitPrice)}</TableCell>
-                                      <TableCell className="text-gray-400 text-xs">
-                                        {new Date(tr.entryAt).toLocaleDateString('en-US', {
-                                          month: 'short', day: 'numeric',
-                                          hour: '2-digit', minute: '2-digit',
-                                        })}
-                                      </TableCell>
-                                      <TableCell className="font-mono text-xs text-emerald-400">
-                                        {runUp}
-                                      </TableCell>
-                                      <TableCell className="font-mono text-xs text-red-400">
-                                        {drawdown}
-                                      </TableCell>
-                                      <TableCell className="font-mono text-xs text-gray-400">
-                                        {bars}
-                                      </TableCell>
-                                      <TableCell>
-                                        <span className="text-xs capitalize text-gray-300">
-                                          {tr.exitReason ? tr.exitReason.replace('_', ' ') : '-'}
-                                        </span>
-                                      </TableCell>
-                                      <TableCell className={`text-right font-mono text-xs font-semibold ${pnl.isPositive ? 'text-emerald-400' : 'text-red-400'}`}>
-                                        {pnl.value} ({formatSignedPct(tr.pnlPct)})
-                                      </TableCell>
-                                    </TableRow>
-                                  )
-                                })}
-                              </TableBody>
-                            </Table>
+                                return (
+                                  <TableRow key={tr.id}>
+                                    <TableCell className="font-mono text-xs text-slate-500">{tr.id}</TableCell>
+                                    <TableCell>
+                                      <Badge variant={tr.type === 'long' ? 'profit' : 'destructive'}>
+                                        {tr.type.toUpperCase()}
+                                      </Badge>
+                                    </TableCell>
+                                    <TableCell className="font-mono text-xs">{formatQty(tr.qty)}</TableCell>
+                                    <TableCell className="font-mono text-xs">{formatPrice(tr.entryPrice)}</TableCell>
+                                    <TableCell className="font-mono text-xs">{formatPrice(tr.exitPrice)}</TableCell>
+                                    <TableCell className="text-slate-500 text-xs font-mono tabular-nums">
+                                      {new Date(tr.entryAt).toLocaleDateString('en-US', {
+                                        month: 'short', day: 'numeric',
+                                        hour: '2-digit', minute: '2-digit',
+                                      })}
+                                    </TableCell>
+                                    <TableCell className="font-mono text-xs text-emerald-400">
+                                      {runUp}
+                                    </TableCell>
+                                    <TableCell className="font-mono text-xs text-red-400">
+                                      {drawdown}
+                                    </TableCell>
+                                    <TableCell className="font-mono text-xs text-gray-400">
+                                      {bars}
+                                    </TableCell>
+                                    <TableCell>
+                                      <span className="text-xs capitalize text-gray-300">
+                                        {tr.exitReason ? tr.exitReason.replace('_', ' ') : '-'}
+                                      </span>
+                                    </TableCell>
+                                    <TableCell className={`text-right font-mono text-xs font-semibold ${pnl.isPositive ? 'text-emerald-400' : 'text-red-400'}`}>
+                                      {pnl.value} ({formatSignedPct(tr.pnlPct)})
+                                    </TableCell>
+                                  </TableRow>
+                                )
+                              })}
+                            </TableBody>
+                          </Table>
 
-                            {totalPages > 1 && (
-                              <div className="flex items-center justify-between pt-2 border-t border-gray-800">
-                                <span className="text-xs text-gray-500">
-                                  Showing {startIdx + 1}–{Math.min(startIdx + TRADES_PER_PAGE, totalTrades)} of {totalTrades} trades
-                                </span>
-                                <div className="flex items-center gap-1">
-                                  <button
-                                    onClick={() => setTradePage((p) => Math.max(1, p - 1))}
-                                    disabled={tradePage === 1}
-                                    className="p-1.5 rounded border border-gray-800 text-gray-400 hover:text-gray-100 hover:border-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                                  >
-                                    <ChevronLeft className="size-4" />
-                                  </button>
-                                  {Array.from({ length: totalPages }, (_, i) => i + 1)
-                                    .filter((p) => p === 1 || p === totalPages || Math.abs(p - tradePage) <= 2)
-                                    .reduce((acc, p, idx, arr) => {
-                                      if (idx > 0 && p - arr[idx - 1] > 1) acc.push('…')
-                                      acc.push(p)
-                                      return acc
-                                    }, [])
-                                    .map((item, idx) =>
-                                      item === '…' ? (
-                                        <span key={`e-${idx}`} className="px-1 text-gray-600 text-xs">…</span>
-                                      ) : (
-                                        <button
-                                          key={item}
-                                          onClick={() => setTradePage(item)}
-                                          className={`min-w-[28px] h-7 px-1.5 rounded border text-xs font-medium transition-colors ${tradePage === item
-                                            ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400'
-                                            : 'border-gray-800 text-gray-400 hover:text-gray-100 hover:border-gray-600'
-                                            }`}
-                                        >
-                                          {item}
-                                        </button>
-                                      )
-                                    )}
-                                  <button
-                                    onClick={() => setTradePage((p) => Math.min(totalPages, p + 1))}
-                                    disabled={tradePage === totalPages}
-                                    className="p-1.5 rounded border border-gray-800 text-gray-400 hover:text-gray-100 hover:border-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                                  >
-                                    <ChevronRight className="size-4" />
-                                  </button>
-                                </div>
+                          {totalPages > 1 && (
+                            <div className="flex items-center justify-between px-4 py-3 border-t border-slate-700/50">
+                              <span className="text-sm text-slate-400">
+                                {totalTrades} trades · page {tradePage} of {totalPages}
+                              </span>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={() => setTradePage((p) => Math.max(1, p - 1))}
+                                  disabled={tradePage === 1}
+                                  className="p-1.5 rounded-lg text-slate-400 hover:text-gray-100 hover:bg-slate-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                                >
+                                  <ChevronLeft className="size-4" />
+                                </button>
+                                <button
+                                  onClick={() => setTradePage((p) => Math.min(totalPages, p + 1))}
+                                  disabled={tradePage >= totalPages}
+                                  className="p-1.5 rounded-lg text-slate-400 hover:text-gray-100 hover:bg-slate-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                                >
+                                  <ChevronRight className="size-4" />
+                                </button>
                               </div>
-                            )}
-                          </div>
-                        )
-                      })() : (
-                        <div className="text-center text-gray-500 py-6">
-                          No trades were executed during this backtest. Try relaxing strategy rules or expanding dates.
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
+                            </div>
+                          )}
+                        </>
+                      )
+                    })() : (
+                      <p className="text-center text-gray-500 py-6 text-sm">
+                        No trades were executed during this backtest. Try relaxing strategy rules or expanding dates.
+                      </p>
+                    )}
+                  </div>
                 </TabsContent>
 
                 <TabsContent value="comparison" className="space-y-3">
@@ -822,8 +774,8 @@ export default function Backtest() {
                     </Card>
                   )}
                 </TabsContent>
-              </Tabs>
-            </div>
+              </div>
+            </Tabs>
           ) : (
             <Card className="h-full flex flex-col justify-center items-center py-20 px-6 text-center">
               <Activity className="size-10 text-gray-700 mb-3" />
@@ -835,6 +787,18 @@ export default function Backtest() {
           )}
         </div>
       </div>
+
+      <Dialog open={showWizard} onOpenChange={(open) => { if (!open) setShowWizard(false) }}>
+        <DialogContent className="w-[720px] max-w-[95vw] max-h-[90vh] overflow-y-auto overflow-x-hidden bg-title-bg">
+          <NewBacktestWizard
+            onCancel={() => setShowWizard(false)}
+            onRun={(config) => {
+              setShowWizard(false)
+              handleRun(config)
+            }}
+          />
+        </DialogContent>
+      </Dialog>
     </PageWrapper>
   )
 }

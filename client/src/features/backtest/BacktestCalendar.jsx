@@ -62,10 +62,10 @@ export default function BacktestCalendar({ trades, onSelectPeriod }) {
     };
 
     return (
-        <div className="flex flex-col h-full bg-title-bg border border-slate-700/50 rounded-lg p-4 overflow-hidden">
-            {/* Header / Tabs */}
-            <div className="flex items-center justify-between -mx-4 -mt-4 px-4 pt-4 pb-3 mb-4 title-fade">
-                <div className="flex items-center gap-2 text-gray-200 font-semibold">
+        <div className="flex flex-col h-full bg-title-bg border border-slate-700/50 overflow-hidden">
+            {/* Header */}
+            <div className="h-11 title-fade flex items-center justify-between px-4 border-b border-slate-700/30 shrink-0">
+                <div className="flex items-center gap-2 text-gray-200 font-semibold text-sm">
                     <CalendarIcon className="size-4 text-emerald-400" />
                     <span>Performance Calendar</span>
                 </div>
@@ -89,7 +89,7 @@ export default function BacktestCalendar({ trades, onSelectPeriod }) {
             </div>
 
             {/* Content - Expanded to fit */}
-            <div className="max-h-[500px] overflow-y-auto pr-1">
+            <div className="max-h-[500px] overflow-y-auto p-4">
                 <div className={cn(
                     "grid gap-2 content-start",
                     view === 'QUARTERLY' && "grid-cols-2 md:grid-cols-4",

@@ -31,23 +31,23 @@ export default function Dashboard() {
       <PageHeader title="Dashboard" />
 
       {isLoading ? (
-        <div className="space-y-6 mt-6">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-0">
             {Array.from({ length: 4 }).map((_, i) => (
-              <Skeleton key={i} className="h-28 rounded-lg bg-slate-800/50" />
+              <Skeleton key={i} className="h-28 bg-slate-800/50" />
             ))}
           </div>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <Skeleton className="h-80 rounded-lg bg-slate-800/50" />
-            <Skeleton className="h-80 rounded-lg bg-slate-800/50" />
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-0">
+            <Skeleton className="h-80 bg-slate-800/50" />
+            <Skeleton className="h-80 bg-slate-800/50" />
           </div>
-          <Skeleton className="h-64 rounded-lg bg-slate-800/50" />
+          <Skeleton className="h-64 bg-slate-800/50" />
         </div>
       ) : isError ? (
-        <p className="text-red-400 text-sm mt-6">Failed to load dashboard data. Ensure the backend is running.</p>
+        <p className="text-red-400 text-sm">Failed to load dashboard data. Ensure the backend is running.</p>
       ) : (
-        <div className="space-y-6 mt-6">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-0">
             <StatCard
               title="Total Runs"
               value={stats.totalRuns}
@@ -74,13 +74,12 @@ export default function Dashboard() {
             />
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-0">
             <RecentActivityTable data={recentRuns} />
             <StrategyLeaderboard data={leaderboard} />
           </div>
 
           <div>
-            <h2 className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider mb-3">Historical Data Cache</h2>
             <CachedCandlesTable data={cachedCandles} />
           </div>
         </div>

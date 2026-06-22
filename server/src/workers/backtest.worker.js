@@ -21,6 +21,7 @@ const worker = new Worker('backtest', async (job) => {
     fundingEnabled,
     fundingRate,
     riskParams,
+    alphaParams,
   } = job.data
 
   subscribeToJob(jobId, 'backtest')
@@ -43,6 +44,7 @@ const worker = new Worker('backtest', async (job) => {
       fundingEnabled,
       fundingRate,
       riskParams,
+      alphaParams,
     })
 
     // Engine wrote the full result to MongoDB — only update status here

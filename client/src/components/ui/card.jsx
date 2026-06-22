@@ -4,7 +4,7 @@ export function Card({ className, ...props }) {
   return (
     <div
       className={cn(
-        'bg-title-bg border border-slate-700/50 rounded-xl shadow-2xl hover:border-slate-600/70 transition-all duration-300',
+        'bg-title-bg border border-slate-700/50 shadow-2xl hover:border-slate-600/70 transition-all duration-300',
         className
       )}
       {...props}
@@ -16,7 +16,7 @@ export function CardHeader({ className, ...props }) {
   return (
     <div
       className={cn(
-        'flex flex-col space-y-1.5 p-6 rounded-t-xl title-fade',
+        'flex flex-col space-y-1.5 p-6 title-fade',
         className
       )}
       {...props}
