@@ -249,11 +249,79 @@ class MultiDivergence(BaseStrategy):
             result = 1
         return result
 
-    # ── Per-candle signal computation ───────────────────────────────────────
+    # ── Phase A: one-time vectorized pre-computation (full candle array) ─────
+    def prepare(self, candles: np.ndarray) -> None:
+        """Compute price pivots, ATR and every enabled oscillator's pivot arrays
+        once over the full candle array.
 
+        Every source here is causal (each index depends only on earlier bars),
+        and the original ``before()`` always computed over ``candles[:i+1]`` from
+        index 0 — so a single full-array pass is bit-identical at every index.
+        ``before()`` then only reads these arrays up to the confirmation horizon
+        ``c = i - L`` (a pivot needs ``L`` bars to its right), which is what keeps
+        the strategy non-repainting. 9× O(N) per candle → 1× O(N) total.
+        """
+        L = int(self.piv_len)
+        if len(candles) == 0:
+            empty = np.array([])
+            self._atr_seq = empty
+            self._ph = empty
+            self._pl = empty
+            self._osc_pivot_pairs = []
+            return
+
+        self._atr_seq = np.asarray(
+            ta.atr(candles, period=self.atr_period, sequential=True), dtype=float
+        )
+        self._ph = ta.pivot_high(candles, L, L, "high", sequential=True)
+        self._pl = ta.pivot_low(candles, L, L, "low", sequential=True)
+
+        def _osc_piv(series):
+            return (_compute_pivots(series, L, L, True),
+                    _compute_pivots(series, L, L, False))
+
+        # Enabled oscillator sources whose votes come from _div(pr, osc). Order
+        # is irrelevant (votes are summed independently); price-action divergence
+        # uses only the price pivots and is handled directly in before().
+        pairs = []
+        if self.use_rsi:
+            pairs.append(_osc_piv(ta.rsi(candles, period=self.rsi_period, sequential=True)))
+        if self.use_mfi:
+            pairs.append(_osc_piv(ta.mfi(candles, period=self.mfi_period, sequential=True)))
+        if self.use_stoch:
+            k, _ = ta.stochastic(candles, period=self.stoch_period, sequential=True)
+            pairs.append(_osc_piv(k))
+        if self.use_zscore:
+            pairs.append(_osc_piv(self._zscore_series(candles[:, 2].astype(float))))
+        if self.use_adx:
+            pairs.append(_osc_piv(ta.adx(candles, period=self.adx_period, sequential=True)))
+        if self.use_macd:
+            line, _, _ = ta.macd(
+                candles, fast=self.macd_fast, slow=self.macd_slow,
+                signal=self.macd_signal, sequential=True,
+            )
+            pairs.append(_osc_piv(line))
+        if self.use_obv:
+            pairs.append(_osc_piv(ta.obv(candles, sequential=True)))
+        if self.use_swing:
+            pairs.append(_osc_piv(candles[:, 5].astype(float)))
+        self._osc_pivot_pairs = pairs
+
+    @staticmethod
+    def _last2_upto(arr: np.ndarray, c: int) -> tuple | None:
+        """``(newest, previous)`` confirmed pivot values at or before index ``c``
+        — the no-lookahead form of the module-level ``_last2``."""
+        valid = arr[:c + 1]
+        valid = valid[~np.isnan(valid)]
+        if valid.size < 2:
+            return None
+        return float(valid[-1]), float(valid[-2])
+
+    # ── Phase B: per-candle index lookup only (no TA-Lib) ───────────────────
     def before(self) -> None:
         self.vars["signal"] = 0
-        n = len(self.candles)
+        i = self.index
+        n = i + 1
         if n < self.MIN_WARMUP_CANDLES:
             return
 
@@ -262,18 +330,15 @@ class MultiDivergence(BaseStrategy):
         if c < 0:
             return
 
-        atr = ta.atr(self.candles, period=self.atr_period)
+        atr = self._atr_seq[i]
         self.vars["atr"] = float(atr) if atr == atr else 0.0
 
-        ph = ta.pivot_high(self.candles, L, L, "high", sequential=True)
-        pl = ta.pivot_low(self.candles, L, L, "low", sequential=True)
-
-        new_pivot = not np.isnan(ph[c]) or not np.isnan(pl[c])
+        new_pivot = not np.isnan(self._ph[c]) or not np.isnan(self._pl[c])
         if not new_pivot:
             return
 
-        pr_hi = _last2(ph)
-        pr_lo = _last2(pl)
+        pr_hi = self._last2_upto(self._ph, c)
+        pr_lo = self._last2_upto(self._pl, c)
         if pr_hi is None and pr_lo is None:
             return
 
@@ -285,34 +350,12 @@ class MultiDivergence(BaseStrategy):
             elif d == -1:
                 votes["bear"] += 1
 
-        def osc_div(series) -> int:
-            osc_hi = _last2(_compute_pivots(series, L, L, True))
-            osc_lo = _last2(_compute_pivots(series, L, L, False))
-            return _div(pr_hi, pr_lo, osc_hi, osc_lo)
-
-        if self.use_rsi:
-            tally(osc_div(ta.rsi(self.candles, period=self.rsi_period, sequential=True)))
-        if self.use_mfi:
-            tally(osc_div(ta.mfi(self.candles, period=self.mfi_period, sequential=True)))
-        if self.use_stoch:
-            k, _ = ta.stochastic(self.candles, period=self.stoch_period, sequential=True)
-            tally(osc_div(k))
-        if self.use_zscore:
-            tally(osc_div(self._zscore_series(self.candles[:, 2].astype(float))))
-        if self.use_adx:
-            tally(osc_div(ta.adx(self.candles, period=self.adx_period, sequential=True)))
-        if self.use_macd:
-            line, _, _ = ta.macd(
-                self.candles, fast=self.macd_fast, slow=self.macd_slow,
-                signal=self.macd_signal, sequential=True,
-            )
-            tally(osc_div(line))
-        if self.use_obv:
-            tally(osc_div(ta.obv(self.candles, sequential=True)))
+        for hi_arr, lo_arr in self._osc_pivot_pairs:
+            osc_hi = self._last2_upto(hi_arr, c)
+            osc_lo = self._last2_upto(lo_arr, c)
+            tally(_div(pr_hi, pr_lo, osc_hi, osc_lo))
         if self.use_price:
             tally(self._price_div(pr_hi, pr_lo))
-        if self.use_swing:
-            tally(osc_div(self.candles[:, 5].astype(float)))
 
         bull, bear = votes["bull"], votes["bear"]
         thr    = int(self.min_confluence)
