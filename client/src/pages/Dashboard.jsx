@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import {
   Play,
   TrendingUp,
@@ -13,21 +12,18 @@ import {
 
 import PageWrapper from '../components/layout/PageWrapper'
 import PageHeader from '../components/ui/PageHeader'
-import { Select } from '../components/ui/select'
 import { Skeleton } from '../components/ui/skeleton'
 import { Button } from '../components/ui/button'
 import { Badge } from '../components/ui/badge'
 import StatCard from '../features/dashboard/StatCard'
 import CachedCandlesTable from '../features/dashboard/CachedCandlesTable'
 import StrategyLeaderboard from '../features/dashboard/StrategyLeaderboard'
-import DashboardCalendar from '../features/dashboard/DashboardCalendar'
-import EquitySparkline from '../components/charts/EquitySparkline'
-import DrawdownSparkline from '../components/charts/DrawdownSparkline'
 import { useNavigate } from 'react-router-dom'
 import { formatPnl } from '../utils/formatters'
 
-import { useDashboardStats, useCachedCandles, useDashboardCalendar } from '../hooks/useDashboard'
-import { useBacktestsList, useBacktestResult } from '../hooks/useBacktest'
+import { useDashboardStats, useCachedCandles } from '../hooks/useDashboard'
+import { useBacktestsList } from '../hooks/useBacktest'
+import { useAlgoSessions } from '../hooks/useAlgoSessions'
 
 const DEFAULT_STATS = {
   totalRuns: 0,
@@ -109,48 +105,71 @@ function RecentRunsPanel({ runs }) {
   )
 }
 
-export default function Dashboard() {
-  const [timeframe, setTimeframe] = useState('all')
+function RecentLiveRunsPanel({ sessions }) {
+  const navigate = useNavigate()
+  return (
+    <div className="divide-y divide-slate-700/30">
+      {sessions.length === 0 ? (
+        <div className="px-4 py-6 text-center text-slate-400 text-xs">No live session history found.</div>
+      ) : (
+        sessions.map((session) => {
+          const pnlVal = parseFloat(session.pnl || '0')
+          const pnl = formatPnl(pnlVal)
+          return (
+            <div
+              key={session._id}
+              className="flex items-center justify-between px-4 py-2 hover:bg-slate-800/20 group"
+            >
+              <div className="min-w-0 flex-1 pr-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-gray-200 font-semibold text-xs truncate">
+                    {session.strategyName}
+                  </span>
+                  <Badge variant={statusVariant(session.status)}>{session.status}</Badge>
+                </div>
+                <div className="text-[10px] text-slate-500 font-mono mt-0.5 truncate">
+                  {session.symbols.join(', ')} · {session.timeframe}
+                </div>
+              </div>
+              <div className="text-right">
+                <div className={`text-xs font-mono font-semibold ${pnl.isPositive ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {pnl.value}
+                </div>
+              </div>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => navigate('/algo')}
+                className="h-7 w-7 p-0 ml-2"
+              >
+                <ChevronRight className="size-4 text-slate-500 group-hover:text-emerald-400" />
+              </Button>
+            </div>
+          )
+        })
+      )}
+    </div>
+  )
+}
 
+export default function Dashboard() {
   const { data: statsData, isLoading: loadingStats, isError: errorStats } = useDashboardStats()
   const { data: candlesData, isLoading: loadingCandles, isError: errorCandles } = useCachedCandles()
-  const { data: calendarData, isLoading: loadingCalendar } = useDashboardCalendar()
-  const { data: listData } = useBacktestsList(1, 5)
+  const { data: listData, isLoading: loadingBacktests } = useBacktestsList(1, 5)
+  const { data: algoSessions = [], isLoading: loadingSessions, isError: errorSessions } = useAlgoSessions()
 
   const stats = statsData?.stats ?? DEFAULT_STATS
   const leaderboard = statsData?.leaderboard ?? []
   const cachedCandles = candlesData?.cached ?? []
-  const calendarDays = calendarData?.days ?? []
   const recentRuns = listData?.backtests ?? []
+  const recentLiveRuns = algoSessions.slice(0, 5)
 
-  // Fetch the equity curve of the most-recently-completed run for the sparklines.
-  const { data: latestRunData } = useBacktestResult(stats.latestRunId || undefined)
-  const equityCurve = latestRunData?.equityCurve ?? []
-
-  const isLoading = loadingStats || loadingCandles
-  const isError = errorStats || errorCandles
+  const isLoading = loadingStats || loadingCandles || loadingBacktests || loadingSessions
+  const isError = errorStats || errorCandles || errorSessions
 
   return (
     <PageWrapper>
-      <PageHeader
-        title="Dashboard"
-        actions={
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">
-              Calendar Window
-            </span>
-            <Select
-              value={timeframe}
-              onChange={(e) => setTimeframe(e.target.value)}
-              className="h-8 w-36 text-xs"
-            >
-              <option value="30d">Last 30 days</option>
-              <option value="90d">Last 90 days</option>
-              <option value="all">All Time</option>
-            </Select>
-          </div>
-        }
-      />
+      <PageHeader title="Dashboard" />
 
       {isLoading ? (
         <div>
@@ -159,10 +178,9 @@ export default function Dashboard() {
               <Skeleton key={i} className="h-28 bg-slate-800/50" />
             ))}
           </div>
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-0">
-            <Skeleton className="h-32 bg-slate-800/50" />
-            <Skeleton className="h-32 bg-slate-800/50" />
-            <Skeleton className="h-32 bg-slate-800/50" />
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-0">
+            <Skeleton className="h-48 bg-slate-800/50" />
+            <Skeleton className="h-48 bg-slate-800/50" />
           </div>
           <Skeleton className="h-64 bg-slate-800/50" />
         </div>
@@ -224,60 +242,25 @@ export default function Dashboard() {
             />
           </div>
 
-          {/* ── Sparkline row (3-col) ────────────────────────────────────── */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-0 border-t border-slate-700/50">
+          {/* ── Split Row: Recent Backtests & Recent Live Runs (2-col) ──────────────── */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-0 border-t border-slate-700/50">
             <div className="bg-title-bg border-r border-slate-700/50">
               <div className="h-11 title-fade flex items-center px-4 border-b border-slate-700/30">
-                <h3 className="text-gray-200 font-semibold text-sm">Latest Equity</h3>
+                <h3 className="text-gray-200 font-semibold text-sm">Recent Backtests</h3>
               </div>
-              <div className="p-4">
-                {stats.latestRunId ? (
-                  <>
-                    <EquitySparkline data={equityCurve} />
-                    <p className="text-[10px] text-slate-500 mt-2 uppercase tracking-wider font-bold">
-                      Most recent completed run
-                    </p>
-                  </>
-                ) : (
-                  <div className="h-[90px] flex items-center justify-center border border-slate-700/50 text-slate-500 text-xs">
-                    Run a backtest to see the equity curve.
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="bg-title-bg border-r border-slate-700/50">
-              <div className="h-11 title-fade flex items-center px-4 border-b border-slate-700/30">
-                <h3 className="text-gray-200 font-semibold text-sm">Latest Drawdown</h3>
-              </div>
-              <div className="p-4">
-                {stats.latestRunId ? (
-                  <DrawdownSparkline data={equityCurve} />
-                ) : (
-                  <div className="h-[90px] flex items-center justify-center border border-slate-700/50 text-slate-500 text-xs">
-                    No drawdown history.
-                  </div>
-                )}
+              <div className="max-h-[220px] overflow-y-auto [&::-webkit-scrollbar]:hidden [scrollbar-width:none]">
+                <RecentRunsPanel runs={recentRuns} />
               </div>
             </div>
 
             <div className="bg-title-bg">
               <div className="h-11 title-fade flex items-center px-4 border-b border-slate-700/30">
-                <h3 className="text-gray-200 font-semibold text-sm">Recent Activity</h3>
+                <h3 className="text-gray-200 font-semibold text-sm">Recent Live Runs</h3>
               </div>
-              <div className="max-h-[200px] overflow-y-auto">
-                <RecentRunsPanel runs={recentRuns} />
+              <div className="max-h-[220px] overflow-y-auto [&::-webkit-scrollbar]:hidden [scrollbar-width:none]">
+                <RecentLiveRunsPanel sessions={recentLiveRuns} />
               </div>
             </div>
-          </div>
-
-          {/* ── Performance Calendar (full width) ─────────────────────── */}
-          <div className="border-t border-slate-700/50">
-            {loadingCalendar ? (
-              <Skeleton className="h-64 bg-slate-800/50" />
-            ) : (
-              <DashboardCalendar days={calendarDays} timeframe={timeframe} />
-            )}
           </div>
 
           {/* ── Strategy Leaderboard (full width) ──────────────────────── */}
