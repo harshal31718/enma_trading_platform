@@ -232,54 +232,79 @@ class MicroMacroRSIDivergence(BaseStrategy):
         out[valid] = np.asarray(sm, dtype=float)
         return out
 
-    # ── Indicators — computed once per candle in before() ──────────────────
-    def before(self) -> None:
-        n = len(self.candles)
-        if n < self.MIN_WARMUP_CANDLES:
-            self.vars["ready"] = False
+    # ── Phase A: one-time vectorized pre-computation (full candle array) ─────
+    def prepare(self, candles: np.ndarray) -> None:
+        """Compute every indicator once over the full candle array.
+
+        ``before()`` then only indexes into these ``self._*`` arrays at
+        ``self.index`` — no TA-Lib calls in the hot loop. Replaces the former
+        per-candle recompute (and the ``win = candles[off:]`` windowing): pivot
+        arrays are now absolute-indexed over the whole array, and no-lookahead is
+        enforced at read time by the ``i - right`` visibility horizon in
+        ``_last_two_visible`` (a pivot at absolute index ``p`` is only confirmed
+        once candle ``p + right`` has closed).
+        """
+        if len(candles) == 0:
+            empty = np.array([])
+            self._rsi = empty
+            self._sm = None
+            self._atr_seq = empty
+            self._micro_low = self._micro_high = empty
+            self._macro_low = self._macro_high = empty
             return
 
-        rsi_seq = np.asarray(
-            ta.rsi(self.candles, period=self.rsi_period, sequential=True), dtype=float
+        self._rsi = np.asarray(
+            ta.rsi(candles, period=self.rsi_period, sequential=True), dtype=float
         )
-        smoothed_seq = self._smoothed_rsi(rsi_seq) if self.enable_smoothed_filter else None
+        self._sm = self._smoothed_rsi(self._rsi) if self.enable_smoothed_filter else None
+        self._atr_seq = np.asarray(
+            ta.atr(candles, period=self.atr_period, sequential=True), dtype=float
+        )
+        self._micro_low = ta.pivot_low(candles, self.micro_pivot, self.micro_pivot,
+                                       source="low", sequential=True)
+        self._micro_high = ta.pivot_high(candles, self.micro_pivot, self.micro_pivot,
+                                         source="high", sequential=True)
+        self._macro_low = ta.pivot_low(candles, self.macro_pivot, self.macro_pivot,
+                                       source="low", sequential=True)
+        self._macro_high = ta.pivot_high(candles, self.macro_pivot, self.macro_pivot,
+                                         source="high", sequential=True)
 
-        span = self.max_pivot_bars + 4 * self.macro_pivot + 10
-        off  = max(0, n - span)
-        win  = self.candles[off:]
-
+    # ── Phase B: per-candle index lookup only (no TA-Lib) ───────────────────
+    def before(self) -> None:
+        i = self.index
+        if (i + 1) < self.MIN_WARMUP_CANDLES:
+            self.vars["ready"] = False
+            return
         self.vars.update(
             ready=True,
-            n=n,
-            off=off,
-            rsi=rsi_seq,
-            sm=smoothed_seq,
-            atr=float(ta.atr(self.candles, period=self.atr_period)),
-            micro_low=ta.pivot_low(win, self.micro_pivot, self.micro_pivot,
-                                   source="low", sequential=True),
-            micro_high=ta.pivot_high(win, self.micro_pivot, self.micro_pivot,
-                                     source="high", sequential=True),
-            macro_low=ta.pivot_low(win, self.macro_pivot, self.macro_pivot,
-                                   source="low", sequential=True),
-            macro_high=ta.pivot_high(win, self.macro_pivot, self.macro_pivot,
-                                     source="high", sequential=True),
+            atr=float(self._atr_seq[i]),
         )
 
     # ── Divergence evaluation on the last two pivots of a scale ─────────────
-    def _last_two(self, piv_rel: np.ndarray):
-        idxs = np.where(~np.isnan(piv_rel))[0]
+    def _last_two_visible(self, piv_abs: np.ndarray, right: int):
+        """Last two pivots confirmed by the current candle (no lookahead).
+
+        A pivot at absolute index ``p`` needs ``right`` bars to its right to
+        confirm, so it is only visible once ``self.index >= p + right`` — i.e.
+        searching ``piv_abs[: i - right + 1]``. This reproduces the old
+        windowed-sequential pivot visibility exactly.
+        """
+        i = self.index
+        horizon = i - right
+        if horizon < 0:
+            return None
+        idxs = np.where(~np.isnan(piv_abs[:horizon + 1]))[0]
         if idxs.size < 2:
             return None
         return int(idxs[-2]), int(idxs[-1])
 
-    def _eval_bull(self, piv_rel: np.ndarray, right: int):
-        pair = self._last_two(piv_rel)
+    def _eval_bull(self, piv_abs: np.ndarray, right: int):
+        pair = self._last_two_visible(piv_abs, right)
         if pair is None:
             return False, -1, False
-        off, n, rsi, sm = self.vars["off"], self.vars["n"], self.vars["rsi"], self.vars["sm"]
-        p_rel, c_rel = pair
-        p_abs, c_abs = off + p_rel, off + c_rel
-        price_prev, price_cur = piv_rel[p_rel], piv_rel[c_rel]
+        i, rsi, sm = self.index, self._rsi, self._sm
+        p_abs, c_abs = pair
+        price_prev, price_cur = piv_abs[p_abs], piv_abs[c_abs]
         rsi_prev, rsi_cur = rsi[p_abs], rsi[c_abs]
         if np.isnan(rsi_prev) or np.isnan(rsi_cur):
             return False, c_abs, False
@@ -297,17 +322,16 @@ class MicroMacroRSIDivergence(BaseStrategy):
             cond = cond and (not np.isnan(sm[c_abs])) and (not np.isnan(sm[p_abs])) \
                 and (sm[c_abs] > sm[p_abs])
 
-        fired_now = bool(cond) and (c_abs == n - 1 - right)
+        fired_now = bool(cond) and (c_abs == i - right)
         return bool(cond), c_abs, fired_now
 
-    def _eval_bear(self, piv_rel: np.ndarray, right: int):
-        pair = self._last_two(piv_rel)
+    def _eval_bear(self, piv_abs: np.ndarray, right: int):
+        pair = self._last_two_visible(piv_abs, right)
         if pair is None:
             return False, -1, False
-        off, n, rsi, sm = self.vars["off"], self.vars["n"], self.vars["rsi"], self.vars["sm"]
-        p_rel, c_rel = pair
-        p_abs, c_abs = off + p_rel, off + c_rel
-        price_prev, price_cur = piv_rel[p_rel], piv_rel[c_rel]
+        i, rsi, sm = self.index, self._rsi, self._sm
+        p_abs, c_abs = pair
+        price_prev, price_cur = piv_abs[p_abs], piv_abs[c_abs]
         rsi_prev, rsi_cur = rsi[p_abs], rsi[c_abs]
         if np.isnan(rsi_prev) or np.isnan(rsi_cur):
             return False, c_abs, False
@@ -325,22 +349,22 @@ class MicroMacroRSIDivergence(BaseStrategy):
             cond = cond and (not np.isnan(sm[c_abs])) and (not np.isnan(sm[p_abs])) \
                 and (sm[c_abs] < sm[p_abs])
 
-        fired_now = bool(cond) and (c_abs == n - 1 - right)
+        fired_now = bool(cond) and (c_abs == i - right)
         return bool(cond), c_abs, fired_now
 
     # ── Confluence: macro fires the trigger, micro corroborates ─────────────
     def _confluent_long(self) -> bool:
-        macro_valid, macro_c, macro_fired = self._eval_bull(self.vars["macro_low"], self.macro_pivot)
+        macro_valid, macro_c, macro_fired = self._eval_bull(self._macro_low, self.macro_pivot)
         if not macro_fired:
             return False
-        micro_valid, micro_c, _ = self._eval_bull(self.vars["micro_low"], self.micro_pivot)
+        micro_valid, micro_c, _ = self._eval_bull(self._micro_low, self.micro_pivot)
         return micro_valid and abs(macro_c - micro_c) <= self.confluence_window
 
     def _confluent_short(self) -> bool:
-        macro_valid, macro_c, macro_fired = self._eval_bear(self.vars["macro_high"], self.macro_pivot)
+        macro_valid, macro_c, macro_fired = self._eval_bear(self._macro_high, self.macro_pivot)
         if not macro_fired:
             return False
-        micro_valid, micro_c, _ = self._eval_bear(self.vars["micro_high"], self.micro_pivot)
+        micro_valid, micro_c, _ = self._eval_bear(self._micro_high, self.micro_pivot)
         return micro_valid and abs(macro_c - micro_c) <= self.confluence_window
 
     # ── Alpha Model: forecast() handles both open and flat cases ────────────
