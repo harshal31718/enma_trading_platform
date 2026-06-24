@@ -638,3 +638,11 @@ The Risk Dashboard lands in 5 logical phases. Pipeline-touching changes (R2, R4)
 > - **`MKRUSDT`** (Status: `SETTLING`)
 >
 > **Action:** Do not select or trade these symbols. Keep them excluded from platform active symbol lists.
+
+### Market Order Constraints (Sizing Failures)
+
+> [!IMPORTANT]
+> The following symbols have strict limits on single Market Orders that may trigger errors during automated sizing:
+> - **`JUPUSDT`**: Binance Futures Testnet has a `MARKET_LOT_SIZE` filter setting `maxQty: 10000` (10,000 JUP). Since automated bot entries use market fills, any order sized above 10,000 JUP will be rejected with: `Quantity greater than max quantity`.
+>
+> **Action:** Keep JUPUSDT order sizes capped at 10,000 units, or adjust strategy capital allocation / leverage settings to ensure sized amounts remain below this limit.
