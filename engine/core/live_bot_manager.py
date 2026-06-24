@@ -5,6 +5,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from decimal import ROUND_DOWN, ROUND_UP
+from enum import Enum
 
 import httpx
 import numpy as np
@@ -12,7 +13,10 @@ import websockets
 
 from config.timescale import get_pool
 from core.position import Position
-from core.models import DefaultPortfolioModel, LiveExecution, OrderPlan
+from core.models import (
+    DefaultPortfolioModel, LiveExecution, OrderPlan,
+    CooldownPeriod, StoplossGuard, ProtectionManager,
+)
 from core.pipeline import evaluate
 from services.trade_recorder import record_trade, build_trade_record
 from utils.symbols import round_price, round_qty, clamp_and_round_qty, clamp_leverage
@@ -34,6 +38,11 @@ _TF_TO_BINANCE = {
 
 # Server URL for callbacks
 SERVER_URL = os.getenv("SERVER_URL", "http://server:5000")
+
+TRADING_STATES = ("active", "reducing", "halted")
+
+
+from utils.rate_limiter import OrderRateLimiter
 
 
 def _get_min_candles_required(strategy) -> int:
@@ -74,6 +83,44 @@ class LiveAdapter(ExecutionAdapter):
     ) -> bool:
         session = self.manager.sessions.get(self.session_id)
         if not session:
+            return False
+
+        # TradingState check (A-002) — halt new entries when reducing or halted
+        trading_state = session.get("trading_state", "active")
+        if trading_state in ("halted", "reducing"):
+            logger.warning(f"[AlgoBot] {symbol}: entry blocked, trading_state={trading_state}")
+            await self.manager._notify_node(self.session_id, {
+                "event": "log",
+                "eventData": {"type": "warning", "message": f"{symbol}: entry blocked (trading_state={trading_state})"}
+            })
+            strategy.buy = None
+            strategy.sell = None
+            return False
+
+        # Protections check (A-001)
+        protection_manager = session.get("protection_manager")
+        if protection_manager is not None:
+            lock = protection_manager.check_entry(symbol, direction, session.get("capital", 0))
+            if lock is not None:
+                logger.warning(f"[AlgoBot] {symbol}: entry blocked by protection: {lock.reason}")
+                await self.manager._notify_node(self.session_id, {
+                    "event": "log",
+                    "eventData": {"type": "warning", "message": f"{symbol}: entry blocked — {lock.reason}"}
+                })
+                strategy.buy = None
+                strategy.sell = None
+                return False
+
+        # Rate limiter check (A-003)
+        rate_limiter = session.get("rate_limiter")
+        if rate_limiter is not None and not rate_limiter.allow():
+            logger.warning(f"[AlgoBot] {symbol}: order rate limited, skipping")
+            await self.manager._notify_node(self.session_id, {
+                "event": "log",
+                "eventData": {"type": "warning", "message": f"{symbol}: order rate limited, skipping"}
+            })
+            strategy.buy = None
+            strategy.sell = None
             return False
 
         fill_price = ref_price
@@ -210,6 +257,11 @@ class LiveAdapter(ExecutionAdapter):
         executed_by = session.get("strategy_name", "unknown")
         exit_time = datetime.now(timezone.utc)
 
+        # Rate limiter check (A-003)
+        rate_limiter = session.get("rate_limiter")
+        if rate_limiter is not None and not rate_limiter.allow():
+            logger.warning(f"[AlgoBot] {symbol}: exit rate limited, proceeding anyway")
+
         sem = self.manager._order_semaphores.get(self.session_id)
         try:
             async with (sem if sem else asyncio.nullcontext()):
@@ -229,6 +281,17 @@ class LiveAdapter(ExecutionAdapter):
         realized_pnl = pos.pnl - fee
         strategy.balance += realized_pnl
         session["pnl"] += realized_pnl
+
+        # Record trade close in protections (A-001)
+        protection_manager = session.get("protection_manager")
+        if protection_manager is not None:
+            protection_manager.record_trade_close(
+                pair=symbol,
+                side=pos.type,
+                exit_reason=reason,
+                profit=realized_pnl,
+                close_timestamp=exit_time.timestamp(),
+            )
 
         event_data = {
             "symbol": symbol,
@@ -354,6 +417,23 @@ class LiveBotManager:
         # Allow at most 2 concurrent Binance order calls per session
         self._order_semaphores[session_id] = asyncio.Semaphore(2)
 
+        # Setup protections stack (A-001) from risk_params config
+        protection_manager = ProtectionManager()
+        prot_cfg = risk_params.get("protections", {}) or {}
+        cooldown_cfg = prot_cfg.get("cooldown_period", {})
+        if cooldown_cfg.get("enabled", True):
+            protection_manager.add(CooldownPeriod(cooldown_cfg))
+        stoploss_cfg = prot_cfg.get("stoploss_guard", {})
+        if stoploss_cfg.get("enabled", True):
+            protection_manager.add(StoplossGuard(stoploss_cfg))
+
+        # Order rate limiter (A-003): default 10 req/s per session
+        rate_limit_cfg = risk_params.get("rate_limiting", {}) or {}
+        rate_limiter = OrderRateLimiter(
+            max_rate=int(rate_limit_cfg.get("max_rate", 10)),
+            window_seconds=int(rate_limit_cfg.get("window_seconds", 1)),
+        )
+
         self.sessions[session_id] = {
             "session_id": session_id,
             "strategy_name": strategy_name,
@@ -365,6 +445,9 @@ class LiveBotManager:
             "risk_params": risk_params,
             "status": "running",
             "pnl": 0.0,
+            "trading_state": "active",  # A-002: active/reducing/halted
+            "protection_manager": protection_manager,  # A-001
+            "rate_limiter": rate_limiter,  # A-003
             "open_positions": {},  # symbol -> dict with position info
             "strategy_instances": {},  # symbol -> strategy instance
         }
@@ -469,7 +552,24 @@ class LiveBotManager:
             "status": session["status"],
             "pnl": str(round(session["pnl"], 2)),
             "openPositions": open_pos,
+            "trading_state": session.get("trading_state", "active"),
         }
+
+    async def set_trading_state(self, session_id: str, new_state: str) -> dict:
+        """Set the trading state for a session (A-002)."""
+        session = self.sessions.get(session_id)
+        if not session:
+            return {"success": False, "error": "Session not found"}
+        if new_state not in TRADING_STATES:
+            return {"success": False, "error": f"Invalid trading_state '{new_state}'. Must be one of: {', '.join(TRADING_STATES)}"}
+        old_state = session.get("trading_state", "active")
+        session["trading_state"] = new_state
+        logger.info(f"[AlgoBot] Session {session_id}: trading_state {old_state} -> {new_state}")
+        await self._notify_node(session_id, {
+            "event": "log",
+            "eventData": {"type": "info", "message": f"Trading state changed: {old_state} -> {new_state}"}
+        })
+        return {"success": True, "data": {"trading_state": new_state}}
 
     # ── Private helpers ──────────────────────────────────────────────────────
 
@@ -1032,6 +1132,7 @@ class LiveBotManager:
             "pnl": str(round(total_pnl, 2)),
             "openPositions": list(session.get("open_positions", {}).keys()),
             "status": "running",
+            "trading_state": session.get("trading_state", "active"),
         })
 
     async def _notify_node(self, session_id: str, data: dict) -> None:

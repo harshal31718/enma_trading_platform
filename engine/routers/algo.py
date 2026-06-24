@@ -31,6 +31,10 @@ class StopSessionRequest(BaseModel):
     pass
 
 
+class TradingStateRequest(BaseModel):
+    state: str
+
+
 @router.post("/sessions")
 async def start_session(req: StartSessionRequest, background_tasks: BackgroundTasks):
     """Start a new live bot session. Called by Node server."""
@@ -64,3 +68,14 @@ async def get_session_status(session_id: str):
     """Get current session status. Called by Node for health polls."""
     status = await live_bot_manager.get_session_status(session_id)
     return {"success": True, "data": status}
+
+
+@router.post("/sessions/{session_id}/trading-state")
+async def set_trading_state(session_id: str, req: TradingStateRequest):
+    """Set the trading state for a session (A-002)."""
+    if session_id not in live_bot_manager.sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    result = await live_bot_manager.set_trading_state(session_id, req.state)
+    if not result["success"]:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return {"success": True, "data": result["data"]}

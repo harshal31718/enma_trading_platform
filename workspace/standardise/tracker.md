@@ -9,10 +9,10 @@
 ## Progress
 
 | | Total | TODO | IN PROGRESS | BLOCKED | DONE | DROPPED |
-|---|---|---|---|---|---|---|
+|---|---|---|---|---|---|---|---|
 | Corrections (F) | 24 | 14 | 0 | 0 | 10 | 0 |
-| Additions (A) | 16 | 9 | 0 | 0 | 7 | 0 |
-| **All** | **40** | **23** | **0** | **0** | **17** | **0** |
+| Additions (A) | 16 | 6 | 0 | 0 | 10 | 0 |
+| **All** | **40** | **20** | **0** | **0** | **20** | **0** |
 
 > Update this table whenever a row changes status.
 
@@ -94,9 +94,9 @@
 
 | Step | ID | Item | Doc | Val/Sev | Status | Commit / Note |
 |---|---|---|---|---|---|---|
-| 4.1 | A-001 | Protections stack: CooldownPeriod + StoplossGuard (then MaxDrawdown window, LowProfitPairs) | 07 | ★★★ | TODO | |
-| 4.2 | A-002 | TradingState machine ACTIVE / REDUCING / HALTED session kill-switch | 07 | ★★★ | TODO | |
-| 4.3 | A-003 | Order rate-limiting (max submit/modify rate) before orders hit Binance | 07 | ★★ | TODO | |
+| 4.1 | A-001 | Protections stack: CooldownPeriod + StoplossGuard (then MaxDrawdown window, LowProfitPairs) | 07 | ★★★ | DONE | Created protections.py with CooldownPeriod, StoplossGuard, ProtectionManager; wired into LiveAdapter.execute_entry() & execute_exit() |
+| 4.2 | A-002 | TradingState machine ACTIVE / REDUCING / HALTED session kill-switch | 07 | ★★★ | DONE | TradingState (active/reducing/halted) on session; checked in execute_entry(); engine + server endpoints added; LiveSession model updated |
+| 4.3 | A-003 | Order rate-limiting (max submit/modify rate) before orders hit Binance | 07 | ★★ | DONE | OrderRateLimiter in utils/rate_limiter.py; checked in execute_entry() & execute_exit() before Binance calls |
 
 ## Phase 5 — State truth & reconciliation (root cause RC-A/B). Large rework; do on its own.
 

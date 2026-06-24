@@ -49,6 +49,13 @@ from .execution import (
     BacktestExecution,
     LiveExecution,
 )
+from .protections import (
+    ProtectionReturn,
+    IProtection,
+    CooldownPeriod,
+    StoplossGuard,
+    ProtectionManager,
+)
 
 __all__ = [
     # Value objects
@@ -85,4 +92,10 @@ __all__ = [
     "DefaultExecution",
     "BacktestExecution",
     "LiveExecution",
+    # Protections
+    "ProtectionReturn",
+    "IProtection",
+    "CooldownPeriod",
+    "StoplossGuard",
+    "ProtectionManager",
 ]

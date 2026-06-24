@@ -195,6 +195,42 @@ async function getSession(req, res, next) {
   }
 }
 
+// POST /api/v1/algo/sessions/:id/trading-state
+async function setTradingState(req, res, next) {
+  try {
+    const { state } = req.body
+    if (!['active', 'reducing', 'halted'].includes(state)) {
+      throw new ApiError(400, 'INVALID_STATE', 'trading_state must be "active", "reducing", or "halted"')
+    }
+
+    const session = await LiveSession.findById(req.params.id).lean()
+    if (!session) throw new ApiError(404, 'SESSION_NOT_FOUND', 'Session not found')
+
+    // Call engine to update trading state
+    try {
+      await engineClient.post(`/algo/sessions/${req.params.id}/trading-state`, { state })
+    } catch (engineErr) {
+      throw new ApiError(502, 'ENGINE_ERROR', `Engine failed to set trading state: ${engineErr.message}`)
+    }
+
+    // Update in MongoDB
+    await LiveSession.findByIdAndUpdate(req.params.id, { tradingState: state })
+
+    const io = getIO()
+    io.emit('algo:session:update', { sessionId: req.params.id, tradingState: state })
+    io.emit('algo:session:log', {
+      sessionId: req.params.id,
+      timestamp: new Date().toISOString(),
+      type: 'info',
+      message: `Trading state changed to ${state}`
+    })
+
+    res.json(ApiResponse.success({ tradingState: state }))
+  } catch (err) {
+    next(err)
+  }
+}
+
 // GET /api/v1/algo/symbols/locked
 async function getLockedSymbols(req, res, next) {
   try {
@@ -784,6 +820,7 @@ async function getChaosSymbols(req, res, next) {
 module.exports = {
   startSession,
   stopSession,
+  setTradingState,
   listSessions,
   getSession,
   getLockedSymbols,

@@ -14,6 +14,12 @@ const liveSessionSchema = new mongoose.Schema({
     enum: ['starting', 'running', 'stopping', 'stopped', 'error'],
     default: 'starting',
   },
+  // TradingState (A-002): active / reducing / halted — manual kill-switch per session.
+  tradingState: {
+    type: String,
+    enum: ['active', 'reducing', 'halted'],
+    default: 'active',
+  },
   capital: { type: String, required: true },
   leverage: { type: Number, default: 1 },
   createdAt: { type: Date, default: Date.now },
