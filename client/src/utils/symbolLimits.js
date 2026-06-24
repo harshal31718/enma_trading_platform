@@ -29,7 +29,6 @@ export const SYMBOL_LIMITS = {
   "WLDUSDT": { "tickSize": 0.0001, "stepSize": 1.0, "minQty": 1.0, "minNotional": 5.0 },
   "STXUSDT": { "tickSize": 0.0001, "stepSize": 1.0, "minQty": 1.0, "minNotional": 5.0 },
   "RUNEUSDT": { "tickSize": 0.0001, "stepSize": 1.0, "minQty": 1.0, "minNotional": 5.0 },
-  "FTMUSDT": { "tickSize": 0.0001, "stepSize": 1.0, "minQty": 1.0, "minNotional": 5.0 },
   "SANDUSDT": { "tickSize": 0.00001, "stepSize": 1.0, "minQty": 1.0, "minNotional": 5.0 },
   "MANAUSDT": { "tickSize": 0.0001, "stepSize": 1.0, "minQty": 1.0, "minNotional": 5.0 },
   "AXSUSDT": { "tickSize": 0.001, "stepSize": 1.0, "minQty": 1.0, "minNotional": 5.0 },

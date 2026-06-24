@@ -36,7 +36,6 @@ const TIERED_SYMBOLS = [
 
   // ── MID tier (next 35) ──────────────────────────────────────────────────────
   { symbol: 'APTUSDT',        tier: 'mid' },
-  { symbol: 'FTMUSDT',        tier: 'mid' },
   { symbol: 'ATOMUSDT',       tier: 'mid' },
   { symbol: 'BCHUSDT',        tier: 'mid' },
   { symbol: 'ETCUSDT',        tier: 'mid' },
@@ -78,7 +77,6 @@ const TIERED_SYMBOLS = [
   { symbol: 'LRCUSDT',        tier: 'low' },
   { symbol: 'SKLUSDT',        tier: 'low' },
   { symbol: 'RVNUSDT',        tier: 'low' },
-  { symbol: 'WAVESUSDT',      tier: 'low' },
   { symbol: 'COTIUSDT',       tier: 'low' },
   { symbol: 'CELOUSDT',       tier: 'low' },
   { symbol: 'ICPUSDT',        tier: 'low' },
