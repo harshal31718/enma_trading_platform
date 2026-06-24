@@ -53,10 +53,10 @@ Each source can be individually toggled off via `use_rsi`, `use_mfi`, … `use_s
 
 | Param | Default | Notes |
 |-------|---------|-------|
-| `piv_len` | 5 | Pivot confirmation lag on each side; 2–15 |
-| `min_confluence` | 2 | Min sources that must agree; must not exceed enabled count |
+| `piv_len` | 4 | Pivot confirmation lag on each side; 2–15 |
+| `min_confluence` | 3 | Min sources that must agree; must not exceed enabled count |
 | `sl_atr_mult` | 1.5 | Stop distance (or use `custom_sl_pct`) |
-| `tp_atr_mult` | 2.5 | Take-profit distance |
+| `tp_atr_mult` | 2.0 | Take-profit distance |
 | `use_custom_sl` | 0 | 1 = fixed % stop instead of ATR |
 | `custom_sl_pct` | 1.0 | Fixed stop % of entry price |
 | `allow_shorts` | 1 | 0 = long-only |

@@ -51,7 +51,8 @@ There are exactly two Binance environments. Only Testnet is implemented today.
 | **Mainnet** | `https://fapi.binance.com` | Real | 🔒 Not yet implemented |
 
 Rules:
-- Base URLs are defined **once** in `engine/services/binance_testnet.py` (`_BASE_URLS` dict). No other file defines them.
+- The **authenticated/signed** base URLs are defined **once** in `engine/services/binance_testnet.py` (`_BASE_URLS` dict). All signed Binance calls go through `send_signed_request` from that module — no other file defines the *signed* base.
+- **Public-data** fetches (OHLCV klines, leverageBracket) intentionally hit **mainnet** `https://fapi.binance.com` directly per `workspace/docs/core/binance-api.md` §2, so that URL also appears literally in `engine/core/live_bot_manager.py`, `engine/routers/trade.py`, `engine/services/candle_importer.py`, and `engine/utils/symbols.py`. That is by design (testnet historical data is unreliable), not a duplication of the signed base.
 - All authenticated Binance calls (Trade page, algo bot entries, exits, leverage) use `send_signed_request` from that module.
 - `LiveSession.mode` is `"paper" | "live"`. All current sessions are `"paper"` (Binance Testnet).
 - There is no Enma-internal paper trading simulation. "Paper trading" = Binance Testnet.

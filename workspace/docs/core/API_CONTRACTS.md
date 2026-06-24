@@ -69,7 +69,7 @@ type Balance = { asset: string, walletBalance: string, availableBalance: string,
 - **`GET /api/v1/trade/klines`** -> Req: `?symbol=&interval=&limit=` -> `[openTime, o, h, l, c, v, closeTime, qv, trades, takerBase, takerQuote, ignore][]`
 
 ## Server ↔ Engine (HTTP)
-- Mirror routes exactly as above, prepended with `{ENGINE_URL}` instead of `/api/v1`. Express adds `X-Binance-API-Key` and `X-Binance-API-Secret`.
+- Mirror routes approximately (engine paths may simplify the REST path, e.g. server `/api/v1/trade/order/history` → engine `/trade/history-orders`). Express adds `X-Binance-API-Key` and `X-Binance-API-Secret`.
 
 ## Client ↔ Binance (Public WebSockets)
 - Endpoint: `wss://fstream.binance.com/ws`
@@ -81,7 +81,7 @@ type Balance = { asset: string, walletBalance: string, availableBalance: string,
 
 ### AlgoTrading (Algo Bot Sessions)
 ```typescript
-type LiveSession = { _id: string, strategyId: string, strategyName: string, symbols: string[], timeframe: string, params: object, mode: "testnet"|"mainnet", status: "starting"|"running"|"stopping"|"stopped"|"error", capital: string, leverage: number, pnl: string, openPositions: string[], createdAt: string, stoppedAt?: string, errorMessage?: string }
+type LiveSession = { _id: string, strategyId: string, strategyName: string, symbols: string[], timeframe: string, params: object, mode: "paper"|"live", status: "starting"|"running"|"stopping"|"stopped"|"error", capital: string, leverage: number, pnl: string, openPositions: string[], createdAt: string, stoppedAt?: string, errorMessage?: string }
 type SymbolLock = { reason: "bot"|"manual", sessionId: string|null, lockedAt: string }
 ```
 - **`POST /api/v1/algo/sessions`** -> Req: `{ strategyId, symbols, timeframe, params, capital, leverage }` -> `{ sessionId, status }`

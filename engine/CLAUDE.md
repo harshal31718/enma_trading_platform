@@ -192,9 +192,7 @@ indicators).
 directly — they call these convenience functions, which delegate to the active
 `IndicatorProvider`. TA-Lib is the default; set `ENMA_INDICATOR_LIBRARY=pandas_ta` to switch
 the whole engine to the pure-Python backend with no strategy changes. If the chosen backend
-can't load, the engine auto-falls-back (toggle with `ENMA_INDICATOR_FALLBACK`). MicroScalper's
-direct `import talib` for an ATR-SMA is the one remaining exception and only works on the
-TA-Lib backend.
+can't load, the engine auto-falls-back (toggle with `ENMA_INDICATOR_FALLBACK`).
 
 ---
 
@@ -261,15 +259,15 @@ Implemented in `routers/dashboard.py`. Reads `backtestResults` from MongoDB via 
 **Computation logic:**
 - Filter: only documents with `status == "completed"` are included.
 - `totalRuns`: count of completed documents.
-- `averageWinRate`: mean of `metrics.winRate` across all completed runs (formatted to 2 decimal places as a string).
-- `bestStrategy`: `strategyName` of the completed run with the highest `metrics.winRate`.
+- `averageNetProfit`: mean of `metrics.netProfit` across all completed runs (formatted to 2 decimal places as a string).
+- `bestStrategy`: `strategyName` of the completed run with the highest `metrics.netProfit`.
 - `leaderboard`: group completed runs by `strategyName`, compute per group:
   - `runs` (count)
   - `averageWinRate` (mean of `metrics.winRate`, 2 decimal string)
   - `averageNetProfit` (mean of `metrics.netProfit`, 2 decimal string)
   - `averageSharpe` (mean of `metrics.sharpeRatio`, 2 decimal string)
-  - Sort leaderboard by `averageWinRate` descending before returning.
-- If no completed runs exist, return `stats: { totalRuns: 0, bestStrategy: null, averageWinRate: "0.00" }` and `leaderboard: []`.
+  - Sort leaderboard by `averageNetProfit` descending before returning.
+- If no completed runs exist, return `stats: { totalRuns: 0, bestStrategy: null, averageNetProfit: "0.00" }` and `leaderboard: []`.
 
 ---
 

@@ -78,7 +78,7 @@ Returns: { strategy: Strategy }
 
 | Name | Type | Description |
 |------|------|-------------|
-| `MicroScalper` | Scalper | Fast EMA(3/9) cross + ATR gate; flip_position SAR |
+| `MicroScalper` | Scalper | EMA(9/21) cross + ATR gate; stop-and-reverse via `forecast()` |
 | `AdaptiveTrend` | Trend Following | EMA(200) regime + EMA(21/55) cross + ATR gate + chandelier trailing stop |
 | `BestSupertrend` | Trend + MTF | HTF Supertrend + SMA(7/20) crossover |
 | `MicroMacroRSIDivergence` | Divergence | RSI regular divergence on micro+macro pivot confluence |

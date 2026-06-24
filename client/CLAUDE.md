@@ -30,7 +30,6 @@
 client/
 ├── public/
 ├── src/
-│   ├── assets/          ← static assets (logo, icons)
 │   ├── components/      ← shared reusable components
 │   │   ├── ui/          ← generic UI (Button, Input, Modal, Card, Badge, PageHeader, skeleton)
 │   │   │                   Note: DataTable.jsx, EmptyState.jsx, StatusBadge.jsx, and the
@@ -42,21 +41,23 @@ client/
 │   │   │   ├── SessionCard.jsx       ← single live session display card
 │   │   │   ├── SymbolPicker.jsx      ← symbol multi-select for bot session
 │   │   │   └── ParamsForm.jsx        ← strategy param inputs for bot session
+│   ├── RiskParamsFields.jsx       ← shared risk-model parameter fields (pre-filled from settings, used by backtest & algo wizards)
 │   │   └── SymbolSearchBar.jsx       ← global symbol search (uses all-ticker WS when open)
 │   ├── features/        ← feature-specific components
 │   │   ├── backtest/
-│   │   │   ├── NewBacktestWizard.jsx   ← multi-step dialog wizard for launching a backtest (strategy → params → market → settings → review)
+│   │   │   ├── BacktestCalendar.jsx   ← performance calendar heatmap (Day/Week/Month/Quarter)
 │   │   │   ├── BacktestHistory.jsx     ← history sidebar list with emerald highlight
-│   │   │   └── BacktestMetricCard.jsx  ← single reusable KPI stat card (replaces 6 inline copies)
+│   │   │   ├── BacktestMetricCard.jsx  ← single reusable KPI stat card (replaces 6 inline copies)
+│   │   │   └── NewBacktestWizard.jsx   ← multi-step dialog wizard for launching a backtest (strategy → params → market → settings → review)
 │   │   ├── dashboard/
 │   │   │   ├── StatCard.jsx            ← single numeric metric card (canonical — only this one exists)
 │   │   │   ├── CachedCandlesTable.jsx  ← TimescaleDB candle cache summary table
 │   │   │   ├── RecentActivityTable.jsx ← last 5 backtest runs with View deep-links
 │   │   │   └── StrategyLeaderboard.jsx ← per-strategy averaged metrics
-│   │   ├── live/
 │   │   └── strategies/
-│   │       ├── StrategyCard.jsx   ← card: name, description, type badge, View button
-│   │       └── CodeViewer.jsx     ← read-only pre block rendered in a Dialog
+│   │       ├── CodeViewer.jsx          ← read-only pre block rendered in a Dialog
+│   │       ├── StrategyCard.jsx        ← card: name, description, type badge, View button
+│   │       └── StrategyCreateDialog.jsx ← create/clone strategy dialog
 │   ├── hooks/           ← custom hooks
 │   │   ├── useSocket.js           ← subscribe/unsubscribe to Socket.IO events with cleanup
 │   │   ├── useCandles.js          ← TanStack Query hooks: useSymbols() only
@@ -73,7 +74,7 @@ client/
 │   ├── context/
 │   │   └── SymbolContext.jsx  ← provides current symbol selection across Trade page sub-components
 │   ├── lib/
-│   │   ├── axios.js       ← configured Axios instance with JWT interceptor
+│   │   ├── axios.js       ← configured Axios instance
 │   │   ├── socket.js      ← Socket.IO client instance
 │   │   ├── binanceWS.js   ← Binance WebSocket singleton connection manager
 │   │   ├── queryClient.js ← TanStack Query client config
@@ -87,7 +88,6 @@ client/
 │   │   ├── AlgoTrading.jsx    ← route: /algo (algo bot session management)
 │   │   └── OrderHistory.jsx   ← route: /order-history (paginated trade log; not in navbar)
 │   ├── store/
-│   │   └── useAuthStore.js
 │   │       Note: useUIStore.js has been deleted — it tracked sidebar state that no longer exists.
 │   ├── utils/
 │   │   ├── formatters.js    ← formatQty, formatPrice, formatPct, formatPnl, formatSignedPct
@@ -208,7 +208,7 @@ WebSocket stream (`@kline_<interval>`) — only the initial REST fetch is affect
 - **Cards:** `bg-[#0d1117] border border-slate-700/50 shadow-2xl hover:border-slate-600/70 transition-all duration-300` — **no `rounded-xl`** (global borderRadius is 0px)
 - **Panel grids:** always `gap-0` — sections are connected, not floating
 - **No Rounded Corners (global):** All `borderRadius` values are `0px` via `tailwind.config.js` theme override. Never write `rounded-*` classes.
-- **No Sidebar component** — Sidebar.jsx is removed; all navigation lives in the top navbar (TopBar.jsx or Navbar.jsx)
+- **No Sidebar component** — Sidebar.jsx is removed; all navigation lives in the top navbar (Navbar.jsx)
 
 ## Dashboard page spec
 
@@ -240,7 +240,7 @@ The Dashboard (`/`) is a simulation metrics hub. It has no live trading data —
 **StrategyLeaderboard** — per-strategy averaged metrics across all runs.
 - Data source: `GET /api/v1/dashboard/stats` (leaderboard array) via `useDashboardStats()` hook
 - Columns: Strategy, Runs, Avg Win Rate, Avg Net Profit, Avg Sharpe
-- Sorted by Avg Win Rate descending (server returns pre-sorted)
+- Sorted by Avg Net Profit descending (server returns pre-sorted)
 - Must handle loading skeleton and empty state ("Run your first backtest to see the leaderboard.")
 
 ### Hooks (`client/src/hooks/useDashboard.js`)

@@ -31,15 +31,15 @@
 
 ## 9. Binance Environment Model — Testnet vs Mainnet (no internal paper-trading simulation)
 **Decision:** The platform has exactly two Binance environments:
-- **Testnet** (`testnet.binancefuture.com`): Fake money. Used for all development, testing, and demo trading. ALL algo bot orders, Trade page orders, and account queries go here today.
+- **Testnet** (`demo-fapi.binance.com`): Fake money. Used for all development, testing, and demo trading. ALL algo bot orders, Trade page orders, and account queries go here today.
 - **Mainnet** (`fapi.binance.com` / signed): Real money. Not yet implemented. Will be a future setting switch.
 
 There is no Enma-internal paper trading simulation. The concept of "paper trading" in Enma means using Binance Testnet, not simulating orders locally.
 
 **Concretely:**
-- `BINANCE_TESTNET_BASE = "https://testnet.binancefuture.com"` is the single source of truth, defined only in `engine/services/binance_testnet.py`.
+- The signed base URLs live only in the `_BASE_URLS` dict in `engine/services/binance_testnet.py` — `testnet → https://demo-fapi.binance.com`, `mainnet → https://fapi.binance.com`. No other file defines the signed base.
 - `LiveSession.mode` is `"paper" | "live"` (default `"paper"`). All current sessions are paper (Testnet).
-- `Settings` stores only `binanceApiKey` and `binanceApiSecret` — no `paperTrading` flag.
+- `Settings` stores exchange configuration: mode, trading fees, simulation defaults, risk defaults, bot defaults, and chaos mode defaults. Binance API credentials live in server `.env` (not MongoDB) — the AES-256 encryption util (`server/src/utils/encryption.js`) exists but is not currently wired. No `paperTrading` flag.
 - `BaseStrategy.is_papertrading` is always `False` in the live bot; `is_livetrading` is always `True`. These flags exist for strategy code self-inspection and remain part of the BaseStrategy contract.
 
 **Rationale:** Removes a confusing intermediate layer (simulated positions that look real but aren't), eliminates a source of bugs (positions showing in Enma UI but not on Binance), and creates a clear upgrade path to Mainnet.

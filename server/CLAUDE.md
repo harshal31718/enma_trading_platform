@@ -31,7 +31,7 @@ server/
     │   ├── redis.js        ← ioredis client singleton (shared by BullMQ + pub/sub)
     │   └── socket.js       ← Socket.IO server setup
     ├── constants/
-    │   └── top_symbols.js  ← 70 top Binance Futures symbols (TOP_SYMBOLS) — Chaos Mode pool
+    │   └── top_symbols.js  ← ~80 tiered symbols (high/mid/low) — Chaos Mode pool
     ├── middleware/
     │   ├── errorHandler.js          ← global error handler
     │   └── requireBinanceCredentials.js ← validates X-Binance headers on trade routes
@@ -73,9 +73,11 @@ server/
     ├── workers/
     │   └── backtest.worker.js
     ├── utils/
-    │   ├── ApiError.js      ← Custom error class
-    │   ├── ApiResponse.js   ← Standard response helpers
-    │   └── encryption.js    ← AES-256 for API key storage
+    │   ├── ApiError.js        ← Custom error class
+    │   ├── ApiResponse.js     ← Standard response helpers
+    │   ├── chaosAllocator.js  ← Chaos Mode symbol allocation (manual pick guarantee + round-robin tier partition)
+    │   ├── encryption.js      ← AES-256 for API key storage
+    │   └── risk.js            ← resolveRiskParams() — per-run risk override merge
     ├── app.js               ← Express app setup (no server.listen here)
     └── server.js            ← Entry point (server.listen + startup reconciliation)
 ```
@@ -205,7 +207,6 @@ The server owns the routing, auth, and job queue layers. Database ownership is s
 - `GET /api/v1/dashboard/stats` → `dashboard.controller.js` → proxies `GET {ENGINE_URL}/dashboard/stats` via `engineClient`; returns result to client unchanged
 - `GET /api/v1/candles/cached` → `candle.controller.js` (`getCachedCandles`) → proxies `GET {ENGINE_URL}/candles/cached` via `engineClient`; returns result to client unchanged
 - Server does **not** perform any aggregation itself — both endpoints are pure proxies; all data computation happens in the engine
-- Both endpoints require JWT auth middleware (same as all other `/api/v1/` routes)
 
 ---
 

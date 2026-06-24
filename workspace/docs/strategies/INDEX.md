@@ -15,7 +15,7 @@ for the full indicator catalog before choosing what to use.
 
 | Name | Category | Signal Logic | Key Indicators | Best Timeframe |
 |------|----------|-------------|----------------|----------------|
-| [MicroScalper](MicroScalper.md) | Scalper (always-in) | Fast EMA(3/9) cross + ATR gate; `flip_position` | ema, atr | 1m |
+| [MicroScalper](MicroScalper.md) | Scalper (always-in) | EMA(9/21) cross + ATR gate; stop-and-reverse via `forecast()` | ema, atr | 1m |
 | [AdaptiveTrend](AdaptiveTrend.md) | Trend + Regime | EMA(200) regime + EMA(21/55) cross + ATR gate + chandelier trailing stop | ema, atr | 4h |
 | [BestSupertrend](BestSupertrend.md) | Trend + MTF | HTF Supertrend (inline) + SMA(7/20) crossover | sma, atr (inline Supertrend) | 1h–4h |
 | [MicroMacroRSIDivergence](MicroMacroRSIDivergence.md) | Divergence | RSI regular divergence on micro+macro pivot confluence; ported from Pine | rsi, atr, pivot_high, pivot_low, ema/sma | 1h–4h |

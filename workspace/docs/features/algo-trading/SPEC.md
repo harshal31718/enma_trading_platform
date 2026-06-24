@@ -37,8 +37,8 @@ Engine starts session in background task:
         ↓
 On each candle close event (per symbol):
   strategy.before()
-  strategy.should_long() / strategy.should_short()
-  → If signal: place order on Binance Testnet
+  pipeline.evaluate(strategy, current_holding)  → Alpha forecast() → Risk → Cost → Portfolio → Execution
+  → If the Execution model emits an OrderPlan: place order on Binance Testnet
   → Track position, compute unrealized PnL (uses fee_rate on exit)
   strategy.after()
   → Emit session update to Node server
@@ -78,7 +78,7 @@ Socket.IO emits algo:session:stopped → client sets status to 'stopped'
 - **Bot defaults pre-fill.** NewSessionWizard pre-fills capital and leverage from Exchange Settings one-time on load, user can override.
 - **Graceful stop.** When stopped, the engine closes all open positions before exiting the loop. The session does not terminate mid-trade.
 - **Candle-driven execution.** Strategy logic runs only on confirmed candle close events (not tick data). This matches backtest behavior.
-- **Multi-symbol sessions.** Each symbol gets its own Kline WebSocket stream. The strategy `should_long()` / `should_short()` is called independently per symbol.
+- **Multi-symbol sessions.** Each symbol gets its own Kline WebSocket stream and its own strategy instance; `pipeline.evaluate()` (Alpha `forecast()` → Risk → Cost → Portfolio → Execution) runs independently per symbol.
 - **Indicator warmup.** Historical candles are loaded before the live stream begins, so indicators have sufficient data on the first signal evaluation.
 - **Single engine instance.** `LiveBotManager` is a singleton — it manages all active sessions in one process.
 
@@ -96,6 +96,8 @@ Socket.IO emits algo:session:stopped → client sets status to 'stopped'
 | POST | `/api/v1/algo/sessions/:id/stop` | Stop a running session |
 | DELETE | `/api/v1/algo/sessions/:id` | Delete a session (only if stopped/errored) |
 | GET | `/api/v1/algo/symbols/locked` | Get all currently locked symbols |
+| POST | `/api/v1/algo/chaos` | Launch Chaos Mode (testnet-only multi-strategy stress run) |
+| GET | `/api/v1/algo/chaos/symbols` | Curated tier-tagged symbol pool for Chaos Mode |
 
 ---
 
@@ -103,8 +105,12 @@ Socket.IO emits algo:session:stopped → client sets status to 'stopped'
 
 | Event | Direction | Payload |
 |-------|-----------|---------|
-| `algo:session:update` | Engine → Node → Client | `{ sessionId, status, pnl, openPositions, totalTrades }` |
-| `algo:session:stopped` | Engine → Node → Client | `{ sessionId }` |
+| `algo:session:update` | Node → Client | **Partial** — clients merge only present fields. Most carry `{ sessionId, status?, pnl?, openPositions? }`; the per-symbol aggregation emit carries `{ sessionId, symbolStats }` only. |
+| `algo:position:open` | Node → Client | `{ sessionId, symbol, side, qty, price, leverage, timestamp }` |
+| `algo:position:close` | Node → Client | `{ sessionId, symbol, pnl, exitPrice, exitReason, timestamp }` |
+| `algo:session:log` | Node → Client | `{ sessionId, type, message, timestamp }` |
+
+> There is no `algo:session:stopped` event — a stop is communicated via `algo:session:update` with `status: "stopped"`.
 
 ---
 

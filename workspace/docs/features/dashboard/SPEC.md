@@ -25,7 +25,7 @@ TanStack Query fires 3 parallel fetches:
    Engine queries MongoDB backtestResults (status='completed'):
      - totalRuns: COUNT(*)
      - averageWinRate: MEAN(metrics.winRate)
-     - bestStrategy: strategyName with highest average winRate
+      - bestStrategy: strategyName with highest averageNetProfit
      - leaderboard: GROUP BY strategyName → runs, avgWinRate, avgNetProfit, avgSharpe
                     SORT BY avgNetProfit DESC
         ↓

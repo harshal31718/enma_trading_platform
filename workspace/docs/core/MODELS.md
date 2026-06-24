@@ -8,60 +8,47 @@ Both the backtest engine (`backtest_runner.py`) and live trading engine (`live_b
 
 ## 1. The Decision Pipeline (`core/pipeline.py`)
 
-The pipeline represents a sequential assembly line (Narang's canonical workflow): **Alpha → Risk → Portfolio → Cost → Execution**.
+The pipeline represents a sequential assembly line (Narang's canonical workflow), now run
+**unconditionally on every candle** — there is no early return for open positions. Execution order:
+**Alpha → Risk → Cost → Portfolio → Execution**. A signed `current_holding` (+long, −short, 0 flat)
+flows through all five models, so `forecast()` itself decides maintain / exit / flip while holding.
 
 ```
-             [Start: Candle Closed / Event]
+             [Every candle — no position-state branch]
                            │
                            ▼
-                    Is Position Open?
-                    ├── Yes ──► Update Position / Trailing Stops ──► [End]
-                    └── No
+                    1. Alpha Model — forecast() -> Signal
+                           │  (handles maintain/exit/flip while holding; entry while flat)
+                           ▼
+                    2. Risk Model — assess() -> RiskConstraints
+                           │  (drawdown breaker, structural stop, budget, max_notional)
+                           ▼
+                    3. Transaction Cost Model — estimate() -> CostEstimate
+                           │  (fee, slippage, market impact)
+                           ▼
+                    4. Portfolio Construction Model — construct() -> TargetPortfolio
+                           │  (signed sizing/weighting; edge-vs-cost veto)
+                           ▼
+                    5. Execution Model — route() -> OrderPlan | None
                            │
                            ▼
-                    1. Alpha Model
-                    └── signal.flat? ───► Yes ──► [End]
-                           │ No
-                           ▼
-                    2. Risk Model (circuit breakers, structural stop, budget)
-                    └── risk_frame.vetoed? ──► Yes ──► [End]
-                           │ No
-                           ▼
-                    4. Portfolio Construction Model (sizing, weighting)
-                           │
-                           ▼
-                    3. Transaction Cost Model (fee, slippage, market impact)
-                    └── is_worth_it? ───────► No ──► [End]
-                           │ Yes
-                           ▼
-                    5. Execution Model (order plan creation)
-                           │
-                           ▼
-                    [Output: OrderPlan]
+                    [Output: OrderPlan or None]
 ```
 
-The pipeline is implemented by [pipeline.py](file:///c:/Users/harsh/Desktop/enma_trading_platform/engine/core/pipeline.py#L17-L38):
+The pipeline is implemented by [pipeline.py](file:///c:/Users/harsh/Desktop/enma_trading_platform/engine/core/pipeline.py):
 ```python
-def evaluate(s) -> OrderPlan | None:
-    if s.is_open:
-        s.update_position()
-        return None          # exits/trailing = Risk-managed
-
-    sig = s.forecast()                            # 1 Alpha Model
-    if sig.flat:
-        return None
-
-    rf = s.risk_model.frame(s, sig)              # 2 Risk Model
-    if rf.vetoed:
-        return None                              # risk circuit breaker
-
-    tgt = s.portfolio_model.size(s, sig, rf)      # 4 Portfolio Construction Model
-    cost = s.cost_model.estimate(s, tgt)          # 3 Transaction Cost Model
-    if not s.cost_model.is_worth_it(s, sig, rf, cost):
-        return None                              # cost hurdle gate
-
-    return s.execution_model.plan(s, sig, tgt, rf)  # 5 Execution Model
+def evaluate(s, current_holding: float = 0.0) -> "OrderPlan | None":
+    sig         = s.forecast()                                    # 1 Alpha
+    constraints = s.risk_model.assess(s, sig, current_holding)    # 2 Risk
+    cost        = s.cost_model.estimate(s, sig, constraints)      # 3 TCM
+    target      = s.portfolio_model.construct(s, sig, constraints,# 4 PCM
+                                              cost, current_holding)
+    return s.execution_model.route(s, target, current_holding,    # 5 Execution
+                                   constraints)
 ```
+All five models run every candle; none short-circuit the pipeline. Vetoes/flat signals are expressed
+as a zero/closing `TargetPortfolio` and resolved inside `route()` (its 5 paths: flat→flat, hold→close,
+flat→enter, flip, maintain bracket).
 
 ---
 
@@ -79,34 +66,29 @@ All pluggable models inherit from abstract base classes defined in [core/models/
 
 ### 2. Risk Model
 - **Role:** Controls structural stop placement, calculates risk budgets, and checks circuit breakers.
-- **Contract:** `RiskModel.frame(s, sig: Signal) -> RiskFrame`
-- **Output:** `RiskFrame(vetoed: bool, stop_price: float, risk_per_unit: float, budget: float, max_notional: float)`
-- **Drawdown Circuit Breaker:** Checked via `RiskModel.can_trade(s)`.
-- **Default Implementation:** `DefaultRiskModel` ([risk.py](file:///c:/Users/harsh/Desktop/enma_trading_platform/engine/core/models/risk.py)) implements standard ATR stops, risk-based budgets, and isolated-margin liquidation buffer checks.
+- **Contract:** `RiskModel.assess(s, sig: Signal, current_holding: float) -> RiskConstraints`
+- **Output:** `RiskConstraints(vetoed: bool, max_drawdown_hit: bool, stop_price: float | None, take_profit_price: float | None, risk_per_unit: float, budget: float, max_notional: float)` (alias `RiskFrame` kept for one phase)
+- **Drawdown Circuit Breaker:** sets `vetoed=True` / `max_drawdown_hit=True` inside `assess()`.
+- **Variants** ([risk.py](file:///c:/Users/harsh/Desktop/enma_trading_platform/engine/core/models/risk.py)): `AtrBracketRiskModel` (ATR stop + R:R target), `ChandelierRiskModel` (trailing chandelier exit), `SignalExitRiskModel` (no hard stop; exit on signal). All apply isolated-margin liquidation-buffer checks.
 
 ### 3. Portfolio Construction Model (PCM)
-- **Role:** Sizes position targets by combining alpha conviction and risk parameters, and allocates capital across multiple symbols.
-- **Contract:** `PortfolioModel.size(s, sig: Signal, rf: RiskFrame) -> Target`
-- **Output:** `Target(qty: float, weight: float)`
-- **Capital Allocation:** `PortfolioModel.allocate(total_capital, symbols) -> dict[str, float]` splits capital across multiple symbols.
-- **Default Implementation:** `DefaultPortfolioModel` ([portfolio.py](file:///c:/Users/harsh/Desktop/enma_trading_platform/engine/core/models/portfolio.py)) sizes using the risk budget scaled by alpha conviction (`qty = size_by_risk * conviction`).
+- **Role:** Sizes the (signed) position target by combining alpha conviction, risk constraints, and the cost estimate; owns the edge-vs-cost veto (returns a zero target when the edge doesn't clear the cost hurdle).
+- **Contract:** `PortfolioModel.construct(s, sig: Signal, constraints: RiskConstraints, cost: CostEstimate, current_holding: float) -> TargetPortfolio`
+- **Output:** `TargetPortfolio(asset: str, qty: float, weight: float)` — `qty` is **signed** (+long, −short, 0 flat); alias `Target` kept for one phase.
+- **Variants** ([portfolio.py](file:///c:/Users/harsh/Desktop/enma_trading_platform/engine/core/models/portfolio.py)): `RiskBudgetPortfolio` (risk-budget sizing scaled by conviction) and `NotionalPortfolio` (fixed equity-fraction notional sizing).
 
 ### 4. Transaction Cost Model (TCM)
-- **Role:** Estimates fee, slippage, and market impact costs, and enforces the hurdle gate comparing edge against cost.
-- **Contract:**
-  - `CostModel.estimate(s, target: Target) -> Cost`
-  - `CostModel.is_worth_it(s, sig: Signal, rf: RiskFrame, cost: Cost) -> bool`
-- **Output:** `Cost(fee: float, slippage: float, impact: float)`
-- **Default Implementation:** `DefaultCostModel` ([cost.py](file:///c:/Users/harsh/Desktop/enma_trading_platform/engine/core/models/cost.py)) computes adverse fill slippage and taker fees. If `min_edge_mult > 0`, it requires the trade's expected edge (`conviction * risk_per_unit * rrr`) to clear the cost hurdle.
+- **Role:** Estimates fee, slippage, and market impact costs. (The edge-vs-cost hurdle gate itself is applied downstream in `PortfolioModel.construct()`, which consumes this estimate.)
+- **Contract:** `CostModel.estimate(s, sig: Signal, constraints: RiskConstraints) -> CostEstimate`
+- **Output:** `CostEstimate(fee: float, slippage: float, impact: float)` with a `.total` property; alias `Cost` kept for one phase.
+- **Default Implementation:** `DefaultTransactionCostModel` ([cost.py](file:///c:/Users/harsh/Desktop/enma_trading_platform/engine/core/models/cost.py)) computes adverse fill slippage and taker fees. When `min_edge_mult > 0`, the PCM requires the trade's expected edge to clear `min_edge_mult × total cost`.
 
 ### 5. Execution Model
-- **Role:** Translates targets into order plans, and simulates (backtest) or tracks (live) order fills.
-- **Contract:** `ExecutionModel.plan(s, sig: Signal, target: Target, rf: RiskFrame) -> OrderPlan | None`
-- **Output:** `OrderPlan(direction: int, qty: float, entry_price: float, stop_loss: float, take_profit: float, order_type: str)`
-- **Fills Assembly:** `ExecutionModel.entry_fill()` and `ExecutionModel.exit_fill()` assemble market fills.
-- **Default Implementations:**
-  - `BacktestExecution` ([execution.py](file:///c:/Users/harsh/Desktop/enma_trading_platform/engine/core/models/execution.py)) simulates next-open market fills with adverse slippage.
-  - `LiveExecution` ([execution.py](file:///c:/Users/harsh/Desktop/enma_trading_platform/engine/core/models/execution.py)) handles Testnet Binance execution and calculates close fees via `exit_fee()`.
+- **Role:** Translates the signed target (vs `current_holding`) into a concrete order plan — and is the **sole writer** of `buy`/`sell`/`stop_loss`/`take_profit`/`_pending_flip`/`_close_at_open`.
+- **Contract:** `ExecutionModel.route(s, target: TargetPortfolio, current_holding: float, constraints: RiskConstraints) -> OrderPlan | None`
+- **Output:** `OrderPlan(direction: int, qty: float, entry_price: float, stop_loss: float | None, take_profit: float | None, order_type: str)`
+- **5 routing paths:** flat→flat (no-op), hold→close, flat→enter, flip (atomic close-and-reverse), maintain bracket.
+- **Default Implementation:** `DefaultExecution` ([execution.py](file:///c:/Users/harsh/Desktop/enma_trading_platform/engine/core/models/execution.py)) — backtest simulates next-open market fills with adverse slippage; live routes to Binance Testnet.
 
 ---
 
@@ -116,18 +98,16 @@ To implement custom behaviors, subclass the appropriate model and reassign the i
 
 ```python
 from engine.core.strategy import BaseStrategy
-from engine.core.models import RiskModel, RiskFrame, Signal
+from engine.core.models import RiskModel, RiskConstraints, Signal
 
 class CustomVolatilityRiskModel(RiskModel):
-    def can_trade(self, s) -> bool:
+    def assess(self, s, sig: Signal, current_holding: float) -> RiskConstraints:
         # Halt trading if market volatility is too high
-        return s.vars.get("market_volatility", 0.0) < 0.05
-
-    def frame(self, s, sig: Signal) -> RiskFrame:
+        too_volatile = s.vars.get("market_volatility", 0.0) >= 0.05
         # Custom stop distance logic
         stop = s.price - (3.0 * s._atr()) if sig.direction > 0 else s.price + (3.0 * s._atr())
-        return RiskFrame(
-            vetoed=not self.can_trade(s),
+        return RiskConstraints(
+            vetoed=too_volatile,
             stop_price=stop,
             risk_per_unit=abs(s.price - stop),
             budget=s.equity * 0.02, # risk 2% instead of default 1%

@@ -34,16 +34,18 @@ Each entry is tagged so we can triage fast:
 Several ideas only make sense after we pick a side on a higher-level question. Tracking the forks
 explicitly so individual items don't get evaluated in a vacuum:
 
+> **Resolved (2026-06-24) — Build vs. adopt a backtest/exec framework:** keep extending Enma's
+> bespoke five-model engine. VectorBT/Nautilus dropped from the backlog — a vectorized/parallel
+> engine breaks the backtest=live `pipeline.evaluate()` invariant and isn't ground truth for
+> validating our sim. Re-open only if we outgrow the in-house engine.
+
 1. **Crypto-only vs. add equities.** A whole cluster (Stock Screener, Insider/Form-4 tracker, FinBERT,
    much of News Sentiment) assumes a *stock* data domain Enma doesn't have today. Adding equities means
    a new market-data source, new symbols model, and arguably a separate route — a second product surface.
    Decide once; it gates ~5 items.
-2. **Build vs. adopt a backtest/exec framework.** Enma already has a bespoke five-model "Narang Black-Box"
-   pipeline + isolated-margin futures sim. VectorBT / Nautilus Trader would *replace or sit beside* that.
-   Adopting = leverage + speed but a parallel engine to reconcile; building = keep full control of our sim.
-3. **Classical quant vs. ML/RL.** GARCH/regime-detection/PyPortfolioOpt are classical and explainable.
+2. **Classical quant vs. ML/RL.** GARCH/regime-detection/PyPortfolioOpt are classical and explainable.
    portfolio_grpo / TensorTrade are RL — high ceiling, heavy infra, harder to trust with real (testnet) capital.
-4. **Single-symbol strategies vs. portfolio-level allocation.** Today each bot/backtest is symbol-centric.
+3. **Single-symbol strategies vs. portfolio-level allocation.** Today each bot/backtest is symbol-centric.
    PyPortfolioOpt, Smart Portfolio Optimizer, and portfolio_grpo all assume a *portfolio* abstraction
    (weights across assets) we'd need to introduce first.
 
@@ -66,11 +68,9 @@ double-count:
 
 | Item | Fit | Effort | Type | Notes / Enma mapping |
 |---|---|---|---|---|
-| **VectorBT** | 🟡 | L | Adopt | Vectorized NumPy/Pandas backtesting — rapid param sweeps & multi-symbol portfolio tests. Would sit *beside* our sequential `backtest_runner` as a fast "exploration" engine (different fidelity: vectorized ≠ our candle-by-candle isolated-margin sim). Decision fork #2. Good fuel for the Monte Carlo / optimization roadmap item. |
-| **Nautilus Trader** | 🔴 | XL | Adopt | Rust-core, production-grade, *same code for backtest + live*. Powerful but overlaps almost entirely with Enma's own engine — adopting it is effectively re-platforming. Park as "if we outgrow our engine." Fork #2. |
-| **PyPortfolioOpt** | 🟡 | M | Adopt | Mean-Variance / Black-Litterman / risk-parity weight allocation across symbols. Needs a portfolio abstraction first (fork #4). Natural complement to Chaos Mode's multi-symbol fan-out — could decide capital weights instead of round-robin. |
+| **PyPortfolioOpt** | 🟡 | M | Adopt | Mean-Variance / Black-Litterman / risk-parity weight allocation across symbols. Needs a portfolio abstraction first (fork #3). Natural complement to Chaos Mode's multi-symbol fan-out — could decide capital weights instead of round-robin. |
 | **Monte Carlo Simulation** | 🟢 | M | Build | Already roadmap'd. Resample/shuffle trade sequences from a completed backtest → distribution of outcomes, probability of ruin, robustness. Lands cleanly in `engine/` reading existing `backtestTrades`; new result tab in the report UI. **Highest-fit, lowest-friction "next" candidate.** |
-| **Smart Portfolio Optimizer** | 🟡 | L | Build | Dynamic rebalancing on live signals + risk constraints (beyond static PyPortfolioOpt weights). Depends on portfolio abstraction (#4) and a live risk layer. Pairs with the Risk Management Dashboard (Track D). |
+| **Smart Portfolio Optimizer** | 🟡 | L | Build | Dynamic rebalancing on live signals + risk constraints (beyond static PyPortfolioOpt weights). Depends on portfolio abstraction (#3) and a live risk layer. Pairs with the Risk Management Dashboard (Track D). |
 
 ## Track B — ML / RL & Forecasting
 
@@ -78,7 +78,7 @@ double-count:
 |---|---|---|---|---|
 | **Volatility Forecasting (GARCH/EGARCH/ML)** | 🟢 | M | Research→Build | Predict forward vol → feeds position sizing & risk model (we already have ATR-based sizing). Classical, explainable, self-contained in `engine/`. Could surface as a new indicator/risk input. Strong fit, low blast radius. |
 | **Market Regime Detection (HMM/clustering/vol filters)** | 🟢 | M–L | Research→Build | Classify trending/ranging/hi-lo-vol/bull-bear → switch strategy behavior. Fits the Alpha/Risk model boundary; AdaptiveTrend already gestures at "regime-aware." Could become a shared engine service strategies consume. |
-| **portfolio_grpo (RL, GRPO)** | 🔴 | XL | Research | RL portfolio mgmt, 16 parallel sims, no critic; claims +639% OOS 2020–2024. Impressive but: RL infra, portfolio abstraction (#4), and trust/validation burden. Reference repo: github.com/Priyanshu-5257/portfolio_grpo. Deep-dive/prototype before any commitment. Fork #3. |
+| **portfolio_grpo (RL, GRPO)** | 🔴 | XL | Research | RL portfolio mgmt, 16 parallel sims, no critic; claims +639% OOS 2020–2024. Impressive but: RL infra, portfolio abstraction (#3), and trust/validation burden. Reference repo: github.com/Priyanshu-5257/portfolio_grpo. Deep-dive/prototype before any commitment. Fork #2. |
 | **TensorTrade** | 🔴 | L | Research | RL trading via simulated-market trial-and-error. **Project largely inactive** — marked exploration-only by user. Read for ideas, don't depend on it. |
 
 ## Track C — Signals & Alternative Data
@@ -131,9 +131,8 @@ Everything in Tracks C/E and the RL items in B should wait on the **strategic fo
 ## Open questions (for when we decide)
 
 1. **Equities: in or out?** Resolves fork #1 and ~5 items at once.
-2. **Adopt VectorBT/Nautilus, or keep extending our own engine?** Resolves fork #2.
-3. **Is there appetite for ML/RL,** or stay classical/explainable for now? Resolves fork #3.
-4. **Do we introduce a portfolio (multi-asset weight) abstraction?** Unblocks PyPortfolioOpt, Smart
+2. **Is there appetite for ML/RL,** or stay classical/explainable for now? Resolves fork #2.
+3. **Do we introduce a portfolio (multi-asset weight) abstraction?** Unblocks PyPortfolioOpt, Smart
    Optimizer, portfolio_grpo.
-5. **MCP-agent angle (à la QuantDinger):** do we want AI agents to run backtests/trades autonomously
+4. **MCP-agent angle (à la QuantDinger):** do we want AI agents to run backtests/trades autonomously
    through Enma? (We already have rich `.claude/` infra — this could be a differentiator.)

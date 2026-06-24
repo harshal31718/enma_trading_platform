@@ -122,7 +122,9 @@ already on-style — the guide was derived from them.
 **Open questions:** None. All resolved in feature.md.
 
 ---
-Previous: Strategy parameter fixes applied (2026-06-21). All 5 seeded strategies updated with industry-standard defaults per StrategyResearch.md. Golden master snapshots are now STALE — must re-baseline before any further pipeline refactors.
+Previous: Strategy parameter fixes applied (2026-06-21). All 5 seeded strategies updated with industry-standard defaults per StrategyResearch.md. Golden master snapshots were STALE after this change.
+
+> **Resolved 2026-06-21:** the golden baseline was re-established and the five-strategy comparison passed (boundary suite 20/20) — see `workspace/docs/state/CURRENT_STATE.md` → "Verified Baselines". The "must re-baseline" action below is complete.
 
 Changes made:
 - MicroScalper: EMA 2/3→9/21, ATR 5→14, atr_multiplier 0.0→1.2 (gate enabled), sl 0.3→1.5, tp 0.5→2.0, MIN_WARMUP 10→25

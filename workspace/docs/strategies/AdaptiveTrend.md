@@ -35,12 +35,12 @@ Optional breakeven move: stop moves to entry price once price extends `breakeven
 | `slope_lookback` | 5 | Bars for EMA slope measurement |
 | `fast_period` | 21 | Must be < `slow_period` |
 | `slow_period` | 55 | — |
-| `atr_floor_mult` | 0.8 | 0 disables gate |
+| `atr_floor_mult` | 1.0 | 0 disables gate |
 | `sl_atr_mult` | 2.0 | Must be ≤ `trail_atr_mult` |
 | `trail_atr_mult` | 3.0 | Chandelier trailing distance |
-| `breakeven_r` | 1.0 | 0 disables breakeven move |
+| `breakeven_r` | 0.0 | 0 disables breakeven move |
 | `tp_r_mult` | 0.0 | 0 = pure trailing exit |
-| `max_leverage` | 3.0 | Notional leverage cap for sizing |
+| `max_leverage` | 20.0 | Notional leverage cap for sizing |
 | `allow_shorts` | 1 | 0 = long-only |
 
 ## Risk Model
@@ -51,6 +51,6 @@ Optional breakeven move: stop moves to entry price once price extends `breakeven
 
 ## Notes
 
-- `MIN_WARMUP_CANDLES = 215` (trend_period + slope_lookback + buffer).
+- `MIN_WARMUP_CANDLES = 210` (trend_period + slope_lookback + buffer).
 - All indicators computed exactly once in `before()` — D-01/D-03 fix.
-- Per-trade state stored as instance variables (`_entry_price`, `_extreme`, etc.), not `self.vars`.
+- Per-trade state stored in `self.vars` (trend_ema, atr, atr_baseline, etc.) — all indicators computed exactly once in `before()`.

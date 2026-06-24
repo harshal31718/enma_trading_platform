@@ -13,7 +13,7 @@ If something appears here, it does not exist in the codebase and must not be ref
 |------|--------|-------------|-------------|
 | `workspace/docs/complete_plan.md` | Does not exist | Phase-based planning dropped early in development | `workspace/docs/state/CURRENT_STATE.md` |
 | `workspace/docs/phases.md` | Does not exist | Same as above | `workspace/docs/state/CURRENT_STATE.md` |
-| `workspace/docs/WORKFLOW.md` | Does not exist | Superseded by Workflow V2 | `.claude/BOOTSTRAP.md` |
+| `workspace/docs/WORKFLOW.md` | Does not exist | Superseded by Workflow V2 | `AGENTS.md` (entry point; `BOOTSTRAP.md` was later folded into it) |
 | `workspace/docs/ARCHITECTURE.md` | Moved | Reorganized to `workspace/docs/core/` | `workspace/docs/core/ARCHITECTURE.md` |
 | `workspace/docs/DECISIONS.md` | Moved | Reorganized to `workspace/docs/core/` | `workspace/docs/core/DECISIONS.md` |
 | `workspace/docs/API_CONTRACTS.md` | Moved | Reorganized to `workspace/docs/core/` | `workspace/docs/core/API_CONTRACTS.md` |
@@ -108,7 +108,7 @@ Do not reintroduce these unless multi-user support is actually built (see `CURRE
 
 | Item | Removed When | Why | Replacement |
 |------|-------------|-----|-------------|
-| `workspace/docs/WORKFLOW.md` "chatname_app_work" model | Workflow V2 redesign (2026-06-05) | Stale naming, stale references to non-existent files | `.claude/BOOTSTRAP.md` |
+| `workspace/docs/WORKFLOW.md` "chatname_app_work" model | Workflow V2 redesign (2026-06-05) | Stale naming, stale references to non-existent files | `AGENTS.md` (`BOOTSTRAP.md` was later folded into it) |
 | `.claude/commands/add-exchange.md` | Workflow stabilization (2026-06-05) | Aspirational — no implementation exists; no workflow steps were valid | N/A — add only when Binance is no longer the only exchange |
 | `.claude/commands/monte-carlo.md` | Workflow stabilization (2026-06-05) | Aspirational — `/optimize` endpoint not implemented; referenced non-existent "Phase 6" | N/A — create when optimization is actually built |
 | `.claude/AGENTS.md` | Clean up (2026-06-13) | Removed the theoretical multi-agent model (Claude Code, Brain, PromptGeneratorPipeline, WarmUpExecutor) and subagents (client-dev, engine-dev, reviewer) | Focus exclusively on Claude Code as a single agent (`.claude/BOOTSTRAP.md`) |
@@ -122,11 +122,14 @@ Do not reintroduce these unless multi-user support is actually built (see `CURRE
 > - **Root docs removed:** `.claude/BOOTSTRAP.md` (folded into `AGENTS.md`) and `.claude/AI_INFRASTRUCTURE.md` (folded into `.claude/GOVERNANCE.md` Part 2). `GOVERNANCE.md` is now the sole `.claude/` root doc.
 > Do not reconstruct any of these — their content lives in the merge targets named above.
 
-## Renamed Commands / Skills
+## Renamed Commands / Skills (historical — all four were later REMOVED)
 
-These files were renamed — invocation slash command changed accordingly.
+> **These commands no longer exist.** They were renamed mid-development (below), then **removed
+> entirely on 2026-06-20** (see "Removed Agent / Workflow Infrastructure" above — the four domain
+> primers were redundant with the service `CLAUDE.md` files and `binance-api.md`). This table is kept
+> only as rename history; do not treat the "New Command" column as invocable.
 
-| Old Name | New Name | Old Command | New Command |
+| Old Name | Renamed To (since removed) | Old Command | Renamed Command (since removed) |
 |----------|----------|-------------|-------------|
 | `client-ui-skill.md` | `client-ui.md` | `/client-ui-skill` | `/client-ui` |
 | `server-api-skill.md` | `server-api.md` | `/server-api-skill` | `/server-api` |

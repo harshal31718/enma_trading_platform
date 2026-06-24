@@ -7,7 +7,7 @@
 
 ## What It Does
 
-Manages platform configuration: trading mode (Testnet/Mainnet), Binance API credential verification, and exchange trading settings. The Exchange Settings section centralizes all trading parameters (fees, slippage, funding) and form defaults — all values are stored as variables, not hardcoded. **There is no authentication layer** — no register/login routes and no auth middleware (the `bcryptjs`/`jsonwebtoken` deps are unused; see `../../state/DEPRECATED.md` → "Removed Server Modules"). This is a single-user, self-hosted platform; a login gate is unnecessary unless multi-user support is added.
+Manages platform configuration: trading mode (Testnet/Mainnet), Binance API credential verification, and exchange trading settings. The Exchange Settings section centralizes all trading parameters (fees, slippage, funding) and form defaults — all values are stored as variables, not hardcoded. **There is no authentication layer** — no register/login routes, no auth middleware, no `User` model. The former auth scaffolding was **fully removed 2026-06-22**: `bcryptjs`/`jsonwebtoken` deleted from `server/package.json`, `client/src/store/useAuthStore.js` deleted, and the JWT/401 interceptors stripped from `client/src/lib/axios.js` (see `../../state/DEPRECATED.md` → "Client Auth Scaffolding"). This is a single-user, self-hosted platform; a login gate is unnecessary unless multi-user support is added.
 
 ---
 
@@ -78,9 +78,9 @@ When forms load (BacktestConfigForm, NewSessionWizard):
 ### Authentication — not implemented
 
 There are **no** `/api/v1/auth/*` routes, no auth middleware, and no `User` model. This is a
-single-user, self-hosted platform, so no login gate is needed. `client/src/store/useAuthStore.js`
-and the `bcryptjs`/`jsonwebtoken` server deps exist but are **unused scaffolding** — add real
-auth (register/login + middleware) only if multi-user support is ever introduced.
+single-user, self-hosted platform, so no login gate is needed. The old client/server auth scaffolding
+(`useAuthStore.js`, axios JWT interceptors, `bcryptjs`/`jsonwebtoken`) was deleted 2026-06-22 — add
+real auth (register/login + middleware) from scratch only if multi-user support is ever introduced.
 
 ---
 
@@ -96,11 +96,10 @@ auth (register/login + middleware) only if multi-user support is ever introduced
 
 ## Key Invariants
 
-- **Credentials live in `.env`.** Binance API key/secret are read from server environment variables — they are not stored in MongoDB. Do not move them to MongoDB without a full security review.
-- **Single-user model.** No `user_id` on any schema. No authentication layer exists; the unused `bcryptjs`/`jsonwebtoken` deps and orphaned `useAuthStore` are the only remnants of a deferred multi-user idea.
+- **Credentials live in `.env`.** Binance API key/secret are read from server environment variables (`BINANCE_TESTNET_KEY`, `BINANCE_TESTNET_SECRET`, `BINANCE_LIVE_KEY`, `BINANCE_LIVE_SECRET`) — they are not stored in MongoDB. The AES-256 encryption util (`server/src/utils/encryption.js`) exists for future use but is not currently wired.
+- **Single-user model.** No `user_id` on any schema. No authentication layer exists; the former `bcryptjs`/`jsonwebtoken` deps and `useAuthStore` scaffolding were deleted 2026-06-22 — nothing auth-related remains.
 - **Do not modify `.env` files.** Settings changes (mode) go to MongoDB Settings collection only.
 - **Mainnet not implemented.** Switching mode to `mainnet` in Settings has no effect on the current trade route behavior — all orders still target Testnet. Full mainnet support requires swapping the base URL in the engine.
-- **AES-256 encryption.** If API keys are ever stored in MongoDB (not current behavior), they must be encrypted via `server/src/utils/encryption.js` before storage.
 
 ---
 
@@ -113,23 +112,31 @@ auth (register/login + middleware) only if multi-user support is ever introduced
 |-------|------|-------------|
 | `_id` | String | Fixed value `'global'` |
 | `mode` | Enum | `'testnet'` or `'mainnet'` |
-| `binanceTestnetKey` | String | AES-256 encrypted (if stored) |
-| `binanceTestnetSecret` | String | AES-256 encrypted (if stored) |
-| `binanceLiveKey` | String | AES-256 encrypted (if stored) |
-| `binanceLiveSecret` | String | AES-256 encrypted (if stored) |
 | **Trading Fees** | | |
 | `takerFee` | Number | Taker fee rate (decimal: 0.0005 = 0.05%), default 0.0005 |
 | `makerFee` | Number | Maker fee rate (decimal: 0.0002 = 0.02%), default 0.0002 |
+| **Simulation Realism** | | |
+| `slippagePct` | Number | Market fill slippage (decimal: 0.0005 = 0.05%), default 0.0005 |
+| `fundingEnabled` | Boolean | Whether to charge funding during backtests, default false |
+| `fundingRate` | Number | Funding rate per 8h period (decimal: 0.0001 = 0.01%), default 0.0001 |
 | **Backtest Defaults** | | |
 | `defaultCapital` | Number | Starting capital for new backtests, default 10000 |
 | `defaultLeverage` | Number | Default leverage for backtests (1-125), default 1 |
 | **Bot Defaults** | | |
 | `defaultBotCapital` | Number | Starting capital for new bot sessions, default 1000 |
 | `defaultBotLeverage` | Number | Default leverage for bot sessions (1-125), default 1 |
-| **Simulation Realism** | | |
-| `slippagePct` | Number | Market fill slippage (decimal: 0.0005 = 0.05%), default 0.0005 |
-| `fundingEnabled` | Boolean | Whether to charge funding during backtests, default false |
-| `fundingRate` | Number | Funding rate per 8h period (decimal: 0.0001 = 0.01%), default 0.0001 |
+| **Risk Model Defaults** | | |
+| `riskPct` | Number | Risk per trade as fraction of equity (0.01 = 1%), default 0.01 |
+| `riskRewardRatio` | Number | Reward:risk multiple for take-profit, default 2.0 |
+| `maxSessionDrawdown` | Number | Max equity drawdown before halting new entries (0.20 = 20%), default 0.20 |
+| `liqBufferPct` | Number | Min gap between stop-loss and liquidation price, default 0.005 |
+| `minEdgeMult` | Number | Cost Model minimum edge multiplier, default 0.0 |
+| **Chaos Mode Defaults** | | |
+| `chaosMaxStrategies` | Number | Hard cap on strategies per chaos run, default 10 |
+| `chaosMaxManualSymbols` | Number | Max hand-picked symbols per strategy, default 5 |
+| `chaosDefaultCapital` | Number | Per-strategy capital pre-fill, default 500 |
+| `chaosDefaultLeverage` | Number | Leverage pre-fill, default 50 |
+| `chaosDefaultTimeframe` | String | Default chaos timeframe, default `'1m'` |
 
 ---
 
@@ -137,11 +144,11 @@ auth (register/login + middleware) only if multi-user support is ever introduced
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| `POST /api/v1/auth/register` | Implemented | Not used in current UI |
-| `POST /api/v1/auth/login` | Implemented | Not used in current UI |
-| JWT middleware | Implemented | Not applied to any routes |
-| Login gate in UI | Not implemented | Single-user model defers this |
-| `useAuthStore` (Zustand) | Implemented | Token stored but not used to gate routes |
+| `POST /api/v1/auth/register` | Does not exist | No route file or controller |
+| `POST /api/v1/auth/login` | Does not exist | No route file or controller |
+| JWT middleware | Does not exist | `server/src/middleware/auth.js` never existed |
+| Login gate in UI | Does not exist | Single-user model — no gate needed |
+| `useAuthStore` (Zustand) | Deleted 2026-06-22 | Removed with the rest of the auth scaffolding |
 
 ---
 
@@ -149,8 +156,6 @@ auth (register/login + middleware) only if multi-user support is ever introduced
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/auth/register` | Register user (JWT, not enforced) |
-| POST | `/api/v1/auth/login` | Login user, returns JWT |
 | GET | `/api/v1/trade/settings/keys` | Get current trading mode |
 | POST | `/api/v1/trade/settings/keys` | Save trading mode |
 | POST | `/api/v1/trade/settings/verify` | Verify Binance API credentials |
@@ -167,8 +172,6 @@ auth (register/login + middleware) only if multi-user support is ever introduced
 | `client/src/hooks/useExchangeSettings.js` | TanStack Query hooks: `useExchangeSettings()` (GET), `useUpdateExchangeSettings()` (PUT) |
 | `client/src/features/backtest/BacktestConfigForm.jsx` | Pre-fills capital/leverage from `defaultCapital`/`defaultLeverage` |
 | `client/src/components/algo/NewSessionWizard.jsx` | Pre-fills capital/leverage from `defaultBotCapital`/`defaultBotLeverage` |
-| `client/src/store/useAuthStore.js` | Zustand store for JWT token |
-| `server/src/routes/auth.routes.js` | Register + login routes |
 | `server/src/routes/settings.routes.js` | Exchange settings GET + PUT routes |
 | `server/src/routes/trade.routes.js` | Settings keys routes (GET + POST + verify) |
 | `server/src/controllers/settings.controller.js` | `getExchangeSettings`, `updateExchangeSettings` |
@@ -176,7 +179,6 @@ auth (register/login + middleware) only if multi-user support is ever introduced
 | `server/src/controllers/algo.controller.js` | Reads `takerFee` from Settings on session start, injects into engine call |
 | `server/src/controllers/backtest.controller.js` | Reads trading fees, slippage, funding from Settings on backtest start |
 | `server/src/models/Settings.js` | Singleton Settings document with all exchange configuration |
-| `server/src/middleware/auth.js` | JWT verification middleware (not applied) |
 | `server/src/middleware/requireBinanceCredentials.js` | Ensures .env credentials exist before trade routes |
 | `server/src/utils/encryption.js` | AES-256 encrypt/decrypt for API keys |
 | `engine/routers/backtest.py` | Accepts `slippagePct`, `fundingEnabled`, `fundingRate` in backtest request |

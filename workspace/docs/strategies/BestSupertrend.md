@@ -21,8 +21,9 @@ then running the inline Supertrend algorithm. Uses `tsl[-2]` (previous completed
 |-----------|--------|---------|
 | `ta.sma` | `fast_length=7` | Entry/exit trigger (sequential) |
 | `ta.sma` | `slow_length=20` | Entry/exit trigger (sequential) |
-| `ta.atr` | `pd=3` | ATR input for inline Supertrend (sequential) |
-| **Inline Supertrend** | `factor=3.0, pd=3` | HTF filter; see [supertrend.md](../indicators/supertrend.md) |
+| `ta.atr` | `pd=10` | ATR input for inline Supertrend (sequential) |
+| `ta.atr` | `atr_period=14` | Stop sizing for the hard ATR stop (AtrBracketRiskModel) |
+| **Inline Supertrend** | `factor=3.0, pd=10` | HTF filter; see [supertrend.md](../indicators/supertrend.md) |
 
 ## Key Parameters
 
@@ -32,18 +33,22 @@ then running the inline Supertrend algorithm. Uses `tsl[-2]` (previous completed
 | `fast_length` | 7 | 1–100 | Fast SMA period |
 | `slow_length` | 20 | 2–200 | Slow SMA period |
 | `factor` | 3.0 | 1.0–100 | Supertrend multiplier |
-| `pd` | 3 | 1–100 | Supertrend ATR period |
-| `tf` | `"daily"` | `daily`, `weekly`, `monthly`, `quarterly`, `yearly` | HTF for Supertrend |
-| `position_size_pct` | 0.1 | 0.01–1.0 | Fixed fraction of equity (not risk-based) |
+| `pd` | 10 | 1–100 | Supertrend ATR period |
+| `sl_atr_mult` | 2.0 | 0.1–10 | Hard ATR stop distance (AtrBracketRiskModel) |
+| `atr_period` | 14 | 5–50 | ATR period for the hard stop |
+| `tf` | `"daily"` | `1h`, `4h`, `daily`, `weekly`, `monthly` | HTF for Supertrend |
+| `position_size_pct` | 1.0 | 0.01–1.0 | Fixed fraction of equity (not risk-based) |
 
 ## Risk Model
 
-- Uses `size_by_notional(position_size_pct)` — **not** risk-based sizing (no SL/TP set at entry)
-- Exit is trigger-based (SMA crossunder/crossover) or via `liquidate()` / `flip_position()`
+- Binds `AtrBracketRiskModel` + `NotionalPortfolio`: sizing is notional (`position_size_pct` fraction
+  of equity), but a **hard ATR stop** (`sl_atr_mult * ATR`, `atr_period`) is now armed at entry —
+  this replaced the earlier `SignalExitRiskModel` (no-hard-SL) variant.
+- Exit is trigger-based (SMA crossunder/crossover) or the hard ATR stop, or via `liquidate()` / `flip_position()`
 
 ## Notes
 
-- This is the only strategy not using `size_by_risk` — it uses a fixed equity fraction.
+- This is the only strategy sizing via a fixed equity fraction (`NotionalPortfolio`) rather than `size_by_risk`.
 - Supertrend logic is a Python loop over the candle array; performance on long backtests may be slower.
 - The `cross_buy`/`cross_sell` scan iterates backwards through SMA history to find the most recent cross.
 - No `MIN_WARMUP_CANDLES` declared — warmup is implicitly `max(fast_length, slow_length) + 1`.

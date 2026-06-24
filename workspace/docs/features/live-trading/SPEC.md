@@ -58,7 +58,7 @@ TanStack Query invalidates positions + open orders queries
 
 ## Key Invariants
 
-- **Binance Testnet only.** All orders target `https://testnet.binancefuture.com`. Mainnet is not implemented.
+- **Binance Testnet only.** All orders target `https://demo-fapi.binance.com` (the `_BASE_URLS["testnet"]` base in `engine/services/binance_testnet.py`). Mainnet is not implemented.
 - **No direct client-to-Binance REST calls.** All REST calls go through server → engine.
 - **Symbol lock mutual exclusion.** A symbol locked by a bot session cannot be manually traded, and a manually active symbol blocks bot entry. Lock state stored in Redis.
 - **ISOLATED margin type only.** CROSS margin is not supported.

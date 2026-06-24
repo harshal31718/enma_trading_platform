@@ -178,9 +178,13 @@ Invocable as `/command-name` in Claude Code or via the Skill tool — same Markd
 | `/sync-spec` | Workflow gate | Post-implementation doc-sync checklist + completion gate (required before declaring done) |
 | `/add-strategy` | Scaffolding | Scaffold a new strategy in the engine + register in the seeder |
 | `/add-indicator` | Scaffolding | Add a new TA indicator to **both** adapters (talib + pandas-ta) |
-| `/add-endpoint` | Scaffolding | Add a REST endpoint across engine → server → client |
+| `/create-api-endpoint` | Scaffolding | Add a REST endpoint across engine → server → client |
 | `/security-review` | Operational | Scan for secrets, `user_id` leakage, layer-boundary violations, key handling |
 | `/verify` | Operational | Bring the Docker stack up + confirm a change works (health checks + observed behavior) |
+| `/ui-restyle` | UI Restyling | Restyle UI components to match the official UI_STYLE_GUIDE.md |
+| `/check-boundaries` | Boundary Check | Verify architectural boundaries are respected (no financial logic in wrong layer) |
+| `/golden-check` | Golden Check | Run golden master tests to verify refactors don't change behavior |
+| `/depth-review` | Depth Review | Perform comprehensive review across 6 drift vectors (stack, structure, API, boundary, convention, doc) |
 
 **Dependencies:** all scaffolding commands call `/sync-spec` on completion; `/sync-spec`'s gate spawns the `drift-reviewer` agent. All commands assume the caller has read `AGENTS.md` + `CURRENT_STATE.md`.
 

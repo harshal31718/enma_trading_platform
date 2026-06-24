@@ -3,7 +3,7 @@
 **Authority:** This is the single source of truth for what ENMA currently does.
 Read this before starting any work. If this conflicts with chat history, this document wins.
 
-Last updated: 2026-06-22
+Last updated: 2026-06-24
 
 ---
 
@@ -24,7 +24,7 @@ Last updated: 2026-06-22
 - 5 strategies seeded on startup — each ported to the Narang Black-Box architecture (defines `forecast()`, binds specific risk/portfolio model, does not own `go_long`/`go_short`/`update_position`). The seeder also prunes any MongoDB strategy documents whose name is not in `DEFAULT_STRATEGIES` (e.g., stale `PnlFixer` remnant):
   - `MicroScalper` — `AtrBracketRiskModel` + `RiskBudgetPortfolio`; volatility-gated momentum crossover; flips while holding
   - `AdaptiveTrend` — `ChandelierRiskModel` + `RiskBudgetPortfolio`; regime-aware trend follower with chandelier trailing exit
-  - `BestSupertrend` — `SignalExitRiskModel` + `NotionalPortfolio`; multi-timeframe Supertrend + SMA crossovers; closes via `_close_at_open` (intentional behavioral change from prior `liquidate()`); has `_safe_sma()` helper to guard against `period > data_length` TA errors
+  - `BestSupertrend` — `AtrBracketRiskModel` + `NotionalPortfolio`; multi-timeframe Supertrend + SMA crossovers with a hard ATR stop (replaced the earlier `SignalExitRiskModel`); closes via `_close_at_open` (intentional behavioral change from prior `liquidate()`); has `_safe_sma()` helper to guard against `period > data_length` TA errors
   - `MicroMacroRSIDivergence` — `AtrBracketRiskModel` + `RiskBudgetPortfolio`; RSI divergence with micro+macro pivot confluence; optional opposite-divergence exit
   - `MultiDivergence` — `AtrBracketRiskModel` + `RiskBudgetPortfolio`; multi-oscillator divergence confluence (9 sources: RSI, MFI, Stochastic, Z-Score, ADX, MACD, OBV, price-action, swing-volume)
 
@@ -52,7 +52,7 @@ Last updated: 2026-06-22
 
 ### Dashboard
 - Total runs, best strategy, average win rate stats
-- Strategy leaderboard (per-strategy averaged metrics, sorted by win rate)
+- Strategy leaderboard (per-strategy averaged metrics, sorted by net profit)
 - Recent activity table (last 5 completed backtests with deep-link to results)
 - Cached candles table (TimescaleDB inventory: symbol, timeframe, exchange, type, date range, count)
 
@@ -112,7 +112,7 @@ Last updated: 2026-06-22
 - Files: `base.py` (interface + convenience fns), `config.py` (backend selection), `adapters/talib_adapter.py`, `adapters/pandas_ta_adapter.py`
 
 ### UI / Navigation
-- 6 pages: Dashboard, Strategies, Backtest, Live Trading (Trade), Algo Trading, Settings
+- 6 nav pages + OrderHistory (at `/order-history`, not in navbar): Dashboard, Strategies, Backtest, Live Trading (Trade), Algo Trading, Settings
 - Horizontal top navbar — no sidebar
 - Active nav state: `text-emerald-400`, `bg-emerald-500/10`, `border-b-2 border-emerald-500`
 - Dark theme throughout (`bg-gray-950` base)
