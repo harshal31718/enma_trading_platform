@@ -12,6 +12,7 @@ from config.mongo import get_database
 from core.position import Position
 from core.models import BacktestExecution
 from core.pipeline import evaluate
+from core.params import param_coerce, param_validate
 from services.candle_manager import ensure_candles_available
 from utils.timeframes import annual_factor
 from decimal import ROUND_DOWN, ROUND_UP
@@ -612,18 +613,21 @@ async def run_backtest_simulation(
             sym_leverage = min(sym_leverage, _sym_max_lev)
             strategy.leverage = sym_leverage
 
-            # Inject alpha params
+            # Inject alpha params (F-015/F-016: reject out-of-range and unknown params)
+            strategy_params = getattr(strategy, "PARAMS", {})
             for key, val in (alpha_params or {}).items():
-                if hasattr(strategy, "PARAMS") and key in strategy.PARAMS:
-                    bounds = strategy.PARAMS[key]
-                    try:
-                        typed_val = type(bounds["default"])(val)
-                    except (TypeError, ValueError):
-                        typed_val = val
-                    typed_val = max(bounds["min"], min(bounds["max"], typed_val))
-                    setattr(strategy, key, typed_val)
-                elif hasattr(strategy, key):
-                    setattr(strategy, key, val)
+                if key not in strategy_params:
+                    raise ValueError(
+                        f"Unknown parameter '{key}'. "
+                        f"Valid parameters for {strategy.__class__.__name__}: {list(strategy_params.keys())}"
+                    )
+                bounds = strategy_params[key]
+                try:
+                    typed_val = param_coerce(bounds, val)
+                except (TypeError, ValueError):
+                    typed_val = val
+                param_validate(bounds, typed_val)
+                setattr(strategy, key, typed_val)
 
             try:
                 strategy.validate_params()

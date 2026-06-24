@@ -68,13 +68,14 @@ from inside forecast(); the engine owns execution and order planning.
 
 import engine.indicators as ta
 from engine.core.strategy import BaseStrategy, Signal
+from engine.core.params import IntParameter, FloatParameter
 
 
 class {name}(BaseStrategy):
     PARAMS = {{
-        "fast_period": {{"type": "int", "default": 12, "min": 2, "max": 50, "label": "Fast EMA Period"}},
-        "slow_period": {{"type": "int", "default": 26, "min": 5, "max": 100, "label": "Slow EMA Period"}},
-        "atr_multiplier": {{"type": "float", "default": 2.0, "min": 1.0, "max": 5.0, "label": "ATR Stop Multiplier"}},
+        "fast_period": IntParameter(2, 50, default=12, label="Fast EMA Period"),
+        "slow_period": IntParameter(5, 100, default=26, label="Slow EMA Period"),
+        "atr_multiplier": FloatParameter(1.0, 5.0, default=2.0, label="ATR Stop Multiplier"),
     }}
 
     def forecast(self):
@@ -280,9 +281,11 @@ async def get_strategy_code(name: str):
 async def get_strategy_params(name: str):
     """Returns the PARAMS schema for a strategy class."""
     try:
+        from core.params import param_to_dict
         module = importlib.import_module(f"strategies.{name}")
         strategy_class = getattr(module, name)
-        params = getattr(strategy_class, "PARAMS", {})
+        raw = getattr(strategy_class, "PARAMS", {})
+        params = {k: param_to_dict(v) for k, v in raw.items()}
         return {"success": True, "data": {"params": params}}
     except Exception:
         raise HTTPException(status_code=404, detail=f"Strategy '{name}' not found")

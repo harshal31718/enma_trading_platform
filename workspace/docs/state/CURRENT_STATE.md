@@ -3,7 +3,7 @@
 **Authority:** This is the single source of truth for what ENMA currently does.
 Read this before starting any work. If this conflicts with chat history, this document wins.
 
-Last updated: 2026-06-24 (Phase 7)
+Last updated: 2026-06-24 (Phase 8)
 
 ---
 
@@ -155,6 +155,11 @@ Last updated: 2026-06-24 (Phase 7)
 - **Dynamic Pairlist Pipeline (A-004)**: New `engine/services/pairlist.py` provides a composable pairlist system with `VolumePairList` (generator, top N by volume), `SpreadFilter` (drops wide bid/ask spreads via cached ticker data), `VolatilityFilter` (keeps pairs within a volatility band), `PrecisionFilter` (drops pairs where tick size precision makes stop placement unreliable), and `AgeFilter` (placeholder). A config-based factory `pairlist_from_config()` builds `PairlistPipeline` instances from session config. In `live_bot_manager.start_session()`, if `symbols` is empty and `risk_params.pairlist` is configured, the pipeline generates the symbol list dynamically. A preview endpoint at `POST /algo/pairlist/preview` (proxied via server at `POST /api/v1/algo/pairlist/preview`) lets users test pairlist configurations without starting a session.
 - **Ticker Cache**: `load_symbol_volume_tiers()` now populates `_ticker_cache` with bidPrice, askPrice, highPrice, lowPrice, volume, quoteVolume, and priceChangePercent from the 24hr ticker. Consumed by pairlist filters (SpreadFilter, VolatilityFilter). Exposed via `get_ticker_data(exchange, symbol)`.
 
+### Phase 8 — Parameters & Optimization
+- **F-015/F-016 — Reject (not silently clamp/drop) params**: Backtest and live param injection now raises `ValueError` with a clear message when a param is out of range or unknown (instead of silently clamping or dropping). The same validation applies to both dict-style and typed PARAMS.
+- **A-005 — Typed Self-Validating Parameters**: New `engine/core/params.py` with `IntParameter`, `FloatParameter`, `DecimalParameter`, `CategoricalParameter`, and `BooleanParameter` classes — bounds validated at construction, type coercion, and `.to_dict()` for server API consumption. Backward-compatible shared helpers (`param_coerce`, `param_validate`, `param_default`, `param_to_dict`) work with both typed and legacy dict-style PARAMS.
+- **A-006 — Parameter Optimization Run Mode**: New `engine/services/optimizer.py` — grid search over parameter combinations (int step/range, float linspace, categorical values, random subset support). 8 objective functions (sharpe, sortino, calmar, profit, profit_pct, drawdown, sqn, multi). Results persisted to MongoDB `optimizationResults` collection. New router at `engine/routers/optimize.py` — endpoints: `GET /optimize/objectives`, `POST /optimize/run`, `GET /optimize/{id}/status`, `GET /optimize/{id}/results`.
+
 ### UI / Navigation
 - 6 nav pages + OrderHistory (at `/order-history`, not in navbar): Dashboard, Strategies, Backtest, Live Trading (Trade), Algo Trading, Settings
 - Horizontal top navbar — no sidebar
@@ -166,7 +171,7 @@ Last updated: 2026-06-24 (Phase 7)
 
 ## In Progress
 
-Phase 8 (Parameters & optimization) — next on the tracker.
+Phase 9 (Strategy mechanisms — DCA, entry/exit tagging) — next on the tracker.
 
 ## Verified Baselines
 
@@ -195,7 +200,7 @@ Phase 8 (Parameters & optimization) — next on the tracker.
 | Feature | Notes |
 |---------|-------|
 | **Mainnet trading** | `fapi.binance.com` not implemented; all orders go to Testnet. Adding mainnet = swap base URL + mode selector in settings. |
-| **Monte Carlo optimization** | `/optimize` engine endpoint not implemented. |
+| **Mainnet trading** | `fapi.binance.com` not implemented; all orders go to Testnet. |
 | **Multi-exchange support** | Binance only. |
 | **Authentication** | Not implemented. The single-user model needs no login gate; add register/login + middleware only if multi-user support is ever introduced. |
 

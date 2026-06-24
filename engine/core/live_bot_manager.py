@@ -18,6 +18,7 @@ from core.models import (
     DefaultPortfolioModel, LiveExecution, OrderPlan,
     CooldownPeriod, StoplossGuard, ProtectionManager,
 )
+from core.params import param_coerce, param_default, param_validate
 from core.pipeline import evaluate
 from services.trade_recorder import record_trade, build_trade_record
 from services.pairlist import pairlist_from_config
@@ -768,9 +769,22 @@ class LiveBotManager:
         strategy.exchange_type = "futures"
         strategy.fee_rate = fee_rate
 
-        # Set user params on instance
-        for key, meta in getattr(strategy_class, "PARAMS", {}).items():
-            setattr(strategy, key, params.get(key, meta["default"]))
+        # Set user params on instance (F-015/F-016: reject out-of-range and unknown params)
+        _strategy_params = getattr(strategy_class, "PARAMS", {})
+        for key in params:
+            if key not in _strategy_params:
+                raise ValueError(
+                    f"Unknown parameter '{key}'. "
+                    f"Valid parameters for {strategy_class.__name__}: {list(_strategy_params.keys())}"
+                )
+        for key, meta in _strategy_params.items():
+            raw_val = params.get(key, param_default(meta))
+            try:
+                typed_val = param_coerce(meta, raw_val)
+            except (TypeError, ValueError):
+                typed_val = raw_val
+            param_validate(meta, typed_val)
+            setattr(strategy, key, typed_val)
 
         # Inject risk model params (mirrors backtest_runner step 6b). Live
         # trading executes against real fills, so slippage_pct is left at the

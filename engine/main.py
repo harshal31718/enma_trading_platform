@@ -24,6 +24,7 @@ from routers.strategies import router as strategies_router
 from routers.trade import router as trade_router
 from routers.risk import router as risk_router
 from routers.leverage_sensitivity import router as leverage_sensitivity_router
+from routers.optimize import router as optimize_router
 from services.strategy_seeder import seed_strategies
 from services.binance_testnet import close_client
 from services.user_data_stream import user_data_stream
@@ -143,6 +144,7 @@ app.include_router(trade_router, prefix="/trade", tags=["trade"])
 app.include_router(algo_router, prefix="/algo", tags=["algo"])
 app.include_router(risk_router, prefix="/risk", tags=["risk"])
 app.include_router(leverage_sensitivity_router, prefix="/backtest", tags=["backtest"])
+app.include_router(optimize_router, prefix="/optimize", tags=["optimize"])
 
 
 @app.get("/health")

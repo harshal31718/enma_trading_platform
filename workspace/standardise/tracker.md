@@ -9,10 +9,10 @@
 ## Progress
 
 | | Total | TODO | IN PROGRESS | BLOCKED | DONE | DROPPED |
-|---|---|---|---|---|---|---|---|---|
-| Corrections (F) | 24 | 3 | 0 | 0 | 21 | 0 |
-| Additions (A) | 16 | 3 | 0 | 0 | 13 | 0 |
-| **All** | **40** | **6** | **0** | **0** | **34** | **0** |
+|---|---|---|---|---|---|---|---|
+| Corrections (F) | 24 | 1 | 0 | 0 | 23 | 0 |
+| Additions (A) | 16 | 1 | 0 | 0 | 15 | 0 |
+| **All** | **40** | **2** | **0** | **0** | **38** | **0** |
 
 > Update this table whenever a row changes status.
 
@@ -128,11 +128,11 @@
 ## Phase 8 — Parameters & optimization.
 
 | Step | ID | Item | Doc | Val/Sev | Status | Commit / Note |
-|---|---|---|---|---|---|---|
-| 8.1 | F-015 | Reject (not silently clamp) out-of-range params; surface to user | 03 | MEDIUM | TODO | |
-| 8.2 | F-016 | Error (not silently drop) unknown/typo'd param names | 03 | LOW | TODO | |
-| 8.3 | A-005 | Typed self-validating parameter classes (IntParameter/DecimalParameter analogues) | 07 | ★★ | TODO | |
-| 8.4 | A-006 | Parameter-optimization run mode over the backtester (Sharpe/Sortino/Calmar/multi-metric objectives) | 07 | ★★★ | TODO | |
+|---|---|---|---|---|---|---|---|
+| 8.1 | F-015 | Reject (not silently clamp) out-of-range params; surface to user | 03 | MEDIUM | DONE | Silent clamp replaced with ValueError in backtest_runner + live_bot_manager; param_validate helper supports both typed + dict PARAMS |
+| 8.2 | F-016 | Error (not silently drop) unknown/typo'd param names | 03 | LOW | DONE | Unknown param names raise ValueError listing valid params; both backtest and live paths reject unknown keys |
+| 8.3 | A-005 | Typed self-validating parameter classes (IntParameter/DecimalParameter analogues) | 07 | ★★ | DONE | engine/core/params.py: IntParameter, FloatParameter, DecimalParameter, CategoricalParameter, BooleanParameter + shared helpers (param_coerce/validate/default/to_dict) for backward compat |
+| 8.4 | A-006 | Parameter-optimization run mode over the backtester (Sharpe/Sortino/Calmar/multi-metric objectives) | 07 | ★★★ | DONE | engine/services/optimizer.py: grid search + random subset over param ranges; 8 objective functions; persists to MongoDB. engine/routers/optimize.py: POST /optimize/run, GET /optimize/{id}/status, GET /optimize/{id}/results |
 
 ## Phase 9 — Strategy mechanisms (borrow logic, not strategy files).
 
