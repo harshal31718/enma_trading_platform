@@ -171,35 +171,55 @@ class AdaptiveTrend(BaseStrategy):
                 f"trail_atr_mult ({self.trail_atr_mult}) should be >= sl_atr_mult ({self.sl_atr_mult})"
             )
 
-    # ── Indicators — computed once per candle in before() ──────────────────
-    # D-01 fix: Previously 9+ TA-Lib calls per candle via @property accessors.
-    # Now computed exactly once and stored in self.vars.
+    # ── Phase A: one-time vectorized pre-computation (full candle array) ─────
+    # D-01 fix retained: indicators are computed exactly once (now in prepare())
+    # over the full array; before() is pure index lookups, zero TA-Lib calls.
+    def prepare(self, candles: np.ndarray) -> None:
+        """Compute the trend/fast/slow EMA and ATR sequences once.
 
+        EMA and ATR are causal and seeded from index 0, so the former
+        ``ta.ema(candles[:-k], …)`` "prev EMA k bars back" equals the sequential
+        EMA at ``i-k`` (k=slope_lookback for the trend, k=1 for fast/slow).
+        """
+        if len(candles) == 0:
+            empty = np.array([])
+            self._trend_ema_seq = empty
+            self._fast_ema_seq = empty
+            self._slow_ema_seq = empty
+            self._atr_seq = empty
+            return
+        self._trend_ema_seq = np.asarray(
+            ta.ema(candles, period=self.trend_period, sequential=True), dtype=float)
+        self._fast_ema_seq = np.asarray(
+            ta.ema(candles, period=self.fast_period, sequential=True), dtype=float)
+        self._slow_ema_seq = np.asarray(
+            ta.ema(candles, period=self.slow_period, sequential=True), dtype=float)
+        self._atr_seq = np.asarray(
+            ta.atr(candles, period=self.atr_period, sequential=True), dtype=float)
+
+    # ── Phase B: per-candle index lookup only (no TA-Lib) ───────────────────
     def before(self) -> None:
-        n = len(self.candles)
-        if n < self.MIN_WARMUP_CANDLES:
+        i = self.index
+        if (i + 1) < self.MIN_WARMUP_CANDLES:
             return
 
-        # Trend regime (long EMA + slope)
-        trend_ema      = ta.ema(self.candles, period=self.trend_period)
-        trend_ema_prev = ta.ema(self.candles[:-self.slope_lookback], period=self.trend_period)
-        self.vars["trend_ema"]      = trend_ema
-        self.vars["trend_ema_prev"] = trend_ema_prev
+        # Trend regime (long EMA + slope) — prev = EMA slope_lookback bars back
+        self.vars["trend_ema"]      = self._trend_ema_seq[i]
+        self.vars["trend_ema_prev"] = self._trend_ema_seq[i - self.slope_lookback]
 
-        # Entry trigger (fast/slow EMA crossover)
-        self.vars["fast_ema"]      = ta.ema(self.candles,      period=self.fast_period)
-        self.vars["slow_ema"]      = ta.ema(self.candles,      period=self.slow_period)
-        self.vars["fast_ema_prev"] = ta.ema(self.candles[:-1], period=self.fast_period)
-        self.vars["slow_ema_prev"] = ta.ema(self.candles[:-1], period=self.slow_period)
+        # Entry trigger (fast/slow EMA crossover) — prev = EMA at i-1
+        self.vars["fast_ema"]      = self._fast_ema_seq[i]
+        self.vars["slow_ema"]      = self._slow_ema_seq[i]
+        self.vars["fast_ema_prev"] = self._fast_ema_seq[i - 1]
+        self.vars["slow_ema_prev"] = self._slow_ema_seq[i - 1]
 
         # Volatility
-        atr = ta.atr(self.candles, period=self.atr_period)
+        atr = float(self._atr_seq[i])
         self.vars["atr"] = atr
 
-        # ATR baseline for volatility gate (rolling mean of ATR series)
+        # ATR baseline for volatility gate (rolling mean of ATR series tail)
         if self.atr_floor_mult > 0.0:
-            series = ta.atr(self.candles, period=self.atr_period, sequential=True)
-            window = series[-(self.atr_period * 2):]
+            window = self._atr_seq[max(0, i + 1 - self.atr_period * 2): i + 1]
             window = window[~np.isnan(window)]
             self.vars["atr_baseline"] = float(np.mean(window)) if window.size > 0 else 0.0
         else:
