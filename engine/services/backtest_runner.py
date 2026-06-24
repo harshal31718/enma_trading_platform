@@ -290,6 +290,17 @@ async def run_backtest_simulation(
     except ValueError as e:
         raise RuntimeError(f"PARAM_ERROR: {e}")
 
+    # ── 6a'. One-time vectorized indicator pre-computation ───────────────
+    # Two-phase strategy contract: prepare() computes all indicators once over
+    # the full candle array (C-speed), and before() indexes into those arrays at
+    # strategy.index (set to the absolute index `t` in step B). Default prepare()
+    # is a no-op, so unmigrated strategies are unaffected. Eliminates the O(N²)
+    # recompute-on-growing-slice pattern (see workspace/plan strategy refactor).
+    try:
+        strategy.prepare(candles_np)
+    except Exception as e:
+        raise RuntimeError(f"STRATEGY_ERROR: prepare() failed: {e}")
+
     # ── 6b. Inject risk model params ──────────────────────────────────
     _risk = risk_params or {}
     strategy.risk_pct          = float(_risk.get("risk_pct",       0.01))

@@ -217,8 +217,28 @@ class BaseStrategy(ABC):
     # Optional lifecycle methods — override as needed
     # ─────────────────────────────────────────
 
+    def prepare(self, candles: np.ndarray) -> None:
+        """One-time vectorized indicator pre-computation.
+
+        Called ONCE by the backtest runner before the simulation loop, and once
+        per closed candle in live trading (on the rolling candle window). Move
+        every TA-Lib / pandas indicator call here, storing results as ``self._*``
+        full-length arrays/scalars over the supplied ``candles``; ``before()``
+        then becomes a pure index lookup at ``self.index`` (no TA-Lib calls).
+
+        Default: no-op — strategies that still compute in ``before()`` keep
+        working unchanged. Index alignment: the runner sets ``self.index`` to the
+        absolute index into the same array passed here, so ``self._arr[self.index]``
+        is always valid.
+        """
+        pass
+
     def before(self) -> None:
-        """Called before each candle. Use for updating self.vars."""
+        """Called before each candle. Use for updating self.vars.
+
+        For migrated strategies this is index-only: read pre-computed ``self._*``
+        arrays at ``self.index`` and populate ``self.vars``. No TA-Lib calls.
+        """
         pass
 
     def after(self) -> None:

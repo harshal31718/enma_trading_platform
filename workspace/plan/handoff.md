@@ -1,4 +1,26 @@
 ---
+## 2026-06-24 — Strategy Performance Refactor (workstream #1) — Phase 1 COMPLETE
+
+**Goal:** Two-phase strategy contract (`prepare()` batch + index-only `before()`) to kill O(N²)
+indicator recompute in the backtest loop. Plan: `C:\Users\harsh\.claude\plans\go-to-workspace-plan-index-md-we-cuddly-gosling.md`. Branch: `refactor/precompute-strategies`.
+
+**Decisions (vs. written docs):** Live path (Phase 7) uses `prepare()` on the rolling ≤500 window
+per closed candle — NOT per-strategy `append_candle()` incremental (doc §3 rejected: drift/IndexError/
+5 custom methods). Backtest index alignment is direct (`strategy.index = t` = absolute index into the
+full `candles_np` passed to `prepare()`).
+
+**Done this session (Phase 1 — no-op foundation):**
+- `engine/core/strategy.py`: added `BaseStrategy.prepare(candles)` default no-op + clarified `before()` docstring (index-only for migrated strategies).
+- `engine/services/backtest_runner.py`: one-time `strategy.prepare(candles_np)` call inserted after `validate_params()` (step 6a', before sim loop). Alpha params (which indicators need) are injected before this; risk params (step 6b) are not needed by prepare().
+- **Golden master:** captured `baseline` on current HEAD, then `phase1` → `compare` = **GOLDEN-MASTER OK (5 strategies, tol 1e-06)**. Byte-equivalent (prepare() is no-op).
+
+**Baseline metrics (for reference):** MicroScalper trades=9 np=-131.61 · AdaptiveTrend 7/+1543.91 · BestSupertrend 61/-117.56 · MicroMacroRSIDivergence 17/-273.30 · MultiDivergence 55/-1688.49.
+
+**Next:** Phase 2 — migrate `MicroMacroRSIDivergence` (move RSI/ATR/4 pivots/smoothed-RSI to `prepare()`, drop `win` windowing, `before()` index-only). Gate: `run --label phase2` then `compare --a baseline --b phase2` must be OK. Watch the windowing-equivalence risk (full-array pivots vs. windowed `_last_two`).
+
+**Open questions:** None.
+
+---
 ## 2026-06-24 — Plan seq #1 (Live PnL fix) + #2 (Backtest UI refactor) COMPLETE
 
 **Goal:** Implement the two highest-priority isolated plans, verify, and update workspace docs + plan tracking.
