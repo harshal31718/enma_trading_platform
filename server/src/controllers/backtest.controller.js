@@ -179,7 +179,7 @@ async function listBacktests(req, res, next) {
     }
 
     const backtests = await BacktestResult.find(filter)
-      .select('jobId strategyName symbol timeframe status exchange createdAt error tradeCount')
+      .select('jobId strategyName symbol timeframe status exchange createdAt error tradeCount metrics.netProfit metrics.netProfitPct metrics.winRate metrics.sharpeRatio')
       .sort({ _id: -1 })
       .limit(limit + 1)   // fetch one extra to know if there's a next page
       .lean()
@@ -199,6 +199,14 @@ async function listBacktests(req, res, next) {
       createdAt: b.createdAt,
       error: b.error,
       tradeCount: b.tradeCount ?? null,
+      metrics: b.metrics
+        ? {
+            netProfit: b.metrics.netProfit,
+            netProfitPct: b.metrics.netProfitPct,
+            winRate: b.metrics.winRate,
+            sharpeRatio: b.metrics.sharpeRatio,
+          }
+        : null,
     }))
 
     res.json(ApiResponse.success({ backtests: formatted, nextCursor }))

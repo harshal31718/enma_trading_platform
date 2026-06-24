@@ -1,7 +1,8 @@
 const express = require('express')
 const router = express.Router()
-const { getStats } = require('../controllers/dashboard.controller')
+const { getStats, getPerformanceCalendar } = require('../controllers/dashboard.controller')
 
 router.get('/stats', getStats)
+router.get('/performance-calendar', getPerformanceCalendar)
 
 module.exports = router

@@ -20,3 +20,14 @@ export function useCachedCandles() {
     },
   })
 }
+
+export function useDashboardCalendar() {
+  return useQuery({
+    queryKey: ['dashboard', 'performance-calendar'],
+    queryFn: async () => {
+      const res = await api.get('/api/v1/dashboard/performance-calendar')
+      return res.data.data
+    },
+    staleTime: 60_000,
+  })
+}
