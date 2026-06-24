@@ -76,7 +76,7 @@ export default function NewBacktestWizard({ onCancel, onRun }) {
   // Default the symbol to the first available whenever the list/exchange changes
   // and the current pick is no longer valid.
   useEffect(() => {
-    if (symbolList.length > 0 && !symbolList.includes(symbol)) {
+    if (symbolList.length > 0 && !symbol) {
       setSymbol(symbolList[0])
     }
   }, [symbolList, symbol])
@@ -268,12 +268,50 @@ export default function NewBacktestWizard({ onCancel, onRun }) {
               </select>
             </div>
             <div>
-              <label className="block text-sm text-gray-300 mb-1">Symbol</label>
-              <select value={symbol} onChange={(e) => setSymbol(e.target.value)} className={inputCls}>
-                {symbolList.map((sym) => (
-                  <option key={sym} value={sym}>{sym}</option>
-                ))}
-              </select>
+              <label className="block text-sm text-gray-300 mb-1">Symbol(s)</label>
+              <input
+                type="text"
+                value={symbol}
+                onChange={(e) => setSymbol(e.target.value)}
+                placeholder="e.g., BTCUSDT or BTCUSDT,ETHUSDT"
+                className={inputCls}
+              />
+              <p className="text-xs text-gray-400 mt-1">
+                Enter a single symbol or multiple comma-separated symbols.
+              </p>
+              {symbolList.length > 0 && (
+                <div className="mt-3">
+                  <label className="block text-xs text-gray-400 mb-1.5">Quick Select</label>
+                  <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto border border-gray-800 p-2 rounded bg-gray-900/50">
+                    {symbolList.map((sym) => {
+                      const selectedList = symbol.split(',').map((s) => s.trim()).filter(Boolean)
+                      const isSelected = selectedList.includes(sym)
+                      return (
+                        <button
+                          key={sym}
+                          type="button"
+                          onClick={() => {
+                            if (isSelected) {
+                              const filtered = selectedList.filter((s) => s !== sym)
+                              setSymbol(filtered.join(', '))
+                            } else {
+                              const updated = [...selectedList, sym]
+                              setSymbol(updated.join(', '))
+                            }
+                          }}
+                          className={`px-2.5 py-1 text-xs rounded border transition-colors ${
+                            isSelected
+                              ? 'bg-emerald-500/10 border-emerald-500 text-emerald-400'
+                              : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-600 hover:text-gray-200'
+                          }`}
+                        >
+                          {sym}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
             <div>
               <label className="block text-sm text-gray-300 mb-1">Timeframe</label>

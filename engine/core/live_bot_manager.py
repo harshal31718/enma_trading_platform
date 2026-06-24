@@ -1,3 +1,4 @@
+from __future__ import annotations
 import asyncio
 import json
 import logging
@@ -15,6 +16,7 @@ from core.models import DefaultPortfolioModel, LiveExecution, OrderPlan
 from core.pipeline import evaluate
 from services.trade_recorder import record_trade, build_trade_record
 from utils.symbols import round_price, round_qty, clamp_and_round_qty, clamp_leverage
+from core.kernel import ExecutionAdapter, ExecutionKernel
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +59,262 @@ def _safe_float(val, default):
         return float(val)
     except (ValueError, TypeError):
         return default
+
+
+class LiveAdapter(ExecutionAdapter):
+    def __init__(self, manager: LiveBotManager, session_id: str):
+        self.manager = manager
+        self.session_id = session_id
+
+    async def verify_position(self, strategy, symbol: str) -> None:
+        await self.manager._verify_exchange_position_still_open(self.session_id, strategy, symbol)
+
+    async def execute_entry(
+        self, strategy, symbol: str, direction: str, qty: float, ref_price: float, time_t: datetime, index_t: int
+    ) -> bool:
+        session = self.manager.sessions.get(self.session_id)
+        if not session:
+            return False
+
+        fill_price = ref_price
+
+        # Retrieve SL/TP values from strategy (updated by evaluate pipeline or exec_algo)
+        sl_raw = strategy.stop_loss[1] if strategy.stop_loss else None
+        tp_raw = strategy.take_profit[1] if strategy.take_profit else None
+        sl_pct = abs(fill_price - sl_raw) / fill_price if sl_raw else None
+
+        exchange_name = "Binance Futures"
+        qty = clamp_and_round_qty(symbol, exchange_name, qty, fill_price, stop_loss_pct=sl_pct)
+
+        rounding_mode = ROUND_DOWN if direction == "long" else ROUND_UP
+        sl_price = round_price(symbol, exchange_name, sl_raw, rounding=rounding_mode) if sl_raw else None
+        tp_price = round_price(symbol, exchange_name, tp_raw, rounding=rounding_mode) if tp_raw else None
+
+        if qty <= 0:
+            logger.warning(f"[AlgoBot] Quantity rounded to 0 for {symbol} (below min lot size), skipping")
+            strategy.buy = None
+            strategy.sell = None
+            return False
+
+        notional = qty * fill_price
+        max_allowed_notional = strategy.balance * strategy.leverage * 1.05
+        if notional > max_allowed_notional:
+            logger.warning(
+                f"[AlgoBot] {symbol}: notional ${notional:.2f} exceeds leveraged buying power "
+                f"${strategy.balance * strategy.leverage:.2f} (leverage {strategy.leverage}x) after min-notional bump, skipping"
+            )
+            await self.manager._notify_node(self.session_id, {
+                "event": "log",
+                "eventData": {
+                    "type": "error",
+                    "message": f"Skipped {symbol}: notional ${notional:.2f} exceeds leveraged buying power ${strategy.balance * strategy.leverage:.2f}"
+                }
+            })
+            strategy.buy = None
+            strategy.sell = None
+            return False
+
+        if sl_price is not None:
+            if direction == "long" and sl_price >= fill_price:
+                logger.warning(f"[AlgoBot] {symbol}: SL {sl_price} >= entry {fill_price}, dropping SL")
+                sl_price = None
+            elif direction == "short" and sl_price <= fill_price:
+                logger.warning(f"[AlgoBot] {symbol}: SL {sl_price} <= entry {fill_price}, dropping SL")
+                sl_price = None
+        if tp_price is not None:
+            if direction == "long" and tp_price <= fill_price:
+                logger.warning(f"[AlgoBot] {symbol}: TP {tp_price} <= entry {fill_price}, dropping TP")
+                tp_price = None
+            elif direction == "short" and tp_price >= fill_price:
+                logger.warning(f"[AlgoBot] {symbol}: TP {tp_price} >= entry {fill_price}, dropping TP")
+                tp_price = None
+
+        binance_side = "BUY" if direction == "long" else "SELL"
+        sem = self.manager._order_semaphores.get(self.session_id)
+        try:
+            async with (sem if sem else asyncio.nullcontext()):
+                resp = await self.manager._call_node_internal(
+                    self.session_id,
+                    f"/internal/algo/sessions/{self.session_id}/place-order",
+                    {
+                        "symbol": symbol,
+                        "side": binance_side,
+                        "type": "MARKET",
+                        "quantity": qty,
+                        "stopLoss": sl_price,
+                        "takeProfit": tp_price,
+                    }
+                )
+            if not resp.get("success"):
+                logger.error(f"[AlgoBot] Order placement failed for {symbol}: {resp.get('error', 'Unknown error')}")
+                await self.manager._notify_node(self.session_id, {
+                    "event": "log",
+                    "eventData": {"type": "error", "message": f"Order failed {symbol}: {resp.get('error', 'Unknown error')}"}
+                })
+                strategy.buy = None
+                strategy.sell = None
+                return False
+            if not resp.get("orderId"):
+                logger.warning(f"[AlgoBot] Order placed but no orderId returned for {symbol}, assuming fill succeeded.")
+            logger.info(f"[AlgoBot] Testnet {direction} order placed: {symbol} qty={qty}, orderId={resp.get('orderId')}")
+        except Exception as e:
+            logger.error(f"[AlgoBot] Testnet order failed for {symbol}: {e}")
+            await self.manager._notify_node(self.session_id, {
+                "event": "log",
+                "eventData": {"type": "error", "message": f"Order failed {symbol}: {e}"}
+            })
+            strategy.buy = None
+            strategy.sell = None
+            return False
+
+        strategy.position = Position(direction, qty, fill_price)
+        if direction == "long":
+            strategy.buy = None
+        else:
+            strategy.sell = None
+
+        pos_info = {
+            "symbol": symbol,
+            "side": direction,
+            "qty": str(qty),
+            "price": str(fill_price),
+            "leverage": strategy.leverage,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        session["open_positions"][symbol] = pos_info
+
+        await self.manager._notify_node(self.session_id, {
+            "pnl": str(round(session["pnl"], 2)),
+            "openPositions": list(session["open_positions"].keys()),
+            "status": "running",
+            "event": "position:open",
+            "eventData": pos_info,
+        })
+
+        logger.info(f"[AlgoBot] Testnet {direction} filled: {symbol} qty={qty} @ {fill_price}")
+        return True
+
+    async def execute_exit(
+        self, strategy, symbol: str, qty: float, exit_price: float, reason: str, time_t: datetime, index_t: int,
+        high_t: float, low_t: float
+    ) -> None:
+        session = self.manager.sessions.get(self.session_id)
+        if not session or strategy.position is None:
+            return
+
+        pos = strategy.position
+        sl_price = strategy.stop_loss[1] if strategy.stop_loss else None
+        tp_price = strategy.take_profit[1] if strategy.take_profit else None
+        entry_time_str = session["open_positions"].get(symbol, {}).get("timestamp")
+        entry_time = datetime.fromisoformat(entry_time_str.replace("Z", "+00:00")) if entry_time_str else datetime.now(timezone.utc)
+        executed_by = session.get("strategy_name", "unknown")
+        exit_time = datetime.now(timezone.utc)
+
+        sem = self.manager._order_semaphores.get(self.session_id)
+        try:
+            async with (sem if sem else asyncio.nullcontext()):
+                resp = await self.manager._call_node_internal(
+                    self.session_id,
+                    f"/internal/algo/sessions/{self.session_id}/close-position",
+                    {"symbol": symbol}
+                )
+            if not resp.get("success"):
+                raise Exception(resp.get("error", "Unknown close error"))
+            logger.info(f"[AlgoBot] Testnet close-position sent for {symbol} reason={reason}")
+        except Exception as e:
+            logger.error(f"[AlgoBot] Testnet close-position failed for {symbol}: {e}")
+
+        fee = strategy.execution_model.exit_fee(strategy, pos.qty, exit_price)
+        pos.close(exit_price)
+        realized_pnl = pos.pnl - fee
+        strategy.balance += realized_pnl
+        session["pnl"] += realized_pnl
+
+        event_data = {
+            "symbol": symbol,
+            "pnl": str(round(realized_pnl, 2)),
+            "exitPrice": str(exit_price),
+            "exitReason": reason,
+            "timestamp": exit_time.isoformat(),
+        }
+
+        trade_record = build_trade_record(
+            source="bot",
+            executed_by=executed_by,
+            symbol=symbol,
+            side=pos.type,
+            qty=str(pos.qty),
+            entry_price=str(pos.entry_price),
+            exit_price=str(exit_price),
+            sl_order_price=str(sl_price) if sl_price is not None else None,
+            tp_order_price=str(tp_price) if tp_price is not None else None,
+            margin=str(pos.margin) if pos.margin else None,
+            liquidation_price=str(pos.liquidation_price) if pos.liquidation_price else None,
+            leverage=pos.leverage if pos.leverage else None,
+            net_pnl=str(round(realized_pnl, 2)),
+            pnl_pct=str(round(pos.pnl_pct, 2)) if pos.pnl_pct else None,
+            fee=str(round(fee, 2)) if fee else None,
+            exit_reason=reason,
+            session_id=self.session_id,
+            strategy_name=session.get("strategy_name"),
+            entry_time=entry_time,
+            exit_time=exit_time,
+        )
+
+        strategy.position = None
+        strategy.stop_loss = None
+        strategy.take_profit = None
+        strategy._pending_flip = None
+        session["open_positions"].pop(symbol, None)
+
+        # Persist the trade record BEFORE notifying Node so the server's
+        # per-symbol aggregation (computeSymbolStats) sees this closed trade.
+        await record_trade(trade_record)
+
+        await self.manager._notify_node(self.session_id, {
+            "pnl": str(round(session["pnl"], 2)),
+            "openPositions": list(session["open_positions"].keys()),
+            "status": "running",
+            "event": "position:close",
+            "eventData": event_data,
+        })
+
+        logger.info(f"[AlgoBot] Position closed: {symbol} pnl={realized_pnl:.2f} reason={reason}")
+
+    async def execute_flip(
+        self, strategy, symbol: str, new_direction: str, new_qty: float, ref_price: float, time_t: datetime,
+        index_t: int, high_t: float, low_t: float, stop_loss: float | None = None, take_profit: float | None = None
+    ) -> bool:
+        await self.execute_exit(
+            strategy=strategy,
+            symbol=symbol,
+            qty=strategy.position.qty,
+            exit_price=ref_price,
+            reason="flip",
+            time_t=time_t,
+            index_t=index_t,
+            high_t=high_t,
+            low_t=low_t,
+        )
+        if strategy.position is not None:
+            return False
+
+        if new_qty <= 0:
+            return False
+
+        strategy.stop_loss = (new_qty, stop_loss) if stop_loss is not None else None
+        strategy.take_profit = (new_qty, take_profit) if take_profit is not None else None
+
+        success = await self.execute_entry(
+            strategy=strategy,
+            symbol=symbol,
+            direction=new_direction,
+            qty=new_qty,
+            ref_price=ref_price,
+            time_t=time_t,
+            index_t=index_t,
+        )
+        return success
 
 
 class LiveBotManager:
@@ -438,7 +696,6 @@ class LiveBotManager:
                                     except Exception as _e:
                                         logger.warning(f"[AlgoBot] {symbol}: HTF candle update failed — {_e}")
 
-                            # Strategy execution
                             try:
                                 # Two-phase contract (live): re-run the one-time
                                 # vectorized prepare() on the rolling ≤500-candle
@@ -448,28 +705,47 @@ class LiveBotManager:
                                 # O(≤500) per candle (~once/hr), no drift.
                                 strategy.index = len(strategy.candles) - 1
                                 strategy.prepare(strategy.candles)
-                                strategy.before()
+                                strategy.price = candle[2]
 
-                                if strategy.position is not None:
-                                    strategy.position.update_pnl(strategy.price)
-                                    await self._verify_exchange_position_still_open(session_id, strategy, symbol)
-                                if strategy.position is not None:
-                                    await self._check_exits(session_id, strategy, symbol)
-                                current_holding = (
-                                    strategy.position.qty * (1 if strategy.is_long else -1)
-                                ) if strategy.position else 0.0
-                                plan = evaluate(strategy, current_holding)
-                                if strategy.position is None and plan is not None:
-                                    await self._execute_entry(session_id, strategy, symbol, plan)
-                                elif strategy.has_pending_flip:
-                                    await self._execute_flip(session_id, strategy, symbol)
-                                elif strategy._close_at_open:
-                                    strategy._close_at_open = False
-                                    await self._close_position(
-                                        session_id, strategy, symbol, strategy.price, "strategy_exit"
-                                    )
+                                # Setup execution algorithm if configured (A-016 parity with backtest path)
+                                exec_algo = None
+                                exec_algo_cfg = params.get("exec_algo") if isinstance(params, dict) else None
+                                if exec_algo_cfg and isinstance(exec_algo_cfg, dict):
+                                    algo_type = exec_algo_cfg.get("type")
+                                    algo_params = exec_algo_cfg.get("params", {})
+                                    try:
+                                        from core.models.exec_algo import TWAPAlgorithm, VWAPAlgorithm, IcebergAlgorithm
+                                    except ImportError:
+                                        from engine.core.models.exec_algo import TWAPAlgorithm, VWAPAlgorithm, IcebergAlgorithm
 
-                                strategy.after()
+                                    if algo_type == "twap":
+                                        exec_algo = TWAPAlgorithm(strategy, symbol, algo_params)
+                                    elif algo_type == "vwap":
+                                        exec_algo = VWAPAlgorithm(strategy, symbol, algo_params)
+                                    elif algo_type == "iceberg":
+                                        exec_algo = IcebergAlgorithm(strategy, symbol, algo_params)
+
+                                adapter = LiveAdapter(self, session_id)
+                                kernel = ExecutionKernel(adapter, exec_algo)
+                                time_t = datetime.fromtimestamp(candle[0] / 1000, tz=timezone.utc)
+
+                                await kernel.check_exits(
+                                    strategy=strategy,
+                                    symbol=symbol,
+                                    candle=candle,
+                                    is_live=True,
+                                    index_t=strategy.index,
+                                    time_t=time_t,
+                                )
+
+                                await kernel.evaluate_and_route(
+                                    strategy=strategy,
+                                    symbol=symbol,
+                                    candle=candle,
+                                    is_live=True,
+                                    index_t=strategy.index,
+                                    time_t=time_t,
+                                )
                             except Exception as e:
                                 consecutive_errors += 1
                                 logger.error(
@@ -510,319 +786,6 @@ class LiveBotManager:
         except Exception as e:
             logger.error(f"[AlgoBot] Unexpected error in symbol loop [{symbol}]: {e}")
 
-    async def _execute_entry(
-        self, session_id: str, strategy, symbol: str, plan: OrderPlan
-    ) -> None:
-        """Place a MARKET entry order on Binance Testnet and track position locally."""
-        session = self.sessions.get(session_id)
-        if not session:
-            return
-
-        direction = "long" if plan.direction > 0 else "short"
-        qty = plan.qty
-
-        fill_price = strategy.price  # local fill price for PnL tracking
-
-        sl_raw = plan.stop_loss
-        tp_raw = plan.take_profit
-        sl_pct = abs(fill_price - sl_raw) / fill_price if sl_raw else None
-
-        # Snap quantity and prices to Binance's LOT_SIZE/PRICE_FILTER precision.
-        exchange_name = "Binance Futures"
-        qty = clamp_and_round_qty(symbol, exchange_name, qty, fill_price, stop_loss_pct=sl_pct)
-
-        # Round stops direction-aware (ROUND_DOWN long / ROUND_UP short) (F-007)
-        rounding_mode = ROUND_DOWN if direction == "long" else ROUND_UP
-        sl_price = round_price(symbol, exchange_name, sl_raw, rounding=rounding_mode) if sl_raw else None
-        tp_price = round_price(symbol, exchange_name, tp_raw, rounding=rounding_mode) if tp_raw else None
-
-        if qty <= 0:
-            logger.warning(f"[AlgoBot] Quantity rounded to 0 for {symbol} (below min lot size), skipping")
-            strategy.buy = None
-            strategy.sell = None
-            return
-
-        # Skip if the bumped notional exceeds the leveraged buying power allocated to this symbol.
-        # This prevents BTCUSDT (minNotional=$50) from placing a $50 order when the
-        # risk-sized qty was only worth ~$6 — that would risk far more than intended.
-        notional = qty * fill_price
-        max_allowed_notional = strategy.balance * strategy.leverage * 1.05
-        if notional > max_allowed_notional:
-            logger.warning(
-                f"[AlgoBot] {symbol}: notional ${notional:.2f} exceeds leveraged buying power "
-                f"${strategy.balance * strategy.leverage:.2f} (leverage {strategy.leverage}x) after min-notional bump, skipping"
-            )
-            await self._notify_node(session_id, {
-                "event": "log",
-                "eventData": {
-                    "type": "error",
-                    "message": f"Skipped {symbol}: notional ${notional:.2f} exceeds leveraged buying power ${strategy.balance * strategy.leverage:.2f}"
-                }
-            })
-            strategy.buy = None
-            strategy.sell = None
-            return
-
-        # Validate SL/TP won't immediately trigger at the current candle price.
-        # Price can move between candle close and actual fill, causing Binance to
-        # reject the conditional order with "would immediately trigger".
-        # Drop invalid SL/TP rather than let them blow up the whole order.
-        if sl_price is not None:
-            if direction == "long" and sl_price >= fill_price:
-                logger.warning(f"[AlgoBot] {symbol}: SL {sl_price} >= entry {fill_price}, dropping SL")
-                sl_price = None
-            elif direction == "short" and sl_price <= fill_price:
-                logger.warning(f"[AlgoBot] {symbol}: SL {sl_price} <= entry {fill_price}, dropping SL")
-                sl_price = None
-        if tp_price is not None:
-            if direction == "long" and tp_price <= fill_price:
-                logger.warning(f"[AlgoBot] {symbol}: TP {tp_price} <= entry {fill_price}, dropping TP")
-                tp_price = None
-            elif direction == "short" and tp_price >= fill_price:
-                logger.warning(f"[AlgoBot] {symbol}: TP {tp_price} >= entry {fill_price}, dropping TP")
-                tp_price = None
-
-        binance_side = "BUY" if direction == "long" else "SELL"
-        sem = self._order_semaphores.get(session_id)
-        try:
-            async with (sem if sem else asyncio.nullcontext()):
-                resp = await self._call_node_internal(
-                    session_id,
-                    f"/internal/algo/sessions/{session_id}/place-order",
-                    {
-                        "symbol": symbol,
-                        "side": binance_side,
-                        "type": "MARKET",
-                        "quantity": qty,
-                        "stopLoss": sl_price,
-                        "takeProfit": tp_price,
-                    }
-                )
-            # Verify order response contains success flag and order identifier
-            if not resp.get("success"):
-                logger.error(f"[AlgoBot] Order placement failed for {symbol}: {resp.get('error', 'Unknown error')}")
-                await self._notify_node(session_id, {
-                    "event": "log",
-                    "eventData": {"type": "error", "message": f"Order failed {symbol}: {resp.get('error', 'Unknown error')}"}
-                })
-                strategy.buy = None
-                strategy.sell = None
-                return
-            if not resp.get("orderId"):
-                logger.warning(f"[AlgoBot] Order placed but no orderId returned for {symbol}, assuming fill succeeded.")
-            logger.info(f"[AlgoBot] Testnet {direction} order placed: {symbol} qty={qty}, orderId={resp.get('orderId')}")
-        except Exception as e:
-            logger.error(f"[AlgoBot] Testnet order failed for {symbol}: {e}")
-            await self._notify_node(session_id, {
-                "event": "log",
-                "eventData": {"type": "error", "message": f"Order failed {symbol}: {e}"}
-            })
-            strategy.buy = None
-            strategy.sell = None
-            return
-
-        # Track position locally for SL/TP monitoring and PnL
-        strategy.position = Position(direction, qty, fill_price)
-        if direction == "long":
-            strategy.buy = None
-        else:
-            strategy.sell = None
-
-        pos_info = {
-            "symbol": symbol,
-            "side": direction,
-            "qty": str(qty),
-            "price": str(fill_price),
-            "leverage": strategy.leverage,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-        session["open_positions"][symbol] = pos_info
-
-        await self._notify_node(session_id, {
-            "pnl": str(round(session["pnl"], 2)),
-            "openPositions": list(session["open_positions"].keys()),
-            "status": "running",
-            "event": "position:open",
-            "eventData": pos_info,
-        })
-
-        logger.info(f"[AlgoBot] Testnet {direction} filled: {symbol} qty={qty} @ {fill_price}")
-
-    async def _execute_flip(self, session_id: str, strategy, symbol: str) -> None:
-        """Execute an atomic close-and-reverse signaled by strategy.flip_position().
-
-        Runs inside the single per-symbol task and is awaited sequentially, so
-        the two legs can never interleave with exit checks or another entry for
-        this symbol. The pending-flip flag is consumed BEFORE any network call:
-        a failed leg is never retried on a later candle, so a Binance error or
-        latency desync degrades the flip to close-only (flat) — never to a
-        doubled or unprotected position.
-        """
-        flip = strategy._pending_flip
-        strategy._pending_flip = None
-        if flip is None or strategy.position is None:
-            return
-
-        await self._notify_node(session_id, {
-            "event": "log",
-            "eventData": {"type": "info", "message": f"{symbol}: flip signal — reversing to {flip['direction']}"}
-        })
-
-        # Leg 1 — close the existing position (market, via Node internal route).
-        await self._close_position(session_id, strategy, symbol, strategy.price, "flip")
-        if strategy.position is not None:
-            return  # local close did not complete — never open the opposite leg
-
-        # Leg 2 — open the opposite side with the flip's SL/TP armed.
-        # _execute_entry re-validates qty/min-notional and drops an SL/TP that
-        # would immediately trigger, exactly like a normal entry.
-        qty = flip["qty"]
-        if qty <= 0:
-            return
-        plan = OrderPlan(
-            direction=1 if flip["direction"] == "long" else -1,
-            qty=qty,
-            entry_price=strategy.price,
-            stop_loss=flip["stop_loss"],
-            take_profit=flip["take_profit"],
-            order_type=getattr(strategy, "order_type", "market"),
-        )
-        await self._execute_entry(session_id, strategy, symbol, plan)
-
-    async def _check_exits(self, session_id: str, strategy, symbol: str) -> None:
-        """Check stop-loss and take-profit for open position."""
-        if strategy.position is None:
-            return
-
-        current = strategy.price
-        # Get candle high/low for more accurate SL/TP simulation
-        high_t = strategy.high
-        low_t = strategy.low
-
-        closed = False
-        exit_price = current
-        exit_reason = ""
-
-        if strategy.is_long:
-            sl = strategy.stop_loss
-            tp = strategy.take_profit
-            if sl is not None:
-                _, sl_price = sl
-                if low_t <= sl_price:
-                    exit_price = sl_price
-                    exit_reason = "stop_loss"
-                    closed = True
-            if not closed and tp is not None:
-                _, tp_price = tp
-                if high_t >= tp_price:
-                    exit_price = tp_price
-                    exit_reason = "take_profit"
-                    closed = True
-        elif strategy.is_short:
-            sl = strategy.stop_loss
-            tp = strategy.take_profit
-            if sl is not None:
-                _, sl_price = sl
-                if high_t >= sl_price:
-                    exit_price = sl_price
-                    exit_reason = "stop_loss"
-                    closed = True
-            if not closed and tp is not None:
-                _, tp_price = tp
-                if low_t <= tp_price:
-                    exit_price = tp_price
-                    exit_reason = "take_profit"
-                    closed = True
-
-        if closed:
-            await self._close_position(session_id, strategy, symbol, exit_price, exit_reason)
-
-    async def _close_position(
-        self, session_id: str, strategy, symbol: str, exit_price: float, reason: str
-    ) -> None:
-        """Close position on Binance Testnet and update local tracking."""
-        session = self.sessions.get(session_id)
-        if not session or strategy.position is None:
-            return
-
-        pos = strategy.position
-        sl_price = strategy.stop_loss[1] if strategy.stop_loss else None
-        tp_price = strategy.take_profit[1] if strategy.take_profit else None
-        entry_time_str = session["open_positions"].get(symbol, {}).get("timestamp")
-        entry_time = datetime.fromisoformat(entry_time_str.replace("Z", "+00:00")) if entry_time_str else datetime.now(timezone.utc)
-        executed_by = session.get("strategy_name", "unknown")
-        exit_time = datetime.now(timezone.utc)
-
-        sem = self._order_semaphores.get(session_id)
-        try:
-            async with (sem if sem else asyncio.nullcontext()):
-                resp = await self._call_node_internal(
-                    session_id,
-                    f"/internal/algo/sessions/{session_id}/close-position",
-                    {"symbol": symbol}
-                )
-            if not resp.get("success"):
-                raise Exception(resp.get("error", "Unknown close error"))
-            logger.info(f"[AlgoBot] Testnet close-position sent for {symbol} reason={reason}")
-        except Exception as e:
-            logger.error(f"[AlgoBot] Testnet close-position failed for {symbol}: {e}")
-
-        fee = strategy.execution_model.exit_fee(strategy, pos.qty, exit_price)
-        pos.close(exit_price)
-        realized_pnl = pos.pnl - fee
-        strategy.balance += realized_pnl
-        session["pnl"] += realized_pnl
-
-        event_data = {
-            "symbol": symbol,
-            "pnl": str(round(realized_pnl, 2)),
-            "exitPrice": str(exit_price),
-            "exitReason": reason,
-            "timestamp": exit_time.isoformat(),
-        }
-
-        trade_record = build_trade_record(
-            source="bot",
-            executed_by=executed_by,
-            symbol=symbol,
-            side=pos.type,
-            qty=str(pos.qty),
-            entry_price=str(pos.entry_price),
-            exit_price=str(exit_price),
-            sl_order_price=str(sl_price) if sl_price is not None else None,
-            tp_order_price=str(tp_price) if tp_price is not None else None,
-            margin=str(pos.margin) if pos.margin else None,
-            liquidation_price=str(pos.liquidation_price) if pos.liquidation_price else None,
-            leverage=pos.leverage if pos.leverage else None,
-            net_pnl=str(round(realized_pnl, 2)),
-            pnl_pct=str(round(pos.pnl_pct, 2)) if pos.pnl_pct else None,
-            fee=str(round(fee, 2)) if fee else None,
-            exit_reason=reason,
-            session_id=session_id,
-            strategy_name=session.get("strategy_name"),
-            entry_time=entry_time,
-            exit_time=exit_time,
-        )
-
-        strategy.position = None
-        strategy.stop_loss = None
-        strategy.take_profit = None
-        strategy._pending_flip = None
-        session["open_positions"].pop(symbol, None)
-
-        # Persist the trade record BEFORE notifying Node so the server's
-        # per-symbol aggregation (computeSymbolStats) sees this closed trade.
-        await record_trade(trade_record)
-
-        await self._notify_node(session_id, {
-            "pnl": str(round(session["pnl"], 2)),
-            "openPositions": list(session["open_positions"].keys()),
-            "status": "running",
-            "event": "position:close",
-            "eventData": event_data,
-        })
-
-        logger.info(f"[AlgoBot] Position closed: {symbol} pnl={realized_pnl:.2f} reason={reason}")
 
     async def _close_position_on_stop(
         self, session_id: str, symbol: str, _pos_info: dict | None, session: dict

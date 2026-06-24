@@ -10,9 +10,9 @@
 
 | | Total | TODO | IN PROGRESS | BLOCKED | DONE | DROPPED |
 |---|---|---|---|---|---|---|
-| Corrections (F) | 24 | 16 | 0 | 0 | 8 | 0 |
-| Additions (A) | 16 | 10 | 0 | 0 | 6 | 0 |
-| **All** | **40** | **26** | **0** | **0** | **14** | **0** |
+| Corrections (F) | 24 | 14 | 0 | 0 | 10 | 0 |
+| Additions (A) | 16 | 9 | 0 | 0 | 7 | 0 |
+| **All** | **40** | **23** | **0** | **0** | **17** | **0** |
 
 > Update this table whenever a row changes status.
 
@@ -45,7 +45,7 @@
 | 2.6 | A-011 | Rolling Sharpe/volatility curve | 07 | ★ | DONE | Rolling Sharpe & Volatility curve computed and downsampled on result document |
 | 2.7 | F-011 | Model gap-through stops in backtest (fill at candle OPEN when range skips the stop) | 01 | HIGH | DONE | gap_through_stop_price() implemented and gapped stop-losses filled at candle OPEN |
 | 2.8 | F-012 | Replace fixed-% slippage with candle-bounded (or liquidity-scaled) fills | 01 | MEDIUM | DONE | bounded_exit_price() clamps proposed price to candle range before adverse cost model slippage |
-| 2.9 | F-017 | Multi-symbol (portfolio) backtest mode | 03 | MEDIUM | TODO | Deferred to Phase 3 (unified execution driver loop / F-024) to avoid engine duplication |
+| 2.9 | F-017 | Multi-symbol (portfolio) backtest mode | 03 | MEDIUM | DONE | Sequentially runs backtests for comma-separated symbols, splits capital, and merges results/equity curves |
 
 > **Phase 2 review (post-implementation, before commit):** two bugs caught and fixed during review:
 > 1. **F-012 `bounded_exit_price` was inverted** — it floored long exits / capped short exits at the
@@ -87,8 +87,8 @@
 
 | Step | ID | Item | Doc | Val/Sev | Status | Commit / Note |
 |---|---|---|---|---|---|---|
-| 3.1 | F-024 | Unify the two execution loops into one driver both backtest and live route through (single engine/kernel) — closes RC-1 at the driver level, not just the guard level | 08 | HIGH | TODO | |
-| 3.2 | A-016 | Pluggable execution algorithms (TWAP/VWAP/iceberg) on the Execution model — only clean once F-024 unifies the driver | 08 | ★★ | TODO | |
+| 3.1 | F-024 | Unify the two execution loops into one driver both backtest and live route through (single engine/kernel) — closes RC-1 at the driver level, not just the guard level | 08 | HIGH | DONE | Unified check_exits and evaluate_and_route via ExecutionKernel and Backtest/Live adapters |
+| 3.2 | A-016 | Pluggable execution algorithms (TWAP/VWAP/iceberg) on the Execution model — only clean once F-024 unifies the driver | 08 | ★★ | DONE | Added TWAP, VWAP, and Iceberg algorithms in exec_algo.py intercepting the OrderPlan pipeline; wired exec_algo into live bot loop (was only in backtest) |
 
 ## Phase 4 — Risk layers (protections + state machine).
 
