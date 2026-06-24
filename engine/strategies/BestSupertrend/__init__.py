@@ -150,23 +150,81 @@ class BestSupertrend(BaseStrategy):
         # Case-sensitive: "1m" (1 min) must not match "1M" (monthly)
         return self.timeframe == mapped
 
-    def _get_resampled_candles(self) -> np.ndarray:
+    # ── Phase A: one-time vectorized pre-computation (full candle array) ─────
+    def prepare(self, candles: np.ndarray) -> None:
+        """Pre-compute SMA crossover arrays and the HTF supertrend once.
+
+        Replaces the per-candle work in ``_evaluate_signals()`` (pandas resample +
+        supertrend + backward SMA-crossover scan, all O(N) per candle):
+          * SMA fast/slow sequences and per-index ``cross_up``/``cross_dn`` (which
+            are exactly the short_exit/long_exit conditions) + a ``recent`` state
+            machine giving the most-recent crossover at or before each candle
+            (== the original backward "first crossover scanning down").
+          * The HTF supertrend computed once over the full resample; the
+            last-completed HTF bar value (the original ``tsl[-2]``) is looked up
+            per base candle via its HTF bucket index ``k`` → ``htf_tsl[k-1]``.
+            Causal supertrend ⇒ a prefix resample equals the full resample for
+            every completed bucket, so this is identical to the per-candle form.
+        """
+        n = len(candles)
+        if n == 0:
+            e = np.array([])
+            self._sma_fast = e
+            self._sma_slow = e
+            self._cross_up = np.zeros(0, dtype=bool)
+            self._cross_dn = np.zeros(0, dtype=bool)
+            self._recent = np.zeros(0, dtype=int)
+            self._htf_tsl = e
+            self._htf_k = None
+            self._htf_is_constant = False
+            self._htf_constant_val = None
+            return
+
+        self._sma_fast = self._safe_sma(candles, self.fast_length)
+        self._sma_slow = self._safe_sma(candles, self.slow_length)
+        self._cross_up, self._cross_dn, self._recent = self._build_cross_arrays(
+            self._sma_fast, self._sma_slow
+        )
+
+        self._htf_is_constant = False
+        self._htf_constant_val = None
+        self._htf_k = None
+        self._htf_tsl = np.array([])
+
         if self._is_same_timeframe():
-            return self.candles
+            R = candles
+            self._htf_k = np.arange(n)
+        elif self._htf_candles is not None and len(self._htf_candles) > 0:
+            # Live path: HTF series is fixed for the current candle → constant tsl[-2]
+            R = self._htf_candles
+            self._htf_is_constant = True
+        else:
+            R, self._htf_k = self._resample_with_map(candles)
 
-        # Use pre-fetched HTF candles if available (live bot path)
-        if self._htf_candles is not None and len(self._htf_candles) > 0:
-            return self._htf_candles
+        if len(R) > 0:
+            self._htf_tsl = self._calculate_supertrend(R)
+        if self._htf_is_constant:
+            self._htf_constant_val = (
+                float(self._htf_tsl[-2])
+                if len(R) >= self.pd + 2 and len(self._htf_tsl) >= 2 else None
+            )
 
-        # Fall back to resampling (backtest path)
+    def _resample_with_map(self, candles: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Resample the base candles to the HTF (default pandas semantics, matching
+        the prior implementation) and return ``(resampled, k_per_candle)`` where
+        ``k_per_candle[i]`` is the HTF bucket-row index containing base candle ``i``.
+
+        Bucket mapping uses ``searchsorted`` on bucket-start labels — exact for the
+        left-labeled rules (1h/4h/daily/monthly). Weekly (W-MON, right-labeled) is
+        a known off-by-one edge to revisit; it is not part of the golden config.
+        """
         rule = self._RESAMPLE_RULES.get(self.tf.lower(), "D")
 
-        df = pd.DataFrame(self.candles, columns=['timestamp', 'open', 'close', 'high', 'low', 'volume'])
+        df = pd.DataFrame(candles, columns=['timestamp', 'open', 'close', 'high', 'low', 'volume'])
         df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms', utc=True)
         df.set_index('datetime', inplace=True)
 
-        resampler = df.resample(rule)
-        resampled_df = resampler.agg({
+        resampled_df = df.resample(rule).agg({
             'open': 'first',
             'close': 'last',
             'high': 'max',
@@ -183,7 +241,44 @@ class BestSupertrend(BaseStrategy):
             resampled_df['low'].values.astype(np.float64),
             resampled_df['volume'].values.astype(np.float64)
         ])
-        return resampled
+        if len(resampled) == 0:
+            return resampled, np.zeros(len(candles), dtype=int)
+
+        # Map each base candle to its HTF bucket row via the actual datetimes
+        # (forward-fill the most recent bucket label ≤ candle time). This avoids
+        # the column-0 unit pitfall: pandas 2.x to_datetime(unit='ms') yields a
+        # datetime64[ms] index, so index.astype(int64)//1e6 corrupts the epoch.
+        bucket_pos = pd.Series(np.arange(len(resampled_df)), index=resampled_df.index)
+        k = bucket_pos.reindex(df.index, method='ffill').to_numpy()
+        k = np.nan_to_num(k, nan=0.0).astype(int)
+        k = np.clip(k, 0, len(resampled) - 1)
+        return resampled, k
+
+    @staticmethod
+    def _build_cross_arrays(f: np.ndarray, s: np.ndarray):
+        """Per-index SMA cross flags + most-recent-crossover state.
+
+        ``cross_up[i]``  : fast crosses above slow at i  (== short_exit / cross_buy condition)
+        ``cross_dn[i]``  : fast crosses below slow at i  (== long_exit / cross_sell condition)
+        ``recent[i]``    : +1 if the most recent crossover at/before i was up, -1 if down, else 0
+                           (reproduces the original backward "first crossover scanning down").
+        """
+        n = len(f)
+        cross_up = np.zeros(n, dtype=bool)
+        cross_dn = np.zeros(n, dtype=bool)
+        recent = np.zeros(n, dtype=int)
+        state = 0
+        for i in range(1, n):
+            fp, sp, fc, sc = f[i - 1], s[i - 1], f[i], s[i]
+            if not (np.isnan(fp) or np.isnan(sp) or np.isnan(fc) or np.isnan(sc)):
+                if fp <= sp and fc > sc:
+                    cross_up[i] = True
+                    state = 1
+                elif fp >= sp and fc < sc:
+                    cross_dn[i] = True
+                    state = -1
+            recent[i] = state
+        return cross_up, cross_dn, recent
 
     def _calculate_supertrend(self, candles: np.ndarray) -> np.ndarray:
         atr_series = ta.atr(candles, period=self.pd, sequential=True)
@@ -229,47 +324,36 @@ class BestSupertrend(BaseStrategy):
 
         return tsl
 
-    def _get_htf_supertrend(self) -> float | None:
-        resampled = self._get_resampled_candles()
-        if len(resampled) < self.pd + 2:
+    def _htf_st_at(self, i: int) -> float | None:
+        """Last-completed HTF supertrend value as of base candle ``i`` — the
+        precomputed equivalent of the original ``tsl[-2]``."""
+        if self._htf_is_constant:
+            return self._htf_constant_val
+        if self._htf_k is None or len(self._htf_tsl) == 0:
             return None
-        tsl = self._calculate_supertrend(resampled)
-        return float(tsl[-2])
+        k = int(self._htf_k[i])
+        # len(prefix resample) == k + 1; original returns None when < pd + 2
+        if (k + 1) < self.pd + 2:
+            return None
+        if not (0 <= k - 1 < len(self._htf_tsl)):
+            return None
+        return float(self._htf_tsl[k - 1])
 
+    # ── Phase B: per-candle index lookup only (no TA-Lib / pandas) ──────────
     def _evaluate_signals(self) -> tuple[bool, bool, bool, bool]:
-        if len(self.candles) < max(self.fast_length, self.slow_length) + 1:
+        i = self.index
+        if (i + 1) < max(self.fast_length, self.slow_length) + 1:
             return False, False, False, False
 
-        # Use safe SMA to avoid errors when insufficient data
-        sma_fast_series = self._safe_sma(self.candles, self.fast_length)
-        sma_slow_series = self._safe_sma(self.candles, self.slow_length)
-
-        if np.isnan(sma_fast_series[-1]) or np.isnan(sma_slow_series[-1]):
+        if np.isnan(self._sma_fast[i]) or np.isnan(self._sma_slow[i]):
             return False, False, False, False
 
-        fast_curr, slow_curr = float(sma_fast_series[-1]), float(sma_slow_series[-1])
-        fast_prev, slow_prev = float(sma_fast_series[-2]), float(sma_slow_series[-2])
+        long_exit  = bool(self._cross_dn[i])
+        short_exit = bool(self._cross_up[i])
+        cross_buy  = self._recent[i] == 1
+        cross_sell = self._recent[i] == -1
 
-        long_exit  = (fast_prev >= slow_prev) and (fast_curr < slow_curr)
-        short_exit = (fast_prev <= slow_prev) and (fast_curr > slow_curr)
-
-        cross_buy  = False
-        cross_sell = False
-        for idx in range(len(self.candles) - 1, 0, -1):
-            f_curr, s_curr = sma_fast_series[idx],   sma_slow_series[idx]
-            f_prev, s_prev = sma_fast_series[idx-1], sma_slow_series[idx-1]
-
-            if np.isnan(f_curr) or np.isnan(s_curr) or np.isnan(f_prev) or np.isnan(s_prev):
-                break
-
-            if (f_prev <= s_prev) and (f_curr > s_curr):
-                cross_buy = True
-                break
-            elif (f_prev >= s_prev) and (f_curr < s_curr):
-                cross_sell = True
-                break
-
-        st_tsl_tf = self._get_htf_supertrend()
+        st_tsl_tf = self._htf_st_at(i)
         if st_tsl_tf is None:
             return False, False, False, False
 
