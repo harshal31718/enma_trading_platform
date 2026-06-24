@@ -46,7 +46,7 @@ Last updated: 2026-06-24
 - Cancel in-progress backtest (Redis cancel flag)
 - Deep-link to any result via `?jobId=` query param
 - Vectorized metric calculations using NumPy (drawdown, Sharpe, Sortino, Calmar, gross profit/loss, profit factor, expectancy, payoff ratio, streaks, and buy & hold benchmark)
-- Detailed tabbed report UI: Overview (Headline cards + Equity/Drawdown/Benchmark chart + Config summary + Performance Calendar), Performance Summary (comparative All / Long / Short table), and List of Trades (log table with excursions)
+- Detailed tabbed report UI: Overview (14-metric headline grid + Equity/Drawdown/Benchmark chart + Performance Calendar), Performance Summary (comparative All / Long / Short table), and List of Trades (log table with excursions). The Overview headline is a 2×7 grid — Net Profit, Net P&L %, Max Drawdown (actual `/` allowed `max_session_dd`), Win Rate, Total Trades, Profit Factor, Sharpe, Sortino, Calmar, Expectancy, Leverage, Fee Rate, Total Fees, Liquidations. The "Export JSON" action sits in the tab header bar (right-aligned, matched to the page-header "Run Backtest" button); the former bottom "Simulation Config" and "Export Results" blocks were removed.
 - **Performance Calendar**: Visualizes backtest results by Day, Week, Month, or Quarter in the Overview tab. Color-coded by P&L intensity (emerald-400 for profit, red-400 for loss). Supported by `backtest-analytics.js` utility and `useAllBacktestTrades` hook.
 - Backtests are launched from a multi-step dialog wizard (`NewBacktestWizard`, opened by a "New Backtest" button in the page header — mirrors the AlgoTrading "New Bot" pipeline). Steps: Strategy → Parameters (skipped when the strategy has no PARAMS) → Market → Settings → Review. The Backtest page left column is now Run History only (the inline `BacktestConfigForm` was removed). The wizard pre-fills capital/leverage/fee/risk from Exchange Settings defaults and supports per-run strategy `alphaParams` overrides (forwarded server → engine).
 
@@ -83,7 +83,7 @@ Last updated: 2026-06-24
 - Start a strategy as a live bot session (multi-symbol support)
 - NewSessionWizard pre-fills bot capital and leverage from Exchange Settings defaults
 - Strategy execution loop (candle-driven via Binance Kline WS)
-- Live PnL tracking per session
+- Live PnL tracking per session — **reload-safe**: open-position snapshots are persisted on the `liveSessions` doc as `positionDetails` (`{ [symbol]: { side, qty, price, leverage } }`, written on `position:open`, cleared on `position:close` by `handleEngineStats`). `SessionCard` seeds its `positionDetails` state from the session doc on mount, so live PnL resolves after a page reload instead of showing `—` for positions opened before the socket connected.
 - Open position tracking
 - Session status updates emitted via Socket.IO (`algo:session:update`)
 - Position open/close events emitted via Socket.IO

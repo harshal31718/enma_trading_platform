@@ -6,7 +6,6 @@ import {
   AlertTriangle,
   DollarSign,
   Activity,
-  Calendar,
   Loader2,
   ChevronRight,
   ChevronLeft,
@@ -471,6 +470,13 @@ export default function Backtest() {
                     )}
                   </TabsTrigger>
                 </TabsList>
+                <button
+                  onClick={() => exportResultAsJSON(activeResult, activeResult.strategyName || 'backtest')}
+                  className="ml-auto mr-4 flex items-center justify-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm rounded-lg transition-colors"
+                >
+                  <Download className="size-4" />
+                  Export JSON
+                </button>
               </div>
 
               {/* ── Scrollable content area ── */}
@@ -491,7 +497,7 @@ export default function Backtest() {
                     const metrics = [
                       { label: 'Net Profit', value: formatPrice(m.netProfit), cls: getPnlClass(m.netProfit) },
                       { label: 'Net P&L %', value: formatSignedPct(m.netProfitPct), cls: getPnlClass(m.netProfit) },
-                      { label: 'Max Drawdown', value: formatPct(m.maxDrawdown), cls: 'text-red-400' },
+                      { label: 'Max Drawdown', value: `${formatPct(m.maxDrawdown)} / ${formatPct((activeResult.riskParams?.max_session_dd ?? 0.20) * 100)}`, cls: 'text-red-400' },
                       { label: 'Win Rate', value: formatPct(parseFloat(m.winRate) * 100), cls: 'text-gray-100' },
                       { label: 'Total Trades', value: m.totalTrades ?? '-', cls: 'text-gray-100' },
                       { label: 'Profit Factor', value: m.profitFactor ? parseFloat(m.profitFactor).toFixed(2) : '-', cls: m.profitFactor && parseFloat(m.profitFactor) >= 1 ? 'text-emerald-400' : 'text-red-400' },
@@ -499,9 +505,13 @@ export default function Backtest() {
                       { label: 'Sortino', value: parseFloat(m.sortinoRatio || 0).toFixed(2), cls: 'text-gray-100' },
                       { label: 'Calmar', value: parseFloat(m.calmarRatio || 0).toFixed(2), cls: 'text-gray-100' },
                       { label: 'Expectancy', value: m.expectancy ? formatPnl(m.expectancy).value : '-', cls: m.expectancy ? getPnlClass(m.expectancy) : 'text-gray-300' },
+                      { label: 'Leverage', value: `${activeResult.leverage}x`, cls: 'text-gray-100' },
+                      { label: 'Fee Rate', value: `${((activeResult.feeRate || 0) * 100).toFixed(2)}%`, cls: 'text-gray-100' },
+                      { label: 'Total Fees', value: m.totalFees ? formatPrice(m.totalFees) : '-', cls: 'text-red-400' },
+                      { label: 'Liquidations', value: m.liquidations ?? 0, cls: (m.liquidations ?? 0) > 0 ? 'text-red-400' : 'text-gray-100' },
                     ]
                     return (
-                      <div className="grid grid-cols-5 border-b border-slate-700/50 divide-x divide-y divide-slate-700/50">
+                      <div className="grid grid-cols-7 border-b border-slate-700/50 divide-x divide-y divide-slate-700/50">
                         {metrics.map(({ label, value, cls }) => (
                           <div key={label} className="flex flex-col justify-center px-3 h-11 bg-title-bg">
                             <span className="text-[9px] uppercase tracking-wider text-gray-500 leading-none mb-1">{label}</span>
@@ -538,69 +548,6 @@ export default function Backtest() {
                     </div>
                   )}
 
-                  {/* Simulation Config */}
-                  <div className="border-b border-slate-700/50 px-5 py-4">
-                    <h4 className="text-gray-100 font-semibold mb-3 text-sm">Simulation Config</h4>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                      <div>
-                        <span className="text-gray-500 block">Date Range</span>
-                        <span className="text-gray-300 font-medium flex items-center gap-1.5 mt-0.5">
-                          <Calendar className="size-4 text-emerald-400" />
-                          {formatIsoDate(activeResult.startDate)} to {formatIsoDate(activeResult.endDate)}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-gray-500 block">Symbol / Exchange</span>
-                        <span className="text-gray-300 font-medium block mt-0.5">
-                          {activeResult.symbol} ({activeResult.exchange})
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-gray-500 block">Leverage / Fee Rate</span>
-                        <span className="text-gray-300 font-medium block mt-0.5">
-                          {activeResult.leverage}x / {(activeResult.feeRate * 100).toFixed(2)}%
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-gray-500 block">Total Fees Paid</span>
-                        <span className="text-red-400 font-medium block mt-0.5">
-                          {activeResult.metrics?.totalFees ? formatPrice(activeResult.metrics.totalFees) : '-'}
-                        </span>
-                      </div>
-                      {activeResult.metrics?.liquidations != null && (
-                        <div>
-                          <span className="text-gray-500 block">Liquidations</span>
-                          <span className={`font-medium block mt-0.5 ${activeResult.metrics.liquidations > 0 ? 'text-red-400' : 'text-gray-300'}`}>
-                            {activeResult.metrics.liquidations}
-                          </span>
-                        </div>
-                      )}
-                      {parseFloat(activeResult.metrics?.totalFunding || 0) !== 0 && (
-                        <div>
-                          <span className="text-gray-500 block">Net Funding</span>
-                          <span className={`font-medium block mt-0.5 ${parseFloat(activeResult.metrics.totalFunding) > 0 ? 'text-red-400' : 'text-emerald-400'}`}>
-                            {parseFloat(activeResult.metrics.totalFunding) > 0 ? '-' : '+'}${Math.abs(parseFloat(activeResult.metrics.totalFunding)).toFixed(2)}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Export Results */}
-                  <div className="px-5 py-4 flex items-center justify-between">
-                    <div>
-                      <h4 className="text-gray-100 font-semibold text-sm">Export Results</h4>
-                      <p className="text-gray-500 text-xs mt-0.5">Download backtest data for analysis</p>
-                    </div>
-                    <Button
-                      onClick={() => exportResultAsJSON(activeResult, activeResult.strategyName || 'backtest')}
-                      size="sm"
-                      className="bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-2"
-                    >
-                      <Download className="size-4" />
-                      Export as JSON
-                    </Button>
-                  </div>
                 </TabsContent>
 
                 <TabsContent value="performance" className="h-full w-full m-0 outline-none data-[state=active]:flex flex-col overflow-hidden">

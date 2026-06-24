@@ -281,7 +281,17 @@ async function handleEngineStats(req, res, next) {
         }
         io.emit('algo:session:log', openLog)
         await LiveSession.findByIdAndUpdate(id, {
-          $push: { logs: { $each: [{ type: openLog.type, message: openLog.message }], $slice: -100 } }
+          $push: { logs: { $each: [{ type: openLog.type, message: openLog.message }], $slice: -100 } },
+          // Persist the open-position snapshot so a reloaded client can value
+          // live PnL without having received the socket event (live_pnl_fix_plan).
+          $set: {
+            [`positionDetails.${eventData.symbol}`]: {
+              side: eventData.side,
+              qty: eventData.qty,
+              price: eventData.price,
+              leverage: eventData.leverage,
+            },
+          },
         }).catch(() => { })
       }
 
@@ -297,7 +307,9 @@ async function handleEngineStats(req, res, next) {
         }
         io.emit('algo:session:log', closeLog)
         await LiveSession.findByIdAndUpdate(id, {
-          $push: { logs: { $each: [{ type: closeLog.type, message: closeLog.message }], $slice: -100 } }
+          $push: { logs: { $each: [{ type: closeLog.type, message: closeLog.message }], $slice: -100 } },
+          // Clear the persisted snapshot — the position is no longer open.
+          $unset: { [`positionDetails.${eventData.symbol}`]: '' },
         }).catch(() => { })
 
         // Push to trade history

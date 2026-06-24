@@ -31,6 +31,11 @@ const liveSessionSchema = new mongoose.Schema({
   // position close. Keyed by symbol → { trades, qty, notional, realisedPnl,
   // leverage }. Margin is derived (notional / leverage) on the client.
   symbolStats: { type: Object, default: {} },
+  // Open-position snapshots keyed by symbol → { side, qty, price, leverage }.
+  // Persisted on position:open and cleared on position:close so the client can
+  // value live PnL after a page reload — i.e. for positions opened before the
+  // browser socket connected. Engine-agnostic; written only by handleEngineStats.
+  positionDetails: { type: Object, default: {} },
   logs: {
     type: [
       {

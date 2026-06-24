@@ -1,4 +1,28 @@
 ---
+## 2026-06-24 — Plan seq #1 (Live PnL fix) + #2 (Backtest UI refactor) COMPLETE
+
+**Goal:** Implement the two highest-priority isolated plans, verify, and update workspace docs + plan tracking.
+
+**Done this session:**
+- **Live PnL `—` on reload (Option A — persistent DB):** Added `positionDetails` (`Object`, default `{}`) to `LiveSession` schema. `handleEngineStats` now `$set`s the per-symbol snapshot `{ side, qty, price, leverage }` on `position:open` and `$unset`s it on `position:close` (folded into the existing log `$push` updates). `SessionCard` seeds `positionDetails` state from `session.positionDetails` via lazy `useState`, so live PnL resolves after reload instead of showing `—`.
+- **Backtest UI refactor:** Overview headline grid `grid-cols-5` (10) → `grid-cols-7` (14) — added Leverage, Fee Rate, Total Fees, Liquidations; Max Drawdown now shows `actual / allowed` (`riskParams?.max_session_dd ?? 0.20`). "Export JSON" relocated from the bottom card into the tab header bar (right-aligned, `ml-auto mr-4`, sized `px-4 py-2 text-sm` to match the page-header "Run Backtest" button). Removed the bottom "Simulation Config" and "Export Results" blocks; dropped the now-unused `Calendar` import.
+- **Verified:** `npm run build` clean twice (8–10s, only pre-existing chunk-size warning). User-confirmed screenshot shows the 2×7 grid + `14.16% / 20.00%` drawdown rendering.
+- **Docs:** `CURRENT_STATE.md` (Algo Trading + Backtesting), `API_CONTRACTS.md` (`LiveSession.positionDetails`). Archived both plans to `workspace/plan/archive/`; `INDEX.md` + `STATUS.md` renumbered remaining sequence (#1 strategy-perf refactor workstream, #2 risk improvements).
+
+**Files changed:**
+- `server/src/models/LiveSession.js`, `server/src/controllers/algo.controller.js`
+- `client/src/components/algo/SessionCard.jsx`, `client/src/pages/Backtest.jsx`
+- `workspace/docs/state/CURRENT_STATE.md`, `workspace/docs/core/API_CONTRACTS.md`
+- `workspace/plan/INDEX.md`, `workspace/plan/STATUS.md`, `workspace/plan/handoff.md`
+- moved → `workspace/plan/archive/{live_pnl_fix_plan,backtest_ui_refactor}.md`
+
+**Heads-up (intentional, per the approved plan):** deleting the "Simulation Config" block also dropped **Date Range**, **Symbol / Exchange**, and **Net Funding** from the Overview tab. Leverage/Fee Rate/Total Fees/Liquidations survive in the new grid; Net Funding is not currently shown anywhere on Overview. Re-add as a 15th metric if it's needed.
+
+**Next session:** seq #1 — strategy performance refactor workstream (`plans/migration_checklist.md`, Phases 0–8, golden-master gated). Not started.
+
+**Open questions:** None.
+
+---
 ## 2026-06-22 — Title Block Shades, Dialog Widths, and Title Descriptions COMPLETE
 
 **Goal:** Standardize background shades to `#0d1117` via `--title-bg`, enforce fixed widths for Chaos & New Bot wizard dialogs, remove section descriptions, and fix any build errors.

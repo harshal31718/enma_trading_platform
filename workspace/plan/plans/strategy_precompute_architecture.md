@@ -118,17 +118,34 @@ LiveBotManager._run_symbol_loop():
     5. Enter WS loop
 ```
 
-### Each New Candle
-```
-    async for kline in ws_stream:
-        new_candles = np.vstack([strategy.candles, candle_row])
-        strategy.candles = new_candles
-        strategy.index += 1
-        strategy.before()                              ← O(1) — index only
-        signal = evaluate(strategy, ...)
+### Each New Candle (Resolving the IndexError Gap)
+*   **The Gap:** If `prepare()` calculates arrays of length `W` (warmup), then when a new live candle arrives and `strategy.index` is incremented to `W`, indexing into `self._rsi_seq[strategy.index]` will trigger an `IndexError` because the precomputed array is still of length `W`.
+*   **The Solution:** Implement a stateful update mechanism for live mode. Instead of simply incrementing `index`, call a specialized `append_candle(candle_row)` method on the strategy. This method updates the candle list, calculates the newest indicator value using a sliding tail of candles (to avoid full recomputations), appends that value to the precomputed arrays, and then increments the index.
+
+```python
+# BaseStrategy live update interface
+def append_candle(self, candle_row: np.ndarray) -> None:
+    # 1. Update candle list
+    self.candles = np.vstack([self.candles, candle_row])
+    
+    # 2. Update each precomputed indicator by running calculations on a sliding tail
+    # (Example using RSI with tail = period * 5 to avoid warmup drift)
+    tail_len = self.rsi_period * 5
+    new_rsi_val = ta.rsi(self.candles[-tail_len:], period=self.rsi_period, sequential=True)[-1]
+    self._rsi_seq = np.append(self._rsi_seq, new_rsi_val)
+    
+    # 3. Increment index safely
+    self.index += 1
 ```
 
-Key requirement: `warmup_candles` length >= longest indicator period + `max_pivot_bars × 2` + buffer. Re-run `prepare()` periodically every 10K candles for long-lived sessions.
+```
+     async for kline in ws_stream:
+         strategy.append_candle(candle_row)            ← Updates candles, calculates tail indicators, appends to arrays, increments index
+         strategy.before()                              ← O(1) — index lookup (same code as backtest!)
+         signal = evaluate(strategy, ...)
+```
+
+Key requirement: `warmup_candles` length >= longest indicator period + `max_pivot_bars × 2` + buffer. Re-run `prepare()` periodically every 10K candles for long-lived sessions to wipe out any minor float drift from sliding-tail calculations.
 
 ### Edge Cases
 
@@ -136,7 +153,7 @@ Key requirement: `warmup_candles` length >= longest indicator period + `max_pivo
 |-----------|----------|
 | Warmup too short for all indicator periods | `LiveBotManager` fetches extra candles: `max_all_periods + max_pivot * 2 + 50` |
 | Very long-lived session (RAM growth) | Periodically re-run `prepare()` on truncated history (every 10K candles) |
-| Candle gap (WS disconnection) | On reconnect, re-fetch missed candles and re-run `prepare()` |
+| Candle gap (WS disconnection) | On reconnect, re-fetch missed candles and re-run `prepare()` over the updated history |
 | Strategy param change mid-session | Restart the symbol loop with new `prepare()` call |
 | Multi-timeframe (BestSupertrend) | HTF supertrend pre-computed in `prepare()`; live appends need HTF resample on demand |
 

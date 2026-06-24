@@ -81,7 +81,8 @@ type Balance = { asset: string, walletBalance: string, availableBalance: string,
 
 ### AlgoTrading (Algo Bot Sessions)
 ```typescript
-type LiveSession = { _id: string, strategyId: string, strategyName: string, symbols: string[], timeframe: string, params: object, mode: "paper"|"live", status: "starting"|"running"|"stopping"|"stopped"|"error", capital: string, leverage: number, pnl: string, openPositions: string[], createdAt: string, stoppedAt?: string, errorMessage?: string }
+type LiveSession = { _id: string, strategyId: string, strategyName: string, symbols: string[], timeframe: string, params: object, mode: "paper"|"live", status: "starting"|"running"|"stopping"|"stopped"|"error", capital: string, leverage: number, pnl: string, openPositions: string[], positionDetails: { [symbol: string]: { side, qty, price, leverage } }, createdAt: string, stoppedAt?: string, errorMessage?: string }
+// positionDetails: open-position snapshots persisted on position:open / cleared on position:close, so a reloaded client can value live PnL for positions opened before its socket connected.
 type SymbolLock = { reason: "bot"|"manual", sessionId: string|null, lockedAt: string }
 ```
 - **`POST /api/v1/algo/sessions`** -> Req: `{ strategyId, symbols, timeframe, params, capital, leverage }` -> `{ sessionId, status }`

@@ -1,6 +1,6 @@
 # Chaos Mode — Configurable Launch Wizard (Upgrade Plan)
 
-**Status:** Draft — proposal only, no code until a phase is approved
+**Status:** COMPLETED — Fully implemented and verified in the codebase as of 2026-06-22.
 **Date:** 2026-06-22
 **Author:** AI session
 **Open questions:** all resolved (see *Resolved Decisions*).

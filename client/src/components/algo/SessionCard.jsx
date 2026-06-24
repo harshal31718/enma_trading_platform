@@ -63,7 +63,10 @@ export default function SessionCard({ session, onStop, stopping }) {
   const [expanded, setExpanded] = useState(false)
   const [equity, setEquity] = useState([])
   const [logs, setLogs] = useState(() => [...(session.logs || [])].reverse())
-  const [positionDetails, setPositionDetails] = useState({})
+  // Seed from the persisted session snapshot so live PnL resolves on first
+  // render / after reload — not just for positions opened while the socket was
+  // connected (live_pnl_fix_plan). Socket events keep it in sync thereafter.
+  const [positionDetails, setPositionDetails] = useState(() => session.positionDetails || {})
   const [prices, setPrices] = useState({})
   const deleteSession = useDeleteSession()
 

@@ -1,31 +1,47 @@
 # Planning Status
 
 Created 2026-06-24 — consolidates `workspace/issues_and_solutions/` into `plan/`.
+Updated 2026-06-24 — completed plans moved to `archive/`; remaining work verified against code and sequenced (see `INDEX.md`).
+
+---
+
+## Verified Implementation Status (2026-06-24)
+
+Checked each remaining plan against the codebase. **All four are unimplemented** — confirmed by absent code markers:
+
+| Item | Marker checked | Status |
+|------|----------------|--------|
+| Two-phase `prepare()`/`before()` | `def prepare(` in `engine/`, `.prepare()` in `backtest_runner.py` | ❌ not implemented → seq #1 |
+| Risk model improvements | `min_edge_mult` default = 0.05, `max_portfolio_risk` | ❌ still 0.0 / absent → seq #2 |
+| Live PnL fix | `positionDetails` on server + `SessionCard.jsx` seed | ✅ **shipped 2026-06-24** (archived) |
+| Backtest UI refactor | `grid-cols-7`, "Simulation Config" removed | ✅ **shipped 2026-06-24** (archived) |
+
+> Note: the `trail_atr_mult` in `risk.py` is the pre-existing **ChandelierRiskModel** (AdaptiveTrend), NOT the proposed trailing on `AtrBracketRiskModel`.
 
 ---
 
 ## Analyses Documented
 
-| Analysis | Source | Status |
-|----------|--------|--------|
-| O(N²) indicator recomputation in 5 strategies | `issues_and_solutions/` (was `refactor_plan/`) | Not yet implemented |
-| 6 risk model limitations | `issues_and_solutions/` (was `refactor_plan/10`) | Not yet implemented |
-| Live/backtest sync gap | `issues_and_solutions/` (was `refactor_plan/07`) | Not yet implemented |
-| Documentation drift across 10 nodes | `issues_and_solutions/` (was `review/FINDINGS.md`) | Items 1-12 applied; items 13-18 pending |
+| Analysis | Status |
+|----------|--------|
+| O(N²) indicator recomputation in 5 strategies | Not yet implemented → seq #3 |
+| 6 risk model limitations | Not yet implemented → seq #4 |
+| Live/backtest sync gap | Not yet implemented → part of seq #3 (Phase 7) |
+| Documentation drift across 10 nodes | **All items 1–18 applied** → archived |
 
-## Plans Documented
+## Plans — Remaining (sequenced in INDEX.md)
 
-| Plan | Source | Status |
-|------|--------|--------|
-| Two-phase `prepare()`/`before()` architecture | `issues_and_solutions/` (was `refactor_plan/01`) | Proposed, not implemented |
-| Per-strategy migration plans (5 strategies) | `issues_and_solutions/` (was `refactor_plan/strategies/`) | Proposed, not implemented |
-| Risk model improvements (5 changes) | `issues_and_solutions/` (was `refactor_plan/10`) | Proposed, not implemented |
-| Live sync plan | `issues_and_solutions/` (was `refactor_plan/07`) | Proposed, not implemented |
-| Updated `/add-strategy` template | `issues_and_solutions/` (was `refactor_plan/09`) | Proposed, not implemented |
-| Doc fixes applied (workspace/ docs only) | `issues_and_solutions/` (was `review/CHANGES.md` items 1-12) | **Applied** |
-| Doc fixes pending (CLAUDE.md, AGENTS.md, .claude/) | `issues_and_solutions/` (was `review/CHANGES.md` items 13-18) | Awaiting user approval |
-| Migration checklist (execution plan) | `issues_and_solutions/` (was `refactor_plan/08`) | Ready to execute |
+| Seq | Plan | Source | Status |
+|-----|------|--------|--------|
+| 1 | Two-phase `prepare()`/`before()` architecture | `plans/strategy_precompute_architecture.md` | Proposed, not implemented |
+| 1 | Per-strategy migration (5 strategies) | `plans/per_strategy_migration.md` | Proposed, not implemented |
+| 1 | Migration checklist (execution runbook) | `plans/migration_checklist.md` | Ready to execute |
+| 2 | Risk model improvements (5 changes) | `plans/strategy_precompute_architecture.md` §2 | Proposed, not implemented |
+
+## Plans — Completed (archived)
+
+Moved to `archive/`: Live PnL resolution + Backtest UI refactor (shipped 2026-06-24); Modular merger (Narang five-model pipeline), Chaos Mode configurable wizard, documentation-drift audit, doc fixes items 1–18 (earlier).
 
 ## Open Decisions
 
-See `open_items.md` — 6 items awaiting user approval (all user-owned files).
+See `open_items.md`.

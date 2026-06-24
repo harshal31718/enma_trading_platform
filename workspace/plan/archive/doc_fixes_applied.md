@@ -1,6 +1,6 @@
-# Plan: Applied Doc Fixes (Items 1-12)
+# Plan: Applied Doc Fixes (Items 1-18)
 
-Originally from `workspace/issues_and_solutions/solutions/doc_fixes_applied.md` (merged into `plan/` 2026-06-24). Applied on 2026-06-24.
+Originally from `workspace/issues_and_solutions/solutions/doc_fixes_applied.md` (merged into `plan/` 2026-06-24). All items 1-18 are now fully applied in the repository as of 2026-06-24.
 
 Maps to analysis: `issues/documentation_drift.md`
 
@@ -20,3 +20,4 @@ Maps to analysis: `issues/documentation_drift.md`
 | 10 | `plan/handoff.md` | Added resolution confirming golden-master baseline re-established | 🟢 Low |
 | 11 | `skills/README.md` | Removed inline command count (point to GOVERNANCE Part 2 instead) | 🟢 Low |
 | 12 | `core/DECISIONS.md` | Fixed testnet base URL (surfaced during verification) | 🟡 Medium |
+| 13-18 | Metadata Files | Applied changes to `.claude/GOVERNANCE.md`, `engine/CLAUDE.md`, `client/CLAUDE.md`, `server/CLAUDE.md`, and `AGENTS.md` (see `plans/doc_fixes_pending.md` for individual details) | 🔴 High / 🟡 Medium |

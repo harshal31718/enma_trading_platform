@@ -1,7 +1,7 @@
 # Modular Merger Plan — Enma Execution Pipeline → Narang Strict Black-Box
 
-**Status:** PROPOSAL — awaiting user approval. No source code has been changed.
-**Author:** Claude (planning task, CLAUDE.md Rule D — docs only).
+**Status:** COMPLETED — Fully implemented and verified in the codebase as of 2026-06-21.
+**Author:** Claude (implemented, verified with golden master and pytest).
 **Inputs:** `currentWorkflow.md` (as-built), `newGuide.md` (target boundaries), live engine source.
 **Scope:** `engine/` decision layer only. Server/client/DB untouched except where noted (none required).
 
