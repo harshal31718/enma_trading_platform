@@ -27,7 +27,7 @@ from routers.leverage_sensitivity import router as leverage_sensitivity_router
 from services.strategy_seeder import seed_strategies
 from services.binance_testnet import close_client
 from services.user_data_stream import user_data_stream
-from utils.symbols import load_exchange_rules
+from utils.symbols import load_exchange_rules, load_symbol_volume_tiers
 
 load_dotenv()
 
@@ -76,6 +76,10 @@ async def lifespan(app: FastAPI):
         await load_exchange_rules("Binance Futures")
         await load_exchange_rules("Binance Spot")
         logger.info("Exchange rules cached")
+
+        await load_symbol_volume_tiers("Binance Futures")
+        await load_symbol_volume_tiers("Binance Spot")
+        logger.info("Symbol volume tiers computed")
     except Exception as e:
         logger.error(f"Exchange rules caching FAILED: {e}")
 

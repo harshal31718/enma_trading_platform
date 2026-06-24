@@ -10,9 +10,9 @@
 
 | | Total | TODO | IN PROGRESS | BLOCKED | DONE | DROPPED |
 |---|---|---|---|---|---|---|---|---|
-| Corrections (F) | 24 | 4 | 0 | 0 | 20 | 0 |
-| Additions (A) | 16 | 4 | 0 | 0 | 12 | 0 |
-| **All** | **40** | **8** | **0** | **0** | **32** | **0** |
+| Corrections (F) | 24 | 3 | 0 | 0 | 21 | 0 |
+| Additions (A) | 16 | 3 | 0 | 0 | 13 | 0 |
+| **All** | **40** | **6** | **0** | **0** | **34** | **0** |
 
 > Update this table whenever a row changes status.
 
@@ -122,8 +122,8 @@
 
 | Step | ID | Item | Doc | Val/Sev | Status | Commit / Note |
 |---|---|---|---|---|---|---|
-| 7.1 | F-009 | Single source for the symbol list (drop the triple-maintained copies) | 05 | MEDIUM | TODO | |
-| 7.2 | A-004 | Dynamic pairlist pipeline: VolumePairList → Spread/Volatility/Precision/Age filters | 07 | ★★★ | TODO | |
+| 7.1 | F-009 | Single source for the symbol list (drop the triple-maintained copies) | 05 | MEDIUM | DONE | Engine: GET /symbols returns `all` symbols with tiers from exchangeInfo cache. Server: symbolService.js fetches from engine; top_symbols.js falls back to static list. Client: symbolLimits.js trimmed to 4-symbol fallback. |
+| 7.2 | A-004 | Dynamic pairlist pipeline: VolumePairList → Spread/Volatility/Precision/Age filters | 07 | ★★★ | DONE | engine/services/pairlist.py: PairlistPipeline + handlers + config-based factory. Wired into live_bot_manager.py start_session. Preview endpoint at POST /algo/pairlist/preview. |
 
 ## Phase 8 — Parameters & optimization.
 

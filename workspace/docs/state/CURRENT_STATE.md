@@ -3,7 +3,7 @@
 **Authority:** This is the single source of truth for what ENMA currently does.
 Read this before starting any work. If this conflicts with chat history, this document wins.
 
-Last updated: 2026-06-24 (Phase 6)
+Last updated: 2026-06-24 (Phase 7)
 
 ---
 
@@ -150,6 +150,11 @@ Last updated: 2026-06-24 (Phase 6)
 - **Live** (`core/live_bot_manager.py`): `prepare()` is re-run on the rolling ≤500-candle window each closed candle (with `index = len-1`), then `before()` indexes — identical math to backtest, O(≤500)/candle (~once/hr), no float drift, no per-strategy incremental code.
 - All 5 seeded strategies migrated (MicroMacroRSIDivergence, MultiDivergence, MicroScalper, BestSupertrend, AdaptiveTrend). No-lookahead preserved: divergence/pivot strategies bound the last-pivot search to the confirmation horizon `i - right`.
 
+### Phase 7 — Pair Management
+- **Unified Symbol Source (F-009)**: The engine's `GET /candles/symbols` now returns a `all` field containing every TRADING symbol from the cached Binance exchangeInfo, enriched with volume-based tiers (`high`/`mid`/`low` computed from 24hr quoteVolume), base/quote asset, and status. `load_symbol_volume_tiers()` runs at engine startup to populate the tier + ticker cache (`_volume_tier_cache`, `_ticker_cache`). The server's `symbolService.js` fetches from the engine on startup (5-minute TTL cache) with `top_symbols.js` falling back to a static 80-symbol list when the engine is unreachable. `getChaosSymbols()` and `startChaos()` now use the dynamic tiered list instead of the static `TIERED_SYMBOLS`. The client's `SYMBOL_LIMITS` is trimmed to 4 core symbols (BTC/ETH/SOL/BNB) as a minimal offline fallback — live rules from the engine are the primary source.
+- **Dynamic Pairlist Pipeline (A-004)**: New `engine/services/pairlist.py` provides a composable pairlist system with `VolumePairList` (generator, top N by volume), `SpreadFilter` (drops wide bid/ask spreads via cached ticker data), `VolatilityFilter` (keeps pairs within a volatility band), `PrecisionFilter` (drops pairs where tick size precision makes stop placement unreliable), and `AgeFilter` (placeholder). A config-based factory `pairlist_from_config()` builds `PairlistPipeline` instances from session config. In `live_bot_manager.start_session()`, if `symbols` is empty and `risk_params.pairlist` is configured, the pipeline generates the symbol list dynamically. A preview endpoint at `POST /algo/pairlist/preview` (proxied via server at `POST /api/v1/algo/pairlist/preview`) lets users test pairlist configurations without starting a session.
+- **Ticker Cache**: `load_symbol_volume_tiers()` now populates `_ticker_cache` with bidPrice, askPrice, highPrice, lowPrice, volume, quoteVolume, and priceChangePercent from the 24hr ticker. Consumed by pairlist filters (SpreadFilter, VolatilityFilter). Exposed via `get_ticker_data(exchange, symbol)`.
+
 ### UI / Navigation
 - 6 nav pages + OrderHistory (at `/order-history`, not in navbar): Dashboard, Strategies, Backtest, Live Trading (Trade), Algo Trading, Settings
 - Horizontal top navbar — no sidebar
@@ -161,7 +166,7 @@ Last updated: 2026-06-24 (Phase 6)
 
 ## In Progress
 
-None.
+Phase 8 (Parameters & optimization) — next on the tracker.
 
 ## Verified Baselines
 

@@ -1,18 +1,21 @@
 // Top Binance USDS-M Perpetuals — curated for Chaos Mode stress testing.
-// Source: Binance Futures open-interest / volume rankings (curated 2026-06-22).
-// Excludes illiquid or recently-deprecated names (BTTUSDT, LUNA2USDT, BONKUSDT,
-// STMXUSDT, XECUSDT, FTTUSDT, GTCUSDT, CHRBUSDT — removed for low/unreliable volume).
+// This module now derives its symbol list from the engine's live exchangeInfo
+// (via symbolService.js), falling back to a hand-maintained static list if the
+// engine is unreachable (e.g. during initial startup).
+//
+// The static fallback preserves the exact same 80-symbol tiered list that was
+// previously the sole source. When the engine is reachable, the list is dynamic
+// and reflects current exchange trading status + volume rankings.
 //
 // Three volume tiers:
-//   high — top 20 by combined OI + 24h volume; deepest books, tightest spreads.
-//   mid  — solid liquidity, suitable for meaningful position sizing.
+//   high — top 20 by 24h quote volume; deepest books, tightest spreads.
+//   mid  — solid liquidity (top 55), suitable for meaningful position sizing.
 //   low  — still acceptable; lower OI but actively traded on Binance Futures.
-//
-// Each strategy in a Chaos run gets a near-equal slice of EACH tier (round-robin
-// per tier) so no strategy hogs the high-volume names.  See chaosAllocator.js.
 
-const TIERED_SYMBOLS = [
-  // ── HIGH tier (top 20) ──────────────────────────────────────────────────────
+const symbolService = require('../services/symbolService')
+
+// ── Static fallback (last updated 2026-06-22) ──────────────────────────────
+const STATIC_TIERED = [
   { symbol: 'BTCUSDT',        tier: 'high' },
   { symbol: 'ETHUSDT',        tier: 'high' },
   { symbol: 'SOLUSDT',        tier: 'high' },
@@ -34,7 +37,6 @@ const TIERED_SYMBOLS = [
   { symbol: 'MKRUSDT',        tier: 'high' },
   { symbol: 'RUNEUSDT',       tier: 'high' },
 
-  // ── MID tier (next 35) ──────────────────────────────────────────────────────
   { symbol: 'APTUSDT',        tier: 'mid' },
   { symbol: 'ATOMUSDT',       tier: 'mid' },
   { symbol: 'BCHUSDT',        tier: 'mid' },
@@ -70,7 +72,6 @@ const TIERED_SYMBOLS = [
   { symbol: 'CHZUSDT',        tier: 'mid' },
   { symbol: 'POLUSDT',        tier: 'mid' },
 
-  // ── LOW tier (final 25) — acceptable volume, actively traded ────────────────
   { symbol: 'KSMUSDT',        tier: 'low' },
   { symbol: 'DASHUSDT',       tier: 'low' },
   { symbol: 'ZRXUSDT',        tier: 'low' },
@@ -97,18 +98,45 @@ const TIERED_SYMBOLS = [
   { symbol: 'LINAUSDT',       tier: 'low' },
 ]
 
-// Flat array — preserves backwards compatibility with all existing imports.
-const TOP_SYMBOLS = TIERED_SYMBOLS.map((e) => e.symbol)
+// ── Dynamic resolution ────────────────────────────────────────────────────
 
-/**
- * Split an array of symbol strings into three tier buckets.
- * Only symbols present in TIERED_SYMBOLS get a tier; the rest fall to 'low'.
- *
- * @param {string[]} symbols
- * @returns {{ high: string[], mid: string[], low: string[] }}
- */
+async function _resolveTiered() {
+  try {
+    const dynamic = await symbolService.getTieredSymbols()
+    if (dynamic && dynamic.length > 20) return dynamic
+  } catch {
+    // fall through to static
+  }
+  return STATIC_TIERED
+}
+
+async function _resolveTop() {
+  try {
+    const top = await symbolService.getTopSymbols()
+    if (top && top.length > 20) return top
+  } catch {
+    // fall through
+  }
+  return STATIC_TIERED.map((e) => e.symbol)
+}
+
+// ── Exports ───────────────────────────────────────────────────────────────
+
+let _tieredCache = null
+let _topCache = null
+
+async function getTIERED_SYMBOLS() {
+  if (!_tieredCache) _tieredCache = await _resolveTiered()
+  return _tieredCache
+}
+
+async function getTOP_SYMBOLS() {
+  if (!_topCache) _topCache = await _resolveTop()
+  return _topCache
+}
+
 function bucketSymbols(symbols) {
-  const tierMap = new Map(TIERED_SYMBOLS.map((e) => [e.symbol, e.tier]))
+  const tierMap = new Map(STATIC_TIERED.map((e) => [e.symbol, e.tier]))
   const result = { high: [], mid: [], low: [] }
   for (const sym of symbols) {
     const tier = tierMap.get(sym) || 'low'
@@ -117,4 +145,17 @@ function bucketSymbols(symbols) {
   return result
 }
 
-module.exports = { TOP_SYMBOLS, TIERED_SYMBOLS, bucketSymbols }
+function invalidateCache() {
+  _tieredCache = null
+  _topCache = null
+  symbolService.invalidateCache()
+}
+
+module.exports = {
+  getTIERED_SYMBOLS,
+  getTOP_SYMBOLS,
+  TOP_SYMBOLS: STATIC_TIERED.map((e) => e.symbol),
+  TIERED_SYMBOLS: STATIC_TIERED,
+  bucketSymbols,
+  invalidateCache,
+}

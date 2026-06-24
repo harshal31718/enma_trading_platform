@@ -3,7 +3,7 @@ const TradeRecord = require('../models/TradeRecord')
 const Strategy = require('../models/Strategy')
 const Settings = require('../models/Settings')
 const engineClient = require('../services/engineClient')
-const { TOP_SYMBOLS } = require('../constants/top_symbols')
+const { getTOP_SYMBOLS, getTIERED_SYMBOLS } = require('../constants/top_symbols')
 const ApiError = require('../utils/ApiError')
 const ApiResponse = require('../utils/ApiResponse')
 const { lockSymbol, releaseSymbolLock, getAllLockedSymbols, isSymbolFree, getSymbolLock } = require('../services/symbolLock')
@@ -702,6 +702,10 @@ async function startChaos(req, res, next) {
     const lockedSymbols = Object.keys(locksSnapshot)
 
     // ── 5. Allocate symbols via the pure allocator ───────────────────────────
+    const [TOP_SYMBOLS, TIERED_SYMBOLS] = await Promise.all([
+      getTOP_SYMBOLS(),
+      getTIERED_SYMBOLS(),
+    ])
     let assignments, dropped
     try {
       const result = allocateChaosSymbols({
@@ -709,6 +713,7 @@ async function startChaos(req, res, next) {
         manualPicks,
         lockedSymbols,
         curatedSymbols: TOP_SYMBOLS,
+        tierMap: TIERED_SYMBOLS,
         maxManualSymbols,
       })
       assignments = result.assignments
@@ -839,8 +844,20 @@ async function startChaos(req, res, next) {
 // GET /api/v1/algo/chaos/symbols
 async function getChaosSymbols(req, res, next) {
   try {
-    const { TIERED_SYMBOLS } = require('../constants/top_symbols')
-    res.json(ApiResponse.success({ tieredSymbols: TIERED_SYMBOLS }))
+    const tiered = await getTIERED_SYMBOLS()
+    res.json(ApiResponse.success({ tieredSymbols: tiered }))
+  } catch (err) {
+    next(err)
+  }
+}
+
+// POST /api/v1/algo/pairlist/preview
+async function previewPairlist(req, res, next) {
+  try {
+    const { config } = req.body
+    const payload = { config: config ? JSON.stringify(config) : '{}' }
+    const { data } = await engineClient.post('/algo/pairlist/preview', payload)
+    res.json(ApiResponse.success(data?.data || data))
   } catch (err) {
     next(err)
   }
@@ -865,6 +882,7 @@ module.exports = {
   deleteAllStopped,
   startChaos,
   getChaosSymbols,
+  previewPairlist,
 }
 
 // ── Internal handlers for real Binance order placement ──────────────────────

@@ -124,6 +124,24 @@ _EXCHANGE_INFO_URLS = {
     "Binance Spot": "https://api.binance.com/api/v3/exchangeInfo",
 }
 
+_TICKER_URLS = {
+    "Binance Futures": "https://testnet.binancefuture.com/fapi/v1/ticker/24hr",
+    "Binance Spot": "https://api.binance.com/api/v3/ticker/24hr",
+}
+
+# Symbol-level metadata beyond filters: (exchange, symbol) -> {"status": str, "baseAsset": str, "quoteAsset": str}
+_symbol_meta_cache: dict[tuple[str, str], dict] = {}
+
+# Volume-based tier cache: (exchange, symbol) -> "high" | "mid" | "low"
+_volume_tier_cache: dict[tuple[str, str], str] = {}
+
+# Ticker data cache (24hr statistics): (exchange, symbol) -> {bidPrice, askPrice, highPrice, lowPrice, volume, priceChangePercent, quoteVolume}
+_ticker_cache: dict[tuple[str, str], dict] = {}
+
+# Volume tier thresholds — top 20 by quoteVolume → high, top 55 → mid, rest → low
+_VOLUME_TIER_HIGH_COUNT = 20
+_VOLUME_TIER_MID_COUNT = 55
+
 DEFAULT_LIMITS = {
     # symbol: (tickSize, stepSize, minQty, minNotional)
     "BTCUSDT": (0.1, 0.0001, 0.0001, 50.0),
@@ -219,6 +237,16 @@ async def load_exchange_rules(exchange: str) -> None:
     loaded = 0
     for sym_info in data.get("symbols", []):
         symbol = sym_info.get("symbol", "")
+        status = sym_info.get("status", "UNKNOWN")
+        base_asset = sym_info.get("baseAsset", "")
+        quote_asset = sym_info.get("quoteAsset", "")
+
+        _symbol_meta_cache[(exchange, symbol)] = {
+            "status": status,
+            "baseAsset": base_asset,
+            "quoteAsset": quote_asset,
+        }
+
         tick_size: Optional[Decimal] = None
         step_size: Optional[Decimal] = None
         min_qty: Optional[Decimal] = None
@@ -359,6 +387,121 @@ def clamp_and_round_qty(
         return 0.0
 
     return float(qty_dec)
+
+
+def _safe_float_str(val) -> float | None:
+    """Convert a ticker value to float, returning None if missing/invalid."""
+    if val is None:
+        return None
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return None
+
+
+def get_symbol_status(exchange: str, symbol: str) -> str | None:
+    """Return the exchange status for a symbol (e.g. TRADING, BREAK, HALT)."""
+    meta = _symbol_meta_cache.get((exchange, symbol))
+    return meta.get("status") if meta else None
+
+
+async def load_symbol_volume_tiers(exchange: str) -> None:
+    """
+    Fetch 24hr ticker data and compute volume tiers (high/mid/low).
+    Populates _volume_tier_cache.
+    """
+    url = _TICKER_URLS.get(exchange)
+    if not url:
+        logger.warning(f"load_symbol_volume_tiers: unknown exchange '{exchange}'")
+        return
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as e:
+        logger.error(f"load_symbol_volume_tiers({exchange}): fetch failed — {e}")
+        return
+
+    # Sort by quoteVolume descending, keep only USDS-M perpetuals (symbol ends with USDT)
+    usdt_pairs = []
+    for s in data:
+        if not isinstance(s, dict):
+            continue
+        sym = s.get("symbol", "")
+        if not sym.endswith("USDT") or sym == "USDTUSDT":
+            continue
+        qv = float(s.get("quoteVolume", "0") or "0")
+        usdt_pairs.append((sym, qv))
+
+        # Cache full ticker data for pairlist filters
+        _ticker_cache[(exchange, sym)] = {
+            "bidPrice": _safe_float_str(s.get("bidPrice")),
+            "askPrice": _safe_float_str(s.get("askPrice")),
+            "highPrice": _safe_float_str(s.get("highPrice")),
+            "lowPrice": _safe_float_str(s.get("lowPrice")),
+            "volume": _safe_float_str(s.get("volume")),
+            "quoteVolume": qv,
+            "priceChangePercent": _safe_float_str(s.get("priceChangePercent")),
+            "count": int(s.get("count", 0)),
+        }
+
+    usdt_pairs.sort(key=lambda x: x[1], reverse=True)
+
+    for i, (symbol, _) in enumerate(usdt_pairs):
+        if i < _VOLUME_TIER_HIGH_COUNT:
+            tier = "high"
+        elif i < _VOLUME_TIER_MID_COUNT:
+            tier = "mid"
+        else:
+            tier = "low"
+        _volume_tier_cache[(exchange, symbol)] = tier
+
+    logger.info(
+        f"load_symbol_volume_tiers({exchange}): {len(usdt_pairs)} symbols tiered "
+        f"({_VOLUME_TIER_HIGH_COUNT} high, {_VOLUME_TIER_MID_COUNT - _VOLUME_TIER_HIGH_COUNT} mid, "
+        f"{len(usdt_pairs) - _VOLUME_TIER_MID_COUNT} low)"
+    )
+
+
+def get_ticker_data(exchange: str, symbol: str) -> dict | None:
+    """Return cached 24hr ticker data for a symbol, or None."""
+    return _ticker_cache.get((exchange, symbol))
+
+
+def get_symbol_tier(exchange: str, symbol: str) -> str:
+    """Return the volume tier for a symbol, or 'mid' as default."""
+    return _volume_tier_cache.get((exchange, symbol), "mid")
+
+
+def get_all_symbols(exchange: str) -> list[dict]:
+    """
+    Return ALL symbols from the metadata cache for the exchange.
+    Each entry: {symbol, status, baseAsset, quoteAsset, tier, rules}.
+    """
+    symbols = []
+    seen = set()
+    for (exch, sym), meta in _symbol_meta_cache.items():
+        if exch != exchange or sym in seen:
+            continue
+        seen.add(sym)
+        tier = get_symbol_tier(exchange, sym)
+        rules = _rules_cache.get((exchange, sym))
+        entry = {
+            "symbol": sym,
+            "status": meta.get("status", "UNKNOWN"),
+            "baseAsset": meta.get("baseAsset", ""),
+            "quoteAsset": meta.get("quoteAsset", ""),
+            "tier": tier,
+        }
+        if rules:
+            entry["tickSize"] = float(rules["tickSize"])
+            entry["stepSize"] = float(rules["stepSize"])
+            entry["minQty"] = float(rules["minQty"])
+            entry["minNotional"] = float(rules["minNotional"])
+        symbols.append(entry)
+    return symbols
 
 
 def get_all_rules(exchange: str) -> dict:

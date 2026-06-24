@@ -12,6 +12,7 @@ const {
   deleteAllStopped,
   startChaos,
   getChaosSymbols,
+  previewPairlist,
 } = require('../controllers/algo.controller')
 
 router.post('/sessions', startSession)
@@ -24,6 +25,7 @@ router.get('/sessions/:id/equity', getSessionEquity)
 router.post('/sessions/:id/stop', stopSession)
 router.post('/sessions/:id/trading-state', setTradingState)
 router.delete('/sessions/:id', deleteSession)
+router.post('/pairlist/preview', previewPairlist)
 router.get('/symbols/locked', getLockedSymbols)
 
 module.exports = router

@@ -1,12 +1,41 @@
+import json
 import logging
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
 from pydantic import BaseModel
 from typing import Optional
 
 from core.live_bot_manager import live_bot_manager
+from services.pairlist import pairlist_from_config
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+class PairlistPreviewRequest(BaseModel):
+    config: str = '{"generator": {"type": "volume", "top_n": 30}, "filters": []}'  # JSON string
+
+
+@router.post("/pairlist/preview")
+async def preview_pairlist(req: PairlistPreviewRequest):
+    """Preview what symbols a pairlist configuration would produce."""
+    try:
+        config = json.loads(req.config) if isinstance(req.config, str) else req.config
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON config: {e}")
+
+    try:
+        pipeline = pairlist_from_config(config)
+        symbols = pipeline.run(exchange="Binance Futures")
+        return {
+            "success": True,
+            "data": {
+                "symbols": symbols,
+                "count": len(symbols),
+                "pipeline": repr(pipeline),
+            },
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 class StartSessionRequest(BaseModel):

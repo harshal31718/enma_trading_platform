@@ -20,6 +20,7 @@ from core.models import (
 )
 from core.pipeline import evaluate
 from services.trade_recorder import record_trade, build_trade_record
+from services.pairlist import pairlist_from_config
 from utils.symbols import round_price, round_qty, clamp_and_round_qty, clamp_leverage
 from core.kernel import ExecutionAdapter, ExecutionKernel
 
@@ -547,9 +548,29 @@ class LiveBotManager:
         """Start a new live bot session. session_config from Node."""
         session_id = session_config["session_id"]
         strategy_name = session_config["strategy_name"]
-        symbols = session_config["symbols"]
+        symbols = session_config.get("symbols", [])
         timeframe = session_config["timeframe"]
         params = session_config.get("params", {})
+        risk_params = session_config.get("risk_params", {}) or {}
+
+        # Resolve pairlist pipeline if symbols not explicitly provided (A-004)
+        pairlist_config = risk_params.get("pairlist")
+        if not symbols and pairlist_config:
+            pairlist_pipeline = pairlist_from_config(pairlist_config)
+            symbols = pairlist_pipeline.run(exchange="Binance Futures")
+            logger.info(
+                f"[AlgoBot] Session {session_id}: pairlist generated {len(symbols)} symbols "
+                f"({pairlist_pipeline})"
+            )
+
+        if not symbols:
+            logger.error(f"[AlgoBot] Session {session_id}: no symbols provided and pairlist yielded none")
+            await self._notify_node(session_id, {
+                "event": "log",
+                "eventData": {"type": "error", "message": "No symbols available for session"},
+            })
+            return
+
         # Cross-symbol capital split owned by the Portfolio Model (Phase 3).
         # Default is an equal split (byte-identical to the former
         # capital/len(symbols)); a custom PortfolioModel can re-weight here.
@@ -558,7 +579,6 @@ class LiveBotManager:
         )
         leverage = int(session_config.get("leverage", 1))
         fee_rate = float(session_config.get("fee_rate", 0.0005))
-        risk_params = session_config.get("risk_params", {}) or {}
 
         # Dynamic import of strategy class
         import importlib

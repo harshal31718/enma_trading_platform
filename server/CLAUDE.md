@@ -52,7 +52,7 @@ server/
     │   ├── backtest.routes.js
     │   ├── dashboard.routes.js  ← /dashboard/stats
     │   ├── trade.routes.js      ← /trade/* (settings/keys, account, positions, orders, klines)
-    │   ├── algo.routes.js         ← /algo/sessions, /algo/symbols/locked, /algo/chaos
+    │   ├── algo.routes.js         ← /algo/sessions, /algo/symbols/locked, /algo/chaos, /algo/pairlist/preview
     │   ├── settings.routes.js     ← /settings/exchange
     │   ├── orderHistory.routes.js ← /order-history (GET, paginated, filterable)
     │   └── internal.routes.js     ← /internal/algo/sessions/:id/* (engine callbacks)
@@ -69,6 +69,7 @@ server/
     │   ├── engineClient.js  ← axios instance for engine HTTP calls
     │   ├── backtestQueue.js ← BullMQ queue definition for bull:backtest
     │   ├── socketEmitter.js ← Redis pub/sub → Socket.IO relay
+    │   ├── symbolService.js ← fetches tiered symbol list from engine (5-min TTL cache)
     │   └── symbolLock.js    ← Redis-backed symbol lock (bot vs manual)
     ├── workers/
     │   └── backtest.worker.js

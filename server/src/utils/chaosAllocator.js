@@ -14,7 +14,7 @@
  *        round-robin within each tier → every strategy gets a comparable mix.
  */
 
-const { bucketSymbols } = require('../constants/top_symbols')
+const { TIERED_SYMBOLS: STATIC_TIERED } = require('../constants/top_symbols')
 
 /**
  * Fisher–Yates in-place shuffle (mutates the array).
@@ -99,11 +99,20 @@ function allocateChaosSymbols({ activeStrategies, manualPicks = {}, lockedSymbol
   // ── STEP 2: Build the free pool (curated − reserved − locked) ────────────────
   const pool = curatedSymbols.filter((s) => !globalClaimed.has(s) && !lockedSet.has(s))
 
-  // ── STEP 3: Bucket + shuffle pool by tier (D3/D4) ───────────────────────────
-  const { high, mid, low } = bucketSymbols(pool)
-  shuffle(high)
-  shuffle(mid)
-  shuffle(low)
+    // ── STEP 3: Bucket + shuffle pool by tier (D3/D4) ───────────────────────────
+    // Accept an optional tierMap; fall back to static TIERED_SYMBOLS.
+    const tierMap = new Map(
+      (opts.tierMap || STATIC_TIERED).map((e) => [e.symbol, e.tier])
+    )
+    function _bucket(arr) {
+      const r = { high: [], mid: [], low: [] }
+      for (const sym of arr) r[tierMap.get(sym) || 'low'].push(sym)
+      return r
+    }
+    const { high, mid, low } = _bucket(pool)
+    shuffle(high)
+    shuffle(mid)
+    shuffle(low)
 
   // ── STEP 4: Round-robin distribute per tier across ALL active strategies (D1) ──
   const assignedMap = {}  // { strategyName: string[] }
