@@ -439,96 +439,75 @@ export default function ChaosWizard({ onCancel, onSuccess }) {
 
         {/* Step 2: Symbol Allocation */}
         {step === 2 && (
-          <div className="space-y-6">
-            <div>
-              <h3 className="text-sm font-semibold text-gray-300 mb-4">Symbol Allocation</h3>
+          <div className="space-y-4">
+            <h3 className="text-sm font-semibold text-gray-300 mb-4">Symbol Allocation</h3>
 
-              <div className="space-y-4">
-                {activeStrategies.map((stratName) => {
-                  const isManual = strategyToggles[stratName] === 'manual'
-                  const picks = manualPicks[stratName] || []
-                  
-                  return (
-                    <div key={stratName} className="border border-slate-800 rounded-lg bg-slate-950/40 p-4">
-                      <div className="flex justify-between items-center mb-3">
-                        <span className="text-sm font-bold text-slate-200">{stratName}</span>
-                        <div className="inline-flex rounded-lg bg-slate-900 p-0.5 border border-slate-800">
-                          <button
-                            type="button"
-                            onClick={() => handleModeToggle(stratName, 'auto')}
-                            className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
-                              !isManual ? 'bg-purple-650 text-white shadow' : 'text-slate-400 hover:text-slate-250'
-                            }`}
-                          >
-                            Auto
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleModeToggle(stratName, 'manual')}
-                            className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
-                              isManual ? 'bg-purple-650 text-white shadow' : 'text-slate-400 hover:text-slate-250'
-                            }`}
-                          >
-                            Manual
-                          </button>
-                        </div>
-                      </div>
+            <div className="space-y-4">
+              {activeStrategies.map((stratName) => {
+                const isManual = strategyToggles[stratName] === 'manual'
+                const picks = manualPicks[stratName] || []
+                const s = preview.stats[stratName] || { high: 0, mid: 0, low: 0, total: 0 }
 
-                      {isManual && (
-                        <div className="pt-2 border-t border-slate-800/50">
-                          <ScopedSymbolPicker
-                            symbols={curatedSymbols}
-                            selected={picks}
-                            lockedSymbols={lockedSymbols}
-                            globalClaimedByOthers={getGlobalClaimedByOthers(stratName)}
-                            onToggle={(sym) => handleSymbolToggle(stratName, sym)}
-                            maxManualSymbols={maxManualSymbols}
-                          />
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
+                return (
+                  <div key={stratName} className="border border-slate-800 rounded-lg bg-slate-950/40 p-4">
+                    <div className="flex items-center gap-3 mb-3">
+                      {/* Strategy name — fixed width so stats column aligns across rows */}
+                      <span className="text-sm font-bold text-slate-200 w-44 shrink-0 truncate">{stratName}</span>
 
-            {/* Live Allocation Preview Panel */}
-            <div className="border-t border-slate-800 pt-5">
-              <h4 className="text-xs uppercase font-bold tracking-wider text-purple-400 mb-3">Live Allocation Preview</h4>
-              <div className="space-y-3">
-                {activeStrategies.map((stratName) => {
-                  const s = preview.stats[stratName] || { high: 0, mid: 0, low: 0, total: 0 }
-                  const isManual = strategyToggles[stratName] === 'manual'
-                  const pCount = (manualPicks[stratName] || []).length
-                  
-                  return (
-                    <div key={stratName} className="flex flex-col sm:flex-row justify-between items-start sm:items-center p-3 rounded bg-slate-950/60 border border-slate-900 gap-2">
-                      <div className="flex flex-col">
-                        <span className="text-xs font-semibold text-slate-350">{stratName}</span>
-                        <span className="text-[10px] text-slate-500">
-                          {isManual ? `Manual (${pCount} reserved)` : 'Auto (distributed)'}
+                      {/* Inline allocation preview — left-aligned, consistent start position */}
+                      <div className="flex items-center gap-1.5 flex-1 min-w-0 justify-start">
+                        <span className="text-[10px] bg-purple-500/10 text-purple-400 px-1.5 py-0.5 rounded border border-purple-500/20" title="High volume">
+                          H: {s.high}
                         </span>
-                      </div>
-                      <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-start">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-[10px] bg-purple-500/10 text-purple-400 px-1.5 py-0.5 rounded border border-purple-500/20" title="High volume">
-                            H: {s.high}
-                          </span>
-                          <span className="text-[10px] bg-blue-500/10 text-blue-400 px-1.5 py-0.5 rounded border border-blue-500/20" title="Mid volume">
-                            M: {s.mid}
-                          </span>
-                          <span className="text-[10px] bg-slate-700/20 text-slate-450 px-1.5 py-0.5 rounded border border-slate-800" title="Low volume">
-                            L: {s.low}
-                          </span>
-                        </div>
-                        <span className="text-xs font-bold text-slate-200">
+                        <span className="text-[10px] bg-blue-500/10 text-blue-400 px-1.5 py-0.5 rounded border border-blue-500/20" title="Mid volume">
+                          M: {s.mid}
+                        </span>
+                        <span className="text-[10px] bg-slate-700/20 text-slate-400 px-1.5 py-0.5 rounded border border-slate-800" title="Low volume">
+                          L: {s.low}
+                        </span>
+                        <span className="text-[10px] font-semibold text-slate-300 ml-1">
                           {s.total} symbols
                         </span>
                       </div>
+
+                      {/* Auto / Manual toggle */}
+                      <div className="inline-flex rounded-lg bg-slate-900 p-0.5 border border-slate-800 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleModeToggle(stratName, 'auto')}
+                          className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
+                            !isManual ? 'bg-purple-650 text-white shadow' : 'text-slate-400 hover:text-slate-250'
+                          }`}
+                        >
+                          Auto
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleModeToggle(stratName, 'manual')}
+                          className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
+                            isManual ? 'bg-purple-650 text-white shadow' : 'text-slate-400 hover:text-slate-250'
+                          }`}
+                        >
+                          Manual
+                        </button>
+                      </div>
                     </div>
-                  )
-                })}
-              </div>
+
+                    {isManual && (
+                      <div className="pt-2 border-t border-slate-800/50">
+                        <ScopedSymbolPicker
+                          symbols={curatedSymbols}
+                          selected={picks}
+                          lockedSymbols={lockedSymbols}
+                          globalClaimedByOthers={getGlobalClaimedByOthers(stratName)}
+                          onToggle={(sym) => handleSymbolToggle(stratName, sym)}
+                          maxManualSymbols={maxManualSymbols}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           </div>
         )}

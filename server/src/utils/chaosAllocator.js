@@ -47,7 +47,7 @@ function shuffle(arr) {
  * Throws { status: 400, code, message } for hard validation failures (duplicate manual picks,
  * symbol not in curated list, etc.) — the controller converts these to ApiError.
  */
-function allocateChaosSymbols({ activeStrategies, manualPicks = {}, lockedSymbols = [], curatedSymbols, maxManualSymbols }) {
+function allocateChaosSymbols({ activeStrategies, manualPicks = {}, lockedSymbols = [], curatedSymbols, maxManualSymbols, tierMap: tierMapInput }) {
   const errors = []
   const lockedSet = new Set(lockedSymbols)
   const curatedSet = new Set(curatedSymbols)
@@ -102,7 +102,7 @@ function allocateChaosSymbols({ activeStrategies, manualPicks = {}, lockedSymbol
     // ── STEP 3: Bucket + shuffle pool by tier (D3/D4) ───────────────────────────
     // Accept an optional tierMap; fall back to static TIERED_SYMBOLS.
     const tierMap = new Map(
-      (opts.tierMap || STATIC_TIERED).map((e) => [e.symbol, e.tier])
+      (tierMapInput || STATIC_TIERED).map((e) => [e.symbol, e.tier])
     )
     function _bucket(arr) {
       const r = { high: [], mid: [], low: [] }

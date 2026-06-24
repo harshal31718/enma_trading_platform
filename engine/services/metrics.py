@@ -197,15 +197,36 @@ class SortinoStat(Statistic):
         rets = _ReturnsHelper.per_candle_returns(ctx.balances)
         if rets.size == 0:
             return "0.00"
-        std = float(np.std(rets))
-        if std <= 0:
-            return "0.00"
         mean = float(np.mean(rets))
-        neg = rets[rets < 0]
-        down_std = float(np.std(neg)) if neg.size else 0.0
-        if down_std > 0:
-            return f"{(mean / down_std) * math.sqrt(ctx.annual_factor):.2f}"
-        return f"{(mean / std) * math.sqrt(ctx.annual_factor):.2f}"
+        # I-09: downside deviation must be measured against the target (0) over
+        # ALL periods, not the std of the negative subset about its own mean.
+        # Mirror freqtrade: std of returns clipped at 0 (positives → 0).
+        down_std = float(np.std(np.clip(rets, a_min=None, a_max=0.0)))
+        if down_std <= 0:
+            return "0.00"
+        return f"{(mean / down_std) * math.sqrt(ctx.annual_factor):.2f}"
+
+
+def _annualized_return_pct(ctx: MetricContext) -> float | None:
+    """CAGR in percent, or None if the run is too short / inputs are invalid.
+
+    Shared by ``CAGRStat`` and ``CalmarStat`` so the two can never drift —
+    Calmar is annualized return over max drawdown, not total return.
+    """
+    if ctx.balances.size == 0 or ctx.capital <= 0:
+        return None
+    if ctx.candles_np.shape[0] <= ctx.warmup_period:
+        return None
+    start_ts = ctx.candles_np[ctx.warmup_period, 0]   # ms
+    end_ts = ctx.candles_np[-1, 0]
+    seconds = (end_ts - start_ts) / 1000.0
+    years = seconds / (365.25 * 24 * 3600)
+    if years <= 0:
+        return None
+    ratio = ctx.balances[-1] / ctx.capital
+    if ratio <= 0:
+        return -100.0
+    return ((ratio ** (1.0 / years)) - 1.0) * 100.0
 
 
 class CalmarStat(Statistic):
@@ -213,13 +234,14 @@ class CalmarStat(Statistic):
     def compute(self, ctx: MetricContext) -> str:
         if ctx.balances.size == 0:
             return "0.00"
-        net_pct = ((ctx.balances[-1] - ctx.capital) / ctx.capital) * 100.0
         running_max = np.maximum.accumulate(ctx.balances)
         dd = np.where(running_max > 0, (ctx.balances - running_max) / running_max, 0.0)
         max_dd = float(np.min(dd)) * 100.0
-        if max_dd == 0:
+        # I-08: Calmar = CAGR / |maxDD| (annualized return), not total return.
+        cagr = _annualized_return_pct(ctx)
+        if max_dd == 0 or cagr is None:
             return "0.00"
-        return f"{net_pct / abs(max_dd):.2f}"
+        return f"{cagr / abs(max_dd):.2f}"
 
 
 class BuyHoldReturnStat(Statistic):
@@ -241,19 +263,8 @@ class CAGRStat(Statistic):
     name = "cagrPct"
 
     def compute(self, ctx: MetricContext) -> str:
-        if ctx.balances.size == 0 or ctx.balances[0] <= 0:
-            return "0.00"
-        # Run duration in years (same calc freqtrade uses internally)
-        start_ts = ctx.candles_np[ctx.warmup_period, 0]   # ms
-        end_ts   = ctx.candles_np[-1, 0]
-        seconds  = (end_ts - start_ts) / 1000.0
-        years    = seconds / (365.25 * 24 * 3600)
-        if years <= 0:
-            return "0.00"
-        ratio = ctx.balances[-1] / ctx.capital
-        if ratio <= 0:
-            return "-100.00"
-        return f"{((ratio ** (1 / years)) - 1) * 100:.2f}"
+        cagr = _annualized_return_pct(ctx)
+        return "0.00" if cagr is None else f"{cagr:.2f}"
 
 
 class SQNStat(Statistic):
@@ -359,8 +370,11 @@ class ProfitFactorStat(Statistic):
         pnls = np.array([float(t["pnl"]) for t in ctx.trades], dtype=np.float64)
         win  = float(np.sum(pnls[pnls > 0]))
         loss = float(np.sum(pnls[pnls <= 0]))
+        # I-13: no losses + some wins → undefined/∞ profit factor, not 0.00
+        # (which is indistinguishable from the worst case). Matches the "inf"
+        # sentinel ExpectancyRatioStat already returns.
         if loss == 0:
-            return "0.00"
+            return "inf" if win > 0 else "0.00"
         return f"{win / abs(loss):.2f}"
 
 
@@ -372,10 +386,13 @@ class PayoffRatioStat(Statistic):
         pnls = np.array([float(t["pnl"]) for t in ctx.trades], dtype=np.float64)
         wins   = pnls[pnls > 0]
         losses = pnls[pnls <= 0]
-        if losses.size == 0 or float(np.mean(losses)) == 0:
+        # I-13: no losses + some wins → undefined/∞ payoff, not 0.00.
+        if losses.size == 0:
+            return "inf" if wins.size else "0.00"
+        avg_l = float(np.mean(losses))
+        if avg_l == 0:
             return "0.00"
         avg_w = float(np.mean(wins))   if wins.size   else 0.0
-        avg_l = float(np.mean(losses))
         return f"{avg_w / abs(avg_l):.2f}"
 
 

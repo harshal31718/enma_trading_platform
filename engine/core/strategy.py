@@ -88,6 +88,11 @@ class BaseStrategy(ABC):
         self.peak_equity:      float = 0.0   # highest equity seen this session
         self.session_drawdown: float = 0.0   # (peak - equity) / peak; checked by can_trade()
         self.available_capital: float = 0.0  # shared capital pool; decremented on open, credited on close
+        # F-017 shared-wallet (multi-symbol portfolio backtest): margin locked by
+        # OTHER symbols' open positions against the shared balance. Entry
+        # affordability checks free capital = balance - this. Always 0.0 for
+        # single-symbol runs, so single-symbol behaviour is unchanged.
+        self._external_reserved_margin: float = 0.0
 
         # ── Execution ────────────────────────────────────────────────────────
         self._close_at_open:   bool  = False   # set by close_position(); consumed by runner step A1

@@ -28,7 +28,7 @@ from services.curves import (
     timeframe_to_seconds,
 )
 # Phase 2 — fill realism: gap-through stops (F-011), candle-bounded fills (F-012)
-from services.fill_model import gap_through_stop_price, bounded_exit_price, bounded_entry_price
+from services.fill_model import gap_through_stop_price, bounded_exit_price
 
 logger = logging.getLogger(__name__)
 
@@ -309,10 +309,14 @@ class BacktestAdapter(ExecutionAdapter):
         req_margin = _entry.req_margin
         fee = _entry.fee
 
-        if not _entry.affordable(strategy.balance):
+        # F-017: affordability checks FREE capital (balance minus margin already
+        # reserved by other symbols' open positions in a shared-wallet portfolio
+        # run). _external_reserved_margin is 0.0 for single-symbol → unchanged.
+        free_balance = strategy.balance - getattr(strategy, "_external_reserved_margin", 0.0)
+        if not _entry.affordable(free_balance):
             logger.warning(
                 f"[{strategy.symbol}] Entry rejected: margin ${req_margin:.2f} + fee "
-                f"${fee:.2f} exceeds balance ${strategy.balance:.2f}"
+                f"${fee:.2f} exceeds free capital ${free_balance:.2f}"
             )
             return False
 
@@ -487,10 +491,11 @@ class BacktestAdapter(ExecutionAdapter):
         req_margin = _entry.req_margin
         fee = _entry.fee
 
-        if not _entry.affordable(strategy.balance):
+        free_balance = strategy.balance - getattr(strategy, "_external_reserved_margin", 0.0)
+        if not _entry.affordable(free_balance):
             logger.warning(
                 f"[{strategy.symbol}] Flip degraded to close-only: qty {new_qty} margin "
-                f"${req_margin:.2f} + fee ${fee:.2f} vs balance ${strategy.balance:.2f}"
+                f"${req_margin:.2f} + fee ${fee:.2f} vs free capital ${free_balance:.2f}"
             )
             return False
 
@@ -503,9 +508,11 @@ class BacktestAdapter(ExecutionAdapter):
         strategy.available_margin = strategy.balance - req_margin
         self.last_funding_dt = time_t
 
-        rounding_mode = ROUND_DOWN if new_direction == "long" else ROUND_UP
-        strategy.stop_loss = (new_qty, round_price(symbol, exchange_name, stop_loss, rounding=rounding_mode)) if stop_loss is not None else None
-        strategy.take_profit = (new_qty, round_price(symbol, exchange_name, take_profit, rounding=rounding_mode)) if take_profit is not None else None
+        # I-11: stop rounds away from entry; take-profit rounds away the other way.
+        sl_rounding = ROUND_DOWN if new_direction == "long" else ROUND_UP
+        tp_rounding = ROUND_UP if new_direction == "long" else ROUND_DOWN
+        strategy.stop_loss = (new_qty, round_price(symbol, exchange_name, stop_loss, rounding=sl_rounding)) if stop_loss is not None else None
+        strategy.take_profit = (new_qty, round_price(symbol, exchange_name, take_profit, rounding=tp_rounding)) if take_profit is not None else None
 
         self.active_trade = {
             "type":       new_direction,
@@ -546,6 +553,121 @@ class BacktestAdapter(ExecutionAdapter):
             else:
                 self.active_trade["_mfe"] = max(self.active_trade["_mfe"], entry - low_t)
                 self.active_trade["_mae"] = min(self.active_trade["_mae"], entry - high_t)
+
+
+async def _run_shared_portfolio(
+    job_id, symbols, strategies, adapters, kernels,
+    rows_by_sym, candles_np_by_sym, warmup_periods,
+    capital, timeframe, r_client, is_cancelled_fn,
+):
+    """F-017 shared-wallet multi-symbol portfolio simulation.
+
+    All symbols advance together in timestamp order against ONE shared balance
+    with shared isolated margin — mirroring multi-symbol live (where every
+    position competes for the same wallet), instead of N independent
+    single-symbol runs on pre-split capital.
+
+    Returns ``(timestamps, balances)`` for the combined portfolio equity curve.
+    """
+    # Unified, timestamp-ordered event stream across all symbols.
+    events = []  # (ts_ms, ts_dt, sym, local_t)
+    for sym in symbols:
+        rows = rows_by_sym[sym]
+        cnp = candles_np_by_sym[sym]
+        for t in range(warmup_periods[sym], len(rows)):
+            events.append((cnp[t, 0], rows[t]["time"], sym, t))
+    events.sort(key=lambda e: e[0])
+
+    def _reserved_margin():
+        total = 0.0
+        for s in symbols:
+            pos = strategies[s].position
+            if pos is not None and pos.is_open:
+                total += pos.margin
+        return total
+
+    def _portfolio_unrealized():
+        total = 0.0
+        for s in symbols:
+            pos = strategies[s].position
+            if pos is not None and pos.is_open:
+                total += pos.pnl
+        return total
+
+    shared_balance = float(capital)
+    portfolio_ts: list = []
+    portfolio_bal: list = []
+    total = len(events)
+
+    for i, (ts_ms, time_t, sym, t) in enumerate(events):
+        if i % 100 == 0:
+            if is_cancelled_fn():
+                logger.info(f"[{job_id}] Cancelled by user.")
+                raise RuntimeError("JOB_CANCELLED")
+            pct = int((i / total) * 100) if total else 0
+            await r_client.publish(
+                f"progress:{job_id}",
+                json.dumps({
+                    "pct": pct,
+                    "message": f"Simulating portfolio ({len(symbols)} symbols) {timeframe} — {pct}% ({i}/{total} candles)",
+                }),
+            )
+
+        strategy = strategies[sym]
+        kernel = kernels[sym]
+        cnp = candles_np_by_sym[sym]
+        candle = cnp[t]
+        strategy.candles = cnp[:t + 1]
+
+        # Sync the shared wallet into this symbol before it acts. The affordability
+        # check uses balance - _external_reserved_margin (all open positions), so a
+        # new entry can only use capital not already locked by another symbol.
+        strategy.balance = shared_balance
+        strategy.available_margin = shared_balance
+        strategy._external_reserved_margin = _reserved_margin()
+
+        await kernel.execute_pending(strategy, sym, candle, t, time_t)
+        await kernel.check_exits(strategy, sym, candle, is_live=False, index_t=t, time_t=time_t)
+        await kernel.evaluate_and_route(strategy, sym, candle, is_live=False, index_t=t, time_t=time_t)
+
+        # Write realized cash changes (fees, realized PnL) back to the shared wallet.
+        shared_balance = strategy.balance
+
+        # Record one portfolio-equity point per unique timestamp (after the last
+        # symbol at that timestamp has acted): cash + ALL open unrealized PnL.
+        is_last_at_ts = (i == total - 1) or (events[i + 1][0] != ts_ms)
+        if is_last_at_ts:
+            portfolio_ts.append(time_t.isoformat())
+            portfolio_bal.append(shared_balance + _portfolio_unrealized())
+
+    # Termination: force-close any positions still open at each symbol's last candle.
+    for sym in symbols:
+        strategy = strategies[sym]
+        adapter = adapters[sym]
+        cnp = candles_np_by_sym[sym]
+        rows = rows_by_sym[sym]
+        try:
+            strategy.before_terminate()
+        except Exception as e:
+            logger.error(f"[{job_id}] before_terminate error: {e}")
+        if strategy.position is not None:
+            strategy.balance = shared_balance
+            strategy._external_reserved_margin = 0.0
+            await adapter.execute_exit(
+                strategy=strategy, symbol=sym, qty=strategy.position.qty,
+                exit_price=cnp[-1, 2], reason="force_close",
+                time_t=rows[-1]["time"], index_t=len(rows) - 1,
+                high_t=cnp[-1, 3], low_t=cnp[-1, 4],
+            )
+            shared_balance = strategy.balance
+        try:
+            strategy.terminate()
+        except Exception as e:
+            logger.error(f"[{job_id}] terminate error: {e}")
+
+    portfolio_ts.append(rows_by_sym[symbols[0]][-1]["time"].isoformat())
+    portfolio_bal.append(shared_balance)
+    return portfolio_ts, portfolio_bal
 
 
 async def run_backtest_simulation(
@@ -666,28 +788,35 @@ async def run_backtest_simulation(
 
     cancel_task = asyncio.create_task(_watch_cancel())
 
-    # ── 7. Run simulation sequentially for each symbol ────────────────────
+    # ── 7. Run simulation ──────────────────────────────────────────────────
+    # Single-symbol: the symbol runs on its own balance (byte-identical to the
+    # historical behaviour). Multi-symbol (F-017): all symbols advance together
+    # in time against ONE shared balance with shared isolated margin via
+    # _run_shared_portfolio(), representing multi-symbol live.
+    strategies: dict = {}
     adapters = {}
+    kernels: dict = {}
     total_candles_all = sum(len(rows_by_sym[sym]) for sym in symbols)
-    processed_candles = 0
+    _is_multi = len(symbols) > 1
+    portfolio_curve = None
 
     try:
+        # ── 7a. Per-symbol setup (strategy, params, adapter, kernel) ─────────
         for sym in symbols:
-            if is_cancelled:
-                logger.info(f"[{job_id}] Cancelled by user.")
-                raise RuntimeError("JOB_CANCELLED")
-
             rows = rows_by_sym[sym]
             candles_np = candles_np_by_sym[sym]
-            sym_capital = capital_splits[sym]
+            # Shared-wallet portfolio runs start every symbol on the FULL capital
+            # (the balance is synced from the shared wallet each step); single
+            # symbol uses its allocated split (== capital), preserving behaviour.
+            _init_cap = capital if _is_multi else capital_splits[sym]
 
             # Initialise strategy
             strategy = strategy_class()
             strategy.exchange       = exchange
             strategy.symbol         = sym
             strategy.timeframe      = timeframe
-            strategy.balance        = sym_capital
-            strategy.available_margin = sym_capital
+            strategy.balance        = _init_cap
+            strategy.available_margin = _init_cap
             strategy.leverage       = leverage
             strategy.fee_rate       = fee_rate
             strategy.exchange_type  = "futures" if "Futures" in exchange else "spot"
@@ -744,8 +873,8 @@ async def run_backtest_simulation(
             strategy.custom_atr_mult = _safe_float(custom_atr_mult, None) if custom_atr_mult is not None else None
             strategy.slippage_pct      = _slippage
             strategy.fee_rate          = fee_rate
-            strategy.available_capital = float(sym_capital)
-            strategy.peak_equity       = float(sym_capital)
+            strategy.available_capital = float(_init_cap)
+            strategy.peak_equity       = float(_init_cap)
 
             execution = BacktestExecution()
             strategy.execution_model = execution
@@ -776,22 +905,39 @@ async def run_backtest_simulation(
 
             warmup_period = max(strategy.MIN_WARMUP_CANDLES, min(50, len(rows) - 2))
             warmup_periods[sym] = warmup_period
+            strategies[sym] = strategy
+            kernels[sym] = kernel
+
+        # ── 7b. Simulation ──────────────────────────────────────────────────
+        if _is_multi:
+            portfolio_curve = await _run_shared_portfolio(
+                job_id, symbols, strategies, adapters, kernels,
+                rows_by_sym, candles_np_by_sym, warmup_periods,
+                capital, timeframe, r_client, lambda: is_cancelled,
+            )
+        else:
+            sym = symbols[0]
+            strategy = strategies[sym]
+            adapter = adapters[sym]
+            kernel = kernels[sym]
+            rows = rows_by_sym[sym]
+            candles_np = candles_np_by_sym[sym]
+            warmup_period = warmup_periods[sym]
+            total_candles = len(rows)
 
             logger.info(f"[{job_id}] Running simulation loop on {sym} ({len(rows)} candles)...")
-            total_candles = len(rows)
 
             for t in range(warmup_period, total_candles):
                 if t % 100 == 0:
                     if is_cancelled:
                         logger.info(f"[{job_id}] Cancelled by user.")
                         raise RuntimeError("JOB_CANCELLED")
-                    current_total_processed = processed_candles + t
-                    pct = int((current_total_processed / total_candles_all) * 100)
+                    pct = int((t / total_candles_all) * 100)
                     await r_client.publish(
                         f"progress:{job_id}",
                         json.dumps({
                             "pct": pct,
-                            "message": f"Simulating {sym} {timeframe} — {pct}% ({current_total_processed}/{total_candles_all} candles)",
+                            "message": f"Simulating {sym} {timeframe} — {pct}% ({t}/{total_candles_all} candles)",
                         }),
                     )
 
@@ -842,8 +988,6 @@ async def run_backtest_simulation(
             except Exception as e:
                 logger.error(f"[{job_id}] terminate error: {e}")
 
-            processed_candles += total_candles
-
     finally:
         cancel_task.cancel()
         try:
@@ -862,24 +1006,29 @@ async def run_backtest_simulation(
     for idx, tr in enumerate(combined_trades):
         tr["id"] = f"t_{idx + 1}"
 
-    # Merge equity curves
-    all_timestamps = set()
-    for sym in symbols:
-        all_timestamps.update(adapters[sym].equity_timestamps)
-
-    combined_timestamps = sorted(list(all_timestamps))
-    combined_balances = []
-
-    last_balances = {sym: capital_splits[sym] for sym in symbols}
-    for ts in combined_timestamps:
-        ts_balance_sum = 0.0
+    # Equity curve. Multi-symbol (F-017): the single shared-wallet portfolio
+    # curve built during the interleaved run. Single-symbol: the per-symbol
+    # curve (summing one symbol → identical to the historical behaviour).
+    if portfolio_curve is not None:
+        combined_timestamps, combined_balances = portfolio_curve
+    else:
+        all_timestamps = set()
         for sym in symbols:
-            adapter = adapters[sym]
-            if ts in adapter.equity_timestamps:
-                idx = adapter.equity_timestamps.index(ts)
-                last_balances[sym] = adapter.equity_balances[idx]
-            ts_balance_sum += last_balances[sym]
-        combined_balances.append(ts_balance_sum)
+            all_timestamps.update(adapters[sym].equity_timestamps)
+
+        combined_timestamps = sorted(list(all_timestamps))
+        combined_balances = []
+
+        last_balances = {sym: capital_splits[sym] for sym in symbols}
+        for ts in combined_timestamps:
+            ts_balance_sum = 0.0
+            for sym in symbols:
+                adapter = adapters[sym]
+                if ts in adapter.equity_timestamps:
+                    idx = adapter.equity_timestamps.index(ts)
+                    last_balances[sym] = adapter.equity_balances[idx]
+                ts_balance_sum += last_balances[sym]
+            combined_balances.append(ts_balance_sum)
 
     # ── 9. Calculate metrics on combined portfolio ────────────────────────
     balances_arr = np.array(combined_balances, dtype=np.float64)

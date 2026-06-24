@@ -97,13 +97,17 @@ def bounded_entry_price(
     """Bound an entry market fill to the candle range (F-012).
 
     Entries in Enma fill at the next candle's OPEN (Phase 1 invariant).
-    Apply adverse slippage and clamp to the [low, high] band so the fill
-    stays inside the realised trading range — same bound freqtrade applies
-    to ``_get_order_filled``.
+    Apply adverse slippage, then clamp into the realised ``[low, high]`` band
+    so the fill never lands outside the candle that actually traded.
 
-    Long entry (buy):  fill at min(open, high), slippage UP  (pay more)
-    Short entry (sell): fill at max(open, low), slippage DOWN (receive less)
+    Long entry (buy):  open * (1 + slippage), capped at the candle HIGH (pay more).
+    Short entry (sell): open * (1 - slippage), floored at the candle LOW (receive less).
+
+    NOTE: this is a forward-looking helper. The runner's entry path currently
+    fills via ``execution.entry_fill`` (next-open + cost-model slippage); this
+    function is NOT yet wired into that path, so changing it does not alter
+    backtest output. Wiring it in is a separate, golden-master-gated change.
     """
     if is_long:
-        return candle_open * (1.0 + slippage_pct)   # bounded by open already; clamp below
-    return candle_open * (1.0 - slippage_pct)
+        return min(candle_open * (1.0 + slippage_pct), candle_high)
+    return max(candle_open * (1.0 - slippage_pct), candle_low)

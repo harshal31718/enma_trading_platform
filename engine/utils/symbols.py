@@ -129,6 +129,16 @@ _TICKER_URLS = {
     "Binance Spot": "https://api.binance.com/api/v3/ticker/24hr",
 }
 
+# Book ticker (best bid/ask). The 24hr ticker endpoint does NOT return bid/ask
+# for USDⓈ-M futures, so the SpreadFilter needs this separate source.
+_BOOK_TICKER_URLS = {
+    "Binance Futures": "https://testnet.binancefuture.com/fapi/v1/ticker/bookTicker",
+    "Binance Spot": "https://api.binance.com/api/v3/ticker/bookTicker",
+}
+
+# Best bid/ask cache: (exchange, symbol) -> {"bidPrice": float|None, "askPrice": float|None}
+_book_ticker_cache: dict[tuple[str, str], dict] = {}
+
 # Symbol-level metadata beyond filters: (exchange, symbol) -> {"status": str, "baseAsset": str, "quoteAsset": str}
 _symbol_meta_cache: dict[tuple[str, str], dict] = {}
 
@@ -245,6 +255,8 @@ async def load_exchange_rules(exchange: str) -> None:
             "status": status,
             "baseAsset": base_asset,
             "quoteAsset": quote_asset,
+            # ms epoch listing date (USDⓈ-M futures provides it; spot does not) — AgeFilter
+            "onboardDate": sym_info.get("onboardDate"),
         }
 
         tick_size: Optional[Decimal] = None
@@ -317,16 +329,6 @@ def round_price(symbol: str, exchange: str, price: float, rounding: str = ROUND_
     tick = rules["tickSize"]
     quantize_to = _get_precision(tick)
     return float(Decimal(str(price)).quantize(quantize_to, rounding=rounding))
-
-
-def round_qty(symbol: str, exchange: str, qty: float) -> float:
-    """Round quantity to the exchange step size for (exchange, symbol)."""
-    rules = _rules_cache.get((exchange, symbol))
-    if not rules:
-        return qty
-    step = rules["stepSize"]
-    quantize_to = _get_precision(step)
-    return float(Decimal(str(qty)).quantize(quantize_to, rounding=ROUND_DOWN))
 
 
 def clamp_and_round_qty(
@@ -441,6 +443,8 @@ async def load_symbol_volume_tiers(exchange: str) -> None:
             "askPrice": _safe_float_str(s.get("askPrice")),
             "highPrice": _safe_float_str(s.get("highPrice")),
             "lowPrice": _safe_float_str(s.get("lowPrice")),
+            "lastPrice": _safe_float_str(s.get("lastPrice")),
+            "weightedAvgPrice": _safe_float_str(s.get("weightedAvgPrice")),
             "volume": _safe_float_str(s.get("volume")),
             "quoteVolume": qv,
             "priceChangePercent": _safe_float_str(s.get("priceChangePercent")),
@@ -468,6 +472,61 @@ async def load_symbol_volume_tiers(exchange: str) -> None:
 def get_ticker_data(exchange: str, symbol: str) -> dict | None:
     """Return cached 24hr ticker data for a symbol, or None."""
     return _ticker_cache.get((exchange, symbol))
+
+
+async def load_book_tickers(exchange: str) -> None:
+    """Fetch best bid/ask (book ticker) for every symbol and cache it.
+
+    Separate from the 24hr ticker because USDⓈ-M futures' /ticker/24hr does not
+    include bid/ask — the SpreadFilter relies on this source.
+    """
+    url = _BOOK_TICKER_URLS.get(exchange)
+    if not url:
+        logger.warning(f"load_book_tickers: unknown exchange '{exchange}'")
+        return
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as e:
+        logger.error(f"load_book_tickers({exchange}): fetch failed — {e}")
+        return
+
+    if isinstance(data, dict):
+        data = [data]
+    loaded = 0
+    for s in data:
+        if not isinstance(s, dict):
+            continue
+        sym = s.get("symbol", "")
+        if not sym:
+            continue
+        _book_ticker_cache[(exchange, sym)] = {
+            "bidPrice": _safe_float_str(s.get("bidPrice")),
+            "askPrice": _safe_float_str(s.get("askPrice")),
+        }
+        loaded += 1
+
+    logger.info(f"load_book_tickers({exchange}): cached bid/ask for {loaded} symbols")
+
+
+def get_book_ticker(exchange: str, symbol: str) -> dict | None:
+    """Return cached best bid/ask for a symbol, or None."""
+    return _book_ticker_cache.get((exchange, symbol))
+
+
+def get_symbol_onboard_date(exchange: str, symbol: str) -> float | None:
+    """Return the symbol's onboard (listing) timestamp in ms epoch, or None."""
+    meta = _symbol_meta_cache.get((exchange, symbol))
+    if not meta:
+        return None
+    od = meta.get("onboardDate")
+    try:
+        return float(od) if od is not None else None
+    except (ValueError, TypeError):
+        return None
 
 
 def get_symbol_tier(exchange: str, symbol: str) -> str:

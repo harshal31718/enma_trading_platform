@@ -22,7 +22,7 @@ from core.params import param_coerce, param_default, param_validate
 from core.pipeline import evaluate
 from services.trade_recorder import record_trade, build_trade_record
 from services.pairlist import pairlist_from_config
-from utils.symbols import round_price, round_qty, clamp_and_round_qty, clamp_leverage
+from utils.symbols import round_price, clamp_and_round_qty, clamp_leverage, get_ticker_data
 from core.kernel import ExecutionAdapter, ExecutionKernel
 
 logger = logging.getLogger(__name__)
@@ -143,9 +143,12 @@ class LiveAdapter(ExecutionAdapter):
         exchange_name = "Binance Futures"
         qty = clamp_and_round_qty(symbol, exchange_name, qty, fill_price, stop_loss_pct=sl_pct)
 
-        rounding_mode = ROUND_DOWN if direction == "long" else ROUND_UP
-        sl_price = round_price(symbol, exchange_name, sl_raw, rounding=rounding_mode) if sl_raw else None
-        tp_price = round_price(symbol, exchange_name, tp_raw, rounding=rounding_mode) if tp_raw else None
+        # I-11: stop rounds away from entry; take-profit rounds away the other way
+        # (using the stop's mode for TP biased it toward entry — easier to hit).
+        sl_rounding = ROUND_DOWN if direction == "long" else ROUND_UP
+        tp_rounding = ROUND_UP if direction == "long" else ROUND_DOWN
+        sl_price = round_price(symbol, exchange_name, sl_raw, rounding=sl_rounding) if sl_raw else None
+        tp_price = round_price(symbol, exchange_name, tp_raw, rounding=tp_rounding) if tp_raw else None
 
         if qty <= 0:
             logger.warning(f"[AlgoBot] Quantity rounded to 0 for {symbol} (below min lot size), skipping")
@@ -1206,7 +1209,6 @@ class LiveBotManager:
                                 # O(≤500) per candle (~once/hr), no drift.
                                 strategy.index = len(strategy.candles) - 1
                                 strategy.prepare(strategy.candles)
-                                strategy.price = candle[2]
 
                                 # Phase 5: Reconcile state with exchange BEFORE any decision
                                 # Unconditionally syncs positions AND open orders every loop.
@@ -1493,14 +1495,33 @@ class LiveBotManager:
         exchange_side = None
         exchange_unrealized_pnl = None
         exchange_mark_price = None
+        exchange_leverage = None
+        exchange_iso_wallet = None
+        exchange_liq_price = None
 
         if exchange_pos:
             exchange_amt = float(exchange_pos.get("positionAmt", 0))
             if exchange_amt != 0:
                 exchange_entry = float(exchange_pos.get("entryPrice", 0))
                 exchange_side = "long" if exchange_amt > 0 else "short"
-                exchange_unrealized_pnl = float(exchange_pos.get("unRealizedProfit", 0))
-                exchange_mark_price = float(exchange_pos.get("markPrice", 0))
+                # I-05: unRealizedProfit of 0.0 is legitimate (flat PnL) — keep it
+                # as a number; only a missing/invalid value becomes None.
+                exchange_unrealized_pnl = _safe_float(exchange_pos.get("unRealizedProfit"), None)
+                # I-05: markPrice fallback chain (mark → cached last → engine last).
+                # Do NOT coerce a missing key to 0.0 — that made price_missing dead.
+                exchange_mark_price = _safe_float(exchange_pos.get("markPrice"), None)
+                if exchange_mark_price is not None and exchange_mark_price <= 0:
+                    exchange_mark_price = None
+                if exchange_mark_price is None:
+                    _tk = get_ticker_data("Binance Futures", symbol)
+                    if _tk and _tk.get("lastPrice"):
+                        exchange_mark_price = _tk.get("lastPrice")
+                    elif getattr(strategy, "price", None):
+                        exchange_mark_price = float(strategy.price)
+                # I-07: exchange-truth leverage / isolated wallet / liq price for restore
+                exchange_leverage = _safe_float(exchange_pos.get("leverage"), None)
+                exchange_iso_wallet = _safe_float(exchange_pos.get("isolatedWallet"), None)
+                exchange_liq_price = _safe_float(exchange_pos.get("liquidationPrice"), None)
 
         has_exchange_position = exchange_amt != 0
         has_local_position = strategy.position is not None
@@ -1508,15 +1529,46 @@ class LiveBotManager:
         # ── 3. Case 1 — position on exchange but not locally (recover) ──────
         if has_exchange_position and not has_local_position:
             logger.info(f"[AlgoBot] {symbol}: reconciled — restoring {exchange_side} position from exchange")
-            strategy.position = Position(exchange_side, abs(exchange_amt), exchange_entry)
+            # I-07: restore with exchange-truth leverage / isolated wallet so margin,
+            # ROE and liquidation price are correct — not a bare qty/entry position
+            # with leverage=1 and a liquidation price computed from nothing.
+            _restored_lev = exchange_leverage if exchange_leverage and exchange_leverage > 0 else strategy.leverage
+            strategy.position = Position(
+                exchange_side, abs(exchange_amt), exchange_entry,
+                leverage=_restored_lev,
+                isolated_wallet=exchange_iso_wallet,
+            )
+            if exchange_liq_price and exchange_liq_price > 0:
+                strategy.position.liquidation_price = exchange_liq_price
+
+            # I-07: rebuild SL/TP brackets + algo_ids from the open algo orders so the
+            # engine view is protected and the F-019 OUO peer-cancel can fire for a
+            # restored position (it keys off algo_ids).
+            restored_algo_ids = {"sl": None, "tp": None}
+            for order in open_orders:
+                _cid = str(order.get("clientOrderId") or "")
+                _otype = str(order.get("type") or "").upper()
+                _trigger = _safe_float(order.get("stopPrice"), None)
+                if _trigger is None or _trigger <= 0:
+                    continue
+                is_sl = _cid.endswith("sl") or "STOP" in _otype
+                is_tp = _cid.endswith("tp") or "TAKE_PROFIT" in _otype
+                if is_tp:
+                    strategy.take_profit = (abs(exchange_amt), _trigger)
+                    restored_algo_ids["tp"] = order.get("orderId")
+                elif is_sl:
+                    strategy.stop_loss = (abs(exchange_amt), _trigger)
+                    restored_algo_ids["sl"] = order.get("orderId")
+
             pos_info = {
                 "symbol": symbol,
                 "side": exchange_side,
                 "qty": str(abs(exchange_amt)),
                 "price": str(exchange_entry),
-                "leverage": strategy.leverage,
-                "mark_price": str(exchange_mark_price) if exchange_mark_price else None,
-                "unrealized_pnl": str(round(exchange_unrealized_pnl, 2)) if exchange_unrealized_pnl else None,
+                "leverage": _restored_lev,
+                "algo_ids": restored_algo_ids,
+                "mark_price": str(exchange_mark_price) if exchange_mark_price is not None else None,
+                "unrealized_pnl": str(round(exchange_unrealized_pnl, 2)) if exchange_unrealized_pnl is not None else None,
                 "price_missing": exchange_mark_price is None,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
@@ -1611,8 +1663,8 @@ class LiveBotManager:
 
             # Update cached position info with exchange-truth data
             existing_info = session["open_positions"].get(symbol, {})
-            existing_info["mark_price"] = str(exchange_mark_price) if exchange_mark_price else existing_info.get("mark_price")
-            existing_info["unrealized_pnl"] = str(round(exchange_unrealized_pnl, 2)) if exchange_unrealized_pnl else existing_info.get("unrealized_pnl")
+            existing_info["mark_price"] = str(exchange_mark_price) if exchange_mark_price is not None else existing_info.get("mark_price")
+            existing_info["unrealized_pnl"] = str(round(exchange_unrealized_pnl, 2)) if exchange_unrealized_pnl is not None else existing_info.get("unrealized_pnl")
             existing_info["price_missing"] = exchange_mark_price is None
             if symbol in session["open_positions"]:
                 session["open_positions"][symbol] = existing_info

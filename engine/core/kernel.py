@@ -347,7 +347,22 @@ class ExecutionKernel:
                 plan = None
 
             if plan is not None:
-                if plan.direction > 0:
+                # I-01: route continuation slices as an ADD when a same-direction
+                # position is already open. The first slice opens the position via
+                # strategy.buy/sell (which only fill while flat); every later slice
+                # must go through the position-adjust path (qty_to_adjust), which
+                # fills while a position is open. Without this, slices 2..N written
+                # to strategy.buy/sell are silently dropped after slice 1 opens the
+                # position, so the parent order only ever fills its first slice.
+                pos_open = strategy.position is not None and strategy.position.is_open
+                slice_into_open = pos_open and (
+                    (plan.direction > 0 and strategy.position.type == "long")
+                    or (plan.direction < 0 and strategy.position.type == "short")
+                )
+                if slice_into_open:
+                    strategy.qty_to_adjust = plan.qty
+                    strategy.adjust_tag = "exec_algo"
+                elif plan.direction > 0:
                     strategy.buy = (plan.qty, plan.entry_price)
                 elif plan.direction < 0:
                     strategy.sell = (plan.qty, plan.entry_price)
@@ -446,17 +461,22 @@ class ExecutionKernel:
         if direction_name is not None:
             from decimal import ROUND_DOWN, ROUND_UP
             from utils.symbols import round_price
-            rounding_mode = ROUND_DOWN if direction_name == "long" else ROUND_UP
+            # Stops round AWAY from entry (long→DOWN, short→UP) so rounding never
+            # nudges the stop inward. I-11: the take-profit must round away from
+            # entry the OTHER way (long→UP, short→DOWN) — using the stop's mode for
+            # the TP nudged it toward entry (easier to hit), an optimistic bias.
+            sl_rounding = ROUND_DOWN if direction_name == "long" else ROUND_UP
+            tp_rounding = ROUND_UP if direction_name == "long" else ROUND_DOWN
             exchange_name = strategy.exchange or "Binance Futures"
             if strategy.stop_loss is not None:
                 sl_qty, sl_price = strategy.stop_loss
                 strategy.stop_loss = (
                     sl_qty,
-                    round_price(symbol, exchange_name, sl_price, rounding=rounding_mode),
+                    round_price(symbol, exchange_name, sl_price, rounding=sl_rounding),
                 )
             if strategy.take_profit is not None:
                 tp_qty, tp_price = strategy.take_profit
                 strategy.take_profit = (
                     tp_qty,
-                    round_price(symbol, exchange_name, tp_price, rounding=rounding_mode),
+                    round_price(symbol, exchange_name, tp_price, rounding=tp_rounding),
                 )

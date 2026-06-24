@@ -10,12 +10,15 @@ passed in the session's risk_params or pairlist config.
 """
 
 import logging
+import time
 from abc import ABC, abstractmethod
 from typing import Optional
 
 from utils.symbols import (
     get_symbol_tier,
     get_ticker_data,
+    get_book_ticker,
+    get_symbol_onboard_date,
     get_all_symbols,
     _rules_cache,
 )
@@ -45,23 +48,19 @@ class VolumePairList(PairlistHandler):
         self.top_n = max(1, top_n)
 
     def filter(self, pairs: list[str], exchange: str) -> list[str]:
-        # Collect all symbols with known volume tiers
-        all_syms = get_all_symbols(exchange)
-        # Sort by tier priority: high > mid > low, then alphabetically
-        tier_order = {"high": 0, "mid": 1, "low": 2}
-        ranked = sorted(
-            all_syms,
-            key=lambda s: (
-                tier_order.get(s.get("tier", "mid"), 99),
-                s["symbol"],
-            ),
-        )
-        # Keep only TRADING symbols
-        result = [s["symbol"] for s in ranked if s.get("status") == "TRADING"]
-        result = result[: self.top_n]
+        # I-02: rank by actual 24h quote volume (descending), not tier bucket +
+        # alphabetical. The quoteVolume is cached per symbol in the ticker cache.
+        all_syms = [s for s in get_all_symbols(exchange) if s.get("status") == "TRADING"]
+
+        def _quote_volume(sym: str) -> float:
+            ticker = get_ticker_data(exchange, sym)
+            return float(ticker.get("quoteVolume") or 0.0) if ticker else 0.0
+
+        ranked = sorted(all_syms, key=lambda s: _quote_volume(s["symbol"]), reverse=True)
+        result = [s["symbol"] for s in ranked][: self.top_n]
         logger.info(
             f"[VolumePairList] generated {len(result)} symbols "
-            f"(top {self.top_n} by volume)"
+            f"(top {self.top_n} by 24h quote volume)"
         )
         return result
 
@@ -72,7 +71,8 @@ class SpreadFilter(PairlistHandler):
     """
     Remove pairs where the bid/ask spread ratio exceeds max_spread_ratio.
     Spread ratio = (askPrice - bidPrice) / askPrice.
-    Uses cached 24hr ticker bid/ask data.
+    Uses the book-ticker (best bid/ask) cache — NOT the 24hr ticker, which does
+    not carry bid/ask for USDⓈ-M futures (I-03).
     """
 
     def __init__(self, max_spread_ratio: float = 0.005):
@@ -82,12 +82,12 @@ class SpreadFilter(PairlistHandler):
         kept = []
         dropped = 0
         for sym in pairs:
-            ticker = get_ticker_data(exchange, sym)
-            if ticker is None:
+            book = get_book_ticker(exchange, sym)
+            if book is None:
                 kept.append(sym)
                 continue
-            bid = ticker.get("bidPrice")
-            ask = ticker.get("askPrice")
+            bid = book.get("bidPrice")
+            ask = book.get("askPrice")
             if bid is None or ask is None or bid <= 0 or ask <= 0:
                 kept.append(sym)
                 continue
@@ -152,8 +152,22 @@ class PrecisionFilter(PairlistHandler):
     of bugs where rounding broke the stop.
     """
 
-    def __init__(self, max_tick_fraction: float = 0.5):
+    def __init__(self, max_tick_fraction: float = 0.005):
+        # max tick size as a fraction of price (default 0.5%): drop symbols where
+        # one tick is a large fraction of price, making stop placement unreliable.
         self.max_tick_fraction = max_tick_fraction
+
+    @staticmethod
+    def _reference_price(exchange: str, sym: str) -> float | None:
+        ticker = get_ticker_data(exchange, sym)
+        if not ticker:
+            return None
+        price = ticker.get("lastPrice") or ticker.get("weightedAvgPrice")
+        if not price:
+            hi, lo = ticker.get("highPrice"), ticker.get("lowPrice")
+            if hi and lo:
+                price = (hi + lo) / 2.0
+        return float(price) if price and price > 0 else None
 
     def filter(self, pairs: list[str], exchange: str) -> list[str]:
         kept = []
@@ -164,14 +178,13 @@ class PrecisionFilter(PairlistHandler):
                 kept.append(sym)
                 continue
             tick = rules.get("tickSize")
-            if tick is None or tick <= 0:
+            price = self._reference_price(exchange, sym)
+            if tick is None or tick <= 0 or price is None:
                 kept.append(sym)
                 continue
-            # Check if tick is a significant fraction of typical stop distance.
-            # A reasonable stop is ~0.5% of price. If tick > 0.5% of price,
-            # stop placement is unreliable. We approximate: if minNotional > 0
-            # and price is very low, tick/price could be large.
-            tick_fraction = float(tick) / 100.0  # normalized to ~0.5% of price
+            # I-04: tick as an actual fraction OF PRICE (the old code divided the
+            # raw tick by 100, ignoring price, so it never dropped anything).
+            tick_fraction = float(tick) / price
             if tick_fraction > self.max_tick_fraction:
                 dropped += 1
             else:
@@ -188,17 +201,36 @@ class PrecisionFilter(PairlistHandler):
 
 class AgeFilter(PairlistHandler):
     """
-    Placeholder: drop pairs listed for fewer than min_days_listed.
-    Requires exchangeInfo listing date data not currently cached.
-    Currently passes all pairs through unchanged.
+    Drop pairs listed for fewer than min_days_listed (I-12).
+
+    Uses the symbol ``onboardDate`` (ms epoch) captured from exchangeInfo. USDⓈ-M
+    futures provides it; for exchanges/symbols without it (e.g. spot) the pair is
+    kept (we cannot prove it is too young).
     """
 
     def __init__(self, min_days_listed: int = 30):
         self.min_days_listed = min_days_listed
 
     def filter(self, pairs: list[str], exchange: str) -> list[str]:
-        # TODO: implement when exchangeInfo listing dates are cached
-        return pairs
+        kept = []
+        dropped = 0
+        now_ms = time.time() * 1000.0
+        for sym in pairs:
+            onboard_ms = get_symbol_onboard_date(exchange, sym)
+            if onboard_ms is None:
+                kept.append(sym)
+                continue
+            age_days = (now_ms - onboard_ms) / (1000.0 * 60 * 60 * 24)
+            if age_days < self.min_days_listed:
+                dropped += 1
+            else:
+                kept.append(sym)
+        if dropped:
+            logger.info(
+                f"[AgeFilter] dropped {dropped}/{len(pairs)} pairs "
+                f"(min_days_listed={self.min_days_listed})"
+            )
+        return kept
 
 
 # ── Pipeline ───────────────────────────────────────────────────────────────

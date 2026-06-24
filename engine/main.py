@@ -28,7 +28,7 @@ from routers.optimize import router as optimize_router
 from services.strategy_seeder import seed_strategies
 from services.binance_testnet import close_client
 from services.user_data_stream import user_data_stream
-from utils.symbols import load_exchange_rules, load_symbol_volume_tiers
+from utils.symbols import load_exchange_rules, load_symbol_volume_tiers, load_book_tickers
 
 load_dotenv()
 
@@ -81,6 +81,10 @@ async def lifespan(app: FastAPI):
         await load_symbol_volume_tiers("Binance Futures")
         await load_symbol_volume_tiers("Binance Spot")
         logger.info("Symbol volume tiers computed")
+
+        await load_book_tickers("Binance Futures")
+        await load_book_tickers("Binance Spot")
+        logger.info("Book tickers (bid/ask) cached")
     except Exception as e:
         logger.error(f"Exchange rules caching FAILED: {e}")
 

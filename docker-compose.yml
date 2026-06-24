@@ -51,7 +51,7 @@ services:
       - "8000:8000"
     volumes: []
     env_file:
-      - ./engine/.env
+      - ./.env
     depends_on:
       mongodb:
         condition: service_healthy
@@ -84,7 +84,7 @@ services:
     volumes:
       - enma_server_node_modules:/app/node_modules
     env_file:
-      - ./server/.env
+      - ./.env
     depends_on:
       mongodb:
         condition: service_healthy
@@ -113,7 +113,7 @@ services:
     volumes:
       - enma_client_node_modules:/app/node_modules
     env_file:
-      - ./client/.env
+      - ./.env
     depends_on:
       server:
         condition: service_healthy
