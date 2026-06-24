@@ -19,7 +19,7 @@ Verified against code on 2026-06-24: **neither item below is implemented yet** �
 
 | Seq | Item | Plan doc | Scope | Effort | Risk | Gate |
 |-----|------|----------|-------|--------|------|------|
-| **1** | Strategy performance refactor — **workstream** (see below) | `plans/strategy_precompute_architecture.md`, `plans/per_strategy_migration.md`, `plans/migration_checklist.md` | engine (11 files) | L (~12h) | Med–High | Golden-master byte-equivalence mandatory after each strategy (Rule C) |
+| ~~**1**~~ ✅ DONE 2026-06-24 | Strategy performance refactor — **workstream** (Phases 1–8 complete, golden-master byte-equivalent, merged to `dev`; see `handoff.md`) | `plans/strategy_precompute_architecture.md`, `plans/per_strategy_migration.md`, `plans/migration_checklist.md` | engine (8 files) | L | Med–High | ✅ Golden-master OK all 5 strategies after each phase |
 | **2** | Risk model improvements (5 additive changes) | `plans/strategy_precompute_architecture.md` §2 | engine `risk.py`, `portfolio.py` | M | Med | **Behavior-changing** → re-baseline golden master. Sequence after #1 to avoid double churn |
 
 ### Workstream #1 — internal order (per `plans/migration_checklist.md`)

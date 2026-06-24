@@ -111,6 +111,13 @@ Last updated: 2026-06-24
 - **SMA robustness** (`talib_adapter.py`): `sma()` now wraps the TA-Lib call in try/except; if `period > data_length` (or any other error), returns `np.full(shape, np.nan)` for sequential mode or `np.nan` for scalar mode — avoids crashes during warmup.
 - Files: `base.py` (interface + convenience fns), `config.py` (backend selection), `adapters/talib_adapter.py`, `adapters/pandas_ta_adapter.py`
 
+### Two-Phase Strategy Contract (`prepare()` + index-only `before()`)
+- **`BaseStrategy.prepare(candles)`** (`core/strategy.py`): one-time vectorized indicator pre-computation. Default is a no-op (backward compatible). Migrated strategies move **all** TA-Lib/pandas calls here, storing results as `self._*` full-length arrays/scalars over the supplied `candles`.
+- **`before()`** is then a pure index lookup at `self.index` — zero TA-Lib calls in the hot loop. This replaces the former O(N²) pattern (full indicator recompute on a growing `candles[:t+1]` slice every candle).
+- **Backtest** (`services/backtest_runner.py`): the runner calls `strategy.prepare(candles_np)` once after param injection, before the sim loop. `strategy.index = t` (absolute index into the full array) aligns directly with the precomputed arrays.
+- **Live** (`core/live_bot_manager.py`): `prepare()` is re-run on the rolling ≤500-candle window each closed candle (with `index = len-1`), then `before()` indexes — identical math to backtest, O(≤500)/candle (~once/hr), no float drift, no per-strategy incremental code.
+- All 5 seeded strategies migrated (MicroMacroRSIDivergence, MultiDivergence, MicroScalper, BestSupertrend, AdaptiveTrend). No-lookahead preserved: divergence/pivot strategies bound the last-pivot search to the confirmation horizon `i - right`.
+
 ### UI / Navigation
 - 6 nav pages + OrderHistory (at `/order-history`, not in navbar): Dashboard, Strategies, Backtest, Live Trading (Trade), Algo Trading, Settings
 - Horizontal top navbar — no sidebar
@@ -137,6 +144,12 @@ None.
   docker compose exec engine python -m pytest tests/test_boundaries.py -q
   ```
 - Results: golden comparison passed for all 5 seeded strategies; boundary regression suite passed 20/20.
+
+### Strategy Performance Refactor (two-phase `prepare()`/`before()`)
+- Verified in Docker on 2026-06-24. Branch `refactor/precompute-strategies` (merged to `dev`).
+- Each of phases 1–6 gated on golden-master byte-equivalence vs `baseline` (tol 1e-6, all 5 strategies). Phase results recorded in `scripts/golden/phase1.json`…`phase6.json`.
+- BestSupertrend (Phase 5) additionally verified for per-candle signal parity (0 diffs over the full golden range) — caught and fixed a latent pandas-2.x `datetime64[ms]` epoch-conversion bug in the HTF bucket mapping.
+- Baseline metrics unchanged throughout: MicroScalper 9/-131.61 · AdaptiveTrend 7/+1543.91 · BestSupertrend 61/-117.56 · MicroMacroRSIDivergence 17/-273.30 · MultiDivergence 55/-1688.49. Boundary suite 20/20.
 
 ---
 

@@ -302,6 +302,9 @@ class LiveBotManager:
                     strategy.candles = candles[:t+1]
                     strategy.index = t
                     try:
+                        # Two-phase contract: prepare() batch-computes indicators
+                        # over the current window, before() then indexes at i.
+                        strategy.prepare(strategy.candles)
                         strategy.before()
                         strategy.after()
                     except Exception as e:
@@ -411,6 +414,14 @@ class LiveBotManager:
 
                             # Strategy execution
                             try:
+                                # Two-phase contract (live): re-run the one-time
+                                # vectorized prepare() on the rolling ≤500-candle
+                                # window each closed candle, set index to the last
+                                # row, then before() is a pure index lookup —
+                                # identical indicator math to the backtest path,
+                                # O(≤500) per candle (~once/hr), no drift.
+                                strategy.index = len(strategy.candles) - 1
+                                strategy.prepare(strategy.candles)
                                 strategy.before()
 
                                 if strategy.position is not None:

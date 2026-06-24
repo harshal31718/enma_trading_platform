@@ -1,4 +1,56 @@
 ---
+## 2026-06-24 — Strategy Performance Refactor (workstream #1) — Phases 1–8 COMPLETE ✅
+
+**Goal:** Two-phase strategy contract (`prepare()` batch + index-only `before()`) to kill the
+O(N²) indicator recompute in the backtest loop, with live parity. Branch:
+`refactor/precompute-strategies` (merged to `dev`).
+
+**ALL PHASES DONE & golden-master gated (byte-equivalent, tol 1e-6, all 5 strategies):**
+- **P1** — `BaseStrategy.prepare(candles)` default no-op (`core/strategy.py`) + one-time
+  `strategy.prepare(candles_np)` in `services/backtest_runner.py` (step 6a', after validate_params).
+- **P2** — MicroMacroRSIDivergence: RSI/ATR/4 pivots/smoothed-RSI → prepare(); dropped `candles[off:]`
+  windowing; no-lookahead via `i-right` horizon in `_last_two_visible`. (17 trades / -273.30)
+- **P3** — MultiDivergence: ATR + price pivots + every enabled oscillator's pivot arrays → prepare();
+  `before()` reads up to horizon `c = i-L`. 9× O(N)→1×. (55 / -1688.49)
+- **P4** — MicroScalper: fast/slow EMA + ATR seq → prepare(); index at i and i-1. (9 / -131.61)
+- **P5** — BestSupertrend (hardest): SMA cross arrays (per-index cross_up/dn = exits + most-recent
+  state machine = old backward scan) + HTF supertrend precomputed once; `tsl[-2]` via bucket index
+  `k → htf_tsl[k-1]`. **Found & fixed a latent pandas-2.x `datetime64[ms]` epoch bug** in the bucket
+  map (now uses `reindex(ffill)` on datetimes). Verified 0 per-candle signal diffs. (61 / -117.56)
+- **P6** — AdaptiveTrend: trend/fast/slow EMA + ATR seq → prepare(); index at i, i-1, i-slope_lookback.
+  (7 / +1543.91)
+- **P7** — Live parity (`core/live_bot_manager.py`): `prepare()` re-run on the rolling ≤500 window
+  each closed candle (+ warmup replay), `index=len-1`, then index-only `before()`. Same code path as
+  backtest → exact parity, no drift, **no per-strategy `append_candle`** (rejected doc §3 approach).
+- **P8** — boundary tests 20/20 ✅; py_compile all 8 changed files ✅ (ruff not in container);
+  CURRENT_STATE.md updated; this handoff.
+
+**Files changed:** `core/strategy.py`, `services/backtest_runner.py`, `core/live_bot_manager.py`,
+all 5 `strategies/*/__init__.py`, `scripts/golden/{baseline,phase1..6}.json`,
+`workspace/docs/state/CURRENT_STATE.md`, `workspace/plan/handoff.md`.
+
+**Verify command (re-confirm any time, in engine container):**
+```
+docker compose exec engine python -m scripts.golden_master compare --a baseline --b phase6
+docker compose exec engine python -m pytest tests/test_boundaries.py -q
+```
+
+**NOT done / next:**
+- **Workstream #2 (risk-model improvements)** — separate, behavior-changing, re-baselines golden.
+  Note the doc's "enable cost gate" item is WRONG about mechanism: changing the class default
+  `min_edge_mult` is a no-op; both `backtest_runner.py:299` and `live_bot_manager.py:242` inject it
+  from `risk_params` defaulting 0.0 — change the **injection default** instead.
+- Known limitation flagged in code: BestSupertrend weekly (`W-MON`, right-labeled) HTF bucket mapping
+  is off-by-one; not golden-covered (golden uses daily). Revisit if weekly HTF is ever used.
+- Update `/add-strategy` skill template to require `prepare()` + index-only `before()` (deferred).
+
+**Open questions:** None.
+
+**Decisions (vs. written docs):** Live path (P7) uses `prepare()` on the rolling ≤500 window per
+closed candle — NOT per-strategy `append_candle()` incremental (doc §3 rejected: drift/IndexError/
+5 custom methods). Backtest index alignment is direct (`strategy.index = t`).
+
+---
 ## 2026-06-24 — Strategy Performance Refactor (workstream #1) — Phase 1 COMPLETE
 
 **Goal:** Two-phase strategy contract (`prepare()` batch + index-only `before()`) to kill O(N²)
