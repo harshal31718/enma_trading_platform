@@ -164,6 +164,15 @@ def _compute_side_metrics(side_trades: list[dict], starting_capital: float) -> d
     }
 
 
+def _safe_float(val, default):
+    if val is None:
+        return default
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return default
+
+
 async def run_backtest_simulation(
     job_id: str,
     strategy_file: str,
@@ -305,19 +314,19 @@ async def run_backtest_simulation(
     _risk_all = risk_params or {}
     _risk = _risk_all.get(symbol) or _risk_all.get("default") or _risk_all
     
-    strategy.risk_pct          = float(_risk.get("risk_pct",       0.01))
-    strategy.rrr               = float(_risk.get("rrr",            2.0))
-    strategy.liq_buffer_pct    = float(_risk.get("liq_buffer_pct", 0.005))
-    strategy.max_session_dd    = float(_risk.get("max_session_dd", 0.20))
-    strategy.cost_model.min_edge_mult = float(_risk.get("min_edge_mult",     0.05))
-    strategy.max_portfolio_risk       = float(_risk.get("max_portfolio_risk", 0.06))
+    strategy.risk_pct          = _safe_float(_risk.get("risk_pct"),       0.01)
+    strategy.rrr               = _safe_float(_risk.get("rrr"),            2.0)
+    strategy.liq_buffer_pct    = _safe_float(_risk.get("liq_buffer_pct"), 0.005)
+    strategy.max_session_dd    = _safe_float(_risk.get("max_session_dd"), 0.20)
+    strategy.cost_model.min_edge_mult = _safe_float(_risk.get("min_edge_mult"),     0.05)
+    strategy.max_portfolio_risk       = _safe_float(_risk.get("max_portfolio_risk"), 0.06)
     
-    strategy.volatility_multiplier = float(_risk.get("volatility_multiplier", 1.0))
-    strategy.max_exposure_notional = float(_risk.get("max_exposure_notional", float('inf')))
+    strategy.volatility_multiplier = _safe_float(_risk.get("volatility_multiplier"), 1.0)
+    strategy.max_exposure_notional = _safe_float(_risk.get("max_exposure_notional"), float('inf'))
     
     custom_atr_mult = _risk.get("custom_atr_mult")
     if custom_atr_mult is not None:
-        strategy.custom_atr_mult = float(custom_atr_mult)
+        strategy.custom_atr_mult = _safe_float(custom_atr_mult, None)
     else:
         strategy.custom_atr_mult = None
     strategy.slippage_pct      = _slippage
