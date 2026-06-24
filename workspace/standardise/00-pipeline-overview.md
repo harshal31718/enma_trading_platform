@@ -112,7 +112,7 @@ step is skipped, so the loop cannot self-heal from a "lost" position. → **F-00
 ---
 
 ## What freqtrade does that Enma could adopt (inspiration, not transplant)
-
+ 
 - **A single reconcile step at the top of every loop** that syncs *both* open orders and open
   positions against the exchange before any exit/entry decision — even when local state says flat.
 - **One authoritative trade record** the UI reads from, reconciled to the exchange, instead of
