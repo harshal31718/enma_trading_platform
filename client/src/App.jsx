@@ -9,6 +9,7 @@ import Settings from '@/pages/Settings'
 import Trade from '@/pages/Trade'
 import AlgoTrading from '@/pages/AlgoTrading'
 import OrderHistory from '@/pages/OrderHistory'
+import RiskDashboard from '@/pages/RiskDashboard'
 
 export default function App() {
   return (
@@ -25,6 +26,7 @@ export default function App() {
             <Route path="/trade/:symbol" element={<Trade />} />
             <Route path="/algo" element={<AlgoTrading />} />
             <Route path="/order-history" element={<OrderHistory />} />
+            <Route path="/risk-dashboard" element={<RiskDashboard />} />
           </Routes>
         </BrowserRouter>
       </QueryClientProvider>

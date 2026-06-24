@@ -336,6 +336,10 @@ class BaseStrategy(ABC):
         if entry <= 0:
             return 0.0
         max_notional = self.equity * max(self.leverage, 1)
+        
+        symbol_max_exposure = float(getattr(self, "max_exposure_notional", float('inf')))
+        max_notional = min(max_notional, symbol_max_exposure)
+        
         return max_notional / entry
 
     def atr_stop(self, direction: str, mult: float = 2.0, period: int = 14,

@@ -7,6 +7,7 @@ import {
   Settings,
   Bot,
   History,
+  Shield,
 } from 'lucide-react'
 import { useAlgoSessions } from '../../hooks/useAlgoSessions'
 
@@ -14,6 +15,7 @@ const navItems = [
   { label: 'Dashboard', icon: LayoutDashboard, to: '/' },
   { label: 'Trade', icon: Activity, to: '/trade' },
   { label: 'Strategies', icon: Code2, to: '/strategies' },
+  { label: 'Risk Dashboard', icon: Shield, to: '/risk-dashboard' },
   { label: 'Backtest', icon: FlaskConical, to: '/backtest' },
   { label: 'AlgoTrading', icon: Bot, to: '/algo' },
   { label: 'Order History', icon: History, to: '/order-history' },

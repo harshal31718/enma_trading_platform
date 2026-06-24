@@ -8,7 +8,7 @@ const Strategy = require('../models/Strategy')
 const Settings = require('../models/Settings')
 const ApiResponse = require('../utils/ApiResponse')
 const ApiError = require('../utils/ApiError')
-const { resolveModelParams } = require('../utils/risk')
+const { resolveStrategyRiskParams } = require('../utils/risk')
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
@@ -33,6 +33,11 @@ async function runBacktest(req, res, next) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'Missing required fields for running a backtest')
     }
 
+    const strategy = await Strategy.findById(strategyId).lean()
+    if (!strategy) {
+      throw new ApiError(404, 'NOT_FOUND', 'Strategy not found')
+    }
+
     const capitalNum = Number(capital)
     if (!isFinite(capitalNum) || capitalNum <= 0) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'capital must be a positive number')
@@ -52,7 +57,10 @@ async function runBacktest(req, res, next) {
 
     // Risk model: merge per-run override (if any) over saved global defaults,
     // then map to the engine's snake_case risk_params dict.
-    const riskParams = resolveModelParams(savedSettings, riskOverride)
+    const riskParams = resolveStrategyRiskParams(strategy.name, symbol, savedSettings, {
+      ...riskOverride,
+      leverage: leverageNum
+    })
 
     const feeRateNum = Number(feeRate !== undefined ? feeRate : defaultFeeRate)
     if (!isFinite(feeRateNum) || feeRateNum < 0 || feeRateNum > 0.05) {
@@ -66,11 +74,6 @@ async function runBacktest(req, res, next) {
     }
     if (startDt >= endDt) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'startDate must precede endDate')
-    }
-
-    const strategy = await Strategy.findById(strategyId).lean()
-    if (!strategy) {
-      throw new ApiError(404, 'NOT_FOUND', 'Strategy not found')
     }
 
     // Strategy alpha params (Tier 3) — keyed by PARAMS name, clamped by the engine runner.

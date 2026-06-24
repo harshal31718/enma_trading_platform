@@ -56,6 +56,13 @@ Last updated: 2026-06-24
 - Recent activity table (last 5 completed backtests with deep-link to results)
 - Cached candles table (TimescaleDB inventory: symbol, timeframe, exchange, type, date range, count)
 
+### Risk Intelligence Dashboard
+- **Centralized Risk Page**: Accessible at `/risk-dashboard` in the header bar between Strategies and Backtest.
+- **Zone 1: Real-Time Portfolio Risk**: Visualizes aggregate locked initial margin, free wallet balance, net portfolio leverage, and net Long vs Short stacked notional exposure. Calculates live 1-day portfolio Value-at-Risk (VaR) and CVaR at 95% and 99% confidence levels, along with a Pearson correlation heatmap showing rolling 30-day close returns relationships.
+- **Zone 2: Hierarchical Settings Overrides**: Configures and updates global hard limits (margin/leverage ceiling circuit breakers), strategy-specific overrides, and symbol-specific overrides. Overrides are evaluated through standard launches, chaos runs, and backtests via a cascading resolver.
+- **Zone 3: Historical Simulations**: Re-runs completed backtests under leverage scenarios `[1, 2, 5, 10, 20]` using cached candles. Executes Monte Carlo bootstrap resampling (N=2000 paths) to extract ruin probabilities and drawdown exceedance curves.
+- **Rate Limit Protection**: Proxy requests to engine are protected by a 10-second server-side Redis cache.
+
 ### Candle Management
 - Auto-fetches OHLCV from Binance production REST API (`fapi.binance.com`) using httpx
 - Stores in TimescaleDB `candles` hypertable (1,000-candle batches, 200ms inter-batch delay)

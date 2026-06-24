@@ -1,0 +1,551 @@
+import React, { useState, useEffect } from 'react'
+import PageWrapper from '@/components/layout/PageWrapper'
+import PageHeader from '@/components/ui/PageHeader'
+import {
+  useRiskSettings,
+  useUpdateRiskSettings,
+  useLiveRiskMetrics
+} from '../hooks/useRiskSettings'
+import { useStrategies } from '../hooks/useStrategies'
+import CorrelationHeatmap from '../components/risk/CorrelationHeatmap'
+import AggregateMarginGauge from '../components/risk/AggregateMarginGauge'
+import NetExposureBar from '../components/risk/NetExposureBar'
+import SimulationResults from '../components/risk/SimulationResults'
+
+export default function RiskDashboard() {
+  const { data: settings, isLoading: settingsLoading } = useRiskSettings()
+  const updateSettingsMutation = useUpdateRiskSettings()
+  
+  // Live polling metrics (automatically refetches every 10s)
+  const { data: liveMetrics, isLoading: liveLoading } = useLiveRiskMetrics()
+
+  // Load known strategy names for dropdown validation
+  const { data: strategies = [] } = useStrategies()
+
+  // ── Global Hard Limits Form State ─────────────────────────────────────────
+  const [maxLeverageAllowed, setMaxLeverageAllowed] = useState('50')
+  const [maxSessionDrawdown, setMaxSessionDrawdown] = useState('30')
+  const [maxRiskPctPerTrade, setMaxRiskPctPerTrade] = useState('5')
+  const [cooldownPeriodHours, setCooldownPeriodHours] = useState('12')
+
+  // ── Strategy Overrides Editor State ───────────────────────────────────────
+  const [selectedStrategy, setSelectedStrategy] = useState('')
+  const [stratRiskPct, setStratRiskPct] = useState('')
+  const [stratRRR, setStratRRR] = useState('')
+  const [stratMaxDrawdown, setStratMaxDrawdown] = useState('')
+  const [stratLiqBuffer, setStratLiqBuffer] = useState('')
+  const [stratMinEdge, setStratMinEdge] = useState('')
+  const [stratCustomAtr, setStratCustomAtr] = useState('')
+
+  // ── Symbol Overrides Editor State ─────────────────────────────────────────
+  const [selectedSymbol, setSelectedSymbol] = useState('')
+  const [symMaxLeverage, setSymMaxLeverage] = useState('')
+  const [symVolMult, setSymVolMult] = useState('')
+  const [symMaxExposure, setSymMaxExposure] = useState('')
+
+  // Success Feedback Timers
+  const [saveSuccess, setSaveSuccess] = useState(false)
+
+  useEffect(() => {
+    if (settings) {
+      const g = settings.globalHardLimits || {}
+      setMaxLeverageAllowed(String(g.maxLeverageAllowed ?? 50))
+      setMaxSessionDrawdown(String((g.maxSessionDrawdown ?? 0.30) * 100))
+      setMaxRiskPctPerTrade(String((g.maxRiskPctPerTrade ?? 0.05) * 100))
+      setCooldownPeriodHours(String(g.cooldownPeriodHours ?? 12))
+    }
+  }, [settings])
+
+  const handleSaveGlobalHardLimits = async (e) => {
+    e.preventDefault()
+    if (!settings) return
+
+    const payload = {
+      globalHardLimits: {
+        maxLeverageAllowed: Number(maxLeverageAllowed),
+        maxSessionDrawdown: Number(maxSessionDrawdown) / 100,
+        maxRiskPctPerTrade: Number(maxRiskPctPerTrade) / 100,
+        cooldownPeriodHours: Number(cooldownPeriodHours)
+      },
+      strategyOverrides: settings.strategyOverrides || {},
+      symbolOverrides: settings.symbolOverrides || {}
+    }
+
+    try {
+      await updateSettingsMutation.mutateAsync(payload)
+      setSaveSuccess(true)
+      setTimeout(() => setSaveSuccess(false), 3000)
+    } catch (err) {
+      alert(`Save failed: ${err.response?.data?.error?.message || err.message}`)
+    }
+  }
+
+  const handleAddStrategyOverride = async (e) => {
+    e.preventDefault()
+    if (!selectedStrategy || !settings) return
+
+    const rules = {}
+    if (stratRiskPct) rules.riskPct = Number(stratRiskPct) / 100
+    if (stratRRR) rules.riskRewardRatio = Number(stratRRR)
+    if (stratMaxDrawdown) rules.maxSessionDrawdown = Number(stratMaxDrawdown) / 100
+    if (stratLiqBuffer) rules.liqBufferPct = Number(stratLiqBuffer) / 100
+    if (stratMinEdge) rules.minEdgeMult = Number(stratMinEdge)
+    if (stratCustomAtr) rules.customAtrMult = Number(stratCustomAtr)
+
+    const updatedOverrides = { ...settings.strategyOverrides }
+    updatedOverrides[selectedStrategy] = rules
+
+    const payload = {
+      globalHardLimits: settings.globalHardLimits || {},
+      strategyOverrides: updatedOverrides,
+      symbolOverrides: settings.symbolOverrides || {}
+    }
+
+    try {
+      await updateSettingsMutation.mutateAsync(payload)
+      setSelectedStrategy('')
+      setStratRiskPct('')
+      setStratRRR('')
+      setStratMaxDrawdown('')
+      setStratLiqBuffer('')
+      setStratMinEdge('')
+      setStratCustomAtr('')
+    } catch (err) {
+      alert(`Add failed: ${err.response?.data?.error?.message || err.message}`)
+    }
+  }
+
+  const handleRemoveStrategyOverride = async (stratName) => {
+    if (!settings) return
+    const updatedOverrides = { ...settings.strategyOverrides }
+    delete updatedOverrides[stratName]
+
+    const payload = {
+      globalHardLimits: settings.globalHardLimits || {},
+      strategyOverrides: updatedOverrides,
+      symbolOverrides: settings.symbolOverrides || {}
+    }
+
+    try {
+      await updateSettingsMutation.mutateAsync(payload)
+    } catch (err) {
+      alert(`Remove failed: ${err.response?.data?.error?.message || err.message}`)
+    }
+  }
+
+  const handleAddSymbolOverride = async (e) => {
+    e.preventDefault()
+    if (!selectedSymbol || !settings) return
+
+    const rules = {}
+    if (symMaxLeverage) rules.maxLeverage = Number(symMaxLeverage)
+    if (symVolMult) rules.volatilityMultiplier = Number(symVolMult)
+    if (symMaxExposure) rules.maxExposureNotional = Number(symMaxExposure)
+
+    const updatedOverrides = { ...settings.symbolOverrides }
+    updatedOverrides[selectedSymbol.toUpperCase()] = rules
+
+    const payload = {
+      globalHardLimits: settings.globalHardLimits || {},
+      strategyOverrides: settings.strategyOverrides || {},
+      symbolOverrides: updatedOverrides
+    }
+
+    try {
+      await updateSettingsMutation.mutateAsync(payload)
+      setSelectedSymbol('')
+      setSymMaxLeverage('')
+      setSymVolMult('')
+      setSymMaxExposure('')
+    } catch (err) {
+      alert(`Add failed: ${err.response?.data?.error?.message || err.message}`)
+    }
+  }
+
+  const handleRemoveSymbolOverride = async (symbol) => {
+    if (!settings) return
+    const updatedOverrides = { ...settings.symbolOverrides }
+    delete updatedOverrides[symbol]
+
+    const payload = {
+      globalHardLimits: settings.globalHardLimits || {},
+      strategyOverrides: settings.strategyOverrides || {},
+      symbolOverrides: updatedOverrides
+    }
+
+    try {
+      await updateSettingsMutation.mutateAsync(payload)
+    } catch (err) {
+      alert(`Remove failed: ${err.response?.data?.error?.message || err.message}`)
+    }
+  }
+
+  return (
+    <PageWrapper>
+      <PageHeader title="Risk Intelligence Dashboard" subtitle="Manage safety circuit breakers and trade risk profiles" />
+
+      {settingsLoading && (
+        <div className="text-center font-mono py-12 text-xs text-slate-500 italic">
+          Loading risk configurations...
+        </div>
+      )}
+
+      {!settingsLoading && settings && (
+        <div className="flex flex-col gap-6 select-none pb-12">
+          
+          {/* ────────────────── ZONE 1: REAL-TIME PORTFOLIO RISK ────────────────── */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <AggregateMarginGauge
+              marginUsed={liveMetrics?.aggregateMarginUsed}
+              walletBalance={liveMetrics?.aggregateWalletBalance}
+              netLeverage={liveMetrics?.netLeverage}
+            />
+            <NetExposureBar exposures={liveMetrics?.exposures} />
+            <CorrelationHeatmap matrix={liveMetrics?.correlationMatrix} />
+          </div>
+
+          {/* Live VaR Banner */}
+          {liveMetrics && (
+            <div className="bg-[#0b0f19] border border-slate-800 p-4 grid grid-cols-1 md:grid-cols-3 gap-4 font-mono text-center">
+              <div>
+                <span className="text-[9px] uppercase tracking-wider text-slate-500 block">Value-at-Risk (95% 1d)</span>
+                <span className="text-sm font-semibold text-red-400">${parseFloat(liveMetrics.valueAtRisk.var95_1d).toFixed(2)}</span>
+              </div>
+              <div>
+                <span className="text-[9px] uppercase tracking-wider text-slate-500 block">Value-at-Risk (99% 1d)</span>
+                <span className="text-sm font-semibold text-red-400">${parseFloat(liveMetrics.valueAtRisk.var99_1d).toFixed(2)}</span>
+              </div>
+              <div>
+                <span className="text-[9px] uppercase tracking-wider text-slate-500 block">Conditional VaR (95% 1d)</span>
+                <span className="text-sm font-semibold text-red-400">${parseFloat(liveMetrics.valueAtRisk.cvar95_1d).toFixed(2)}</span>
+              </div>
+            </div>
+          )}
+
+          {/* ────────────────── ZONE 2: PARAMETER CONTROLS ────────────────── */}
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+            
+            {/* Global Hard Limits Form */}
+            <div className="bg-slate-950 border border-slate-800 p-5 shadow-2xl flex flex-col justify-between">
+              <form onSubmit={handleSaveGlobalHardLimits}>
+                <h3 className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider mb-2">
+                  Global Hard Limits
+                </h3>
+                <p className="text-xs text-slate-500 mb-4">Hard constraints acting as platform circuit breakers</p>
+
+                <div className="flex flex-col gap-4 font-mono text-xs">
+                  <div>
+                    <label className="text-slate-400 block mb-1 text-[10px] uppercase">Max Leverage Allowed</label>
+                    <input
+                      type="number"
+                      className="bg-slate-900 border border-slate-800 w-full px-2.5 py-1.5 text-slate-200 outline-none focus:border-emerald-500"
+                      value={maxLeverageAllowed}
+                      onChange={(e) => setMaxLeverageAllowed(e.target.value)}
+                      min="1"
+                      max="125"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="text-slate-400 block mb-1 text-[10px] uppercase">Max Session Drawdown %</label>
+                    <input
+                      type="number"
+                      className="bg-slate-900 border border-slate-800 w-full px-2.5 py-1.5 text-slate-200 outline-none focus:border-emerald-500"
+                      value={maxSessionDrawdown}
+                      onChange={(e) => setMaxSessionDrawdown(e.target.value)}
+                      min="5"
+                      max="90"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="text-slate-400 block mb-1 text-[10px] uppercase">Max Risk % Per Trade</label>
+                    <input
+                      type="number"
+                      className="bg-slate-900 border border-slate-800 w-full px-2.5 py-1.5 text-slate-200 outline-none focus:border-emerald-500"
+                      value={maxRiskPctPerTrade}
+                      onChange={(e) => setMaxRiskPctPerTrade(e.target.value)}
+                      min="0.1"
+                      max="20"
+                      step="0.1"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="text-slate-400 block mb-1 text-[10px] uppercase">Cooldown Period (Hours)</label>
+                    <input
+                      type="number"
+                      className="bg-slate-900 border border-slate-800 w-full px-2.5 py-1.5 text-slate-200 outline-none focus:border-emerald-500"
+                      value={cooldownPeriodHours}
+                      onChange={(e) => setCooldownPeriodHours(e.target.value)}
+                      min="1"
+                      max="72"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  className="mt-6 w-full bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 text-slate-950 font-semibold py-2 px-4 transition-colors font-mono text-xs uppercase"
+                  disabled={updateSettingsMutation.isPending}
+                >
+                  {updateSettingsMutation.isPending ? 'Saving...' : 'Save Global Limits'}
+                </button>
+              </form>
+
+              {saveSuccess && (
+                <div className="mt-3 text-center text-xs font-mono text-emerald-400 py-1 border border-emerald-500/20 bg-emerald-500/5">
+                  ✓ Settings saved successfully.
+                </div>
+              )}
+            </div>
+
+            {/* Strategy Overrides Editor */}
+            <div className="bg-slate-950 border border-slate-800 p-5 shadow-2xl flex flex-col justify-between">
+              <div>
+                <h3 className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider mb-2">
+                  Strategy Overrides
+                </h3>
+                <p className="text-xs text-slate-500 mb-4">Set overrides specifically matching strategy classes</p>
+
+                {/* Overrides Table */}
+                <div className="border border-slate-850 max-h-40 overflow-y-auto mb-4 font-mono text-xs">
+                  {Object.keys(settings.strategyOverrides || {}).length === 0 ? (
+                    <p className="text-[10px] text-slate-600 italic text-center py-6">No custom strategy overrides configured.</p>
+                  ) : (
+                    <table className="w-full text-left">
+                      <thead>
+                        <tr className="border-b border-slate-800 bg-slate-900/40 text-[9px] uppercase text-slate-500 tracking-wider">
+                          <th className="p-2">Strategy</th>
+                          <th className="p-2">Risk/RR/Drawdown</th>
+                          <th className="p-2 text-right">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Object.entries(settings.strategyOverrides || {}).map(([stratName, rules]) => (
+                          <tr key={stratName} className="border-b border-slate-900/60 hover:bg-slate-900/20">
+                            <td className="p-2 text-slate-200 font-bold">{stratName}</td>
+                            <td className="p-2 text-slate-400 text-[10px]">
+                              {rules.riskPct && `Risk: ${(rules.riskPct * 100).toFixed(2)}% `}
+                              {rules.riskRewardRatio && `RR: ${rules.riskRewardRatio} `}
+                              {rules.maxSessionDrawdown && `DD: ${(rules.maxSessionDrawdown * 100).toFixed(0)}%`}
+                            </td>
+                            <td className="p-2 text-right">
+                              <button
+                                onClick={() => handleRemoveStrategyOverride(stratName)}
+                                className="text-red-400 hover:text-red-300 text-[10px] font-bold uppercase"
+                              >
+                                Delete
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+
+              {/* Add/Edit form */}
+              <form onSubmit={handleAddStrategyOverride} className="border-t border-slate-800/60 pt-4">
+                <div className="grid grid-cols-2 gap-2 text-xs font-mono">
+                  <div className="col-span-2">
+                    <label className="text-[9px] uppercase text-slate-500 tracking-wider block mb-0.5">Strategy Name</label>
+                    <select
+                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 outline-none focus:border-emerald-500 text-slate-200 text-xs"
+                      value={selectedStrategy}
+                      onChange={(e) => setSelectedStrategy(e.target.value)}
+                      required
+                    >
+                      <option value="">Select Strategy</option>
+                      {strategies.map((s) => (
+                        <option key={s.name} value={s.name}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[9px] uppercase text-slate-500 tracking-wider block mb-0.5">Risk %</label>
+                    <input
+                      type="number"
+                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 outline-none focus:border-emerald-500 text-slate-200"
+                      value={stratRiskPct}
+                      onChange={(e) => setStratRiskPct(e.target.value)}
+                      placeholder="e.g. 1.5"
+                      min="0.01"
+                      max="20"
+                      step="0.01"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[9px] uppercase text-slate-500 tracking-wider block mb-0.5">RR Ratio</label>
+                    <input
+                      type="number"
+                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 outline-none focus:border-emerald-500 text-slate-200"
+                      value={stratRRR}
+                      onChange={(e) => setStratRRR(e.target.value)}
+                      placeholder="e.g. 2.5"
+                      min="0.1"
+                      max="100"
+                      step="0.1"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[9px] uppercase text-slate-500 tracking-wider block mb-0.5">Max DD %</label>
+                    <input
+                      type="number"
+                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 outline-none focus:border-emerald-500 text-slate-200"
+                      value={stratMaxDrawdown}
+                      onChange={(e) => setStratMaxDrawdown(e.target.value)}
+                      placeholder="e.g. 15"
+                      min="1"
+                      max="90"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[9px] uppercase text-slate-500 tracking-wider block mb-0.5">Custom Stop ATR</label>
+                    <input
+                      type="number"
+                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 outline-none focus:border-emerald-500 text-slate-200"
+                      value={stratCustomAtr}
+                      onChange={(e) => setStratCustomAtr(e.target.value)}
+                      placeholder="e.g. 2.5"
+                      min="0.1"
+                      max="10"
+                      step="0.1"
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  className="mt-4 w-full bg-slate-800 hover:bg-slate-750 active:bg-slate-700 text-slate-200 border border-slate-700 py-1.5 px-4 font-mono text-xs uppercase"
+                  disabled={!selectedStrategy}
+                >
+                  Add / Save Override
+                </button>
+              </form>
+            </div>
+
+            {/* Symbol Overrides Editor */}
+            <div className="bg-slate-950 border border-slate-800 p-5 shadow-2xl flex flex-col justify-between">
+              <div>
+                <h3 className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider mb-2">
+                  Symbol Overrides
+                </h3>
+                <p className="text-xs text-slate-500 mb-4">Set overrides specifically matching traded assets</p>
+
+                {/* Overrides Table */}
+                <div className="border border-slate-850 max-h-40 overflow-y-auto mb-4 font-mono text-xs">
+                  {Object.keys(settings.symbolOverrides || {}).length === 0 ? (
+                    <p className="text-[10px] text-slate-600 italic text-center py-6">No custom symbol overrides configured.</p>
+                  ) : (
+                    <table className="w-full text-left">
+                      <thead>
+                        <tr className="border-b border-slate-800 bg-slate-900/40 text-[9px] uppercase text-slate-500 tracking-wider">
+                          <th className="p-2">Symbol</th>
+                          <th className="p-2">Leverage/Vol/Exposure</th>
+                          <th className="p-2 text-right">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Object.entries(settings.symbolOverrides || {}).map(([symbol, rules]) => (
+                          <tr key={symbol} className="border-b border-slate-900/60 hover:bg-slate-900/20">
+                            <td className="p-2 text-slate-200 font-bold">{symbol}</td>
+                            <td className="p-2 text-slate-400 text-[10px]">
+                              {rules.maxLeverage && `Lev: ${rules.maxLeverage}x `}
+                              {rules.volatilityMultiplier && `Vol: ${rules.volatilityMultiplier}x `}
+                              {rules.maxExposureNotional && `Exp: $${rules.maxExposureNotional}`}
+                            </td>
+                            <td className="p-2 text-right">
+                              <button
+                                onClick={() => handleRemoveSymbolOverride(symbol)}
+                                className="text-red-400 hover:text-red-300 text-[10px] font-bold uppercase"
+                              >
+                                Delete
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+
+              {/* Add/Edit form */}
+              <form onSubmit={handleAddSymbolOverride} className="border-t border-slate-800/60 pt-4">
+                <div className="grid grid-cols-2 gap-2 text-xs font-mono">
+                  <div className="col-span-2">
+                    <label className="text-[9px] uppercase text-slate-500 tracking-wider block mb-0.5">Symbol</label>
+                    <input
+                      type="text"
+                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 outline-none focus:border-emerald-500 text-slate-200 uppercase"
+                      value={selectedSymbol}
+                      onChange={(e) => setSelectedSymbol(e.target.value)}
+                      placeholder="e.g. BTCUSDT"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[9px] uppercase text-slate-500 tracking-wider block mb-0.5">Max Leverage</label>
+                    <input
+                      type="number"
+                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 outline-none focus:border-emerald-500 text-slate-200"
+                      value={symMaxLeverage}
+                      onChange={(e) => setSymMaxLeverage(e.target.value)}
+                      placeholder="e.g. 10"
+                      min="1"
+                      max="125"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[9px] uppercase text-slate-500 tracking-wider block mb-0.5">Volatility Mult</label>
+                    <input
+                      type="number"
+                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 outline-none focus:border-emerald-500 text-slate-200"
+                      value={symVolMult}
+                      onChange={(e) => setSymVolMult(e.target.value)}
+                      placeholder="e.g. 1.2"
+                      min="0.1"
+                      max="10"
+                      step="0.1"
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="text-[9px] uppercase text-slate-500 tracking-wider block mb-0.5">Max Exposure Notional ($)</label>
+                    <input
+                      type="number"
+                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 outline-none focus:border-emerald-500 text-slate-200"
+                      value={symMaxExposure}
+                      onChange={(e) => setSymMaxExposure(e.target.value)}
+                      placeholder="e.g. 50000"
+                      min="100"
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  className="mt-4 w-full bg-slate-800 hover:bg-slate-750 active:bg-slate-700 text-slate-200 border border-slate-700 py-1.5 px-4 font-mono text-xs uppercase"
+                  disabled={!selectedSymbol}
+                >
+                  Add / Save Override
+                </button>
+              </form>
+            </div>
+
+          </div>
+
+          {/* ────────────────── ZONE 3: HISTORICAL RISK PROFILER ────────────────── */}
+          <div className="grid grid-cols-1 gap-6">
+            <SimulationResults />
+          </div>
+
+        </div>
+      )}
+    </PageWrapper>
+  )
+}

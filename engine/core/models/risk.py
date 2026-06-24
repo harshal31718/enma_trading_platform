@@ -185,7 +185,7 @@ class AtrBracketRiskModel(DefaultRiskModel):
             if rank / len(self._atr_history) < atr_pct_min:
                 return RiskConstraints(vetoed=True, max_drawdown_hit=not can)
 
-        sl_mult = float(getattr(s, "sl_atr_mult", 2.0))
+        sl_mult = float(getattr(s, "custom_atr_mult", None) or getattr(s, "sl_atr_mult", 2.0))
 
         # Stop: prefer precomputed vars → custom_sl_pct → ATR formula
         if sig.direction > 0:

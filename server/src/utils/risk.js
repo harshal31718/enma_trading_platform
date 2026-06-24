@@ -37,4 +37,74 @@ function resolveModelParams(savedSettings = {}, override = {}) {
 
 const resolveRiskParams = resolveModelParams;
 
-module.exports = { resolveModelParams, resolveRiskParams, RISK_FIELDS }
+/**
+ * Resolves final risk parameters for a backtest or live session symbol.
+ * Handles the cascading priority: Wizard Override -> Strategy Override -> Symbol Override -> Global defaults.
+ * Clamps output values by Global Hard Limits.
+ */
+function resolveStrategyRiskParams(strategyName, symbol, savedSettings = {}, wizardOverride = {}) {
+  // Mongoose Maps come back as plain objects after .lean() — use bracket access
+  const strategyRules = (savedSettings.strategyOverrides || {})[strategyName] || {};
+  const symbolRules   = (savedSettings.symbolOverrides   || {})[symbol]       || {};
+  const hardLimits    = savedSettings.globalHardLimits   || {};
+
+  // Normalise override keys (accepts camelCase or snake_case from client)
+  const normOvr = normaliseKeys(wizardOverride);
+  const out = {};
+  
+  // Resolve base fields and map to engine's snake_case contract
+  for (const [camelField, rule] of Object.entries(RISK_FIELDS)) {
+    let val = normOvr[camelField];
+    if (val == null || !isFinite(Number(val))) val = strategyRules[camelField];
+    if (val == null || !isFinite(Number(val))) val = symbolRules[camelField];
+    if (val == null || !isFinite(Number(val))) val = savedSettings[camelField]; // top-level defaults
+    if (val == null || !isFinite(Number(val))) val = rule.fallback;
+    val = Number(val);
+    
+    // Clamp by Global Hard Limits (using correct schema keys)
+    if (camelField === 'riskPct' && isFinite(hardLimits.maxRiskPctPerTrade)) {
+      val = Math.min(val, hardLimits.maxRiskPctPerTrade);
+    }
+    if (camelField === 'maxSessionDrawdown' && isFinite(hardLimits.maxSessionDrawdown)) {
+      val = Math.min(val, hardLimits.maxSessionDrawdown);
+    }
+    
+    out[rule.engineKey] = clamp(val, rule.min, rule.max);
+  }
+  
+  // Resolve leverage specifically (independent path - no RISK_FIELDS entry)
+  let lev = Number(normOvr.leverage);
+  if (!isFinite(lev)) lev = Number(symbolRules.maxLeverage);
+  if (!isFinite(lev)) lev = Number(savedSettings.defaultLeverage);
+  if (!isFinite(lev)) lev = 1;
+  
+  if (isFinite(hardLimits.maxLeverageAllowed)) {
+    lev = Math.min(lev, hardLimits.maxLeverageAllowed);
+  }
+  out.leverage = clamp(lev, 1, 125);
+  
+  // Custom settings passed through to engine
+  out.volatility_multiplier = Number(symbolRules.volatilityMultiplier ?? 1.0);
+  out.max_exposure_notional = Number(symbolRules.maxExposureNotional ?? Infinity);
+  out.custom_atr_mult       = strategyRules.customAtrMult != null ? Number(strategyRules.customAtrMult) : null;
+
+  return out;
+}
+
+function normaliseKeys(obj = {}) {
+  const out = {};
+  for (const [k, v] of Object.entries(obj)) {
+    const camel = k.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+    out[camel] = v;
+    out[k] = v;
+  }
+  return out;
+}
+
+module.exports = {
+  resolveModelParams,
+  resolveRiskParams,
+  resolveStrategyRiskParams,
+  clamp,
+  RISK_FIELDS
+}

@@ -177,6 +177,10 @@ class RiskModel(ABC):
         """ATR-based stop: long = entry − mult·ATR, short = entry + mult·ATR."""
         entry = entry_price if entry_price is not None else s.price
         atr = s._atr(period)
+        
+        vol_mult = float(getattr(s, "volatility_multiplier", 1.0))
+        mult = mult * vol_mult
+        
         return entry - mult * atr if direction == "long" else entry + mult * atr
 
     def risk_budget_qty(self, s, stop_price: float, risk_pct: float | None = None,

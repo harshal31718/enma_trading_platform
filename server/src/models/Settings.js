@@ -49,6 +49,41 @@ const settingsSchema = new mongoose.Schema(
       default: '1m',
       enum: ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d'],
     },
+
+    // ── Global Hard Constraints (Safety Circuit Breakers) ───────────────────
+    globalHardLimits: {
+      maxLeverageAllowed:   { type: Number, default: 50,    min: 1,    max: 125 },
+      maxSessionDrawdown:   { type: Number, default: 0.30,  min: 0.05, max: 0.90 },
+      maxRiskPctPerTrade:   { type: Number, default: 0.05,  min: 0.001,max: 0.20 },
+      cooldownPeriodHours:  { type: Number, default: 12,    min: 1,    max: 72   },
+    },
+
+    // ── Strategy-Specific Custom Rules ────────────────────────────────────────
+    // Keyed by Strategy Name (e.g., "AdaptiveTrend", "MicroScalper")
+    strategyOverrides: {
+      type: Map,
+      of: new mongoose.Schema({
+        riskPct:            { type: Number, min: 0.0001, max: 1   },
+        riskRewardRatio:    { type: Number, min: 0.1,    max: 100 },
+        maxSessionDrawdown: { type: Number, min: 0.01,   max: 1   },
+        liqBufferPct:       { type: Number, min: 0,      max: 0.5 },
+        minEdgeMult:        { type: Number, min: 0,      max: 10  },
+        customAtrMult:      { type: Number }, // Strategy specific stop mults
+      }, { _id: false }),
+      default: {}
+    },
+
+    // ── Symbol-Specific Risk Parameters ─────────────────────────────────────
+    // Keyed by Symbol Name (e.g., "BTCUSDT", "SOLUSDT")
+    symbolOverrides: {
+      type: Map,
+      of: new mongoose.Schema({
+        maxLeverage:        { type: Number, min: 1, max: 125 },
+        volatilityMultiplier: { type: Number, default: 1.0 }, // scaling factor for ATR stops
+        maxExposureNotional:{ type: Number, min: 100 },       // max dollar size allowed
+      }, { _id: false }),
+      default: {}
+    },
   },
   { timestamps: true }
 )

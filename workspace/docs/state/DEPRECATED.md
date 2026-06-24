@@ -18,6 +18,7 @@ If something appears here, it does not exist in the codebase and must not be ref
 | `workspace/docs/DECISIONS.md` | Moved | Reorganized to `workspace/docs/core/` | `workspace/docs/core/DECISIONS.md` |
 | `workspace/docs/API_CONTRACTS.md` | Moved | Reorganized to `workspace/docs/core/` | `workspace/docs/core/API_CONTRACTS.md` |
 | `workspace/docs/binance-api.md` | Moved | Reorganized to `workspace/docs/core/` | `workspace/docs/core/binance-api.md` |
+| `workspace/plan/RISK_DASHBOARD_DECISIONS.MD` | Consolidation | Merged into consolidated plan file | `workspace/plan/RISK_DASHBOARD_PLAN.MD` |
 
 **Removed 2026-06-20:** three point-in-time reports — `ai_architecture_report.md`, `ai_infrastructure_audit.md`, `workflow_v2_stabilization_report.md` (all dated 2026-06-05) — were archived to `workspace/docs/archive/` on 2026-06-14, then **deleted** 2026-06-20 as fully superseded by `.claude/GOVERNANCE.md` and `AGENTS.md`. Do not reconstruct. The `workspace/docs/archive/` directory no longer exists; the sole archive root is now `workspace/archive/`.
 

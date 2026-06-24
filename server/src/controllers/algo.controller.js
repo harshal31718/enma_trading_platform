@@ -8,7 +8,7 @@ const ApiError = require('../utils/ApiError')
 const ApiResponse = require('../utils/ApiResponse')
 const { lockSymbol, releaseSymbolLock, getAllLockedSymbols, isSymbolFree, getSymbolLock } = require('../services/symbolLock')
 const { getIO } = require('../config/socket')
-const { resolveModelParams } = require('../utils/risk')
+const { resolveModelParams, resolveStrategyRiskParams } = require('../utils/risk')
 const { allocateChaosSymbols } = require('../utils/chaosAllocator')
 
 // POST /api/v1/algo/sessions
@@ -24,11 +24,19 @@ async function startSession(req, res, next) {
     const strategy = await Strategy.findById(strategyId).lean()
     if (!strategy) throw new ApiError(404, 'NOT_FOUND', 'Strategy not found')
 
-    // Risk model: merge per-run override over saved global defaults, mapped to
-    // the engine's snake_case risk_params dict. Loaded up-front so it can be
-    // persisted on the session and forwarded to the engine.
+    // Risk model: resolve per-symbol overrides over strategy overrides, symbol overrides, and saved global defaults.
     const savedSettings = await Settings.findById('global').lean() || {}
-    const riskParams = resolveModelParams(savedSettings, riskOverride)
+    const riskParams = {}
+    for (const symbol of symbols) {
+      riskParams[symbol] = resolveStrategyRiskParams(strategy.name, symbol, savedSettings, {
+        ...riskOverride,
+        leverage: Number(leverage) || 1
+      })
+    }
+    riskParams.default = resolveStrategyRiskParams(strategy.name, null, savedSettings, {
+      ...riskOverride,
+      leverage: Number(leverage) || 1
+    })
 
     // 2. All symbols free
     for (const symbol of symbols) {
@@ -584,7 +592,7 @@ async function startChaos(req, res, next) {
     if (riskBody.maxDrawdown != null) riskOverride.maxSessionDrawdown = riskBody.maxDrawdown / 100
     if (riskBody.riskPct     != null) riskOverride.riskPct            = riskBody.riskPct / 100
     if (riskBody.minEdgeMult != null) riskOverride.minEdgeMult        = riskBody.minEdgeMult
-    const resolvedRisk = resolveModelParams(savedSettings, Object.keys(riskOverride).length ? riskOverride : null)
+    // We will resolve risk parameters per-strategy and per-symbol inside the launch loop below.
 
     // strategies body: array of { name, symbols? }
     const strategiesBody = body.strategies || []
@@ -678,6 +686,19 @@ async function startChaos(req, res, next) {
         errors.push({ strategy: stratName, error: `Symbols locked: ${blockedSymbols.join(', ')} — stop existing sessions first` })
         continue
       }
+
+      // Resolve risk parameters for this specific chaos strategy and symbols
+      const resolvedRisk = {}
+      for (const sym of symbols) {
+        resolvedRisk[sym] = resolveStrategyRiskParams(stratName, sym, savedSettings, {
+          ...riskOverride,
+          leverage: Number(leverage) || 1
+        })
+      }
+      resolvedRisk.default = resolveStrategyRiskParams(stratName, null, savedSettings, {
+        ...riskOverride,
+        leverage: Number(leverage) || 1
+      })
 
       // b. Create session in MongoDB
       let session

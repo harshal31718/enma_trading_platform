@@ -206,6 +206,52 @@ module.exports = {
 };
 ```
 
+### Integration with Controllers
+
+#### 1. `server/src/controllers/backtest.controller.js`
+We replace `resolveModelParams` with the strategy-and-symbol aware `resolveStrategyRiskParams`:
+```javascript
+const { resolveStrategyRiskParams } = require('../utils/risk')
+
+// ...
+const riskParams = resolveStrategyRiskParams(strategy.name, symbol, savedSettings, {
+  ...riskOverride,
+  leverage: leverageNum
+})
+```
+
+#### 2. `server/src/controllers/algo.controller.js`
+For live bot runs, since multiple symbols can be launched simultaneously under a single strategy, we resolve risk parameters on a per-symbol basis to create a nested mapping. This complies with the engine's capability to read symbol-specific parameters or fall back:
+```javascript
+const { resolveStrategyRiskParams } = require('../utils/risk')
+
+// ... inside startSession ...
+const riskParams = {}
+for (const symbol of symbols) {
+  riskParams[symbol] = resolveStrategyRiskParams(strategy.name, symbol, savedSettings, {
+    ...riskOverride,
+    leverage: Number(leverage) || 1
+  })
+}
+riskParams.default = resolveStrategyRiskParams(strategy.name, null, savedSettings, {
+  ...riskOverride,
+  leverage: Number(leverage) || 1
+})
+
+// ... inside startChaos (inside the activeNames loop) ...
+const resolvedRisk = {}
+for (const sym of symbols) {
+  resolvedRisk[sym] = resolveStrategyRiskParams(stratName, sym, savedSettings, {
+    ...riskOverride,
+    leverage: Number(leverage) || 1
+  })
+}
+resolvedRisk.default = resolveStrategyRiskParams(stratName, null, savedSettings, {
+  ...riskOverride,
+  leverage: Number(leverage) || 1
+})
+```
+
 ---
 
 ## 4. Database Schema Expansion

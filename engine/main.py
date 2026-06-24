@@ -22,6 +22,8 @@ from routers.candles import router as candles_router
 from routers.dashboard import router as dashboard_router
 from routers.strategies import router as strategies_router
 from routers.trade import router as trade_router
+from routers.risk import router as risk_router
+from routers.leverage_sensitivity import router as leverage_sensitivity_router
 from services.strategy_seeder import seed_strategies
 from services.binance_testnet import close_client
 from utils.symbols import load_exchange_rules
@@ -115,6 +117,8 @@ app.include_router(backtest_router, prefix="/backtest", tags=["backtest"])
 app.include_router(dashboard_router, prefix="/dashboard", tags=["dashboard"])
 app.include_router(trade_router, prefix="/trade", tags=["trade"])
 app.include_router(algo_router, prefix="/algo", tags=["algo"])
+app.include_router(risk_router, prefix="/risk", tags=["risk"])
+app.include_router(leverage_sensitivity_router, prefix="/backtest", tags=["backtest"])
 
 
 @app.get("/health")
