@@ -3,6 +3,7 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
+from decimal import ROUND_DOWN, ROUND_UP
 
 import httpx
 import numpy as np
@@ -246,10 +247,11 @@ class LiveBotManager:
         _risk_all = risk_params or {}
         _risk = _risk_all.get(symbol) or _risk_all.get("default") or _risk_all
         
-        strategy.risk_pct          = _safe_float(_risk.get("risk_pct"),       strategy.risk_pct)
+        # Enforce global risk hard-limits as a defensive floor (F-014)
+        strategy.risk_pct          = min(_safe_float(_risk.get("risk_pct"),       strategy.risk_pct), 0.20)
         strategy.rrr               = _safe_float(_risk.get("rrr"),            strategy.rrr)
         strategy.liq_buffer_pct    = _safe_float(_risk.get("liq_buffer_pct"), strategy.liq_buffer_pct)
-        strategy.max_session_dd    = _safe_float(_risk.get("max_session_dd"), strategy.max_session_dd)
+        strategy.max_session_dd    = min(_safe_float(_risk.get("max_session_dd"), strategy.max_session_dd), 0.90)
         strategy.cost_model.min_edge_mult = _safe_float(_risk.get("min_edge_mult"),     0.05)
         strategy.max_portfolio_risk       = _safe_float(_risk.get("max_portfolio_risk"), 0.06)
         
@@ -272,6 +274,9 @@ class LiveBotManager:
         session = self.sessions.get(session_id)
         if session:
             session["strategy_instances"][symbol] = strategy
+
+        # Clamp leverage defensively to absolute schema limit (125) (F-014)
+        leverage = min(max(leverage, 1), 125)
 
         # Clamp requested leverage to what Binance actually allows for this symbol.
         # Uses the signed /fapi/v1/leverageBracket endpoint if credentials are
@@ -518,13 +523,18 @@ class LiveBotManager:
 
         fill_price = strategy.price  # local fill price for PnL tracking
 
-        # Snap quantity and prices to Binance's LOT_SIZE/PRICE_FILTER precision.
-        exchange_name = "Binance Futures"
-        qty = clamp_and_round_qty(symbol, exchange_name, qty, fill_price)
         sl_raw = plan.stop_loss
         tp_raw = plan.take_profit
-        sl_price = round_price(symbol, exchange_name, sl_raw) if sl_raw else None
-        tp_price = round_price(symbol, exchange_name, tp_raw) if tp_raw else None
+        sl_pct = abs(fill_price - sl_raw) / fill_price if sl_raw else None
+
+        # Snap quantity and prices to Binance's LOT_SIZE/PRICE_FILTER precision.
+        exchange_name = "Binance Futures"
+        qty = clamp_and_round_qty(symbol, exchange_name, qty, fill_price, stop_loss_pct=sl_pct)
+
+        # Round stops direction-aware (ROUND_DOWN long / ROUND_UP short) (F-007)
+        rounding_mode = ROUND_DOWN if direction == "long" else ROUND_UP
+        sl_price = round_price(symbol, exchange_name, sl_raw, rounding=rounding_mode) if sl_raw else None
+        tp_price = round_price(symbol, exchange_name, tp_raw, rounding=rounding_mode) if tp_raw else None
 
         if qty <= 0:
             logger.warning(f"[AlgoBot] Quantity rounded to 0 for {symbol} (below min lot size), skipping")

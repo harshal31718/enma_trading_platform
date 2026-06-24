@@ -281,14 +281,14 @@ def _get_precision(value: Decimal) -> Decimal:
     return Decimal("0." + "0" * (-exp - 1) + "1")
 
 
-def round_price(symbol: str, exchange: str, price: float) -> float:
+def round_price(symbol: str, exchange: str, price: float, rounding: str = ROUND_DOWN) -> float:
     """Round price to the exchange tick size for (exchange, symbol)."""
     rules = _rules_cache.get((exchange, symbol))
     if not rules:
         return price
     tick = rules["tickSize"]
     quantize_to = _get_precision(tick)
-    return float(Decimal(str(price)).quantize(quantize_to, rounding=ROUND_DOWN))
+    return float(Decimal(str(price)).quantize(quantize_to, rounding=rounding))
 
 
 def round_qty(symbol: str, exchange: str, qty: float) -> float:
@@ -301,10 +301,19 @@ def round_qty(symbol: str, exchange: str, qty: float) -> float:
     return float(Decimal(str(qty)).quantize(quantize_to, rounding=ROUND_DOWN))
 
 
-def clamp_and_round_qty(symbol: str, exchange: str, qty: float, price: float) -> float:
+def clamp_and_round_qty(
+    symbol: str,
+    exchange: str,
+    qty: float,
+    price: float,
+    stop_loss_pct: float | None = None,
+) -> float:
     """
-    Round quantity to step size, ensuring it meets minQty and minNotional filters.
+    Round quantity to step size, ensuring it meets minQty and minNotional filters with a reserve buffer.
     """
+    if qty <= 0.0:
+        return 0.0
+
     rules = _rules_cache.get((exchange, symbol))
     
     # Fallback to DEFAULT_LIMITS if not cached
@@ -326,15 +335,28 @@ def clamp_and_round_qty(symbol: str, exchange: str, qty: float, price: float) ->
     if qty_dec < min_qty_dec:
         qty_dec = min_qty_dec
 
-    # 3. Ensure it meets minimum notional
+    # 3. Ensure it meets minimum notional with reserve buffer (F-008)
     price_dec = Decimal(str(price))
-    if qty_dec * price_dec < min_not_dec:
+    if stop_loss_pct is not None and stop_loss_pct > 0:
+        sl_pct = min(float(stop_loss_pct), 0.95)
+        reserve_factor = Decimal(str(1.05 / (1.0 - sl_pct)))
+    else:
+        reserve_factor = Decimal("1.05")
+
+    buffered_min_not = min_not_dec * reserve_factor
+
+    if qty_dec * price_dec < buffered_min_not:
         # Calculate required quantity and round UP to stepSize
-        req_qty = min_not_dec / price_dec
+        req_qty = buffered_min_not / price_dec
         qty_dec = req_qty.quantize(quantize_to, rounding=ROUND_UP)
         # Re-verify minQty
         if qty_dec < min_qty_dec:
             qty_dec = min_qty_dec
+
+    # 4. Tolerance check (F-013)
+    # If the bumped quantity exceeds the original target quantity by more than +30%, skip the trade.
+    if qty_dec > Decimal(str(qty)) * Decimal("1.30"):
+        return 0.0
 
     return float(qty_dec)
 
