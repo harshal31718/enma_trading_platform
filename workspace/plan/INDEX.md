@@ -48,6 +48,7 @@ Verified against code on 2026-06-24: `min_edge_mult` still defaults to 0.0, `max
 |------|-----------------|--------|
 | `future_paths.md` | Long-horizon roadmap (Monte Carlo, Risk Dashboard, vol forecasting, regime detection, equities/ML forks) | Exploration only |
 | `research/optimization_ideas.md` | Parking lot: 28 optimization ideas from codebase review — nothing decided or implemented | Reference |
+| `mcpt-repo-analysis.md` | **Deep-dive analysis of neurotrader888/mcpt repo** — Monte Carlo Permutation Tests for strategy validation. Covers bar permutation engine, in-sample/walkforward MCPT workflows, Donchian breakout strategy, ML strategy validation patterns, integration roadmap for Enma, and API/UI designs. See `future_paths.md` for how this connects to the existing Monte Carlo roadmap item. | Research — candidate for seq #5 |
 | `open_items.md` | Planning decisions resolved + refactor priority | Updated |
 | `handoff.md` | Session resume log | Active log |
 | `STATUS.md` | Planning status snapshot | Updated |

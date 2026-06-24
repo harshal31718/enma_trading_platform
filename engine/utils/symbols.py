@@ -224,6 +224,9 @@ async def load_exchange_rules(exchange: str) -> None:
         min_qty: Optional[Decimal] = None
         min_notional: Optional[Decimal] = None
 
+        market_step_size: Optional[Decimal] = None
+        market_min_qty: Optional[Decimal] = None
+
         for f in sym_info.get("filters", []):
             ft = f.get("filterType", "")
             if ft == "PRICE_FILTER":
@@ -231,8 +234,31 @@ async def load_exchange_rules(exchange: str) -> None:
             elif ft == "LOT_SIZE":
                 step_size = Decimal(f["stepSize"])
                 min_qty = Decimal(f["minQty"])
+            elif ft == "MARKET_LOT_SIZE":
+                # Market orders on some symbols (e.g. JUPUSDT) have stricter
+                # constraints than the resting LOT_SIZE filter. Use the stricter
+                # values for all market-order sizing to avoid Binance rejections.
+                raw_step = f.get("stepSize", "0")
+                raw_min = f.get("minQty", "0")
+                if Decimal(raw_step) > 0:
+                    market_step_size = Decimal(raw_step)
+                if Decimal(raw_min) > 0:
+                    market_min_qty = Decimal(raw_min)
             elif ft in ("MIN_NOTIONAL", "NOTIONAL"):
                 min_notional = Decimal(f.get("minNotional") or f.get("notional") or "0")
+
+        # If MARKET_LOT_SIZE is stricter than LOT_SIZE, prefer it for market orders.
+        if market_step_size is not None and step_size is not None:
+            if market_step_size > step_size:
+                step_size = market_step_size
+        elif market_step_size is not None:
+            step_size = market_step_size
+
+        if market_min_qty is not None and min_qty is not None:
+            if market_min_qty > min_qty:
+                min_qty = market_min_qty
+        elif market_min_qty is not None:
+            min_qty = market_min_qty
 
         if tick_size is not None and step_size is not None:
             _rules_cache[(exchange, symbol)] = {

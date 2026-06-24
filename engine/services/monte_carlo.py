@@ -5,9 +5,18 @@ from config.mongo import get_database
 
 async def run_monte_carlo_simulation(job_id: str) -> Dict[str, Any]:
     db = get_database()
+
+    # Fetch the parent backtest capital so we can express each trade's PnL as a
+    # fraction of the STARTING equity (equity-based return), not as ROE (return
+    # on margin). pnlPct in backtestTrades is ROE which is leverage-amplified and
+    # unsuitable for compounding equity paths — a 10x trade hitting a 1% move
+    # shows pnlPct=10%, but the actual equity impact was 1%.
+    parent = await db.backtestResults.find_one({"jobId": job_id}, {"capital": 1})
+    capital = float(parent.get("capital", 10000.0)) if parent else 10000.0
+
     cursor = db.backtestTrades.find({"jobId": job_id})
     trades = await cursor.to_list(length=100000)
-    
+
     default_dist = [
         {"drawdownPct": "10.00", "probability": "0.000"},
         {"drawdownPct": "20.00", "probability": "0.000"},
@@ -15,17 +24,20 @@ async def run_monte_carlo_simulation(job_id: str) -> Dict[str, Any]:
         {"drawdownPct": "40.00", "probability": "0.000"},
         {"drawdownPct": "50.00", "probability": "0.000"}
     ]
-    
+
     if not trades:
         return {
             "ruinProbability": "0.000",
             "drawdownDistribution": default_dist
         }
-        
+
     returns = []
     for t in trades:
         try:
-            val = float(t.get("pnlPct", 0.0)) / 100.0
+            # Equity-based return: pnl as a fraction of starting capital.
+            # This gives the correct equity-path compounding regardless of leverage.
+            pnl = float(t.get("pnl", 0.0))
+            val = pnl / capital
             returns.append(val)
         except (ValueError, TypeError):
             continue

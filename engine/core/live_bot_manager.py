@@ -917,20 +917,39 @@ class LiveBotManager:
             if is_closed:
                 logger.warning(f"[AlgoBot] {symbol}: detected position closed on exchange. Syncing local state to flat.")
                 pos = strategy.position
-                fee = strategy.execution_model.exit_fee(strategy, pos.qty, strategy.price)
-                pos.close(strategy.price)
+
+                # Estimate the best exit price from any armed SL/TP orders.
+                # If the SL was breached (current price worse than stop), use the
+                # stop price; if the TP was breached (current price better than
+                # target), use the TP price. Falls back to current candle close.
+                estimated_exit = strategy.price
+                sl_price = strategy.stop_loss[1] if strategy.stop_loss else None
+                tp_price = strategy.take_profit[1] if strategy.take_profit else None
+                if pos.type == "long":
+                    if sl_price is not None and strategy.low <= sl_price:
+                        estimated_exit = sl_price
+                    elif tp_price is not None and strategy.high >= tp_price:
+                        estimated_exit = tp_price
+                else:
+                    if sl_price is not None and strategy.high >= sl_price:
+                        estimated_exit = sl_price
+                    elif tp_price is not None and strategy.low <= tp_price:
+                        estimated_exit = tp_price
+
+                fee = strategy.execution_model.exit_fee(strategy, pos.qty, estimated_exit)
+                pos.close(estimated_exit)
                 realized_pnl = pos.pnl - fee
                 strategy.balance += realized_pnl
                 session["pnl"] += realized_pnl
-                
+
                 exit_time = datetime.now(timezone.utc)
                 entry_time_str = session["open_positions"].get(symbol, {}).get("timestamp")
                 entry_time = datetime.fromisoformat(entry_time_str.replace("Z", "+00:00")) if entry_time_str else exit_time
-                
+
                 event_data = {
                     "symbol": symbol,
                     "pnl": str(round(realized_pnl, 2)),
-                    "exitPrice": str(strategy.price),
+                    "exitPrice": str(estimated_exit),
                     "exitReason": "exchange_sync",
                     "timestamp": exit_time.isoformat(),
                 }
@@ -942,9 +961,9 @@ class LiveBotManager:
                     side=pos.type,
                     qty=str(pos.qty),
                     entry_price=str(pos.entry_price),
-                    exit_price=str(strategy.price),
-                    sl_order_price=str(strategy.stop_loss[1]) if strategy.stop_loss else None,
-                    tp_order_price=str(strategy.take_profit[1]) if strategy.take_profit else None,
+                    exit_price=str(estimated_exit),
+                    sl_order_price=str(sl_price) if sl_price is not None else None,
+                    tp_order_price=str(tp_price) if tp_price is not None else None,
                     margin=str(pos.margin) if pos.margin else None,
                     liquidation_price=str(pos.liquidation_price) if pos.liquidation_price else None,
                     leverage=pos.leverage if pos.leverage else None,

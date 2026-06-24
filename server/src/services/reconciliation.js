@@ -22,6 +22,8 @@ async function reconcileSymbolLocks() {
       await LiveSession.findByIdAndUpdate(session._id, {
         status: 'stopped',
         stoppedAt: new Date(),
+        openPositions: [],
+        positionDetails: {},
       }).catch(() => {})
       for (const symbol of session.symbols) {
         await releaseSymbolLock(symbol).catch(() => {})

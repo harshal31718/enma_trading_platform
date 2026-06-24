@@ -182,7 +182,8 @@ None.
 
 ## Known Technical Debt
 
-None.
+- **Live bot PnL on exchange_sync exits**: when Binance closes a position via SL/TP and the engine detects it via `_verify_exchange_position_still_open`, the exit price is estimated from the local SL/TP prices. If neither SL nor TP was set, it falls back to current candle close. The only way to get the exact fill price would be an additional `GET /fapi/v1/userTrades` call through the Node server (not yet implemented).
+- **Live bot entry fee not tracked**: `session["pnl"]` only deducts the exit fee per trade. Entry fees paid to Binance are not subtracted locally, so session PnL overstates profits by one taker fee per round-trip. Acceptable approximation for now.
 
 ---
 
