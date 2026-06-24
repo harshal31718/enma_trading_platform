@@ -1,21 +1,22 @@
-# Enma — Risk Dashboard Plan
+# Enma — Risk Dashboard Plan (Master Spec)
 
-This plan details the design, quantitative features, control architecture, and database integrations for the **Risk Dashboard** — a dedicated page positioned in the horizontal navigation bar between **Strategies** and **Backtest**. 
+This document is the unified, optimal implementation plan for the **Risk Dashboard** — a dedicated nav page positioned in the horizontal navigation bar between **Strategies** and **Backtest**. 
 
-The Risk Dashboard provides a single pane of glass for real-time portfolio exposure monitoring, historical risk profiling, and hierarchical parameter control.
+It consolidates the initial design with the gap-fill decisions, database schema upgrades, engine mathematical models, API contracts, caching architecture, and frontend specifications.
 
 ---
 
 ## 1. Overview & Strategic Goals
 
-Enma is a single-user, self-hosted algorithmic trading platform. Adding the Risk Dashboard elevates the platform from symbol-centric tracking to **portfolio-level risk intelligence**. It enforces safety rails across live trading bots and backtests alike.
+Enma is a single-user, self-hosted algorithmic trading platform. Adding the Risk Dashboard elevates the platform from symbol-centric tracking to **portfolio-level risk intelligence**, enforcing safety circuit breakers across both live trading and backtesting environments.
 
 ### Key Architecture Constraints (from `AGENTS.md`)
 - **Single-User:** No `user_id` fields are introduced. Settings are stored under the `'global'` document in MongoDB.
-- **Layer Boundaries:** All mathematical and statistical risk calculations (Value at Risk, Beta, Correlation) live inside the Python `engine/`. The Node `server/` handles metadata caching, API routing, and BullMQ job management. The React `client/` is responsible for visual presentation.
+- **Layer Boundaries:** Financial/indicator/order logic lives in the Python `engine/` only. Node `server/` handles metadata caching, API routing, and BullMQ job management. React `client/` is responsible for visual presentation.
+- **Binance Isolation:** Only the Python `engine/` calls Binance. The Node `server/` never makes direct calls to Binance Testnet; it proxies all requests through the engine.
+- **TimescaleDB Isolation:** Candles only, engine only. The Node `server/` never connects to TimescaleDB.
 - **P&L Colors:** Strictly uses `emerald-400` (profit / low risk) and `red-400` (loss / high risk) over the dark theme (`bg-gray-950`).
-- **Testnet-First:** Live risk monitoring applies to active Binance Testnet API feeds.
-- **UI Styling Rules:** Enforce strict sharp edges (Rule 1: No rounded corners, no `rounded-*` classes) and connected layouts (Rule 2).
+- **UI Styling:** All component borders are sharp. **No rounded corners (`rounded-*`) are allowed.** Connected panels should touch each other (using `gap-0` / border dividers) to preserve a professional trading terminal aesthetic.
 
 ### Navbar Integration
 Positioned in `client/src/components/layout/Navbar.jsx` between **Strategies** and **Backtest**:
@@ -58,10 +59,10 @@ The page is designed with a professional trading terminal aesthetic, structured 
 ```
 
 ### Zone 1: Real-Time Portfolio Risk (Live Active Sessions)
-1. **Aggregate Margin & Leverage Gauge:** Total locked initial margin vs. free wallet balance on Binance Testnet, alongside the net portfolio leverage (Total Notional / Equity).
+1. **Aggregate Margin & Leverage Gauge:** Radial visualization showing total locked initial margin vs. free wallet balance on Binance Testnet, alongside net portfolio leverage (Total Notional / Equity).
 2. **Net Exposure & Directionality:** A horizontal stacked bar chart showing aggregate Long vs. Short notional exposure across all traded symbols.
 3. **Value-at-Risk (VaR) & Conditional VaR (CVaR) Panel:** Live estimate of maximum potential portfolio loss over a 1-day horizon at 95% and 99% confidence levels.
-4. **Rolling Pearson Correlation Heatmap:** An interactive grid visualization showing relationships between close-price returns of all actively traded symbols in the last 30 days (720 hours).
+4. **Rolling Pearson Correlation Heatmap:** Grid visualization showing relationships between close-price returns of all actively traded symbols in the last 30 days (720 hours).
 5. **Drawdown Circuit Breakers:** Status bar indicating the session drawdown of the active portfolio relative to the allowed limit (`max_session_dd`).
 
 ### Zone 2: Hierarchical Parameter Controls
@@ -130,7 +131,7 @@ When a live bot or a backtest starts, parameter resolution follows a strict prec
 
 ### Param Resolver Logic (`server/src/utils/risk.js`)
 
-To resolve parameters and maintain compatibility with the database and the Python Engine, the resolver outputs **snake_case** keys and correctly accesses the database schema fields:
+To resolve parameters and maintain compatibility with the database and the Python Engine, the resolver normalizes casing and outputs **snake_case** keys. It maps variables correctly to the Settings schema fields:
 
 ```javascript
 const { RISK_FIELDS, clamp } = require('./risk');
@@ -141,47 +142,61 @@ const { RISK_FIELDS, clamp } = require('./risk');
  * Clamps output values by Global Hard Limits.
  */
 function resolveStrategyRiskParams(strategyName, symbol, savedSettings = {}, wizardOverride = {}) {
-  const strategyRules = (savedSettings.strategyOverrides || {}).get?.(strategyName) || {};
-  const symbolRules = (savedSettings.symbolOverrides || {}).get?.(symbol) || {};
-  const hardLimits = savedSettings.globalHardLimits || {};
+  // Mongoose Maps come back as plain objects after .lean() — use bracket access
+  const strategyRules = (savedSettings.strategyOverrides || {})[strategyName] || {};
+  const symbolRules   = (savedSettings.symbolOverrides   || {})[symbol]       || {};
+  const hardLimits    = savedSettings.globalHardLimits   || {};
 
+  // Normalise override keys (accepts camelCase or snake_case from client)
+  const normOvr = normaliseKeys(wizardOverride);
   const out = {};
   
   // Resolve base fields and map to engine's snake_case contract
   for (const [camelField, rule] of Object.entries(RISK_FIELDS)) {
-    let val = wizardOverride[camelField];
-    if (val === undefined || val === null) val = strategyRules[camelField];
-    if (val === undefined || val === null) val = symbolRules[camelField];
-    if (val === undefined || val === null) val = savedSettings[camelField]; // top-level defaults
-    if (val === undefined || val === null) val = rule.fallback;
+    let val = normOvr[camelField];
+    if (val == null || !isFinite(Number(val))) val = strategyRules[camelField];
+    if (val == null || !isFinite(Number(val))) val = symbolRules[camelField];
+    if (val == null || !isFinite(Number(val))) val = savedSettings[camelField]; // top-level defaults
+    if (val == null || !isFinite(Number(val))) val = rule.fallback;
+    val = Number(val);
     
     // Clamp by Global Hard Limits (using correct schema keys)
-    if (camelField === 'riskPct' && hardLimits.maxRiskPctPerTrade !== undefined) {
+    if (camelField === 'riskPct' && isFinite(hardLimits.maxRiskPctPerTrade)) {
       val = Math.min(val, hardLimits.maxRiskPctPerTrade);
     }
-    if (camelField === 'maxSessionDrawdown' && hardLimits.maxSessionDrawdown !== undefined) {
+    if (camelField === 'maxSessionDrawdown' && isFinite(hardLimits.maxSessionDrawdown)) {
       val = Math.min(val, hardLimits.maxSessionDrawdown);
     }
     
     out[rule.engineKey] = clamp(val, rule.min, rule.max);
   }
   
-  // Resolve leverage specifically
-  let leverageVal = wizardOverride.leverage;
-  if (leverageVal === undefined || leverageVal === null) leverageVal = symbolRules.maxLeverage;
-  if (leverageVal === undefined || leverageVal === null) leverageVal = savedSettings.defaultLeverage;
-  if (leverageVal === undefined || leverageVal === null) leverageVal = 1;
+  // Resolve leverage specifically (independent path - no RISK_FIELDS entry)
+  let lev = Number(normOvr.leverage);
+  if (!isFinite(lev)) lev = Number(symbolRules.maxLeverage);
+  if (!isFinite(lev)) lev = Number(savedSettings.defaultLeverage);
+  if (!isFinite(lev)) lev = 1;
   
-  if (hardLimits.maxLeverageAllowed !== undefined) {
-    leverageVal = Math.min(leverageVal, hardLimits.maxLeverageAllowed);
+  if (isFinite(hardLimits.maxLeverageAllowed)) {
+    lev = Math.min(lev, hardLimits.maxLeverageAllowed);
   }
-  out.leverage = clamp(leverageVal, 1, 125);
+  out.leverage = clamp(lev, 1, 125);
   
-  // Custom settings passed down to engine
-  out.volatility_multiplier = symbolRules.volatilityMultiplier ?? 1.0;
-  out.max_exposure_notional = symbolRules.maxExposureNotional ?? Infinity;
-  out.custom_atr_mult = strategyRules.customAtrMult ?? null;
+  // Custom settings passed through to engine
+  out.volatility_multiplier = Number(symbolRules.volatilityMultiplier ?? 1.0);
+  out.max_exposure_notional = Number(symbolRules.maxExposureNotional ?? Infinity);
+  out.custom_atr_mult       = strategyRules.customAtrMult != null ? Number(strategyRules.customAtrMult) : null;
 
+  return out;
+}
+
+function normaliseKeys(obj = {}) {
+  const out = {};
+  for (const [k, v] of Object.entries(obj)) {
+    const camel = k.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+    out[camel] = v;
+    out[k] = v;
+  }
   return out;
 }
 
@@ -207,10 +222,6 @@ const SettingsSchemaExpansion = {
     maxRiskPctPerTrade:   { type: Number, default: 0.05,  min: 0.001,max: 0.20 },
     cooldownPeriodHours:  { type: Number, default: 12,    min: 1,    max: 72   },
   },
-
-  // ── Global Default Fallbacks (Currently top-level properties) ───────────
-  // We keep the top-level parameters for backward compatibility but allow
-  // the dashboard to manage them cleanly in a grouped interface.
 
   // ── Strategy-Specific Custom Rules ────────────────────────────────────────
   // Keyed by Strategy Name (e.g., "AdaptiveTrend", "MicroScalper")
@@ -241,40 +252,24 @@ const SettingsSchemaExpansion = {
 };
 ```
 
+### Map Hardening & Pruning Tasks
+- **Pruning:** A daily BullMQ cron job runs at 02:00 UTC. It cleans up overrides for strategies or symbols that have not been loaded or executed in active/past sessions for the last 90 days. Logs are written to `workspace/logs/risk-prune.log`.
+- **Validation:** Payloads to `PUT /api/v1/risk/settings` are verified to reject strategyNames that do not exist inside the seeded strategies collection.
+
 ---
 
 ## 5. API Contracts & Communication Flow
 
-Three REST endpoints coordinate the client, server, and engine. Numeric values conform to the `API_CONTRACTS.md` string precision rule:
+Three REST endpoints coordinate the client, server, and engine. In compliance with `API_CONTRACTS.md`, all numeric values (exposures, VaR, margin metrics) are formatted as strings:
 
 ### 1. `GET /api/v1/risk/settings` & `PUT /api/v1/risk/settings`
 - **Purpose:** Read and write hierarchical limits.
-- **Server Controller:** `server/src/controllers/settings.controller.js` updates the maps.
-- **JSON Payload (PUT):**
-  ```json
-  {
-    "globalHardLimits": {
-      "maxLeverageAllowed": 25,
-      "maxSessionDrawdown": 0.25
-    },
-    "strategyOverrides": {
-      "AdaptiveTrend": {
-        "riskPct": 0.015,
-        "riskRewardRatio": 3.0
-      }
-    },
-    "symbolOverrides": {
-      "SOLUSDT": {
-        "maxLeverage": 10,
-        "maxExposureNotional": 5000
-      }
-    }
-  }
-  ```
+- **Server Controller:** `server/src/controllers/risk.controller.js` updates the overrides maps.
 
 ### 2. `GET /api/v1/risk/live-metrics`
 - **Purpose:** Returns real-time risk summaries of active bot sessions.
-- **Caching Mechanism:** Cache results for 10 seconds to avoid exceeding Binance rate limits.
+- **Data Path:** Proxies from the Node API to a new Python Engine endpoint `GET /risk/live-metrics` to gather metrics from active memory/Binance Testnet.
+- **Caching:** Node server caches results in Redis under key `risk:live-metrics:{hash(activeSymbols, exposures)}` with `EXPIRE 10` (10-second cache window) to avoid Binance Testnet rate limit bans.
 - **Response Format:**
   ```json
   {
@@ -302,7 +297,7 @@ Three REST endpoints coordinate the client, server, and engine. Numeric values c
   ```
 
 ### 3. `GET /api/v1/risk/backtest/:id/simulation`
-- **Purpose:** Returns leverage sensitivity metrics and Monte Carlo ruin probabilities for completed backtests.
+- **Purpose:** Returns leverage sensitivity analysis and Monte Carlo ruin probabilities for completed backtests.
 - **Response Format:**
   ```json
   {
@@ -328,14 +323,14 @@ Three REST endpoints coordinate the client, server, and engine. Numeric values c
 
 ## 6. Python Engine Risk Math Calculations
 
-The Python `engine/` implements a new service `engine/utils/risk_math.py` using vectorized calculations on candle data.
+The Python `engine/` implements a new service `engine/utils/risk_math.py` for vectorized metrics calculations over historical candles.
 
 ### 1. Value at Risk (VaR) & Conditional VaR (CVaR)
-Computed using **Historical Simulation** over the last 100 periods of 1-hour returns. Includes guards against empty histories and NaNs:
+Calculated using **Historical Simulation** over the last 100 periods of 1-hour returns. Includes guards against empty histories and NaNs:
 
 ```python
 import numpy as np
-from typing import List, Dict, Tuple
+from typing import Dict, Tuple
 
 def calculate_portfolio_var(
     position_notionals: Dict[str, float], 
@@ -350,7 +345,6 @@ def calculate_portfolio_var(
     if not price_histories or not position_notionals:
         return 0.0, 0.0
 
-    # Compute logarithmic returns for each symbol
     returns = {}
     min_len = min(len(prices) for prices in price_histories.values())
     if min_len < 2:
@@ -358,7 +352,6 @@ def calculate_portfolio_var(
     
     for symbol, prices in price_histories.items():
         p = prices[-min_len:]
-        # Remove NaNs and compute returns
         p = p[~np.isnan(p)]
         if len(p) < 2:
             continue
@@ -368,27 +361,22 @@ def calculate_portfolio_var(
         return 0.0, 0.0
 
     assets = list(returns.keys())
-    # Ensure all aligned returns are the same length
     run_len = min(len(returns[a]) for a in assets)
     if run_len < 1:
         return 0.0, 0.0
         
     r_matrix = np.column_stack([returns[a][-run_len:] for a in assets])
     
-    # Portfolio weights based on absolute notional values
     sizes = np.array([position_notionals[a] for a in assets])
     total_notional = np.sum(np.abs(sizes))
     if total_notional == 0:
         return 0.0, 0.0
     
-    # Signed weights (shorts have negative weights)
     weights = sizes / total_notional
     port_returns = np.dot(r_matrix, weights)
     
     alpha = 1.0 - confidence_level
     var_pct = np.percentile(port_returns, alpha * 100)
-    
-    # Clean up edge case where returns are positive even in the tail
     var_pct = min(0.0, var_pct)
     var_amount = abs(var_pct * total_notional)
     
@@ -418,7 +406,6 @@ def calculate_correlation_matrix(price_histories: Dict[str, np.ndarray]) -> Dict
     
     df_data = {}
     for symbol, prices in price_histories.items():
-        # Remove NaNs
         clean_prices = prices[~np.isnan(prices)]
         if len(clean_prices) < 2:
             continue
@@ -436,7 +423,6 @@ def calculate_correlation_matrix(price_histories: Dict[str, np.ndarray]) -> Dict
     df = pd.DataFrame(aligned_data)
     corr_df = df.corr(method='pearson').fillna(0.0)
     
-    # Standardize diagonal elements to 1.0
     for col in corr_df.columns:
         corr_df.loc[col, col] = 1.0
         
@@ -446,15 +432,13 @@ def calculate_correlation_matrix(price_histories: Dict[str, np.ndarray]) -> Dict
 ### 3. Engine Wiring of Custom Constraints
 
 #### `engine/core/models/base.py → atr_stop()`
-Multiply the ATR multiplier by the symbol's configured volatility multiplier:
+Apply the symbol-specific volatility multiplier override to stops:
 ```python
 def atr_stop(self, s, direction: str, mult: float = 2.0, period: int = 14,
              entry_price: float | None = None) -> float:
-    """ATR-based stop: long = entry − mult·ATR, short = entry + mult·ATR."""
     entry = entry_price if entry_price is not None else s.price
     atr = s._atr(period)
     
-    # Fetch resolved symbol-specific volatility multiplier
     vol_mult = float(getattr(s, "volatility_multiplier", 1.0))
     mult = mult * vol_mult
     
@@ -464,7 +448,6 @@ def atr_stop(self, s, direction: str, mult: float = 2.0, period: int = 14,
 #### `engine/core/models/risk.py → AtrBracketRiskModel.assess()`
 Override the stop multiplier dynamically if `custom_atr_mult` is defined for the strategy:
 ```python
-# Stop: prefer precomputed vars -> custom_sl_pct -> custom_atr_mult -> default sl_atr_mult
 sl_mult = float(getattr(s, "custom_atr_mult", None) or getattr(s, "sl_atr_mult", 2.0))
 ```
 
@@ -472,13 +455,11 @@ sl_mult = float(getattr(s, "custom_atr_mult", None) or getattr(s, "sl_atr_mult",
 Cap the maximum affordable quantity using the symbol's `max_exposure_notional`:
 ```python
 def max_qty(self, entry_price: float | None = None) -> float:
-    """Max quantity affordable, capped by equity leverage and symbol exposure limits."""
     entry = entry_price if entry_price is not None else self.price
     if entry <= 0:
         return 0.0
     max_notional = self.equity * max(self.leverage, 1)
     
-    # Enforce symbol-specific maximum exposure
     symbol_max_exposure = float(getattr(self, "max_exposure_notional", float('inf')))
     max_notional = min(max_notional, symbol_max_exposure)
     
@@ -486,10 +467,9 @@ def max_qty(self, entry_price: float | None = None) -> float:
 ```
 
 #### Multi-Symbol Risk Config Injection (`engine/core/live_bot_manager.py`)
-Extract the symbol-specific configuration slice from the received session `risk_params`:
+Inject the symbol-specific overrides from the parent `risk_params` payload:
 ```python
 _risk_all = risk_params or {}
-# Support symbol-specific nested dictionaries or fall back to default settings
 _risk = _risk_all.get(symbol) or _risk_all.get("default") or _risk_all
 
 strategy.risk_pct          = float(_risk.get("risk_pct",       strategy.risk_pct))
@@ -497,7 +477,6 @@ strategy.rrr               = float(_risk.get("rrr",            strategy.rrr))
 strategy.liq_buffer_pct    = float(_risk.get("liq_buffer_pct", strategy.liq_buffer_pct))
 strategy.max_session_dd    = float(_risk.get("max_session_dd", strategy.max_session_dd))
 
-# Custom fields
 strategy.volatility_multiplier = float(_risk.get("volatility_multiplier", 1.0))
 strategy.max_exposure_notional = float(_risk.get("max_exposure_notional", float('inf')))
 strategy.custom_atr_mult       = _risk.get("custom_atr_mult")
@@ -507,10 +486,26 @@ if strategy.custom_atr_mult is not None:
 
 ---
 
-## 7. Frontend Mockups & CSS Requirements
+## 7. Leverage Sensitivity & Monte Carlo Simulation Pipelines
 
-### Heatmap Component Styling
-Conforms strictly to **Rule 1 (No rounded corners)** and UI Guide palette styles. Computes text contrast dynamically:
+Both historical profiling features execute asynchronously on the engine to avoid server-side blockage.
+
+### A. Leverage Sensitivity Simulation
+- **Endpoint:** `POST /backtest/run/leverage-sensitivity`
+- **Execution:** Resolves the completed `jobId` and re-runs the backtest simulation 5× using the leverage settings `[1, 2, 5, 10, 20]`. It reuses the TimescaleDB candle data already fetched for the parent run.
+- **Storage:** Persisted in a new MongoDB collection `backtestLeverageScenarios` keyed by `{sourceJobId, leverage}`.
+
+### B. Monte Carlo Resampling
+- **Methodology:** Trade-level bootstrap resampling. P&L returns from `backtestTrades` are randomly resampled with replacement to build `N = 2000` synthetic equity paths.
+- **Determinism:** The random number generator is seeded with a hash of the `sourceJobId` to ensure runs are repeatable and returns are byte-identical.
+- **Output Metrics:** Ruin probability (fraction of paths breaching drawdown), expected recovery time (candles to recover to preceding peak).
+
+---
+
+## 8. Frontend Components & UI styling
+
+### Correlation Heatmap Component
+Conforms to **Rule 1 (no rounded corners)** and the slate midnight palette (`bg-[#0d1117]`). Computes cell contrast dynamically:
 
 ```jsx
 // client/src/components/risk/CorrelationHeatmap.jsx
@@ -520,7 +515,6 @@ export default function CorrelationHeatmap({ matrix = {} }) {
   const symbols = Object.keys(matrix);
   
   const getBgColor = (val) => {
-    // val is between -1.0 and 1.0
     if (val > 0) {
       const opacity = Math.round(val * 90);
       return `hsla(142, 70%, 45%, ${opacity / 100})`; // emerald-500 equivalent
@@ -531,7 +525,6 @@ export default function CorrelationHeatmap({ matrix = {} }) {
   };
 
   const getTextColor = (val) => {
-    // Dynamic contrast check: light gray for transparent/low opacity cells, dark for saturated cells
     return Math.abs(val) > 0.5 ? 'text-slate-950' : 'text-slate-300';
   };
 
@@ -541,7 +534,6 @@ export default function CorrelationHeatmap({ matrix = {} }) {
         Rolling 30d Asset Correlation
       </h3>
       <div className="grid gap-0" style={{ gridTemplateColumns: `repeat(${symbols.length + 1}, minmax(0, 1fr))` }}>
-        {/* Label Header row */}
         <div className="text-[10px] font-semibold text-slate-500 p-1"></div>
         {symbols.map(s => (
           <div key={s} className="text-[10px] font-semibold text-slate-400 p-1 font-mono text-center truncate">
@@ -549,7 +541,6 @@ export default function CorrelationHeatmap({ matrix = {} }) {
           </div>
         ))}
 
-        {/* Heatmap rows */}
         {symbols.map(rowSymbol => (
           <React.Fragment key={rowSymbol}>
             <div className="text-[10px] font-semibold text-slate-400 p-1 font-mono flex items-center">
@@ -578,16 +569,14 @@ export default function CorrelationHeatmap({ matrix = {} }) {
 
 ---
 
-## 8. Verification & Execution Testing Plan
+## 9. Verification & Phase Execution Plan
 
-### Automated Test Cases (`engine/tests/test_risk_math.py`)
-Verify calculations are mathematically correct:
-- **Test VaR calculations:** Generate synthetic price history with a known downward trend. Verify that `calculate_portfolio_var` returns positive risk amounts. Handle empty inputs without throwing Exceptions.
-- **Test correlation boundaries:** Generate series with exact linear dependencies ($Y = 2X$ and $Z = -X$). Assert correlation returns exactly `1.0` and `-1.0` respectively, and check that diagonal elements are always `1.0`.
-- **Test precedence clamping:** Assert that running `resolveStrategyRiskParams` with a wizard override larger than the global hard ceiling clamps the output value exactly to the hard ceiling.
+The Risk Dashboard lands in 5 logical phases. Pipeline-touching changes (R2, R4) gate on `golden_master.py` verification.
 
-### Manual Verification
-1. Open settings, configure `maxLeverageAllowed` to `10x` under the global hard limits.
-2. Launch a backtest using the New Backtest Wizard and attempt to set leverage to `20x`.
-3. Verify that the backtest configuration form warns the user, and the execution is clamped to `10x` in the resulting run metrics.
-4. Launch multiple bot sessions via Chaos Mode. Navigate to the new `/risk-dashboard` page and verify that the correlation matrix and Value-at-Risk parameters update in real-time.
+| Phase | Deliverable | Target Files | Verification Gate |
+|-------|-------------|--------------|-------------------|
+| **R1. Schema + Resolver** | DB modifications, resolver helper, GET/PUT endpoints | `server/src/models/Settings.js`, `server/src/utils/risk.js`, `server/src/controllers/risk.controller.js` | Unit tests for precedence & clamping |
+| **R2. Engine Risk Math** | Portfolio VaR/CVaR, Correlation calculator, live metrics router | `engine/utils/risk_math.py`, `engine/routers/risk.py`, `engine/tests/test_risk_math.py` | `pytest tests/test_risk_math.py` |
+| **R3. Live metrics proxy** | API routes passthrough, 10s Redis caching | `server/src/controllers/risk.controller.js` (update), `server/src/routes/risk.routes.js` | Live positions polling with mock headers |
+| **R4. Sim pipelines** | Re-run scenarios, trade bootstrapping | `engine/routers/leverage_sensitivity.py`, `engine/services/monte_carlo.py`, `server/src/models/BacktestLeverageScenario.js` | Re-run check on engine, Golden master verification |
+| **R5. Frontend** | Nav layout component grid, heatmap panel, settings overrides form | `client/src/pages/RiskDashboard.jsx`, `client/src/components/risk/*`, `client/src/App.jsx` | Visual style check (corners & color tokens) |
