@@ -3,7 +3,7 @@
 **Authority:** This is the single source of truth for what ENMA currently does.
 Read this before starting any work. If this conflicts with chat history, this document wins.
 
-Last updated: 2026-06-24
+Last updated: 2026-06-24 (Phase 6)
 
 ---
 
@@ -62,6 +62,9 @@ Last updated: 2026-06-24
 - **Direct Binance Placement (F-003)**: Algo order placement now calls `send_signed_request()` directly from the engine for entry, exit, and stop-close — eliminating the engine→Node→engine→Binance hop chain. Affected methods: `execute_entry()`, `execute_exit()`, `_close_position_on_stop()`, `_reconcile_exchange_state()`.
 - **Mark-Price PnL Fallback Chain (F-023/A-013)**: Live PnL uses exchange-reported `unRealizedProfit` from positionRisk as primary source, falls back to `markPrice`, then last price. `price_missing` flag set when no price source is available, propagated through `positionDetails` to the UI.
 
+### Phase 6 — SL/TP & OCO Robustness
+- **Emergency Market Exit on SL Placement Failure (F-018)**: In `LiveAdapter.execute_entry()`, if a stop-loss conditional order fails to place after a MARKET entry fills, the engine immediately sends a MARKET close order to Binance, records the trade with `exit_reason="emergency_exit"`, and returns `False`. This prevents the position from running naked — matching freqtrade's `emergency_exit()` pattern. Trade is fully accounted (PnL at entry price minus exit fees) and notified to Node as a `position:close` event.
+- **OUO Partial-Fill Peer-Cancel (F-019)**: Algo order IDs for SL and TP legs are tracked in `session["open_positions"][symbol]["algo_ids"]` after placement. Two OUO safety nets prevent over-close when one leg partially fills: (1) in the user data stream `_on_fill` callback, when a tracked `tpsl_*` algo order reports `FILLED` or `PARTIALLY_FILLED`, the peer leg is immediately cancelled via `DELETE /fapi/v1/algoOrder`; (2) in `_reconcile_exchange_state()`, the tracked algo IDs are cross-checked against the exchange's open algo orders — if one leg is missing (triggered/filled), the peer is cancelled. This mirrors nautilus `ContingencyType.OUO` semantics for Binance conditional orders with `closePosition: "true"`.
 
 ### Dashboard
 - Total runs, best strategy, average win rate stats

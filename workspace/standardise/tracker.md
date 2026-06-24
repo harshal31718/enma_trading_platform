@@ -10,9 +10,9 @@
 
 | | Total | TODO | IN PROGRESS | BLOCKED | DONE | DROPPED |
 |---|---|---|---|---|---|---|---|---|
-| Corrections (F) | 24 | 6 | 0 | 0 | 18 | 0 |
+| Corrections (F) | 24 | 4 | 0 | 0 | 20 | 0 |
 | Additions (A) | 16 | 4 | 0 | 0 | 12 | 0 |
-| **All** | **40** | **10** | **0** | **0** | **30** | **0** |
+| **All** | **40** | **8** | **0** | **0** | **32** | **0** |
 
 > Update this table whenever a row changes status.
 
@@ -115,8 +115,8 @@
 
 | Step | ID | Item | Doc | Sev | Status | Commit / Note |
 |---|---|---|---|---|---|---|
-| 6.1 | F-018 | Emergency market exit if SL placement fails after entry (no naked positions) | 04 | HIGH | TODO | |
-| 6.2 | F-019 | Partial-fill quantity propagation between SL/TP legs (OUO semantics) | 04 | HIGH | TODO | |
+| 6.1 | F-018 | Emergency market exit if SL placement fails after entry | 04 | HIGH | DONE | `execute_entry`: on SL placement failure, sends MARKET close, records trade with `emergency_exit` reason, returns False |
+| 6.2 | F-019 | Partial-fill quantity propagation between SL/TP legs (OUO semantics) | 04 | HIGH | DONE | Tracked algo order IDs per position; OUO peer-cancel in user data stream `_on_fill` callback + reconciliation loop when one leg triggers |
 
 ## Phase 7 — Pair management.
 

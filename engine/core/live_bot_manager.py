@@ -181,6 +181,10 @@ class LiveAdapter(ExecutionAdapter):
 
         binance_side = "BUY" if direction == "long" else "SELL"
         sem = self.manager._order_semaphores.get(self.session_id)
+
+        # ── F-019: Track placed algo order IDs for OUO peer-cancel ──
+        _placed_algo_ids: dict[str, str | None] = {"sl": None, "tp": None}
+
         try:
             # F-003: Place orders directly on Binance instead of routing
             # through the engine→Node→engine→Binance hop chain.
@@ -236,12 +240,79 @@ class LiveAdapter(ExecutionAdapter):
                             mode="testnet",
                         )
                         logger.info(f"[AlgoBot] SL placed for {symbol}: algoId={sl_result.get('algoId')}")
+                        # Track algo order ID for OUO peer-cancel (F-019)
+                        _placed_algo_ids["sl"] = sl_result.get("algoId")
                     except Exception as sl_e:
                         logger.warning(f"[AlgoBot] SL placement failed for {symbol}: {sl_e}")
+                        # ── F-018: Emergency market exit ────────────────────
+                        # Entry filled but SL placement failed → position is
+                        # naked. Force-close at market immediately.
+                        try:
+                            _close_side = "SELL" if binance_side == "BUY" else "BUY"
+                            _close_params = {
+                                "symbol": symbol,
+                                "side": _close_side,
+                                "type": "MARKET",
+                                "quantity": _fmt_num(qty),
+                                "reduceOnly": "true",
+                            }
+                            await _signed(
+                                "POST", "/fapi/v1/order",
+                                _api_key, _api_secret,
+                                params=_close_params,
+                                mode="testnet",
+                            )
+                            logger.warning(f"[AlgoBot] {symbol}: emergency MARKET close sent (SL placement failed)")
+                        except Exception as _close_e:
+                            logger.error(f"[AlgoBot] {symbol}: emergency MARKET close FAILED: {_close_e}")
+
+                        # Record the trade locally with emergency_exit reason
+                        _pos_e = Position(direction, qty, fill_price)
+                        _fee_e = strategy.execution_model.exit_fee(strategy, _pos_e.qty, fill_price)
+                        _pos_e.close(fill_price)
+                        _rpnl_e = _pos_e.pnl - _fee_e
+                        strategy.balance += _rpnl_e
+                        session["pnl"] += _rpnl_e
+                        _tr = build_trade_record(
+                            source="bot",
+                            executed_by=session.get("strategy_name", "unknown"),
+                            symbol=symbol,
+                            side=direction,
+                            qty=str(qty),
+                            entry_price=str(fill_price),
+                            exit_price=str(fill_price),
+                            sl_order_price=str(sl_price),
+                            tp_order_price=None,
+                            margin=str(_pos_e.margin) if _pos_e.margin else None,
+                            liquidation_price=str(_pos_e.liquidation_price) if _pos_e.liquidation_price else None,
+                            leverage=_pos_e.leverage if _pos_e.leverage else None,
+                            net_pnl=str(round(_rpnl_e, 2)),
+                            pnl_pct=str(round(_pos_e.pnl_pct, 2)) if _pos_e.pnl_pct else None,
+                            fee=str(round(_fee_e, 2)) if _fee_e else None,
+                            exit_reason="emergency_exit",
+                            session_id=self.session_id,
+                            strategy_name=session.get("strategy_name"),
+                            entry_time=datetime.now(timezone.utc),
+                            exit_time=datetime.now(timezone.utc),
+                        )
+                        await record_trade(_tr)
                         await self.manager._notify_node(self.session_id, {
-                            "event": "log",
-                            "eventData": {"type": "warning", "message": f"{symbol}: SL skipped — {sl_e}"},
+                            "pnl": str(round(session["pnl"], 2)),
+                            "openPositions": list(session["open_positions"].keys()),
+                            "status": "running",
+                            "event": "position:close",
+                            "eventData": {
+                                "symbol": symbol,
+                                "pnl": str(round(_rpnl_e, 2)),
+                                "exitPrice": str(fill_price),
+                                "exitReason": "emergency_exit",
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            },
                         })
+                        logger.warning(f"[AlgoBot] {symbol}: emergency exit complete — PnL={_rpnl_e:.2f}")
+                        strategy.buy = None
+                        strategy.sell = None
+                        return False
 
                 if tp_price is not None:
                     try:
@@ -262,6 +333,7 @@ class LiveAdapter(ExecutionAdapter):
                             mode="testnet",
                         )
                         logger.info(f"[AlgoBot] TP placed for {symbol}: algoId={tp_result.get('algoId')}")
+                        _placed_algo_ids["tp"] = tp_result.get("algoId")
                     except Exception as tp_e:
                         logger.warning(f"[AlgoBot] TP placement failed for {symbol}: {tp_e}")
                         await self.manager._notify_node(self.session_id, {
@@ -291,6 +363,7 @@ class LiveAdapter(ExecutionAdapter):
             "qty": str(qty),
             "price": str(fill_price),
             "leverage": strategy.leverage,
+            "algo_ids": _placed_algo_ids,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         session["open_positions"][symbol] = pos_info
@@ -796,13 +869,49 @@ class LiveBotManager:
         # (F-020).  Triggers immediate reconciliation when an order fills
         # between candles — no need to wait for the next kline close.
         from services.user_data_stream import user_data_stream as _uds
+        from services.binance_testnet import send_signed_request as _uds_signed
         _fill_cb_registered = False
         if _uds._running:
             async def _on_fill(order_data: dict) -> None:
                 symbol_s = order_data.get("s", "")
                 if symbol_s != symbol:
                     return
-                logger.info(f"[AlgoBot] {symbol}: user-data fill event — triggering reconcile")
+                status = order_data.get("X", "")
+                client_algo_id = order_data.get("clientOrderId", "") or order_data.get("i", "")
+                logger.info(
+                    f"[AlgoBot] {symbol}: user-data fill event — "
+                    f"status={status} clientAlgoId={client_algo_id}"
+                )
+
+                # ── F-019: OUO peer-cancel on partial/full fill ──────
+                # If a tracked algo order (tpsl_ prefix) is FILLED or
+                # PARTIALLY_FILLED, cancel the peer leg to prevent
+                # over-close on a reduced position.
+                if status in ("FILLED", "PARTIALLY_FILLED") and client_algo_id.startswith("tpsl_"):
+                    _pos_info = session.get("open_positions", {}).get(symbol)
+                    if _pos_info and "algo_ids" in _pos_info:
+                        _aids = _pos_info["algo_ids"]
+                        _peer_id = _aids.get("tp") if "sl" in client_algo_id else _aids.get("sl")
+                        if _peer_id:
+                            try:
+                                _api_key = os.environ.get("BINANCE_TESTNET_API_KEY", "")
+                                _api_secret = os.environ.get("BINANCE_TESTNET_SECRET", "")
+                                if _api_key and _api_secret:
+                                    await _uds_signed(
+                                        "DELETE", "/fapi/v1/algoOrder",
+                                        _api_key, _api_secret,
+                                        params={"symbol": symbol, "algoId": _peer_id},
+                                        mode="testnet",
+                                    )
+                                    logger.info(
+                                        f"[AlgoBot] {symbol}: cancelled peer algo {_peer_id} "
+                                        f"(OUO — {client_algo_id} filled)"
+                                    )
+                            except Exception as _cancel_e:
+                                logger.warning(
+                                    f"[AlgoBot] {symbol}: peer algo cancel failed: {_cancel_e}"
+                                )
+
                 await self._reconcile_exchange_state(
                     session_id, strategy, symbol,
                     candle_high=None, candle_low=None,
@@ -1311,21 +1420,50 @@ class LiveBotManager:
                 session["open_positions"][symbol] = existing_info
 
         # ── 6. Check for orders filled on exchange that engine hasn't processed ──
+        _tracked_algo_ids: dict[str, str | None] = {"sl": None, "tp": None}
+        _pos_info_stored = session.get("open_positions", {}).get(symbol, {})
+        if "algo_ids" in _pos_info_stored:
+            _tracked_algo_ids = _pos_info_stored["algo_ids"]
+
         if open_orders and has_local_position and has_exchange_position:
+            # ── F-019: OUO — find which tracked algo orders are still open ──
+            _still_open_algo_ids: set[str] = set()
             for order in open_orders:
                 order_status = order.get("status", "")
+                _cid = order.get("clientOrderId", "")
+                if _cid and (_cid.startswith("tpsl_") or _cid.startswith("oco_")):
+                    if order_status in ("NEW", "PARTIALLY_FILLED"):
+                        _still_open_algo_ids.add(order.get("orderId", ""))
+
                 orig_qty = abs(float(order.get("origQty", 0)))
                 executed_qty = abs(float(order.get("executedQty", 0)))
-                order_side = order.get("side", "")
                 order_type = order.get("type", "")
-                is_stop = "STOP" in order_type.upper()
-                is_tp = "TAKE_PROFIT" in order_type.upper()
 
                 if executed_qty > 0 and orig_qty > 0 and (order_status == "FILLED" or executed_qty >= orig_qty):
                     logger.info(f"[AlgoBot] {symbol}: detected filled order {order.get('orderId')} ({order_type}) on exchange")
-                    # If the filled order is an exit (reduceOnly / opposite side), the position is being closed.
-                    # We handle this via the position check above (case 2), so this is supplementary info.
-                    pass
+
+            # If a tracked algo leg is no longer open, cancel its peer
+            if has_exchange_position:
+                for _leg, _id in _tracked_algo_ids.items():
+                    if _id and _id not in _still_open_algo_ids:
+                        _peer_leg = "tp" if _leg == "sl" else "sl"
+                        _peer_id = _tracked_algo_ids.get(_peer_leg)
+                        if _peer_id and _peer_id in _still_open_algo_ids:
+                            try:
+                                await _signed(
+                                    "DELETE", "/fapi/v1/algoOrder",
+                                    _api_key, _api_secret,
+                                    params={"symbol": symbol, "algoId": _peer_id},
+                                    mode="testnet",
+                                )
+                                logger.info(
+                                    f"[AlgoBot] {symbol}: reconciled — cancelled peer algo "
+                                    f"{_peer_id} ({_leg} triggered, OUO)"
+                                )
+                            except Exception as _re_cancel_e:
+                                logger.warning(
+                                    f"[AlgoBot] {symbol}: reconcile peer-cancel failed: {_re_cancel_e}"
+                                )
 
         return {
             "position": {
