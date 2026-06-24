@@ -447,6 +447,8 @@ class LiveBotManager:
 
                                 if strategy.position is not None:
                                     strategy.position.update_pnl(strategy.price)
+                                    await self._verify_exchange_position_still_open(session_id, strategy, symbol)
+                                if strategy.position is not None:
                                     await self._check_exits(session_id, strategy, symbol)
                                 current_holding = (
                                     strategy.position.qty * (1 if strategy.is_long else -1)
@@ -882,6 +884,97 @@ class LiveBotManager:
             await record_trade(trade_record)
 
         session["open_positions"].pop(symbol, None)
+
+    async def _verify_exchange_position_still_open(self, session_id: str, strategy, symbol: str) -> None:
+        """Verify that the local open position is still open on the exchange.
+        If it has been closed (e.g. via Binance SL/TP or manual close), clean up local state."""
+        session = self.sessions.get(session_id)
+        if not session or strategy.position is None:
+            return
+        
+        try:
+            resp = await self._call_node_internal(
+                session_id,
+                f"/internal/algo/sessions/{session_id}/get-position",
+                {"symbol": symbol}
+            )
+            if not resp.get("success"):
+                return
+            pos = resp.get("data")
+            is_closed = False
+            if not pos:
+                is_closed = True
+            else:
+                amt = float(pos.get("positionAmt", 0))
+                if amt == 0:
+                    is_closed = True
+                else:
+                    exchange_dir = "long" if amt > 0 else "short"
+                    local_dir = strategy.position.type
+                    if exchange_dir != local_dir:
+                        is_closed = True
+            
+            if is_closed:
+                logger.warning(f"[AlgoBot] {symbol}: detected position closed on exchange. Syncing local state to flat.")
+                pos = strategy.position
+                fee = strategy.execution_model.exit_fee(strategy, pos.qty, strategy.price)
+                pos.close(strategy.price)
+                realized_pnl = pos.pnl - fee
+                strategy.balance += realized_pnl
+                session["pnl"] += realized_pnl
+                
+                exit_time = datetime.now(timezone.utc)
+                entry_time_str = session["open_positions"].get(symbol, {}).get("timestamp")
+                entry_time = datetime.fromisoformat(entry_time_str.replace("Z", "+00:00")) if entry_time_str else exit_time
+                
+                event_data = {
+                    "symbol": symbol,
+                    "pnl": str(round(realized_pnl, 2)),
+                    "exitPrice": str(strategy.price),
+                    "exitReason": "exchange_sync",
+                    "timestamp": exit_time.isoformat(),
+                }
+                
+                trade_record = build_trade_record(
+                    source="bot",
+                    executed_by=session.get("strategy_name", "unknown"),
+                    symbol=symbol,
+                    side=pos.type,
+                    qty=str(pos.qty),
+                    entry_price=str(pos.entry_price),
+                    exit_price=str(strategy.price),
+                    sl_order_price=str(strategy.stop_loss[1]) if strategy.stop_loss else None,
+                    tp_order_price=str(strategy.take_profit[1]) if strategy.take_profit else None,
+                    margin=str(pos.margin) if pos.margin else None,
+                    liquidation_price=str(pos.liquidation_price) if pos.liquidation_price else None,
+                    leverage=pos.leverage if pos.leverage else None,
+                    net_pnl=str(round(realized_pnl, 2)),
+                    pnl_pct=str(round(pos.pnl_pct, 2)) if pos.pnl_pct else None,
+                    fee=str(round(fee, 2)) if fee else None,
+                    exit_reason="exchange_sync",
+                    session_id=session_id,
+                    strategy_name=session.get("strategy_name"),
+                    entry_time=entry_time,
+                    exit_time=exit_time,
+                )
+                
+                strategy.position = None
+                strategy.stop_loss = None
+                strategy.take_profit = None
+                strategy._pending_flip = None
+                session["open_positions"].pop(symbol, None)
+                
+                await record_trade(trade_record)
+                
+                await self._notify_node(session_id, {
+                    "pnl": str(round(session["pnl"], 2)),
+                    "openPositions": list(session["open_positions"].keys()),
+                    "status": "running",
+                    "event": "position:close",
+                    "eventData": event_data,
+                })
+        except Exception as e:
+            logger.warning(f"[AlgoBot] {symbol}: position verification failed — {e}")
 
     async def _sync_open_position(self, session_id: str, strategy, symbol: str) -> None:
         """Query Binance for an existing position on this symbol and restore it into
