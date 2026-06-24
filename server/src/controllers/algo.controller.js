@@ -793,6 +793,7 @@ module.exports = {
   handleAlgoClosePosition,
   handleAlgoSetLeverage,
   handleAlgoGetPosition,
+  handleEngineStartup,
   deleteSession,
   deleteAllStopped,
   startChaos,
@@ -888,5 +889,17 @@ async function handleAlgoSetLeverage(req, res, next) {
     if (code === -4046) return res.json({ success: true })
     console.error('[AlgoBot] Real set leverage failed:', err.message)
     res.status(err.response?.status || 500).json({ success: false, error: err.message })
+  }
+}
+
+// POST /internal/algo/engine-startup
+async function handleEngineStartup(req, res, next) {
+  try {
+    const { reconcileSymbolLocks } = require('../services/reconciliation')
+    await reconcileSymbolLocks()
+    res.json({ success: true, message: 'Reconciliation complete' })
+  } catch (err) {
+    console.error('[Startup] Engine notification reconciliation failed:', err.message)
+    res.status(500).json({ success: false, error: err.message })
   }
 }

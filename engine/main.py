@@ -78,6 +78,17 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Exchange rules caching FAILED: {e}")
 
+    try:
+        import httpx
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(f"{SERVER_ORIGIN}/internal/algo/engine-startup", timeout=10.0)
+            if resp.status_code == 200:
+                logger.info("Notified Node server of engine startup for session/lock reconciliation")
+            else:
+                logger.warning(f"Node server responded with status {resp.status_code} on engine startup notification")
+    except Exception as e:
+        logger.warning(f"Failed to notify Node server of engine startup: {e}")
+
     yield
 
     # Shutdown
