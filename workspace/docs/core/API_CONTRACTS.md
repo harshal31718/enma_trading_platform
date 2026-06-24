@@ -37,7 +37,7 @@ type Balance = { asset: string, walletBalance: string, availableBalance: string,
 - **`PUT /api/v1/strategies/:id/code`** -> Req: `{ code: string }` -> `{ savedAt: string }`
 - **`GET /api/v1/strategies/:id/params`** -> `{ params: { [key]: { type, default, min, max, label } } }`
 - **`POST /api/v1/backtest`** -> Req: `{ strategyId, exchange, symbol, timeframe, startDate, endDate, capital, leverage, feeRate, riskParams?, alphaParams? }` -> `{ jobId, status }`. `alphaParams` is an optional per-run override of the strategy's Tier-3 PARAMS (keyed by PARAM name); omitted/`{}` ⇒ engine uses each PARAM's default. Server forwards it through the BullMQ payload to the engine's `alphaParams` field (mapped to `alpha_params`).
-- **`GET /api/v1/backtest/:id`** -> `{ id, jobId, status, metrics: BacktestMetric, tradeCount: number, equityCurve: {timestamp, balance}[] }`
+- **`GET /api/v1/backtest/:id`** -> `{ id, jobId, status, metrics: BacktestMetric, tradeCount: number, equityCurve: {timestamp, balance}[], underwaterCurve: {timestamp, drawdownPct}[], rollingMetricsCurve: {index, sharpe, volatility}[], returnsHistogram: {label, count, lo, hi}[], mfeMaeScatter: {mfePct, maePct, exitReason, pnl}[] }`
 - **`GET /api/v1/backtest/:id/trades`** -> `Paginated<Trade> (key "trades")`
 - **`GET /api/v1/backtest/:id/benchmark`** -> `{ benchmark: {timestamp, buyHold}[] }` — Buy & Hold equity path normalized to starting capital (`capital × close/firstClose`), read from the same TimescaleDB OHLCV candles the run used and aligned 1:1 to the saved equity-curve timestamps. Engine computes; server proxies. Empty array if no equity curve / candles.
 - **`POST /api/v1/backtest/:id/cancel`** -> `{ success: true, data: { jobId: string, status: "cancelled" } }`

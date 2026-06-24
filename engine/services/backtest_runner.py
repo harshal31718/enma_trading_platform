@@ -16,6 +16,18 @@ from services.candle_manager import ensure_candles_available
 from utils.timeframes import annual_factor
 from decimal import ROUND_DOWN, ROUND_UP
 from utils.symbols import _MAX_LEVERAGE_OFFLINE_MAP, clamp_and_round_qty, round_price
+# Phase 2 — pluggable metric registry (A-012) + new metrics (A-007) + breakdown tables (A-008)
+from services.metrics import MetricContext, default_registry
+# Phase 2 — backtest curves: underwater (A-009), returns/MFE-MAE (A-010), rolling (A-011)
+from services.curves import (
+    underwater_curve_with_timestamps,
+    returns_histogram,
+    mfe_mae_scatter,
+    rolling_curve,
+    timeframe_to_seconds,
+)
+# Phase 2 — fill realism: gap-through stops (F-011), candle-bounded fills (F-012)
+from services.fill_model import gap_through_stop_price, bounded_exit_price, bounded_entry_price
 
 logger = logging.getLogger(__name__)
 
@@ -506,22 +518,27 @@ async def run_backtest_simulation(
                         rounding_mode = ROUND_DOWN if new_dir == "long" else ROUND_UP
                         strategy.stop_loss   = (new_qty, round_price(symbol, exchange_name, flip["stop_loss"], rounding=rounding_mode)) if flip["stop_loss"] is not None else None
                         strategy.take_profit = (new_qty, round_price(symbol, exchange_name, flip["take_profit"], rounding=rounding_mode)) if flip["take_profit"] is not None else None
-                    active_trade = {
-                        "type":       new_dir,
-                        "qty":        str(new_qty),
-                        "entryPrice": str(fill_price),
-                        "entryAt":    time_t.isoformat(),
-                        "_entry_dt":  time_t,
-                        "_entry_index": t,
-                        "_mfe":       0.0,
-                        "_mae":       0.0,
-                        "leverage":   leverage,
-                        "liqPrice":   f"{strategy.position.liquidation_price:.4f}",
-                    }
-                    try:
-                        strategy.on_open_position((new_qty, fill_price))
-                    except Exception as e:
-                        logger.error(f"on_open_position error: {e}")
+
+                        # active_trade is built ONLY when the new leg actually
+                        # opened. When the flip degrades to close-only above,
+                        # strategy.position is None and active_trade stays None
+                        # (set in leg 1) — building it here would deref None.
+                        active_trade = {
+                            "type":       new_dir,
+                            "qty":        str(new_qty),
+                            "entryPrice": str(fill_price),
+                            "entryAt":    time_t.isoformat(),
+                            "_entry_dt":  time_t,
+                            "_entry_index": t,
+                            "_mfe":       0.0,
+                            "_mae":       0.0,
+                            "leverage":   leverage,
+                            "liqPrice":   f"{strategy.position.liquidation_price:.4f}",
+                        }
+                        try:
+                            strategy.on_open_position((new_qty, fill_price))
+                        except Exception as e:
+                            logger.error(f"on_open_position error: {e}")
 
             # ── A1. Strategy-requested close (close_position() flag) ─────────
             # Checked after atomic flip (A0) but before new entry (A2).
@@ -740,9 +757,19 @@ async def run_backtest_simulation(
                     if sl is not None:
                         _, sl_price = sl
                         if low_t <= sl_price:
-                            exit_price  = sl_price
                             exit_reason = "stop_loss"
                             closed      = True
+                            # F-011: if the candle gapped THROUGH the stop, the
+                            # stop never traded — fill at the candle OPEN
+                            # (worst case) instead of the optimistic stop price.
+                            gap_price = gap_through_stop_price(
+                                is_long=True,
+                                stop_price=sl_price,
+                                candle_open=open_t,
+                                candle_low=low_t,
+                                candle_high=high_t,
+                            )
+                            exit_price = gap_price if gap_price is not None else sl_price
                     if not closed and tp is not None:
                         _, tp_price = tp
                         if high_t >= tp_price:
@@ -756,9 +783,17 @@ async def run_backtest_simulation(
                     if sl is not None:
                         _, sl_price = sl
                         if high_t >= sl_price:
-                            exit_price  = sl_price
                             exit_reason = "stop_loss"
                             closed      = True
+                            # F-011: see long branch
+                            gap_price = gap_through_stop_price(
+                                is_long=False,
+                                stop_price=sl_price,
+                                candle_open=open_t,
+                                candle_low=low_t,
+                                candle_high=high_t,
+                            )
+                            exit_price = gap_price if gap_price is not None else sl_price
                     if not closed and tp is not None:
                         _, tp_price = tp
                         if low_t <= tp_price:
@@ -780,8 +815,22 @@ async def run_backtest_simulation(
                         realized_pnl  = -strategy.position.margin
                         trade_pnl_pct = -100.0
                     else:
-                        # Adverse slippage on the market exit fill
-                        _fill = execution.exit_fill(strategy, exit_price, exit_qty, "sell" if was_long else "buy")
+                        # F-012: bound the exit fill to the candle's realised
+                        # trading range before applying slippage. The proposed
+                        # exit_price (stop / TP / F-011 gap-open) is clamped
+                        # to [low, high] and slippage is then added
+                        # adversarially by execution.exit_fill (cost model).
+                        # This mirrors freqtrade's ``_get_order_filled``
+                        # semantics and replaces the prior "fill at exact
+                        # exit_price" which was symbol/size-agnostic.
+                        bounded_exit = bounded_exit_price(
+                            is_long=was_long,
+                            proposed_price=exit_price,
+                            candle_open=open_t,
+                            candle_low=low_t,
+                            candle_high=high_t,
+                        )
+                        _fill = execution.exit_fill(strategy, bounded_exit, exit_qty, "sell" if was_long else "buy")
                         exit_fill = _fill.fill_price
                         fee = _fill.fee
                         total_fees += fee
@@ -906,6 +955,15 @@ async def run_backtest_simulation(
                 candles_np[-1, 4],
             )
             trades.append(active_trade)
+
+    # Phase 2 (A-012): after the force-close, the final equity snapshot is
+    # missing from equity_balances (it was appended inside the loop BEFORE the
+    # close). Append the post-close balance so registry stats (NetProfitStat,
+    # CAGRStat, etc.) see the realised final equity, not a stale in-loop
+    # value. Legacy metric fields are unchanged — they read strategy.balance
+    # directly.
+    equity_balances.append(strategy.balance)
+    equity_timestamps.append(rows[-1]["time"].isoformat())
 
     try:
         strategy.terminate()
@@ -1037,6 +1095,34 @@ async def run_backtest_simulation(
         }
     }
 
+    # ── 10b. Phase 2 — registry-driven metric additions (A-007 / A-008 / A-012) ─
+    # The legacy block above is byte-identical to its pre-Phase-2 form. New
+    # metrics (CAGR, SQN, expectancy ratio, drawdown duration, per-exit-reason
+    # breakdown) come from the pluggable registry, so adding more is a
+    # one-class edit. Existing metric KEYS are unchanged so the UI / golden
+    # master keep matching for legacy fields; new keys are additive.
+    _annual = annual_factor(timeframe)
+    _metric_ctx = MetricContext(
+        trades=trades,
+        balances=balances_arr,
+        equity_timestamps=equity_timestamps,
+        candles_np=candles_np,
+        capital=capital,
+        timeframe=timeframe,
+        annual_factor=_annual,
+        warmup_period=warmup_period,
+        total_fees=total_fees,
+        total_funding=total_funding,
+        liquidations=liquidations,
+        leverage=leverage,
+    )
+    _registry = default_registry()
+    _registry_metrics = _registry.compute_all(_metric_ctx)
+    # Merge — registry wins for keys it provides (so byExitReason, cagr, sqn,
+    # expectancyRatio, maxDrawdownDurationCandles are sourced from the registry).
+    for k, v in _registry_metrics.items():
+        metrics.setdefault(k, v)
+
     # ── 11. Downsample equity curve ─────────────────────────────────────────
     raw_n = len(equity_timestamps)
     if raw_n <= EQUITY_CURVE_MAX_POINTS:
@@ -1051,6 +1137,20 @@ async def run_backtest_simulation(
         {"timestamp": ts, "balance": f"{bal:.2f}"}
         for ts, bal in zip(sampled_ts, sampled_bal)
     ]
+
+    # ── 11b. Phase 2 — extra curves (A-009 / A-010 / A-011) ─────────────────
+    underwater_docs = underwater_curve_with_timestamps(
+        equity_timestamps, balances_arr, max_points=EQUITY_CURVE_MAX_POINTS,
+    )
+    rolling_docs = rolling_curve(
+        balances_arr,
+        timeframe_seconds=timeframe_to_seconds(timeframe),
+        annual_factor=_annual,
+        window_candles=50,
+        max_points=EQUITY_CURVE_MAX_POINTS,
+    )
+    returns_hist = returns_histogram(trades, capital)
+    mfe_mae_pts  = mfe_mae_scatter(trades, capital)
 
     # ── 12. Write main result document to MongoDB (no trades / no raw curve) ─
     db = get_database()
@@ -1079,6 +1179,11 @@ async def run_backtest_simulation(
                 "status":       "completed",
                 "metrics":      metrics,
                 "equityCurve":  equity_curve_docs,   # ≤1 000 points
+                # Phase 2 — extra curves (A-009 / A-010 / A-011)
+                "underwaterCurve":       underwater_docs,
+                "rollingMetricsCurve":   rolling_docs,
+                "returnsHistogram":      returns_hist,
+                "mfeMaeScatter":         mfe_mae_pts,
                 "tradeCount":   total_trades,
                 "updatedAt":    datetime.now(timezone.utc),
             },

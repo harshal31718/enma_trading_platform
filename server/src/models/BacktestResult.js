@@ -25,6 +25,11 @@ const BacktestResultSchema = new mongoose.Schema(
     metrics: { type: mongoose.Schema.Types.Mixed },
     trades: { type: mongoose.Schema.Types.Mixed },
     equityCurve: { type: mongoose.Schema.Types.Mixed },
+    // Phase 2 — extra curves (A-009 / A-010 / A-011)
+    underwaterCurve: { type: mongoose.Schema.Types.Mixed },
+    rollingMetricsCurve: { type: mongoose.Schema.Types.Mixed },
+    returnsHistogram: { type: mongoose.Schema.Types.Mixed },
+    mfeMaeScatter: { type: mongoose.Schema.Types.Mixed },
   },
   { timestamps: true, collection: 'backtestResults' }
 )

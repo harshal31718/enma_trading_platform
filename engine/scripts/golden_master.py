@@ -87,7 +87,7 @@ def _out_path(label: str) -> str:
 
 async def _run(label: str, cfg: dict, strategies: list[str]) -> dict:
     from config.timescale import init_pool, close_pool
-    from config.mongo import close_mongo
+    from config.mongo import close_mongo, get_database
     from services.backtest_runner import run_backtest_simulation
 
     await init_pool()
@@ -114,10 +114,30 @@ async def _run(label: str, cfg: dict, strategies: list[str]) -> dict:
                     alpha_params=None,
                     risk_params=cfg["risk_params"],
                 )
-                results[name] = out.get("metrics", {})
+                # Capture metrics (legacy + Phase 2 fields) plus the new
+                # curves persisted in the result document. We pull directly
+                # from MongoDB so every persisted field is captured —
+                # including underwaterCurve, rollingMetricsCurve,
+                # returnsHistogram, mfeMaeScatter (Phase 2 additions).
+                metrics_payload = out.get("metrics", {})
+                try:
+                    db = get_database()
+                    doc = await db.backtestResults.find_one({"jobId": job_id})
+                    if doc is not None:
+                        # Carry over the Phase 2 top-level fields
+                        for k in ("underwaterCurve",
+                                  "rollingMetricsCurve",
+                                  "returnsHistogram",
+                                  "mfeMaeScatter"):
+                            if k in doc:
+                                metrics_payload[k] = doc[k]
+                except Exception as e:
+                    print(f"[golden]   {name}: curve capture failed: {e}", flush=True)
+                results[name] = metrics_payload
                 m = results[name]
                 print(f"[golden]   {name}: trades={m.get('totalTrades')} "
-                      f"netProfit={m.get('netProfit')} winRate={m.get('winRate')}", flush=True)
+                      f"netProfit={m.get('netProfit')} winRate={m.get('winRate')} "
+                      f"cagr={m.get('cagrPct')} sqn={m.get('sqn')}", flush=True)
             except Exception as e:
                 results[name] = {"__error__": str(e)}
                 print(f"[golden]   {name}: ERROR {e}", flush=True)

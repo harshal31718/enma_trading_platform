@@ -4,8 +4,9 @@
 > docs. This is the backlog the later fix phase executes from — in **severity order, not file
 > order**. Each row is self-contained: a future session can act on one row without reading the rest.
 >
-> **Status:** complete for Phase 1 (map-only) — all seven docs written; 23 findings (F-001…F-023).
-> Counts reconcile: total rows here == sum of findings across `00`–`06`.
+> **Status:** map complete — all seven topic docs written; 24 findings (F-001…F-024). F-024 added
+> post-Phase-1 from the architecture analysis in `08-algo-strategy-architecture.md`.
+> Counts reconcile: total rows here == sum of findings across `00`–`06` + `08` (F-024).
 
 ## Legend
 
@@ -17,7 +18,7 @@ gap · `[MEDIUM]` inconsistency / missing validation / duplication · `[LOW]` cl
 | Severity | Count | IDs |
 |---|---|---|
 | CRITICAL | 2 | F-005, F-006 |
-| HIGH | 9 | F-001, F-002, F-003, F-007, F-011, F-013, F-018, F-019, F-021 |
+| HIGH | 10 | F-001, F-002, F-003, F-007, F-011, F-013, F-018, F-019, F-021, F-024 |
 | MEDIUM | 10 | F-004, F-008, F-009, F-012, F-014, F-015, F-017, F-020, F-022, F-023 |
 | LOW | 2 | F-010, F-016 |
 
@@ -25,7 +26,7 @@ gap · `[MEDIUM]` inconsistency / missing validation / duplication · `[LOW]` cl
 
 | Area | Count | Doc |
 |---|---|---|
-| pipeline | 4 | `00-pipeline-overview.md` |
+| pipeline | 5 | `00-pipeline-overview.md` + `08` (F-024) |
 | boundaries | 6 | `05-boundaries.md` |
 | backtesting | 2 | `01-backtesting.md` |
 | risk | 2 | `02-risk-management.md` |
@@ -37,7 +38,8 @@ gap · `[MEDIUM]` inconsistency / missing validation / duplication · `[LOW]` cl
 
 - **RC-1 — Backtest↔live guard asymmetry.** Precision/min-notional/risk guards enforced live, skipped
   in backtest. Spawns the only two CRITICALs (F-005, F-006) plus F-011, F-013, F-017. One shared
-  validation path fixes the cluster.
+  validation path fixes the *symptom* cluster (shipped in Phase 1). The *driver-level* root — two
+  separate execution loops kept in sync only by discipline — is **F-024** (Phase 3, doc `08`).
 - **RC-A/B — Three-way state + partial reconcile.** Position truth split across engine memory / Mongo /
   Binance, reconciled only partially and only when a position is open. Spawns F-001, F-002, F-004,
   F-020, F-021, F-022. One exchange-reconciled record that the UI reads fixes the cluster.
@@ -69,6 +71,7 @@ gap · `[MEDIUM]` inconsistency / missing validation / duplication · `[LOW]` cl
 | F-021 | reconciliation | HIGH | UI position/PnL derives from engine in-memory belief (engine→Mongo→UI), not exchange-reconciled state → UI shows wrong data when desynced | `engine/core/live_bot_manager.py:_notify_node`, `server/src/controllers/algo.controller.js:handleEngineStats`, `server/src/models/LiveSession.js` | freqtrade UI reads reconciled `Trade`; nautilus cache |
 | F-022 | reconciliation | MEDIUM | Reconciliation split across Node startup + engine runtime with no shared truth definition | `server/src/services/reconciliation.js`, `engine/core/live_bot_manager.py` | freqtrade single-loop reconcile |
 | F-023 | reconciliation | MEDIUM | Live PnL from last price (`qty*price − notional`) diverges from Binance mark-price + funding unrealized PnL | `engine/core/live_bot_manager.py` PnL calc, client live-PnL hook | freqtrade/nautilus exchange-reported values |
+| F-024 | pipeline | HIGH | Two separate execution loops (backtest replay vs live websocket) orchestrate fills/margin/bracket/reconcile independently though both call `evaluate()` → RC-1-class asymmetry recurs at the driver level (Phase 1 fixed the symptom, not the cause) | `engine/services/backtest_runner.py:run_backtest_simulation`, `engine/core/live_bot_manager.py:_run_symbol_loop` | nautilus `NautilusKernel` (one kernel: backtest/sandbox/live); freqtrade single `create_order()`/`process()` |
 
 <!--
 Row template:

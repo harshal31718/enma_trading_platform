@@ -172,6 +172,23 @@ can't currently express:
 
 ---
 
+## 6. Execution engine (see `08-algo-strategy-architecture.md`)
+
+The architecture analysis (`08`) found the algorithm's structural gap is the **two-loop split** —
+backtest and live run separate driver loops though both call `evaluate()`. That correction is **F-024**
+(Phase 3, not an addition). The one *additive* capability that becomes clean once the driver is unified:
+
+| Mechanism | What it adds | Enma status |
+|---|---|---|
+| **Execution algorithms** (`ExecAlgorithm`: TWAP / VWAP / iceberg) | slice a large order over time instead of one market fill — cuts impact on thin pairs | `[MISSING]` — Execution model is market-fill only |
+
+- **A-016 ★★** — Add a pluggable **`ExecAlgorithm`** seam on the Execution model
+  (`engine/core/models/execution.py`) so an order can be sliced (TWAP/VWAP/iceberg) rather than sent as
+  a single market fill. Lower priority for a single-user platform, and only clean **after F-024** unifies
+  the driver. Borrow nautilus's flow: strategy → `ExecAlgorithm` → `RiskEngine` → `ExecutionEngine`.
+
+---
+
 ## Priority shortlist (where to start)
 
 | Rank | Item | Value | Effort |

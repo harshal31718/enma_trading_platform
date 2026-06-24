@@ -66,9 +66,10 @@ and ties individual findings back to shared root causes (the asymmetry above is 
 05-boundaries.md               exchange filters: minNotional/LOT_SIZE/tick/step, precision rounding
 06-reconciliation-uistate.md   bot↔exchange desync + how true state reaches the UI
 07-additive-features.md        NEW capabilities to borrow (protections, pairlists, metrics, DCA)
+08-algo-strategy-architecture.md  algorithm vs strategy: 3-way separation + the two-loop gap (F-024/A-016)
 findings-index.md              ALL findings (F-xxx), flat & severity-ranked, independently shippable
 CLAUDE.md                      implementation playbook (how to execute) — read by ANY agent
-tracker.md                     live status board for all 38 items, phased step-by-step
+tracker.md                     live status board for all 40 items, phased step-by-step
 ```
 
 > **To implement:** read `CLAUDE.md` first, then work `tracker.md` top-to-bottom, one item at a time.
