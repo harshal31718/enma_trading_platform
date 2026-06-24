@@ -286,7 +286,7 @@ async function computeSymbolStats(sessionId) {
 async function handleEngineStats(req, res, next) {
   try {
     const { id } = req.params
-    const { pnl, openPositions, status, event, eventData } = req.body
+    const { pnl, openPositions, status, event, eventData, positionDetails } = req.body
 
     const updateData = {}
     if (pnl !== undefined) updateData.pnl = String(pnl)
@@ -295,6 +295,16 @@ async function handleEngineStats(req, res, next) {
       updateData.status = status
       if (status === 'stopped') updateData.stoppedAt = new Date()
       if (status === 'error' && req.body.errorMessage) updateData.errorMessage = req.body.errorMessage
+    }
+    // Store exchange-truth position details from engine reconciliation
+    // (F-001/F-023) — each symbol's side, qty, price, mark_price,
+    // unrealized_pnl. Used by the UI as single source of truth.
+    if (positionDetails && typeof positionDetails === 'object') {
+      const pd = {}
+      for (const [sym, info] of Object.entries(positionDetails)) {
+        pd[sym] = info
+      }
+      updateData.positionDetails = pd
     }
 
     const session = await LiveSession.findByIdAndUpdate(id, updateData, { new: true }).lean()
@@ -326,14 +336,17 @@ async function handleEngineStats(req, res, next) {
         io.emit('algo:session:log', openLog)
         await LiveSession.findByIdAndUpdate(id, {
           $push: { logs: { $each: [{ type: openLog.type, message: openLog.message }], $slice: -100 } },
-          // Persist the open-position snapshot so a reloaded client can value
-          // live PnL without having received the socket event (live_pnl_fix_plan).
+          // Persist the open-position snapshot with exchange-truth PnL data
+          // (F-023/A-013): mark_price and unrealized_pnl come from Binance.
           $set: {
             [`positionDetails.${eventData.symbol}`]: {
               side: eventData.side,
               qty: eventData.qty,
               price: eventData.price,
               leverage: eventData.leverage,
+              mark_price: eventData.mark_price || null,
+              unrealized_pnl: eventData.unrealized_pnl || null,
+              price_missing: eventData.price_missing || false,
             },
           },
         }).catch(() => { })
@@ -481,6 +494,22 @@ async function handleAlgoGetPosition(req, res) {
     res.json({ success: true, data: pos || null })
   } catch (err) {
     console.error('[AlgoBot] get-position failed:', err.message)
+    res.json({ success: false, error: err.message })
+  }
+}
+
+// POST /internal/algo/sessions/:id/get-open-orders
+// Body: { symbol }
+// Returns the raw Binance open orders for this symbol so the engine can
+// reconcile open orders against exchange state every loop (F-002).
+async function handleAlgoGetOpenOrders(req, res) {
+  try {
+    const { symbol } = req.body
+    const headers = await _getBinanceHeaders()
+    const { data } = await engineClient.get('/trade/open-orders', { headers, params: { symbol } })
+    res.json({ success: true, data: data?.data || [] })
+  } catch (err) {
+    console.error('[AlgoBot] get-open-orders failed:', err.message)
     res.json({ success: false, error: err.message })
   }
 }
@@ -830,6 +859,7 @@ module.exports = {
   handleAlgoClosePosition,
   handleAlgoSetLeverage,
   handleAlgoGetPosition,
+  handleAlgoGetOpenOrders,
   handleEngineStartup,
   deleteSession,
   deleteAllStopped,

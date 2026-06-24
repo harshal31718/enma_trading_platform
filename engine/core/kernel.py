@@ -164,13 +164,10 @@ class ExecutionKernel:
         exit_reason = ""
         was_long = strategy.is_long
 
-        # For live trading, verify position is still open on exchange
-        if is_live:
-            await self.adapter.verify_position(strategy, symbol)
-            if strategy.position is None:
-                return
-
         # Liquidation (simulated in backtest only)
+        # Note: exchange state reconciliation (F-001/F-004) is done by
+        # _reconcile_exchange_state() before check_exits() is called, so
+        # there is no separate verify_position call here for live.
         if not is_live and strategy.position.is_liquidated(high_t, low_t):
             exit_price = strategy.position.liquidation_price
             exit_reason = "liquidation"

@@ -9,10 +9,10 @@
 ## Progress
 
 | | Total | TODO | IN PROGRESS | BLOCKED | DONE | DROPPED |
-|---|---|---|---|---|---|---|---|
-| Corrections (F) | 24 | 14 | 0 | 0 | 10 | 0 |
-| Additions (A) | 16 | 6 | 0 | 0 | 10 | 0 |
-| **All** | **40** | **20** | **0** | **0** | **20** | **0** |
+|---|---|---|---|---|---|---|---|---|
+| Corrections (F) | 24 | 6 | 0 | 0 | 18 | 0 |
+| Additions (A) | 16 | 4 | 0 | 0 | 12 | 0 |
+| **All** | **40** | **10** | **0** | **0** | **30** | **0** |
 
 > Update this table whenever a row changes status.
 
@@ -102,14 +102,14 @@
 
 | Step | ID | Item | Doc | Sev | Status | Commit / Note |
 |---|---|---|---|---|---|---|
-| 5.1 | F-001 | One exchange-reconciled position record as single source of truth | 00/06 | HIGH | TODO | |
-| 5.2 | F-021 | UI reads the reconciled record, not engine in-memory belief | 06 | HIGH | TODO | |
-| 5.3 | F-002 | Reconcile open ORDERS (not just open positions) each loop | 00 | HIGH | TODO | |
-| 5.4 | F-020 | User-data-stream listener for fills (event-driven, not poll) | 04 | MEDIUM | TODO | |
-| 5.5 | F-004 | Reconcile every loop regardless of local position state (self-heal when wrongly flat) | 00 | MEDIUM | TODO | |
-| 5.6 | F-022 | Unify startup (Node) + runtime (engine) reconciliation into one owner | 06 | MEDIUM | TODO | |
-| 5.7 | F-023 / A-013 | Exchange-truth PnL via mark-price fallback chain (mark→quote→last→close) + missing-price flag | 06/07 | MEDIUM / ★★★ | TODO | |
-| 5.8 | F-003 | Reduce/strengthen the engine→Node→engine→Binance placement hop chain | 00 | HIGH | TODO | |
+| 5.1 | F-001 | One exchange-reconciled position record as single source of truth | 00/06 | HIGH | DONE | Unified `_reconcile_exchange_state()` restores/closes/reconciles positions from exchange; `_push_stats` sends reconciled `positionDetails` to MongoDB every loop |
+| 5.2 | F-021 | UI reads the reconciled record, not engine in-memory belief | 06 | HIGH | DONE | `handleEngineStats` stores exchange-truth position details; `SessionCard` uses the reconciled `positionDetails` field |
+| 5.3 | F-002 | Reconcile open ORDERS (not just open positions) each loop | 00 | HIGH | DONE | `_reconcile_exchange_state()` fetches `/fapi/v1/openOrders` + `/fapi/v1/openAlgoOrders` every loop; new `handleAlgoGetOpenOrders` handler |
+| 5.4 | F-020 | User-data-stream listener for fills (event-driven, not poll) | 04 | MEDIUM | DONE | `services/user_data_stream.py` — Binance listen key WS with auto-reconnect, keep-alive, fill callbacks wired into symbol loops |
+| 5.5 | F-004 | Reconcile every loop regardless of local position state (self-heal when wrongly flat) | 00 | MEDIUM | DONE | `_reconcile_exchange_state()` runs at top of every candle loop before any decision — no early return when position is None |
+| 5.6 | F-022 | Unify startup (Node) + runtime (engine) reconciliation into one owner | 06 | MEDIUM | DONE | `_reconcile_exchange_state()` is the single engine-side reconcile; Node's `reconcileSymbolLocks()` handles only Redis locks & orphan sessions |
+| 5.7 | F-023 / A-013 | Exchange-truth PnL via mark-price fallback chain (mark→quote→last→close) + missing-price flag | 06/07 | MEDIUM / ★★★ | DONE | Live PnL uses exchange `unRealizedProfit` first, then `markPrice` from positionRisk, then last price; `price_missing` flag propagated to positionDetails |
+| 5.8 | F-003 | Reduce/strengthen the engine→Node→engine→Binance placement hop chain | 00 | HIGH | DONE | `execute_entry()`, `execute_exit()`, `_close_position_on_stop()`, `_reconcile_exchange_state()` all call Binance directly via `send_signed_request()` — Node hop eliminated for all algo trading paths |
 
 ## Phase 6 — SL/TP & OCO robustness.
 

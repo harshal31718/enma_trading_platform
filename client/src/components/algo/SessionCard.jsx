@@ -112,7 +112,14 @@ export default function SessionCard({ session, onStop, stopping }) {
     if (String(data.sessionId) === String(session._id)) {
       setPositionDetails(prev => ({
         ...prev,
-        [data.symbol]: { side: data.side, qty: data.qty, price: data.price, leverage: data.leverage },
+        [data.symbol]: {
+          side: data.side,
+          qty: data.qty,
+          price: data.price,
+          leverage: data.leverage,
+          mark_price: data.mark_price || null,
+          unrealized_pnl: data.unrealized_pnl || null,
+        },
       }))
     }
   }, [session._id])
@@ -198,8 +205,9 @@ export default function SessionCard({ session, onStop, stopping }) {
   const totalTrades = session.totalTrades || 0
 
   // Live (unrealized) PnL across currently-open positions — recomputes as
-  // ticker prices stream in. null when positions are open but we lack the
-  // entry details/price to value them yet.
+  // ticker prices stream in. Uses exchange-reported unrealized PnL when
+  // available (F-023/A-013 fallback chain: exchange → local calc).
+  // null when positions are open but we lack the entry details/price to value them yet.
   const livePnl = useMemo(() => {
     const open = session.openPositions || []
     if (open.length === 0) return 0
@@ -207,10 +215,17 @@ export default function SessionCard({ session, onStop, stopping }) {
     for (const sym of open) {
       const d = positionDetails[sym]
       const cur = prices[sym]
-      if (d && cur) {
+      // Use exchange-reported unrealized PnL when available (F-023)
+      if (d && d.unrealized_pnl != null) {
+        const exPnl = parseFloat(d.unrealized_pnl)
+        if (!Number.isNaN(exPnl)) { sum += exPnl; counted++; continue }
+      }
+      // Fallback: compute from entry price, current mark/last price, and qty
+      const price = d?.mark_price || cur
+      if (d && price) {
         const entry = parseFloat(d.price)
         const qty = parseFloat(d.qty)
-        sum += d.side === 'short' ? (entry - cur) * qty : (cur - entry) * qty
+        sum += d.side === 'short' ? (entry - price) * qty : (price - entry) * qty
         counted++
       }
     }

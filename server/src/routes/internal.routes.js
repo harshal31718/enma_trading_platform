@@ -1,6 +1,6 @@
 const express = require('express')
 const router = express.Router()
-const { handleEngineStats, handleAlgoPlaceOrder, handleAlgoClosePosition, handleAlgoSetLeverage, handleAlgoGetPosition, handleEngineStartup } = require('../controllers/algo.controller')
+const { handleEngineStats, handleAlgoPlaceOrder, handleAlgoClosePosition, handleAlgoSetLeverage, handleAlgoGetPosition, handleAlgoGetOpenOrders, handleEngineStartup } = require('../controllers/algo.controller')
 
 // Called by Python engine to push session stat updates
 router.patch('/algo/sessions/:id/stats', handleEngineStats)
@@ -10,6 +10,7 @@ router.post('/algo/sessions/:id/place-order', handleAlgoPlaceOrder)
 router.post('/algo/sessions/:id/close-position', handleAlgoClosePosition)
 router.post('/algo/sessions/:id/set-leverage', handleAlgoSetLeverage)
 router.post('/algo/sessions/:id/get-position', handleAlgoGetPosition)
+router.post('/algo/sessions/:id/get-open-orders', handleAlgoGetOpenOrders)
 
 // Called by Python engine when it boots/restarts to reconcile states
 router.post('/algo/engine-startup', handleEngineStartup)

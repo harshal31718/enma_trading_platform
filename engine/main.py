@@ -26,6 +26,7 @@ from routers.risk import router as risk_router
 from routers.leverage_sensitivity import router as leverage_sensitivity_router
 from services.strategy_seeder import seed_strategies
 from services.binance_testnet import close_client
+from services.user_data_stream import user_data_stream
 from utils.symbols import load_exchange_rules
 
 load_dotenv()
@@ -89,9 +90,17 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to notify Node server of engine startup: {e}")
 
+    # Start the user data stream listener for real-time fill events (F-020)
+    try:
+        await user_data_stream.start()
+        logger.info("User data stream started for live fill events")
+    except Exception as e:
+        logger.warning(f"User data stream failed to start: {e}")
+
     yield
 
     # Shutdown
+    await user_data_stream.stop()
     close_mongo()
     await close_pool()
     await close_client()
