@@ -626,3 +626,15 @@ The Risk Dashboard lands in 5 logical phases. Pipeline-touching changes (R2, R4)
 | **R3. Live metrics proxy** | API routes passthrough, 10s Redis caching | `server/src/controllers/risk.controller.js` (update), `server/src/routes/risk.routes.js` | Live positions polling with mock headers |
 | **R4. Sim pipelines** | Re-run scenarios, trade bootstrapping | `engine/routers/leverage_sensitivity.py`, `engine/services/monte_carlo.py`, `server/src/models/BacktestLeverageScenario.js` | Re-run check on engine, Golden master verification |
 | **R5. Frontend** | Nav layout component grid, heatmap panel, settings overrides form | `client/src/pages/RiskDashboard.jsx`, `client/src/components/risk/*`, `client/src/App.jsx` | Visual style check (corners & color tokens) |
+
+---
+
+## 10. Known Exchange Environment Issues (Binance Futures Testnet)
+
+> [!WARNING]
+> The following symbols are currently inactive/suspended on the Binance Futures Testnet and will fail with an `Invalid symbol status for opening position` error when placing trades:
+> - **`WAVESUSDT`** (Status: `SETTLING` / Delisted)
+> - **`FTMUSDT`** (Status: `SETTLING`)
+> - **`MKRUSDT`** (Status: `SETTLING`)
+>
+> **Action:** Do not select or trade these symbols. Keep them excluded from platform active symbol lists.
