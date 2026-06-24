@@ -1,4 +1,24 @@
 ---
+## 2026-06-24 — Risk Model Improvements (workstream #2) — ALL 5 STEPS COMPLETE ✅
+
+**Goal:** Five additive risk-model changes across `engine/core/models/risk.py`, `engine/core/models/portfolio.py`, `engine/services/backtest_runner.py`, `engine/core/live_bot_manager.py`.
+
+**Steps done:**
+- **Step 1 — Trailing stop on `AtrBracketRiskModel`**: Added `__init__`/`_reset()` with `_current_stop`/`_initialized`. Maintain path gates on `trail_atr_mult > 0`; ratchets stop using `price ± trail_mult × ATR`. Default 0 = static (golden-master safe).
+- **Step 2 — Breakeven move**: Expanded state with `_entry_price`, `_initial_risk`, `_signal_price`. Maintain path gates on `breakeven_r > 0`; floors stop at `_entry_price` once `price >= entry + breakeven_r × initial_risk`. Both features share one stateful init block.
+- **Step 3 — ATR percentile filter**: Added `_atr_history` (session-level, not reset between trades). Accumulates `s.vars["atr"]` each candle (O(1)). Entry path gates on `atr_percentile_min > 0` + ≥20 samples; uses `bisect.bisect_left` for rank. Default 0 = disabled.
+- **Step 4 — Cost gate injection default**: Changed `_risk.get("min_edge_mult", 0.0)` → `0.05` in both `backtest_runner.py:310` and `live_bot_manager.py:242`. Golden master unchanged (ATR-based edge >> 5% of fee for all 5 strategies).
+- **Step 5 — Portfolio exposure cap**: Added cap in `DefaultPortfolioModel.construct()` after sizing: `(risk_per_unit × qty) / equity > max_portfolio_risk` → veto. Injected from `risk_params` with default 0.06 in both runners. Golden master unchanged (default risk_pct=1% << 6% cap).
+
+**Golden master:** `ws2_final` == `baseline` within tol=1e-6 (all 5 strategies). No re-baseline needed — all defaults are neutral for the golden dataset. Boundary suite 20/20.
+
+**Files changed:** `engine/core/models/risk.py`, `engine/core/models/portfolio.py`, `engine/services/backtest_runner.py`, `engine/core/live_bot_manager.py`, `workspace/docs/state/CURRENT_STATE.md`, `workspace/plan/INDEX.md`, `workspace/plan/STATUS.md`, `workspace/plan/handoff.md`.
+
+**Next:** Seq #3 — Dashboard page restructure (`dashboardPage_restructure.md`): 8 KPI stat cards, equity sparkline, drawdown chart, performance calendar heatmap, new backend aggregation endpoints.
+
+**Open questions:** None.
+
+---
 ## 2026-06-24 — Strategy Performance Refactor (workstream #1) — Phases 1–8 COMPLETE ✅
 
 **Goal:** Two-phase strategy contract (`prepare()` batch + index-only `before()`) to kill the

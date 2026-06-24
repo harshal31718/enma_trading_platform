@@ -60,6 +60,15 @@ class DefaultPortfolioModel(PortfolioModel):
         if raw_qty <= 0:
             return TargetPortfolio(qty=current_holding) if is_holding else TargetPortfolio(qty=0.0)
 
+        # Portfolio exposure cap: veto if this position's risk exceeds max_portfolio_risk × equity.
+        # Default 0.06 (6%). With risk_pct=0.01, new_risk_pct≈0.01 << 0.06 → never triggered
+        # at default settings → golden-master safe. Only bites when risk_pct > max_portfolio_risk.
+        max_port_risk = float(getattr(s, "max_portfolio_risk", 0.06))
+        if max_port_risk > 0 and s.equity > 0 and constraints.risk_per_unit > 0:
+            new_risk_pct = (constraints.risk_per_unit * raw_qty) / s.equity
+            if new_risk_pct > max_port_risk:
+                return TargetPortfolio(qty=current_holding) if is_holding else TargetPortfolio(qty=0.0)
+
         signed_qty = raw_qty * sig.direction
         weight = abs(signed_qty * s.price) / s.equity if s.equity > 0 else 0.0
         return TargetPortfolio(qty=signed_qty, weight=weight)

@@ -1,11 +1,14 @@
 """Risk Models — stop placement, budget, trailing, drawdown breaker.
 
-DefaultRiskModel  — ATR stop at entry, can_trade() circuit breaker.
-AtrBracketRiskModel — static ATR bracket (set at entry, unchanged while holding).
+DefaultRiskModel    — ATR stop at entry, can_trade() circuit breaker.
+AtrBracketRiskModel — ATR bracket with optional trailing (trail_atr_mult),
+                      breakeven move (breakeven_r), and ATR percentile filter
+                      (atr_percentile_min). All three default to 0 / disabled.
 ChandelierRiskModel — chandelier trailing stop with per-trade state.
 SignalExitRiskModel — no bracket; exit is signal-driven (BestSupertrend).
 """
 from __future__ import annotations
+import bisect
 
 from .base import RiskModel, RiskConstraints, RiskFrame, Signal
 
@@ -70,27 +73,87 @@ class DefaultRiskModel(RiskModel):
 
 
 class AtrBracketRiskModel(DefaultRiskModel):
-    """Static ATR bracket: computed at entry, returned unchanged while holding.
+    """ATR bracket: computed at entry; optionally trails/moves-to-breakeven.
 
     Used by MicroScalper, MicroMacroRSIDivergence, MultiDivergence.
 
-    Golden-master guarantee: when holding (current_holding != 0 and same
-    direction), reads s.stop_loss[1] / s.take_profit[1] and returns them
-    unchanged → route() path 5 (maintain) writes the same values back →
-    runner state is byte-identical to the old update_position()-does-nothing path.
+    Golden-master guarantee: trail_atr_mult and breakeven_r both default to 0 →
+    maintain path reads s.stop_loss[1] unchanged → byte-identical to prior static
+    behavior. Per-trade state is only used when either param is non-zero.
     """
+
+    def __init__(self):
+        self._current_stop: float | None = None
+        self._entry_price: float = 0.0
+        self._initial_risk: float = 0.0
+        self._signal_price: float = 0.0
+        self._initialized: bool = False
+        self._atr_history: list = []   # session-level; never reset between trades
+
+    def _reset(self) -> None:
+        self._current_stop = None
+        self._entry_price = 0.0
+        self._initial_risk = 0.0
+        self._signal_price = 0.0
+        self._initialized = False
+        # _atr_history intentionally not cleared — accumulates across the session
 
     def assess(self, s, sig: Signal, current_holding: float = 0.0) -> RiskConstraints:
         can = self.can_trade(s)
         is_holding = current_holding != 0.0
+
+        # Accumulate ATR for percentile filter (session-level; O(1) — reads s.vars set by before())
+        _atr_now = s.vars.get("atr")
+        if _atr_now and _atr_now > 0:
+            self._atr_history.append(float(_atr_now))
         same_dir = (
             (sig.direction > 0 and current_holding > 0) or
             (sig.direction < 0 and current_holding < 0)
         )
 
-        # ── Path: maintain static bracket while holding same direction ────────
+        # ── Path: maintain bracket while holding same direction ───────────────
         if is_holding and same_dir:
-            stop = s.stop_loss[1] if s.stop_loss else None
+            trail_mult  = float(getattr(s, "trail_atr_mult", 0.0))
+            breakeven_r = float(getattr(s, "breakeven_r", 0.0))
+
+            if trail_mult > 0 or breakeven_r > 0:
+                if not self._initialized:
+                    self._current_stop = float(s.stop_loss[1]) if s.stop_loss else None
+                    self._entry_price  = self._signal_price if self._signal_price > 0 else s.price
+                    self._initial_risk = (
+                        abs(self._entry_price - self._current_stop)
+                        if self._current_stop is not None else 0.0
+                    )
+                    self._initialized = True
+
+                stop = self._current_stop
+
+                # Trailing: ratchet stop toward price
+                if trail_mult > 0 and stop is not None:
+                    atr = s.vars.get("atr") or s._atr(int(getattr(s, "atr_period", 14)))
+                    if atr and atr > 0:
+                        if sig.direction > 0:
+                            candidate = s.price - trail_mult * atr
+                            if candidate > stop:
+                                stop = candidate
+                        else:
+                            candidate = s.price + trail_mult * atr
+                            if candidate < stop:
+                                stop = candidate
+
+                # Breakeven: floor stop at entry once price moves breakeven_r * initial_risk
+                if breakeven_r > 0 and stop is not None and self._initial_risk > 0:
+                    if (sig.direction > 0 and
+                            s.price >= self._entry_price + breakeven_r * self._initial_risk):
+                        stop = max(stop, self._entry_price)
+                    elif (sig.direction < 0 and
+                            s.price <= self._entry_price - breakeven_r * self._initial_risk):
+                        stop = min(stop, self._entry_price)
+
+                self._current_stop = stop
+            else:
+                stop = s.stop_loss[1] if s.stop_loss else None
+
             tp   = s.take_profit[1] if s.take_profit else None
             rpu  = abs(s.price - stop) if stop is not None else 0.0
             budget      = s.equity * float(getattr(s, "risk_pct", 0.01))
@@ -105,13 +168,22 @@ class AtrBracketRiskModel(DefaultRiskModel):
                 max_notional=max_notional,
             )
 
-        # ── Path: new entry or flip — compute fresh bracket from ATR ─────────
+        # ── Path: new entry or flip — reset state, store signal price, compute fresh ATR bracket
+        self._reset()
         if sig.direction == 0:
             return RiskConstraints(max_drawdown_hit=not can)
 
         atr = s.vars.get("atr") or s._atr(int(getattr(s, "atr_period", 14)))
         if not atr or atr <= 0:
             return RiskConstraints(vetoed=True, max_drawdown_hit=not can)
+
+        # ATR percentile filter: veto if current ATR is in the bottom N% of session history.
+        # atr_percentile_min=0 (default) disables the filter → golden-master safe.
+        atr_pct_min = float(getattr(s, "atr_percentile_min", 0.0))
+        if atr_pct_min > 0 and len(self._atr_history) >= 20:
+            rank = bisect.bisect_left(sorted(self._atr_history), atr)
+            if rank / len(self._atr_history) < atr_pct_min:
+                return RiskConstraints(vetoed=True, max_drawdown_hit=not can)
 
         sl_mult = float(getattr(s, "sl_atr_mult", 2.0))
 
@@ -156,6 +228,9 @@ class AtrBracketRiskModel(DefaultRiskModel):
         budget       = s.equity * float(getattr(s, "risk_pct", 0.01))
         max_notional = s.equity * max(int(getattr(s, "leverage", 1)), 1)
         vetoed = (not can) or risk_per_unit <= 0
+
+        # Capture signal price so the first holding candle can initialize entry state.
+        self._signal_price = s.price
 
         return RiskConstraints(
             vetoed=vetoed,

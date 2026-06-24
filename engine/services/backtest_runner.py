@@ -307,7 +307,8 @@ async def run_backtest_simulation(
     strategy.rrr               = float(_risk.get("rrr",            2.0))
     strategy.liq_buffer_pct    = float(_risk.get("liq_buffer_pct", 0.005))
     strategy.max_session_dd    = float(_risk.get("max_session_dd", 0.20))
-    strategy.cost_model.min_edge_mult = float(_risk.get("min_edge_mult", 0.0))
+    strategy.cost_model.min_edge_mult = float(_risk.get("min_edge_mult",     0.05))
+    strategy.max_portfolio_risk       = float(_risk.get("max_portfolio_risk", 0.06))
     strategy.slippage_pct      = _slippage
     strategy.fee_rate          = fee_rate
     strategy.available_capital = float(capital)

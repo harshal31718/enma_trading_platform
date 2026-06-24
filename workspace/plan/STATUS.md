@@ -33,10 +33,12 @@ Checked each remaining plan against the codebase. **All four are unimplemented**
 
 | Seq | Plan | Source | Status |
 |-----|------|--------|--------|
-| 1 | Two-phase `prepare()`/`before()` architecture | `plans/strategy_precompute_architecture.md` | Proposed, not implemented |
-| 1 | Per-strategy migration (5 strategies) | `plans/per_strategy_migration.md` | Proposed, not implemented |
-| 1 | Migration checklist (execution runbook) | `plans/migration_checklist.md` | Ready to execute |
-| 2 | Risk model improvements (5 changes) | `plans/strategy_precompute_architecture.md` §2 | Proposed, not implemented |
+| ~~1~~ | Two-phase `prepare()`/`before()` architecture | `plans/strategy_precompute_architecture.md` | ✅ Done 2026-06-24 |
+| ~~1~~ | Per-strategy migration (5 strategies) | `plans/per_strategy_migration.md` | ✅ Done 2026-06-24 |
+| ~~1~~ | Migration checklist (execution runbook) | `plans/migration_checklist.md` | ✅ Done 2026-06-24 |
+| 2 | Risk model improvements (5 changes: trailing stop, breakeven, ATR percentile filter, cost gate injection, portfolio cap) | `plans/strategy_precompute_architecture.md` §2 | Proposed — **next up** |
+| 3 | Dashboard page restructure (8 KPIs, sparklines, performance calendar heatmap) | `dashboardPage_restructure.md` | Proposed — independent, can run after #2 |
+| 4 | Risk Dashboard — new nav page (VaR, correlation, Monte Carlo, hierarchical param controls) | `RISK_DASHBOARD_PLAN.MD` | Proposed — sequence after #2 |
 
 ## Plans — Completed (archived)
 

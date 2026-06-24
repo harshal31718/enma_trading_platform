@@ -111,6 +111,15 @@ Last updated: 2026-06-24
 - **SMA robustness** (`talib_adapter.py`): `sma()` now wraps the TA-Lib call in try/except; if `period > data_length` (or any other error), returns `np.full(shape, np.nan)` for sequential mode or `np.nan` for scalar mode — avoids crashes during warmup.
 - Files: `base.py` (interface + convenience fns), `config.py` (backend selection), `adapters/talib_adapter.py`, `adapters/pandas_ta_adapter.py`
 
+### Risk Model Improvements (Workstream #2)
+- **`AtrBracketRiskModel`** (`core/models/risk.py`) gains three additive opt-in features (all default to off → golden-master safe):
+  - **Trailing stop** (`trail_atr_mult`, default 0): in the maintain path, ratchets the stop toward price using `price ± trail_mult × ATR`; only ever tightens. Per-trade state (`_current_stop`, `_initialized`) reset on new entry/flip.
+  - **Breakeven move** (`breakeven_r`, default 0): once price moves `breakeven_r × initial_risk` in favor, floors the stop at entry price. Initialises `_entry_price` from `_signal_price` captured at signal time (mirrors `ChandelierRiskModel`).
+  - **ATR percentile filter** (`atr_percentile_min`, default 0): vetoes new entries when the current ATR is in the bottom N% of the session's ATR history (accumulated via `s.vars["atr"]` every candle, O(1)). Requires ≥ 20 samples before activating.
+- **Cost gate injection default** changed from `0.0` → `0.05` in `backtest_runner.py` and `live_bot_manager.py`. The gate (`edge ≥ min_edge_mult × cost`) is now active by default; still overridable per-run via `risk_params["min_edge_mult"]`.
+- **Portfolio exposure cap** (`max_portfolio_risk`, default 0.06): added to `DefaultPortfolioModel.construct()` — after sizing, vetoes the trade if `risk_per_unit × qty / equity > max_portfolio_risk`. Injected from `risk_params` in both runners. With default `risk_pct = 0.01`, the cap (6%) is never triggered → golden-master safe.
+- All 5 golden master snapshots unchanged after workstream #2 (`ws2_final` == `baseline`, tol 1e-6). Boundary suite 20/20.
+
 ### Two-Phase Strategy Contract (`prepare()` + index-only `before()`)
 - **`BaseStrategy.prepare(candles)`** (`core/strategy.py`): one-time vectorized indicator pre-computation. Default is a no-op (backward compatible). Migrated strategies move **all** TA-Lib/pandas calls here, storing results as `self._*` full-length arrays/scalars over the supplied `candles`.
 - **`before()`** is then a pure index lookup at `self.index` — zero TA-Lib calls in the hot loop. This replaces the former O(N²) pattern (full indicator recompute on a growing `candles[:t+1]` slice every candle).
