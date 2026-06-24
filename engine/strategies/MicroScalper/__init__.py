@@ -104,27 +104,47 @@ class MicroScalper(BaseStrategy):
                 f"tp_atr_mult ({self.tp_atr_mult}) must be greater than sl_atr_mult ({self.sl_atr_mult})"
             )
 
-    # ── Indicators — computed once per candle in before() ──────────────────
-    # BUG-05 fix: atr_sma previously used `import talib` directly, crashing
-    # on the pandas_ta backend. Now uses numpy rolling mean on the sequential
-    # ATR series, backend-agnostic.
+    # ── Phase A: one-time vectorized pre-computation (full candle array) ─────
+    # BUG-05 fix retained: ATR baseline uses a numpy rolling mean on the
+    # sequential ATR series (backend-agnostic — no direct talib import).
+    def prepare(self, candles: np.ndarray) -> None:
+        """Compute the fast/slow EMA and ATR sequences once over the full array.
 
+        EMA and ATR are causal and TA-Lib seeds them from index 0, so the former
+        ``ta.ema(candles[:-1], …)`` "previous EMA" is exactly the sequential EMA
+        at ``i-1``; before() becomes pure index lookups.
+        """
+        if len(candles) == 0:
+            empty = np.array([])
+            self._fast_ema_seq = empty
+            self._slow_ema_seq = empty
+            self._atr_seq = empty
+            return
+        self._fast_ema_seq = np.asarray(
+            ta.ema(candles, period=self.fast_period, sequential=True), dtype=float)
+        self._slow_ema_seq = np.asarray(
+            ta.ema(candles, period=self.slow_period, sequential=True), dtype=float)
+        self._atr_seq = np.asarray(
+            ta.atr(candles, period=self.atr_period, sequential=True), dtype=float)
+
+    # ── Phase B: per-candle index lookup only (no TA-Lib) ───────────────────
     def before(self) -> None:
-        if len(self.candles) < self.MIN_WARMUP_CANDLES:
+        i = self.index
+        if (i + 1) < self.MIN_WARMUP_CANDLES:
             return
 
-        self.vars["fast_ema"]      = ta.ema(self.candles,      period=self.fast_period)
-        self.vars["slow_ema"]      = ta.ema(self.candles,      period=self.slow_period)
-        self.vars["fast_ema_prev"] = ta.ema(self.candles[:-1], period=self.fast_period)
-        self.vars["slow_ema_prev"] = ta.ema(self.candles[:-1], period=self.slow_period)
+        self.vars["fast_ema"]      = self._fast_ema_seq[i]
+        self.vars["slow_ema"]      = self._slow_ema_seq[i]
+        self.vars["fast_ema_prev"] = self._fast_ema_seq[i - 1]
+        self.vars["slow_ema_prev"] = self._slow_ema_seq[i - 1]
 
-        atr = ta.atr(self.candles, period=self.atr_period)
+        atr = float(self._atr_seq[i])
         self.vars["atr"] = atr
 
-        # ATR baseline for volatility filter — numpy rolling mean (BUG-05 fix)
+        # ATR baseline for volatility filter — numpy rolling mean (BUG-05 fix).
+        # Mirrors the old series[-(atr_period*2):] tail on the ATR sequence.
         if self.atr_multiplier > 0.0:
-            series = ta.atr(self.candles, period=self.atr_period, sequential=True)
-            window = series[-(self.atr_period * 2):]
+            window = self._atr_seq[max(0, i + 1 - self.atr_period * 2): i + 1]
             window = window[~np.isnan(window)]
             self.vars["atr_baseline"] = float(np.mean(window)) if window.size > 0 else 0.0
         else:
