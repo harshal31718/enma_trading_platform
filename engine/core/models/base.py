@@ -27,6 +27,7 @@ class Signal:
     conviction: strength in [0, 1]; 1.0 reproduces legacy boolean signal.
     asset / timeframe: filled by forecast() for multi-asset pipelines.
     ref_price: close at forecast time (entry reference, internal).
+    entry_tag / exit_tag: optional labels for per-tag analytics (A-015).
     """
     direction: int = 0
     magnitude: float = 0.0
@@ -34,6 +35,8 @@ class Signal:
     timeframe: str = ""
     ref_price: float = 0.0
     asset: str = ""
+    entry_tag: str = ""
+    exit_tag: str = ""
 
     @property
     def flat(self) -> bool:
@@ -103,6 +106,8 @@ class OrderPlan:
     """Execution Model output: the concrete order to send.
 
     direction: +1 long, -1 short (derived from target sign in route()).
+    intent: "enter" | "add" | "reduce" | "exit" — describes the order's purpose.
+    entry_tag: label from the strategy signal for per-tag analytics (A-015).
     """
     direction: int
     qty: float
@@ -110,6 +115,8 @@ class OrderPlan:
     stop_loss: float | None = None
     take_profit: float | None = None
     order_type: str = "market"
+    intent: str = "enter"
+    entry_tag: str = ""
 
 
 @dataclass

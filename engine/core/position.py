@@ -70,6 +70,35 @@ class Position:
             return low <= self.liquidation_price
         return high >= self.liquidation_price
 
+    def add_qty(self, qty: float, price: float) -> None:
+        """Scale in: add qty at price, recalculating average entry."""
+        new_total = self.qty + qty
+        self.entry_price = (self.qty * self.entry_price + qty * price) / new_total
+        self.qty = new_total
+        notional = self.qty * self.entry_price
+        self.margin = initial_margin(notional, self.leverage)
+        self._isolated_wallet = self.margin
+        self.liquidation_price = liquidation_price(
+            self.type, self.qty, self.entry_price, self._isolated_wallet
+        )
+
+    def reduce_qty(self, qty: float, price: float) -> float:
+        """Scale out: reduce position by qty. Returns realized P&L."""
+        if qty >= self.qty:
+            raise ValueError(f"reduce_qty {qty} >= position qty {self.qty} — use close()")
+        if self.type == "long":
+            realized = (price - self.entry_price) * qty
+        else:
+            realized = (self.entry_price - price) * qty
+        self.qty -= qty
+        ratio = self.qty / (self.qty + qty)
+        self.margin *= ratio
+        self._isolated_wallet = self.margin
+        self.liquidation_price = liquidation_price(
+            self.type, self.qty, self.entry_price, self._isolated_wallet
+        )
+        return realized
+
     def close(self, close_price: float) -> None:
         """Close the position and realize P&L at the actual fill price.
 

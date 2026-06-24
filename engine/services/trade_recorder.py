@@ -49,6 +49,8 @@ def build_trade_record(
     strategy_name: str | None,
     entry_time: datetime,
     exit_time: datetime,
+    entry_tag: str | None = None,
+    exit_tag: str | None = None,
 ) -> dict[str, Any]:
     """Assemble a trade record dict from captured fields.
 
@@ -75,6 +77,8 @@ def build_trade_record(
         "pnlPct": pnl_pct,
         "fee": fee,
         "exitReason": exit_reason,
+        "entryTag": entry_tag or "",
+        "exitTag": exit_tag or "",
         "sessionId": session_id,
         "strategyName": strategy_name,
         "entryTime": entry_time,

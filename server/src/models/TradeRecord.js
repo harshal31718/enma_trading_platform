@@ -21,6 +21,8 @@ const TradeRecordSchema = new mongoose.Schema(
     pnlPct:           { type: String },
     fee:              { type: String },
     exitReason:       { type: String, required: true },
+    entryTag:         { type: String },
+    exitTag:          { type: String },
 
     sessionId:        { type: String, index: true },
     strategyName:     { type: String },

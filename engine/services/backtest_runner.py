@@ -93,6 +93,7 @@ def _finalize_trade(
         "exitReason": exit_reason,
         "pnl": f"{realized_pnl:.2f}",
         "pnlPct": f"{pnl_pct:.2f}",
+        "exitTag": active_trade.get("exitTag", ""),
     })
     return active_trade
 
@@ -215,6 +216,69 @@ class BacktestAdapter(ExecutionAdapter):
     async def verify_position(self, strategy, symbol: str) -> None:
         pass
 
+    async def execute_reduce(self, strategy, symbol: str, qty: float, exit_price: float,
+                             time_t: datetime, index_t: int, adjust_tag: str = "") -> None:
+        if strategy.position is None or not strategy.position.is_open:
+            return
+        if qty <= 0 or qty >= strategy.position.qty:
+            return
+
+        open_t = strategy.candles[index_t, 1]
+        was_long = strategy.position.type == "long"
+        bounded_exit = bounded_exit_price(
+            is_long=was_long,
+            proposed_price=exit_price,
+            candle_open=open_t,
+            candle_low=strategy.candles[index_t, 4],
+            candle_high=strategy.candles[index_t, 3],
+        )
+        _fill = self.execution.exit_fill(strategy, bounded_exit, qty, "sell" if was_long else "buy")
+        fill_price = _fill.fill_price
+        fee = _fill.fee
+        self.total_fees += fee
+
+        realized_pnl = strategy.position.reduce_qty(qty, fill_price) - fee
+        strategy.balance += realized_pnl
+        strategy.available_margin = strategy.balance
+
+        if self.active_trade is not None:
+            entry = float(self.active_trade["entryPrice"])
+            _mfe = max(self.active_trade["_mfe"],
+                       (strategy.candles[index_t, 3] - entry) if was_long else (entry - strategy.candles[index_t, 4]))
+            _mae = min(self.active_trade["_mae"],
+                       (strategy.candles[index_t, 4] - entry) if was_long else (entry - strategy.candles[index_t, 3]))
+
+            # Record the partial exit as a synthetic trade for analytics
+            partial_trade = {
+                "type":       strategy.position.type,
+                "qty":        str(qty),
+                "entryPrice": str(self.active_trade["entryPrice"]),
+                "exitPrice":  str(fill_price),
+                "entryAt":    self.active_trade["entryAt"],
+                "exitAt":     time_t.isoformat(),
+                "_entry_dt":  self.active_trade["_entry_dt"],
+                "_exit_dt":   time_t,
+                "exitReason": "scale_out",
+                "pnl":        f"{realized_pnl:.2f}",
+                "pnlPct":     f"{(realized_pnl / (qty * fill_price / strategy.leverage)) * 100:.2f}",
+                "leverage":   strategy.leverage,
+                "liqPrice":   self.active_trade.get("liqPrice", ""),
+                "_mfe":       _mfe,
+                "_mae":       _mae,
+                "runUpPct":   f"{(_mfe / float(self.active_trade['entryPrice'])) * 100:.2f}",
+                "drawdownPct": f"{abs(_mae / float(self.active_trade['entryPrice'])) * 100:.2f}",
+                "barsHeld":   int(index_t - self.active_trade["_entry_index"]),
+                "entryTag":   adjust_tag or self.active_trade.get("entryTag", ""),
+                "exitTag":    self.active_trade.get("exitTag", ""),
+            }
+            self.active_trade["qty"] = str(strategy.position.qty)
+            self.trades.append(partial_trade)
+
+        try:
+            strategy.on_reduced_position((qty, fill_price))
+        except Exception as e:
+            logger.error(f"on_reduced_position error: {e}")
+
     async def charge_funding(self, strategy, close_t: float, time_t: datetime) -> None:
         if self.funding_enabled and self.funding_rate and self.last_funding_dt is not None:
             side_sign = 1.0 if strategy.position.type == "long" else -1.0
@@ -226,7 +290,9 @@ class BacktestAdapter(ExecutionAdapter):
                 self.last_funding_dt = boundary
                 boundary = _next_funding_boundary(boundary)
 
-    async def execute_entry(self, strategy, symbol: str, direction: str, qty: float, ref_price: float, time_t: datetime, index_t: int) -> bool:
+    async def execute_entry(self, strategy, symbol: str, direction: str, qty: float,
+                            ref_price: float, time_t: datetime, index_t: int,
+                            intent: str = "enter", adjust_tag: str = "") -> bool:
         exchange_name = strategy.exchange or "Binance Futures"
         sl_pct = None
         if strategy.stop_loss is not None:
@@ -252,30 +318,53 @@ class BacktestAdapter(ExecutionAdapter):
 
         self.total_fees += fee
         strategy.balance -= fee
-        strategy.position = Position(
-            direction, qty, fill_price, strategy.leverage,
-            isolated_wallet=req_margin,
-        )
-        strategy.available_capital -= req_margin
-        strategy.available_margin = strategy.balance - req_margin
-        self.last_funding_dt = time_t
 
-        self.active_trade = {
-            "type":       direction,
-            "qty":        str(qty),
-            "entryPrice": str(fill_price),
-            "entryAt":    time_t.isoformat(),
-            "_entry_dt":  time_t,
-            "_entry_index": index_t,
-            "_mfe":       0.0,
-            "_mae":       0.0,
-            "leverage":   strategy.leverage,
-            "liqPrice":   f"{strategy.position.liquidation_price:.4f}",
-        }
-        try:
-            strategy.on_open_position((qty, fill_price))
-        except Exception as e:
-            logger.error(f"on_open_position error: {e}")
+        if intent == "add" and strategy.position is not None and strategy.position.is_open:
+            # Scale in — add to existing position (A-014)
+            strategy.position.add_qty(qty, fill_price)
+            # Update active trade stats for the add leg
+            if self.active_trade is not None:
+                old_qty = float(self.active_trade["qty"])
+                old_entry = float(self.active_trade["entryPrice"])
+                new_qty = old_qty + qty
+                new_entry = (old_qty * old_entry + qty * fill_price) / new_qty
+                self.active_trade["qty"] = str(new_qty)
+                self.active_trade["entryPrice"] = str(new_entry)
+                self.active_trade["liqPrice"] = f"{strategy.position.liquidation_price:.4f}"
+            try:
+                strategy.on_increased_position((qty, fill_price))
+            except Exception as e:
+                logger.error(f"on_increased_position error: {e}")
+        else:
+            strategy.position = Position(
+                direction, qty, fill_price, strategy.leverage,
+                isolated_wallet=req_margin,
+            )
+            strategy.available_capital -= req_margin
+            self.last_funding_dt = time_t
+
+            self.active_trade = {
+                "type":       direction,
+                "qty":        str(qty),
+                "entryPrice": str(fill_price),
+                "entryAt":    time_t.isoformat(),
+                "_entry_dt":  time_t,
+                "_entry_index": index_t,
+                "_mfe":       0.0,
+                "_mae":       0.0,
+                "leverage":   strategy.leverage,
+                "liqPrice":   f"{strategy.position.liquidation_price:.4f}",
+                "entryTag":   adjust_tag or strategy.entry_tag or "",
+                "exitTag":    strategy.exit_tag or "",
+            }
+            try:
+                strategy.on_open_position((qty, fill_price))
+            except Exception as e:
+                logger.error(f"on_open_position error: {e}")
+
+        strategy.available_margin = strategy.balance - (
+            strategy.position.margin if strategy.position else 0
+        )
         strategy._entered_this_candle = True
         return True
 
@@ -935,6 +1024,8 @@ async def run_backtest_simulation(
                 "runUpPct":    tr.get("runUpPct", "0.00"),
                 "drawdownPct": tr.get("drawdownPct", "0.00"),
                 "barsHeld":    tr.get("barsHeld", 0),
+                "entryTag":    tr.get("entryTag", ""),
+                "exitTag":     tr.get("exitTag", ""),
             }
             for i, tr in enumerate(combined_trades)
         ]

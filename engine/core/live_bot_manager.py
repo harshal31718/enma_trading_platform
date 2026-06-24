@@ -84,49 +84,54 @@ class LiveAdapter(ExecutionAdapter):
         pass
 
     async def execute_entry(
-        self, strategy, symbol: str, direction: str, qty: float, ref_price: float, time_t: datetime, index_t: int
+        self, strategy, symbol: str, direction: str, qty: float, ref_price: float,
+        time_t: datetime, index_t: int, intent: str = "enter", adjust_tag: str = "",
     ) -> bool:
         session = self.manager.sessions.get(self.session_id)
         if not session:
             return False
 
-        # TradingState check (A-002) — halt new entries when reducing or halted
-        trading_state = session.get("trading_state", "active")
-        if trading_state in ("halted", "reducing"):
-            logger.warning(f"[AlgoBot] {symbol}: entry blocked, trading_state={trading_state}")
-            await self.manager._notify_node(self.session_id, {
-                "event": "log",
-                "eventData": {"type": "warning", "message": f"{symbol}: entry blocked (trading_state={trading_state})"}
-            })
-            strategy.buy = None
-            strategy.sell = None
-            return False
+        # DCA scale-in (A-014): skip new-entry guards when adding to existing position
+        is_dca = intent == "add" and strategy.position is not None and strategy.position.is_open
 
-        # Protections check (A-001)
-        protection_manager = session.get("protection_manager")
-        if protection_manager is not None:
-            lock = protection_manager.check_entry(symbol, direction, session.get("capital", 0))
-            if lock is not None:
-                logger.warning(f"[AlgoBot] {symbol}: entry blocked by protection: {lock.reason}")
+        if not is_dca:
+            # TradingState check (A-002) — halt new entries when reducing or halted
+            trading_state = session.get("trading_state", "active")
+            if trading_state in ("halted", "reducing"):
+                logger.warning(f"[AlgoBot] {symbol}: entry blocked, trading_state={trading_state}")
                 await self.manager._notify_node(self.session_id, {
                     "event": "log",
-                    "eventData": {"type": "warning", "message": f"{symbol}: entry blocked — {lock.reason}"}
+                    "eventData": {"type": "warning", "message": f"{symbol}: entry blocked (trading_state={trading_state})"}
                 })
                 strategy.buy = None
                 strategy.sell = None
                 return False
 
-        # Rate limiter check (A-003)
-        rate_limiter = session.get("rate_limiter")
-        if rate_limiter is not None and not rate_limiter.allow():
-            logger.warning(f"[AlgoBot] {symbol}: order rate limited, skipping")
-            await self.manager._notify_node(self.session_id, {
-                "event": "log",
-                "eventData": {"type": "warning", "message": f"{symbol}: order rate limited, skipping"}
-            })
-            strategy.buy = None
-            strategy.sell = None
-            return False
+            # Protections check (A-001)
+            protection_manager = session.get("protection_manager")
+            if protection_manager is not None:
+                lock = protection_manager.check_entry(symbol, direction, session.get("capital", 0))
+                if lock is not None:
+                    logger.warning(f"[AlgoBot] {symbol}: entry blocked by protection: {lock.reason}")
+                    await self.manager._notify_node(self.session_id, {
+                        "event": "log",
+                        "eventData": {"type": "warning", "message": f"{symbol}: entry blocked — {lock.reason}"}
+                    })
+                    strategy.buy = None
+                    strategy.sell = None
+                    return False
+
+            # Rate limiter check (A-003)
+            rate_limiter = session.get("rate_limiter")
+            if rate_limiter is not None and not rate_limiter.allow():
+                logger.warning(f"[AlgoBot] {symbol}: order rate limited, skipping")
+                await self.manager._notify_node(self.session_id, {
+                    "event": "log",
+                    "eventData": {"type": "warning", "message": f"{symbol}: order rate limited, skipping"}
+                })
+                strategy.buy = None
+                strategy.sell = None
+                return False
 
         fill_price = ref_price
 
@@ -186,6 +191,68 @@ class LiveAdapter(ExecutionAdapter):
 
         # ── F-019: Track placed algo order IDs for OUO peer-cancel ──
         _placed_algo_ids: dict[str, str | None] = {"sl": None, "tp": None}
+
+        # DCA scale-in: skip SL/TP placement and use existing brackets
+        if is_dca:
+            try:
+                from services.binance_testnet import send_signed_request as _signed
+                _api_key = os.getenv("BINANCE_TESTNET_API_KEY")
+                _api_secret = os.getenv("BINANCE_TESTNET_SECRET")
+                if not _api_key or not _api_secret:
+                    raise RuntimeError("Binance Testnet API credentials not configured")
+
+                async with (sem if sem else asyncio.nullcontext()):
+                    add_params = {
+                        "symbol": symbol,
+                        "side": binance_side,
+                        "type": "MARKET",
+                        "quantity": _fmt_num(qty),
+                        "newOrderRespType": "RESULT",
+                    }
+                    result = await _signed(
+                        "POST", "/fapi/v1/order",
+                        _api_key, _api_secret,
+                        params=add_params,
+                        mode="testnet",
+                    )
+                    fill_price = float(result.get("avgPrice", ref_price))
+                    logger.info(
+                        f"[AlgoBot] DCA add {direction}: {symbol} +{qty} @ {fill_price} "
+                        f"orderId={result.get('orderId')}"
+                    )
+
+                strategy.position.add_qty(qty, fill_price)
+                pos_info = session["open_positions"].get(symbol, {})
+                old_qty = float(pos_info.get("qty", 0))
+                new_qty = old_qty + qty
+                new_price = (old_qty * float(pos_info.get("price", 0)) + qty * fill_price) / new_qty if old_qty > 0 else fill_price
+                pos_info["qty"] = str(new_qty)
+                pos_info["price"] = str(new_price)
+                session["open_positions"][symbol] = pos_info
+
+                try:
+                    strategy.on_increased_position((qty, fill_price))
+                except Exception as e:
+                    logger.error(f"on_increased_position error: {e}")
+
+                await self.manager._notify_node(self.session_id, {
+                    "pnl": str(round(session["pnl"], 2)),
+                    "openPositions": list(session["open_positions"].keys()),
+                    "status": "running",
+                    "event": "position:adjust",
+                    "eventData": {
+                        "symbol": symbol,
+                        "qty": str(new_qty),
+                        "price": str(new_price),
+                        "adjustQty": str(qty),
+                        "adjustTag": adjust_tag,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    },
+                })
+                return True
+            except Exception as e:
+                logger.error(f"[AlgoBot] DCA add failed for {symbol}: {e}")
+                return False
 
         try:
             # F-003: Place orders directly on Binance instead of routing
@@ -381,6 +448,101 @@ class LiveAdapter(ExecutionAdapter):
         logger.info(f"[AlgoBot] Testnet {direction} filled: {symbol} qty={qty} @ {fill_price}")
         return True
 
+    async def execute_reduce(
+        self, strategy, symbol: str, qty: float, exit_price: float,
+        time_t: datetime, index_t: int, adjust_tag: str = "",
+    ) -> None:
+        session = self.manager.sessions.get(self.session_id)
+        if not session or strategy.position is None or not strategy.position.is_open:
+            return
+        if qty <= 0 or qty >= strategy.position.qty:
+            return
+
+        reduce_side = "SELL" if strategy.position.type == "long" else "BUY"
+        try:
+            from services.binance_testnet import send_signed_request as _signed
+            _api_key = os.getenv("BINANCE_TESTNET_API_KEY")
+            _api_secret = os.getenv("BINANCE_TESTNET_SECRET")
+
+            sem = self.manager._order_semaphores.get(self.session_id)
+            async with (sem if sem else asyncio.nullcontext()):
+                reduce_params = {
+                    "symbol": symbol,
+                    "side": reduce_side,
+                    "type": "MARKET",
+                    "quantity": _fmt_num(qty),
+                    "reduceOnly": "true",
+                    "newOrderRespType": "RESULT",
+                }
+                result = await _signed(
+                    "POST", "/fapi/v1/order",
+                    _api_key, _api_secret,
+                    params=reduce_params,
+                    mode="testnet",
+                )
+                fill_price = float(result.get("avgPrice", exit_price))
+                logger.info(
+                    f"[AlgoBot] DCA reduce {strategy.position.type}: {symbol} -{qty} @ {fill_price} "
+                    f"orderId={result.get('orderId')}"
+                )
+
+            realized_pnl = strategy.position.reduce_qty(qty, fill_price)
+            fee = strategy.execution_model.exit_fee(strategy, qty, fill_price)
+            realized_pnl -= fee
+
+            pos_info = session["open_positions"].get(symbol, {})
+            new_qty = strategy.position.qty
+            pos_info["qty"] = str(new_qty)
+            session["open_positions"][symbol] = pos_info
+
+            _tr = build_trade_record(
+                source="bot",
+                executed_by=session.get("strategy_name", "unknown"),
+                symbol=symbol,
+                side=strategy.position.type,
+                qty=str(qty),
+                entry_price=str(pos_info.get("price", "0")),
+                exit_price=str(fill_price),
+                sl_order_price=None,
+                tp_order_price=None,
+                margin=None,
+                liquidation_price=None,
+                leverage=strategy.leverage,
+                net_pnl=str(round(realized_pnl, 2)),
+                pnl_pct=None,
+                fee=str(round(fee, 2)) if fee else None,
+                exit_reason="scale_out",
+                session_id=self.session_id,
+                strategy_name=session.get("strategy_name"),
+                entry_time=datetime.now(timezone.utc),
+                exit_time=datetime.now(timezone.utc),
+                entry_tag=adjust_tag or "",
+                exit_tag="",
+            )
+            await record_trade(_tr)
+
+            try:
+                strategy.on_reduced_position((qty, fill_price))
+            except Exception as e:
+                logger.error(f"on_reduced_position error: {e}")
+
+            await self.manager._notify_node(self.session_id, {
+                "pnl": str(round(session["pnl"], 2)),
+                "openPositions": list(session["open_positions"].keys()),
+                "status": "running",
+                "event": "position:adjust",
+                "eventData": {
+                    "symbol": symbol,
+                    "qty": str(new_qty),
+                    "reduceQty": str(qty),
+                    "exitPrice": str(fill_price),
+                    "adjustTag": adjust_tag,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            })
+        except Exception as e:
+            logger.error(f"[AlgoBot] DCA reduce failed for {symbol}: {e}")
+
     async def execute_exit(
         self, strategy, symbol: str, qty: float, exit_price: float, reason: str, time_t: datetime, index_t: int,
         high_t: float, low_t: float
@@ -478,6 +640,8 @@ class LiveAdapter(ExecutionAdapter):
             strategy_name=session.get("strategy_name"),
             entry_time=entry_time,
             exit_time=exit_time,
+            entry_tag=strategy.entry_tag or "",
+            exit_tag=strategy.exit_tag or "",
         )
 
         strategy.position = None

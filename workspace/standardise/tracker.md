@@ -9,10 +9,10 @@
 ## Progress
 
 | | Total | TODO | IN PROGRESS | BLOCKED | DONE | DROPPED |
-|---|---|---|---|---|---|---|---|
+|---|---|---|---|---|---|---|---|---|
 | Corrections (F) | 24 | 1 | 0 | 0 | 23 | 0 |
-| Additions (A) | 16 | 1 | 0 | 0 | 15 | 0 |
-| **All** | **40** | **2** | **0** | **0** | **38** | **0** |
+| Additions (A) | 16 | 0 | 0 | 0 | 16 | 0 |
+| **All** | **40** | **1** | **0** | **0** | **39** | **0** |
 
 > Update this table whenever a row changes status.
 
@@ -138,8 +138,8 @@
 
 | Step | ID | Item | Doc | Val | Status | Commit / Note |
 |---|---|---|---|---|---|---|
-| 9.1 | A-014 | Position adjustment / DCA (scale in/out) in the execution model | 07 | ★★★ | TODO | |
-| 9.2 | A-015 | Entry/exit tagging end-to-end (signal → trade record) feeding per-tag analytics | 07 | ★★ | TODO | |
+| 9.1 | A-014 | Position adjustment / DCA (scale in/out) in the execution model | 07 | ★★★ | DONE | Position.add_qty/reduce_qty; strategy.adjust_trade_position() hook; DCA paths in kernel, backtest_runner, live_bot_manager |
+| 9.2 | A-015 | Entry/exit tagging end-to-end (signal → trade record) feeding per-tag analytics | 07 | ★★ | DONE | entry_tag/exit_tag on Signal, OrderPlan, trade_recorder, BacktestTrade, TradeRecord models |
 
 ## Phase 10 — Cleanup.
 

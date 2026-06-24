@@ -94,6 +94,14 @@ class BaseStrategy(ABC):
         self.order_type:       str   = "market" # "market" | "limit"
         self.limit_offset:     float = 0.0      # price offset for limit entries
 
+        # ── DCA / position adjustment (A-014) ──────────────────────────────
+        self.qty_to_adjust: float = 0.0  # signed delta; positive=increase, negative=decrease
+        self.adjust_tag: str = ""        # tag for the adjustment leg
+
+        # ── Entry/exit tagging (A-015) ──────────────────────────────────────
+        self.entry_tag: str = ""  # set by strategy forecast() to label the entry signal
+        self.exit_tag: str = ""   # set by strategy forecast() to label the exit signal
+
         # ── Five-Model Quant Architecture (see plan.md) ──────────────────────
         # The strategy itself is the Alpha Model (forecast()/should_*). The other
         # four models are pluggable; defaults reproduce legacy behavior exactly.
@@ -436,6 +444,22 @@ class BaseStrategy(ABC):
     # ─────────────────────────────────────────
     # Utility methods
     # ─────────────────────────────────────────
+
+    def adjust_trade_position(self) -> tuple[float, str] | None:
+        """Override to scale in/out. Returns (qty_delta, tag) or None.
+
+        Called every candle when a position is open. Positive qty_delta
+        increases the position (scale in), negative decreases it (scale out).
+        The tag is propagated to trade records for per-tag analytics (A-015).
+
+        Example::
+
+            def adjust_trade_position(self):
+                if self.position.pnl_pct < -5.0 and self.position.qty < self.max_dca_qty:
+                    return self.size_by_risk(self.stop_loss[1]), "dca_dip"
+                return None
+        """
+        return None
 
     def liquidate(self) -> None:
         """[DEPRECATED] Close the open position at market price.

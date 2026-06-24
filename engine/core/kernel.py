@@ -26,9 +26,14 @@ class ExecutionAdapter(ABC):
 
     @abstractmethod
     async def execute_entry(
-        self, strategy, symbol: str, direction: str, qty: float, ref_price: float, time_t: datetime, index_t: int
+        self, strategy, symbol: str, direction: str, qty: float, ref_price: float,
+        time_t: datetime, index_t: int, intent: str = "enter", adjust_tag: str = "",
     ) -> bool:
-        """Execute a market entry order. Returns True if entered."""
+        """Execute a market entry order. Returns True if entered.
+
+        intent: "enter" for new position, "add" for DCA scale-in.
+        adjust_tag: label from strategy.adjust_trade_position() for per-tag analytics.
+        """
 
     @abstractmethod
     async def execute_exit(
@@ -43,6 +48,15 @@ class ExecutionAdapter(ABC):
         index_t: int, high_t: float, low_t: float, stop_loss: float | None = None, take_profit: float | None = None
     ) -> bool:
         """Execute atomic close-and-reverse order. Returns True if flip succeeded."""
+
+    @abstractmethod
+    async def execute_reduce(
+        self, strategy, symbol: str, qty: float, exit_price: float,
+        time_t: datetime, index_t: int, adjust_tag: str = "",
+    ) -> None:
+        """Partial position reduction (DCA scale-out). Closes ``qty`` units
+        without closing the entire position. The reduced leg is recorded as
+        a separate realized P&L event for per-tag analytics."""
 
     @abstractmethod
     async def verify_position(self, strategy, symbol: str) -> None:
@@ -99,6 +113,52 @@ class ExecutionKernel:
                 high_t=high_t,
                 low_t=low_t,
             )
+            return
+
+        # 2b. DCA position adjustment (scale in/out) — A-014
+        if strategy.position is not None and strategy.qty_to_adjust != 0.0:
+            delta = strategy.qty_to_adjust
+            tag = strategy.adjust_tag
+            strategy.qty_to_adjust = 0.0
+            strategy.adjust_tag = ""
+            if delta > 0:
+                # Scale in — add to existing position
+                await self.adapter.execute_entry(
+                    strategy=strategy,
+                    symbol=symbol,
+                    direction=strategy.position.type,
+                    qty=delta,
+                    ref_price=open_t,
+                    time_t=time_t,
+                    index_t=index_t,
+                    intent="add",
+                    adjust_tag=tag,
+                )
+            else:
+                # Scale out — partial exit
+                reduce_qty = min(abs(delta), strategy.position.qty)
+                if reduce_qty < strategy.position.qty:
+                    await self.adapter.execute_reduce(
+                        strategy=strategy,
+                        symbol=symbol,
+                        qty=reduce_qty,
+                        exit_price=open_t,
+                        time_t=time_t,
+                        index_t=index_t,
+                        adjust_tag=tag,
+                    )
+                else:
+                    await self.adapter.execute_exit(
+                        strategy=strategy,
+                        symbol=symbol,
+                        qty=strategy.position.qty,
+                        exit_price=open_t,
+                        reason="scale_out",
+                        time_t=time_t,
+                        index_t=index_t,
+                        high_t=high_t,
+                        low_t=low_t,
+                    )
             return
 
         # 3. Entry buy or sell
@@ -257,6 +317,20 @@ class ExecutionKernel:
         # Execute 5-model pipeline
         plan = evaluate(strategy, current_holding)
 
+        # DCA / position adjustment (A-014) — called every candle when open
+        strategy.qty_to_adjust = 0.0
+        strategy.adjust_tag = ""
+        if strategy.position is not None and strategy.position.is_open:
+            try:
+                adj = strategy.adjust_trade_position()
+                if adj is not None:
+                    delta, tag = adj
+                    if delta != 0.0:
+                        strategy.qty_to_adjust = delta
+                        strategy.adjust_tag = tag
+            except Exception:
+                pass
+
         # Intercept with execution algorithm if configured (A-016)
         if self.exec_algo is not None:
             # Clear what DefaultExecution.route set on strategy, because we will rewrite it with the slice
@@ -285,6 +359,39 @@ class ExecutionKernel:
 
         # For live trading, execute immediately on this candle close
         if is_live:
+            # Live DCA / position adjustment (A-014)
+            if strategy.position is not None and strategy.qty_to_adjust != 0.0:
+                delta = strategy.qty_to_adjust
+                tag = strategy.adjust_tag
+                strategy.qty_to_adjust = 0.0
+                strategy.adjust_tag = ""
+                if delta > 0:
+                    await self.adapter.execute_entry(
+                        strategy=strategy, symbol=symbol,
+                        direction=strategy.position.type,
+                        qty=delta, ref_price=strategy.price,
+                        time_t=time_t, index_t=index_t,
+                        intent="add", adjust_tag=tag,
+                    )
+                else:
+                    reduce_qty = min(abs(delta), strategy.position.qty)
+                    if reduce_qty < strategy.position.qty:
+                        await self.adapter.execute_reduce(
+                            strategy=strategy, symbol=symbol,
+                            qty=reduce_qty, exit_price=strategy.price,
+                            time_t=time_t, index_t=index_t,
+                            adjust_tag=tag,
+                        )
+                    else:
+                        await self.adapter.execute_exit(
+                            strategy=strategy, symbol=symbol,
+                            qty=strategy.position.qty,
+                            exit_price=strategy.price,
+                            reason="scale_out",
+                            time_t=time_t, index_t=index_t,
+                            high_t=candle[3], low_t=candle[4],
+                        )
+
             if strategy.position is None and plan is not None:
                 await self.adapter.execute_entry(
                     strategy=strategy,

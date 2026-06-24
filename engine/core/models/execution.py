@@ -3,14 +3,17 @@
 route() is the primary contract (Narang strict boundary: strategies never write
 buy/sell/stop_loss/take_profit/_pending_flip/_close_at_open directly).
 
-Five paths in route():
+Paths in route():
   1. flat  → flat:          no-op
   2. hold  → flat (close):  _close_at_open = True
   3. flat  → enter:         write buy/sell + bracket
   4. hold  → flip:          flip_position()
   5. hold  → maintain:      refresh bracket from constraints (handles trailing)
 
-plan() is kept as a deprecated shim for legacy runners not yet using the pipeline.
+DCA scale-in/out (A-014) is handled externally by evaluate_and_route():
+the strategy's adjust_trade_position() hook sets qty_to_adjust on the
+strategy object, which the adapter processes as a separate order. route()
+itself does not handle DCA — Path 5 covers the bracket refresh that follows.
 """
 from __future__ import annotations
 

@@ -18,6 +18,8 @@ const BacktestTradeSchema = new mongoose.Schema(
     runUpPct:    { type: String },
     drawdownPct: { type: String },
     barsHeld:    { type: Number },
+    entryTag:    { type: String },
+    exitTag:     { type: String },
   },
   { timestamps: false, collection: 'backtestTrades' }
 )

@@ -3,7 +3,7 @@
 **Authority:** This is the single source of truth for what ENMA currently does.
 Read this before starting any work. If this conflicts with chat history, this document wins.
 
-Last updated: 2026-06-24 (Phase 8)
+Last updated: 2026-06-24 (Phase 9)
 
 ---
 
@@ -160,6 +160,11 @@ Last updated: 2026-06-24 (Phase 8)
 - **A-005 — Typed Self-Validating Parameters**: New `engine/core/params.py` with `IntParameter`, `FloatParameter`, `DecimalParameter`, `CategoricalParameter`, and `BooleanParameter` classes — bounds validated at construction, type coercion, and `.to_dict()` for server API consumption. Backward-compatible shared helpers (`param_coerce`, `param_validate`, `param_default`, `param_to_dict`) work with both typed and legacy dict-style PARAMS.
 - **A-006 — Parameter Optimization Run Mode**: New `engine/services/optimizer.py` — grid search over parameter combinations (int step/range, float linspace, categorical values, random subset support). 8 objective functions (sharpe, sortino, calmar, profit, profit_pct, drawdown, sqn, multi). Results persisted to MongoDB `optimizationResults` collection. New router at `engine/routers/optimize.py` — endpoints: `GET /optimize/objectives`, `POST /optimize/run`, `GET /optimize/{id}/status`, `GET /optimize/{id}/results`.
 
+### Phase 9 — Strategy Mechanisms (DCA, Entry/Exit Tagging)
+- **A-014 — Position Adjustment / DCA**: `Position` model (`engine/core/position.py`) gains two new methods — `add_qty()` (scale-in: recalculates average entry price, merges fees) and `reduce_qty()` (partial close: returns realized P&L without removing the position). `Strategy` (`engine/core/strategy.py`) gains an `adjust_trade_position()` hook (returns `(qty_delta, tag) | None`), modeled after freqtrade's DCA pattern. The unified `ExecutionKernel` evaluates the hook in `evaluate_and_route()` when an open position exists: if the strategy returns a non-zero qty delta, the kernel sets `strategy.qty_to_adjust` and routes it through the adapter. `BacktestAdapter.execute_entry()` handles `intent="add"` by calling `Position.add_qty()` instead of creating a new Position. New `execute_reduce()` on both adapters handles partial close via `Position.reduce_qty()`, recording a synthetic partial-exit trade. **Backward compatible**: strategies that don't override `adjust_trade_position()` return `None` — zero behavior change.
+- **A-015 — Entry/Exit Tagging End-to-End**: `Signal` (`engine/core/models/base.py`) gains optional `entry_tag` and `exit_tag` fields — set by the strategy in `forecast()` (entry_tag) or in `adjust_trade_position()`/exit signal (exit_tag). `OrderPlan` gains `intent` ("enter"|"add"|"reduce"|"exit") and `entry_tag` for traceability through the pipeline. Tags propagate to `build_trade_record()` in `engine/services/trade_recorder.py` and are persisted on both `backtestTrades` and `tradeRecords` via `BacktestTrade.entryTag`/`exitTag` and `TradeRecord.entryTag`/`exitTag` (server models). Enables per-tag analytics (A-008 per-tag breakdown) — signals can now be labeled and analyzed independently.
+
+
 ### UI / Navigation
 - 6 nav pages + OrderHistory (at `/order-history`, not in navbar): Dashboard, Strategies, Backtest, Live Trading (Trade), Algo Trading, Settings
 - Horizontal top navbar — no sidebar
@@ -171,7 +176,7 @@ Last updated: 2026-06-24 (Phase 8)
 
 ## In Progress
 
-Phase 9 (Strategy mechanisms — DCA, entry/exit tagging) — next on the tracker.
+
 
 ## Verified Baselines
 
