@@ -8,11 +8,19 @@ Enma was built single-user (no `user_id` anywhere by design). We are adding:
 - **Shared strategies** — strategy files and metadata stay global (no per-user partitioning)
 - **Public landing page** — explains invite-only nature, has "Sign in with Google" CTA
 
-This overrides the previous constraint of "no user_id on any Mongoose model". The server `CLAUDE.md` and `AGENTS.md` must be updated after implementation to reflect the new multi-user architecture.
+This overrides the previous constraint of "no user_id on any Mongoose model". The server `CLAUDE.md` and `AGENTS.md` must be updated after implementation (Phase 6) to reflect the new multi-user architecture.
 
 **Auth pattern:** Google OAuth → Passport.js → server issues signed JWT in `httpOnly` cookie → all `/api/v1/*` routes protected by `verifyJWT` middleware → Socket.IO handshake reads the same cookie.
 
 **Invite system:** Admin adds trusted emails to a `PlatformConfig` MongoDB singleton. Users sign in with Google; if their email isn't on the list, they're redirected to the landing page with `?error=not_invited`.
+
+**Admin model:** Single hardcoded `ADMIN_EMAIL` in `.env`. When that email logs in via Google, the server auto-promotes `role = 'admin'`. Admin sees the same app plus one extra page (`/admin`) to manage the email whitelist. Admin has **no access to any user's data** (backtests, sessions, trades, settings).
+
+---
+
+## Existing Data Migration
+
+> **Decision needed before Phase 3:** If existing MongoDB documents (BacktestResult, LiveSession, etc.) contain test data that can be discarded, treat them as orphaned — no migration needed. If any data must be kept, a backfill script is required to stamp a `userId` on all existing documents. Confirm before starting Phase 3.
 
 ---
 
@@ -38,7 +46,7 @@ JWT_SECRET=<long random string>
 # ENCRYPTION_KEY already exists (used by encryption.js for API key AES-256-GCM)
 ```
 
-Google Cloud Console setup:
+Google Cloud Console setup (prerequisite — must exist before Phase 1 can be tested):
 1. Create project → APIs & Services → Credentials → OAuth 2.0 Client ID (Web application)
 2. Authorized redirect URIs: `http://localhost:5000/api/v1/auth/google/callback` (dev) + production URL
 3. App status: **Testing** — add trusted test user emails manually
@@ -109,17 +117,17 @@ GET  /api/v1/auth/me               → verifyJWT → getMe
 
 **`server/src/routes/admin.routes.js`** (all behind `verifyJWT + requireAdmin`)
 ```
-GET    /api/v1/admin/users
 GET    /api/v1/admin/allowed-emails
 POST   /api/v1/admin/allowed-emails         body: { email }
 DELETE /api/v1/admin/allowed-emails/:email
 ```
 
 **`server/src/controllers/admin.controller.js`**
-- `listUsers`: `User.find({}).select('-__v').sort({ createdAt: -1 })`
 - `getAllowedEmails`: `PlatformConfig.findById('platform')` → return `allowedEmails`
 - `addAllowedEmail`: check email exists first, then `$push` if not present (avoid duplicates)
 - `removeAllowedEmail`: `$pull: { allowedEmails: { email: req.params.email.toLowerCase() } }`
+
+Note: No `listUsers` endpoint — admin only manages the email whitelist. Admin has no visibility into user data.
 
 ### Rewrite `server/src/app.js`
 
@@ -130,7 +138,6 @@ app.use(cors({ origin: CLIENT_URL, credentials: true }))  // ADD credentials: tr
 app.use(morgan('dev'))
 app.use(express.json())
 app.use(passport.initialize()) // ADD
-app.use('/api/v1/', apiLimiter)
 
 // Unprotected
 app.get('/api/v1/health', ...)
@@ -181,7 +188,7 @@ Changes:
 
 All other fields unchanged.
 
-**Migration note:** The existing `_id: 'global'` document becomes orphaned but doesn't break anything — first user login creates a fresh Settings doc. No automated migration needed.
+**Migration note:** The existing `_id: 'global'` document becomes orphaned but doesn't break anything — first user login creates a fresh Settings doc. No automated migration needed for Settings.
 
 ### Rewrite `server/src/controllers/settings.controller.js`
 
@@ -239,6 +246,7 @@ Update all callers (`handleAlgoPlaceOrder`, `handleAlgoClosePosition`, `handleAl
 
 - Replace `Settings.findById('global')` → `Settings.findOne({ userId: req.user.id })`
 - Change Redis cache key: `risk:live-metrics:${req.user.id}` (was `risk:live-metrics:global`)
+- Each user sees only their own risk data (no global aggregate for admin)
 
 ---
 
@@ -257,6 +265,8 @@ Add `userId: { type: String, required: true, index: true }` to:
 - `TradeRecord.js` — use `required: false` (engine is sole writer; field added gradually after engine update)
 
 **Strategy.js: NO change** — stays global/shared.
+
+> See migration decision above. If existing documents can be discarded, proceed. Otherwise add a backfill step here before marking Phase 3 complete.
 
 ### Controller Query Changes
 
@@ -429,9 +439,9 @@ export default function ProtectedRoute({ children }) {
 ### Rewrite `client/src/App.jsx`
 
 - `/` → `<Landing />` (public, no Navbar)
-- `/dashboard` → Dashboard (moved from `/`; all existing routes stay except Dashboard)
+- `/dashboard` → Dashboard (moved from `/`; all existing routes stay, prefixed under ProtectedRoute)
 - All existing routes wrapped in `<ProtectedRoute>` inside a `<Layout>` (Navbar wrapper)
-- Add `/admin` → `<AdminPanel />`
+- Add `/admin` → `<AdminPanel />` (behind ProtectedRoute; server enforces admin role)
 
 ### Update `client/src/lib/axios.js`
 
@@ -453,7 +463,21 @@ Add "API Keys" section: configure/verify Binance API key + secret per user. Show
 
 ### New `client/src/pages/AdminPanel.jsx`
 
-Manage allowed emails (add/remove) and view registered users.
+Single-page interface for the admin email. Shows:
+- List of allowed emails (email + date added)
+- Add email form
+- Remove button per email
+
+No user data visible. No stats. No user list.
+
+---
+
+## Phase 6 — Docs + Architecture Update
+
+- Update `server/CLAUDE.md`: remove single-user constraints, document auth architecture
+- Update `workspace/docs/state/CURRENT_STATE.md`: remove single-user constraint from Current Constraints table, document auth under Implemented Features
+- Update `AGENTS.md`: reflect new multi-user architecture
+- Run `/sync-spec`
 
 ---
 
@@ -468,6 +492,7 @@ Manage allowed emails (add/remove) and view registered users.
 | `TradeRecord.userId` engine-written | Set `required: false` on Mongoose model |
 | Dashboard route `/` → `/dashboard` | Update Navbar link + any internal `navigate('/')` calls |
 | Strategy queries | NO userId filter — strategies are shared |
+| Admin email whitelist | ADMIN_EMAIL always present in whitelist (seeded on startup); cannot be removed via API |
 
 ---
 
@@ -487,7 +512,7 @@ Manage allowed emails (add/remove) and view registered users.
 1. User A runs backtest → User B cannot see it via `GET /api/v1/backtest`
 2. User A calls `GET /api/v1/backtest/:userA-jobId` as User B → 404
 
-### Post-Implementation
-- Update `server/CLAUDE.md`: remove single-user constraints, document auth architecture
-- Update `workspace/docs/state/CURRENT_STATE.md`
-- Run `/sync-spec`
+### Admin Panel
+1. Admin can add/remove emails from the whitelist
+2. Admin cannot access any user's backtests, sessions, or settings
+3. Removing ADMIN_EMAIL from whitelist via API is blocked (server enforces this)
