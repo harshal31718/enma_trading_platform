@@ -10,6 +10,9 @@ env/
 .env
 .env.local
 .env.production
+# Exception: client prod env holds only public build-time URLs (no secrets)
+# and must be tracked so VPS builds bake in the right domain
+!client/.env.production
 
 # Build outputs
 dist/
