@@ -1,0 +1,83 @@
+# Production stack — see workspace/plan/deployment_plan.md (Step 7).
+# Differences from the dev docker-compose.yml:
+#   - command overrides run server/engine in production mode (the Dockerfile
+#     CMDs are dev-mode: nodemon / uvicorn --reload / npm install on start)
+#   - server binds 127.0.0.1 only; engine/redis/timescaledb publish no host
+#     ports (Docker-published ports bypass host firewall INPUT rules)
+#   - named volume persists engine/strategies across image rebuilds
+# Compose interpolates ${TIMESCALE_PASSWORD} from the git-ignored root .env.
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - enma_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: enma_candles
+      POSTGRES_USER: enma
+      POSTGRES_PASSWORD: ${TIMESCALE_PASSWORD}
+    volumes:
+      - enma_timescale_data:/var/lib/postgresql/data
+      - ./docker/timescale/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U enma -d enma_candles"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  engine:
+    build: ./engine
+    restart: unless-stopped
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+    env_file:
+      - ./.env
+    volumes:
+      - enma_engine_strategies:/app/strategies
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  server:
+    build: ./server
+    restart: unless-stopped
+    command: ["node", "src/server.js"]
+    ports:
+      - "127.0.0.1:5000:5000"
+    env_file:
+      - ./.env
+    depends_on:
+      redis:
+        condition: service_healthy
+      engine:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  enma_redis_data:
+  enma_timescale_data:
+  enma_engine_strategies:

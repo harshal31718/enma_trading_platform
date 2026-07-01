@@ -389,7 +389,9 @@ volumes:
 
 ## Pre-Deploy Code Changes Required
 
-Apply these on `dev` (and promote to `main`) **before** the first deployment:
+> **Status: all four items below are implemented on `dev`.** The only remaining manual
+> step is replacing the `yourdomain.com` placeholder in `client/.env.production` once
+> the production domain exists.
 
 1. **`server/src/app.js` — trust the proxy.** Add `app.set('trust proxy', 1)` right after `const app = express()`. Behind Nginx, `express-rate-limit` v7 errors on the `X-Forwarded-For` header without this, and `req.ip` would otherwise log Nginx's address for every client.
 

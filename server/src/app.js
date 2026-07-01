@@ -29,6 +29,10 @@ const passport = require('passport')
 
 const app = express()
 
+// Behind the production Nginx reverse proxy: needed for express-rate-limit
+// (X-Forwarded-For) and correct req.ip / secure-cookie handling
+app.set('trust proxy', 1)
+
 app.use(cookieParser())
 app.use(helmet())
 app.use(cors({ origin: process.env.CLIENT_URL || 'http://localhost:5173', credentials: true }))
