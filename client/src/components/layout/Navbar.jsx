@@ -25,7 +25,6 @@ const navItems = [
   { label: 'Backtest', icon: FlaskConical, to: '/backtest' },
   { label: 'AlgoTrading', icon: Bot, to: '/algo' },
   { label: 'Order History', icon: History, to: '/order-history' },
-  { label: 'Settings', icon: Settings, to: '/settings' },
 ]
 
 export default function Navbar() {
@@ -87,7 +86,7 @@ export default function Navbar() {
             }
           >
             <Icon size={16} className="shrink-0" />
-            <span className="hidden xl:inline">{label}</span>
+            <span className="hidden lg:inline">{label}</span>
             {label === 'AlgoTrading' && runningCount > 0 && (
               <span className="ml-1 text-xs bg-emerald-600 text-white px-1.5 py-0.5 rounded-full leading-none shrink-0">
                 {runningCount}
@@ -98,14 +97,28 @@ export default function Navbar() {
       </nav>
 
       {/* Avatar wrapper (always on right) */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-4">
         {user && (
-          <div className="relative" ref={dropdownRef}>
-            <button
-              onClick={() => setDropdownOpen(!dropdownOpen)}
-              className="flex items-center justify-center hover:ring-2 hover:ring-emerald-500/50 transition-all focus:outline-none"
-              style={{ borderRadius: '50%' }}
+          <>
+            <NavLink
+              to="/settings"
+              title="Settings"
+              className={({ isActive }) =>
+                [
+                  'p-1.5 text-slate-400 hover:text-gray-100 hover:bg-slate-800/50 rounded transition-colors',
+                  isActive ? 'text-emerald-400 bg-emerald-400/10' : '',
+                ].join(' ')
+              }
             >
+              <Settings size={18} />
+            </NavLink>
+
+            <div className="relative" ref={dropdownRef}>
+              <button
+                onClick={() => setDropdownOpen(!dropdownOpen)}
+                className="flex items-center justify-center hover:ring-2 hover:ring-emerald-500/50 transition-all focus:outline-none"
+                style={{ borderRadius: '50%' }}
+              >
               {user.avatar ? (
                 <img
                   src={user.avatar}
@@ -163,6 +176,7 @@ export default function Navbar() {
               </div>
             )}
           </div>
+          </>
         )}
       </div>
 
