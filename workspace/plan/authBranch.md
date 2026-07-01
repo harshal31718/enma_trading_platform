@@ -41,7 +41,7 @@ This overrides the previous constraint of "no user_id on any Mongoose model". Th
 ```
 GOOGLE_CLIENT_ID=<from Google Cloud Console>
 GOOGLE_CLIENT_SECRET=<from Google Cloud Console>
-ADMIN_EMAIL=harshaldodke31718@gmail.com
+ADMIN_EMAIL=admin.enmaquant@gmail.com
 JWT_SECRET=<long random string>
 # ENCRYPTION_KEY already exists (used by encryption.js for API key AES-256-GCM)
 ```

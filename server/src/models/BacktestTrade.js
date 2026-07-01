@@ -2,6 +2,7 @@ const mongoose = require('mongoose')
 
 const BacktestTradeSchema = new mongoose.Schema(
   {
+    userId:      { type: String, index: true },
     jobId:       { type: String, required: true, index: true },
     tradeIndex:  { type: Number, required: true },  // 1-based sequential id within the backtest
     type:        { type: String, enum: ['long', 'short'] },

@@ -169,92 +169,105 @@ export default function BacktestHistory({
       </div>
 
       {/* ── List ── */}
-      <div className="flex-1 overflow-y-auto">
-        {isLoading ? (
-          <div className="flex justify-center p-6">
-            <Loader2 className="size-5 animate-spin text-gray-600" />
-          </div>
-        ) : !data || data.length === 0 ? (
-          <p className="text-gray-500 text-xs text-center py-8">No backtest runs yet.</p>
-        ) : (
-          pagedData.map((b) => {
-            const isSelected = selectedId === b.jobId
-            const isCompared = comparisonIds.includes(b.jobId)
-            const isCompleted = b.status === 'completed'
-            const statusCfg = STATUS_CONFIG[b.status] ?? STATUS_CONFIG.queued
+      <div className="flex-1 overflow-y-auto flex flex-col justify-between">
+        <div className="flex-1">
+          {isLoading ? (
+            <div className="flex justify-center p-6">
+              <Loader2 className="size-5 animate-spin text-gray-600" />
+            </div>
+          ) : !data || data.length === 0 ? (
+            <div className="m-4 border border-dashed border-slate-700/30 p-8 flex flex-col items-center justify-center text-center">
+              <p className="text-slate-500 text-xs">No backtest runs yet.</p>
+              <p className="text-[10px] text-slate-600 mt-1">Run new backtests to compare performance.</p>
+            </div>
+          ) : (
+            <>
+              {pagedData.map((b) => {
+                const isSelected = selectedId === b.jobId
+                const isCompared = comparisonIds.includes(b.jobId)
+                const isCompleted = b.status === 'completed'
+                const statusCfg = STATUS_CONFIG[b.status] ?? STATUS_CONFIG.queued
 
-            return (
-              <div
-                key={b.jobId}
-                className={cn(
-                  'group relative border h-11 transition-all duration-150',
-                  isSelected
-                    ? 'border-emerald-500/50 bg-emerald-500/8'
-                    : isCompared
-                    ? 'border-transparent border-b-emerald-900/60 bg-gray-900/60'
-                    : 'border-transparent border-b-slate-700/50 bg-transparent hover:bg-slate-800/20'
-                )}
-              >
-                {/* Clickable main area */}
-                <button
-                  onClick={() => onSelect(b.jobId)}
-                  className="w-full h-full text-left px-3 pr-8 flex flex-col justify-center"
-                >
-                  <div className="flex items-center justify-between w-full">
-                    {/* Strategy name */}
-                    <div className={cn(
-                      'text-xs font-semibold truncate leading-none',
-                      isSelected ? 'text-emerald-300' : 'text-gray-200'
-                    )}>
-                      {b.strategyName}
-                    </div>
-                    {/* Timestamp */}
-                    {b.createdAt && (
-                      <div className="text-[9px] text-gray-500 leading-none">
-                        {formatTime(b.createdAt)}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Meta row */}
-                  <div className="flex items-center gap-1.5 mt-1.5">
-                    <span className="text-[9px] font-mono text-gray-400 bg-gray-800 px-1 py-[1px] rounded leading-none">
-                      {b.symbol}
-                    </span>
-                    <span className="text-[9px] font-mono text-gray-500 bg-gray-800/60 px-1 py-[1px] rounded leading-none">
-                      {b.timeframe}
-                    </span>
-                    <span className={cn(
-                      'text-[9px] px-1 py-[1px] rounded border font-medium leading-none',
-                      statusCfg.cls
-                    )}>
-                      {statusCfg.label}
-                    </span>
-                  </div>
-                </button>
-
-                {/* Compare toggle — absolute top-right */}
-                {isCompleted && (
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onToggleComparison?.(b.jobId) }}
-                    title={isCompared ? 'Remove from comparison' : 'Add to comparison'}
+                return (
+                  <div
+                    key={b.jobId}
                     className={cn(
-                      'absolute right-1 top-1/2 -translate-y-1/2 p-1.5 rounded transition-colors',
-                      isCompared
-                        ? 'text-emerald-400 hover:bg-emerald-500/10'
-                        : 'text-gray-600 hover:text-gray-300 hover:bg-gray-800 opacity-0 group-hover:opacity-100'
+                      'group relative border h-11 transition-all duration-150',
+                      isSelected
+                        ? 'border-emerald-500/50 bg-emerald-500/8'
+                        : isCompared
+                        ? 'border-transparent border-b-emerald-900/60 bg-gray-900/60'
+                        : 'border-transparent border-b-slate-700/50 bg-transparent hover:bg-slate-800/20'
                     )}
                   >
-                    {isCompared
-                      ? <CheckSquare className="size-3.5" />
-                      : <Square className="size-3.5" />
-                    }
-                  </button>
-                )}
-              </div>
-            )
-          })
-        )}
+                    {/* Clickable main area */}
+                    <button
+                      onClick={() => onSelect(b.jobId)}
+                      className="w-full h-full text-left px-3 pr-8 flex flex-col justify-center"
+                    >
+                      <div className="flex items-center justify-between w-full">
+                        {/* Strategy name */}
+                        <div className={cn(
+                          'text-xs font-semibold truncate leading-none',
+                          isSelected ? 'text-emerald-300' : 'text-gray-200'
+                        )}>
+                          {b.strategyName}
+                        </div>
+                        {/* Timestamp */}
+                        {b.createdAt && (
+                          <div className="text-[9px] text-gray-500 leading-none">
+                            {formatTime(b.createdAt)}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Meta row */}
+                      <div className="flex items-center gap-1.5 mt-1.5">
+                        <span className="text-[9px] font-mono text-gray-400 bg-gray-800 px-1 py-[1px] rounded leading-none">
+                          {b.symbol}
+                        </span>
+                        <span className="text-[9px] font-mono text-gray-500 bg-gray-800/60 px-1 py-[1px] rounded leading-none">
+                          {b.timeframe}
+                        </span>
+                        <span className={cn(
+                          'text-[9px] px-1 py-[1px] rounded border font-medium leading-none',
+                          statusCfg.cls
+                        )}>
+                          {statusCfg.label}
+                        </span>
+                      </div>
+                    </button>
+
+                    {/* Compare toggle — absolute top-right */}
+                    {isCompleted && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onToggleComparison?.(b.jobId) }}
+                        title={isCompared ? 'Remove from comparison' : 'Add to comparison'}
+                        className={cn(
+                          'absolute right-1 top-1/2 -translate-y-1/2 p-1.5 rounded transition-colors',
+                          isCompared
+                            ? 'text-emerald-400 hover:bg-emerald-500/10'
+                            : 'text-gray-600 hover:text-gray-300 hover:bg-gray-800 opacity-0 group-hover:opacity-100'
+                        )}
+                      >
+                        {isCompared
+                          ? <CheckSquare className="size-3.5" />
+                          : <Square className="size-3.5" />
+                        }
+                      </button>
+                    )}
+                  </div>
+                )
+              })}
+              {pagedData.length < 5 && (
+                <div className="m-4 border border-dashed border-slate-700/30 p-6 flex flex-col items-center justify-center text-center">
+                  <p className="text-[10px] text-slate-500 font-medium">Run new backtests</p>
+                  <p className="text-[9px] text-slate-600 mt-1">to compare performance here.</p>
+                </div>
+              )}
+            </>
+          )}
+        </div>
       </div>
 
       {/* ── Pagination footer ── */}

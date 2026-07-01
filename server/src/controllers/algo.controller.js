@@ -2,6 +2,7 @@ const LiveSession = require('../models/LiveSession')
 const TradeRecord = require('../models/TradeRecord')
 const Strategy = require('../models/Strategy')
 const Settings = require('../models/Settings')
+const { decrypt } = require('../utils/encryption')
 const engineClient = require('../services/engineClient')
 const { getTOP_SYMBOLS, getTIERED_SYMBOLS } = require('../constants/top_symbols')
 const ApiError = require('../utils/ApiError')
@@ -25,7 +26,10 @@ async function startSession(req, res, next) {
     if (!strategy) throw new ApiError(404, 'NOT_FOUND', 'Strategy not found')
 
     // Risk model: resolve per-symbol overrides over strategy overrides, symbol overrides, and saved global defaults.
-    const savedSettings = await Settings.findById('global').lean() || {}
+    const savedSettings = await Settings.findOne({ userId: req.user.id }).lean() || {}
+    const apiKey = savedSettings.encryptedApiKey ? decrypt(savedSettings.encryptedApiKey) : ''
+    const apiSecret = savedSettings.encryptedApiSecret ? decrypt(savedSettings.encryptedApiSecret) : ''
+    if (!apiKey || !apiSecret) throw new ApiError(400, 'NO_CREDENTIALS', 'Binance API keys not configured. Add them in Settings.')
     const riskParams = {}
     for (const symbol of symbols) {
       riskParams[symbol] = resolveStrategyRiskParams(strategy.name, symbol, savedSettings, {
@@ -54,6 +58,7 @@ async function startSession(req, res, next) {
 
     // 3. Create session in MongoDB
     const session = await LiveSession.create({
+      userId: req.user.id,
       strategyId: strategy._id,
       strategyName: strategy.name,
       symbols,
@@ -94,6 +99,9 @@ async function startSession(req, res, next) {
         leverage: Number(leverage) || 1,
         fee_rate: feeRate,
         risk_params: riskParams,
+        user_id: String(req.user.id),
+        api_key: apiKey,
+        api_secret: apiSecret,
       })
     } catch (engineErr) {
       // Rollback on engine failure
@@ -109,7 +117,7 @@ async function startSession(req, res, next) {
     await LiveSession.findByIdAndUpdate(session._id, { status: 'running' })
 
     const io = getIO()
-    io.emit('algo:session:log', {
+    io.to(`user:${req.user.id}`).emit('algo:session:log', {
       sessionId: String(session._id),
       timestamp: new Date().toISOString(),
       type: 'info',
@@ -125,7 +133,7 @@ async function startSession(req, res, next) {
 // POST /api/v1/algo/sessions/:id/stop
 async function stopSession(req, res, next) {
   try {
-    const session = await LiveSession.findById(req.params.id)
+    const session = await LiveSession.findOne({ _id: req.params.id, userId: req.user.id })
     if (!session) throw new ApiError(404, 'SESSION_NOT_FOUND', 'Session not found')
     if (session.status !== 'running') {
       throw new ApiError(409, 'SESSION_NOT_RUNNING', `Session is ${session.status}, not running`)
@@ -142,7 +150,7 @@ async function stopSession(req, res, next) {
 
       // Fallback: Close positions and release locks
       try {
-        const headers = await _getBinanceHeaders()
+        const headers = await _getBinanceHeaders(req.params.id)
         const { releaseSymbolLock } = require('../services/symbolLock')
         for (const symbol of session.symbols) {
           console.log(`[AlgoBot] Engine stop call failed. Fallback force-closing position for ${symbol}...`)
@@ -156,11 +164,11 @@ async function stopSession(req, res, next) {
       }
 
       const io = getIO()
-      io.emit('algo:session:update', {
+      io.to(`user:${String(session.userId)}`).emit('algo:session:update', {
         sessionId: req.params.id,
         status: 'stopped',
       })
-      io.emit('algo:session:log', {
+      io.to(`user:${String(session.userId)}`).emit('algo:session:log', {
         sessionId: req.params.id,
         timestamp: new Date().toISOString(),
         type: 'error',
@@ -177,7 +185,7 @@ async function stopSession(req, res, next) {
 // GET /api/v1/algo/sessions
 async function listSessions(req, res, next) {
   try {
-    const sessions = await LiveSession.find({}).sort({ createdAt: -1 }).lean()
+    const sessions = await LiveSession.find({ userId: req.user.id }).sort({ createdAt: -1 }).lean()
     res.json(ApiResponse.success({ sessions }))
   } catch (err) {
     next(err)
@@ -187,7 +195,7 @@ async function listSessions(req, res, next) {
 // GET /api/v1/algo/sessions/:id
 async function getSession(req, res, next) {
   try {
-    const session = await LiveSession.findById(req.params.id).lean()
+    const session = await LiveSession.findOne({ _id: req.params.id, userId: req.user.id }).lean()
     if (!session) throw new ApiError(404, 'SESSION_NOT_FOUND', 'Session not found')
     res.json(ApiResponse.success({ session }))
   } catch (err) {
@@ -203,7 +211,7 @@ async function setTradingState(req, res, next) {
       throw new ApiError(400, 'INVALID_STATE', 'trading_state must be "active", "reducing", or "halted"')
     }
 
-    const session = await LiveSession.findById(req.params.id).lean()
+    const session = await LiveSession.findOne({ _id: req.params.id, userId: req.user.id }).lean()
     if (!session) throw new ApiError(404, 'SESSION_NOT_FOUND', 'Session not found')
 
     // Call engine to update trading state
@@ -217,8 +225,8 @@ async function setTradingState(req, res, next) {
     await LiveSession.findByIdAndUpdate(req.params.id, { tradingState: state })
 
     const io = getIO()
-    io.emit('algo:session:update', { sessionId: req.params.id, tradingState: state })
-    io.emit('algo:session:log', {
+    io.to(`user:${String(session.userId)}`).emit('algo:session:update', { sessionId: req.params.id, tradingState: state })
+    io.to(`user:${String(session.userId)}`).emit('algo:session:log', {
       sessionId: req.params.id,
       timestamp: new Date().toISOString(),
       type: 'info',
@@ -244,7 +252,7 @@ async function getLockedSymbols(req, res, next) {
 // GET /api/v1/algo/sessions/:id/equity
 async function getSessionEquity(req, res, next) {
   try {
-    const session = await LiveSession.findById(req.params.id).lean()
+    const session = await LiveSession.findOne({ _id: req.params.id, userId: req.user.id }).lean()
     if (!session) throw new ApiError(404, 'SESSION_NOT_FOUND', 'Session not found')
     res.json(ApiResponse.success({ equity: session.tradeHistory || [] }))
   } catch (err) {
@@ -316,9 +324,10 @@ async function handleEngineStats(req, res, next) {
     // Emit Socket.IO events
     try {
       const io = getIO()
+      const userRoom = `user:${String(session.userId)}`
 
       // Always emit session update
-      io.emit('algo:session:update', {
+      io.to(userRoom).emit('algo:session:update', {
         sessionId: id,
         status: session.status,
         pnl: session.pnl,
@@ -326,14 +335,14 @@ async function handleEngineStats(req, res, next) {
       })
 
       if (event === 'position:open' && eventData) {
-        io.emit('algo:position:open', { sessionId: id, ...eventData })
+        io.to(userRoom).emit('algo:position:open', { sessionId: id, ...eventData })
         const openLog = {
           sessionId: id,
           timestamp: new Date().toISOString(),
           type: eventData.side === 'long' ? 'long' : 'short',
           message: `${eventData.side.toUpperCase()} ${eventData.symbol} · qty ${eventData.qty} · entry $${eventData.price}`
         }
-        io.emit('algo:session:log', openLog)
+        io.to(userRoom).emit('algo:session:log', openLog)
         await LiveSession.findByIdAndUpdate(id, {
           $push: { logs: { $each: [{ type: openLog.type, message: openLog.message }], $slice: -100 } },
           // Persist the open-position snapshot with exchange-truth PnL data
@@ -353,7 +362,7 @@ async function handleEngineStats(req, res, next) {
       }
 
       if (event === 'position:close' && eventData) {
-        io.emit('algo:position:close', { sessionId: id, ...eventData })
+        io.to(userRoom).emit('algo:position:close', { sessionId: id, ...eventData })
 
         const isPositive = parseFloat(eventData.pnl) >= 0
         const closeLog = {
@@ -362,7 +371,7 @@ async function handleEngineStats(req, res, next) {
           type: 'closed',
           message: `Closed ${eventData.symbol} · PnL ${isPositive ? '+' : ''}$${eventData.pnl}`
         }
-        io.emit('algo:session:log', closeLog)
+        io.to(userRoom).emit('algo:session:log', closeLog)
         await LiveSession.findByIdAndUpdate(id, {
           $push: { logs: { $each: [{ type: closeLog.type, message: closeLog.message }], $slice: -100 } },
           // Clear the persisted snapshot — the position is no longer open.
@@ -386,7 +395,7 @@ async function handleEngineStats(req, res, next) {
         try {
           const symbolStats = await computeSymbolStats(id)
           await LiveSession.findByIdAndUpdate(id, { symbolStats })
-          io.emit('algo:session:update', { sessionId: id, symbolStats })
+          io.to(userRoom).emit('algo:session:update', { sessionId: id, symbolStats })
         } catch (statsErr) {
           console.error('[AlgoBot] symbolStats aggregation failed:', statsErr.message)
         }
@@ -398,7 +407,7 @@ async function handleEngineStats(req, res, next) {
 
       if (status === 'error') {
         const errMsg = req.body.errorMessage || session?.errorMessage || 'Unknown strategy error'
-        io.emit('algo:session:log', {
+        io.to(userRoom).emit('algo:session:log', {
           sessionId: id,
           timestamp: new Date().toISOString(),
           type: 'error',
@@ -419,7 +428,7 @@ async function handleEngineStats(req, res, next) {
           type: eventData.type || 'info',
           message: eventData.message,
         }
-        io.emit('algo:session:log', logEntry)
+        io.to(userRoom).emit('algo:session:log', logEntry)
         await LiveSession.findByIdAndUpdate(id, {
           $push: { logs: { $each: [{ type: logEntry.type, message: logEntry.message }], $slice: -100 } }
         }).catch(() => { })
@@ -431,7 +440,7 @@ async function handleEngineStats(req, res, next) {
         try {
           const symbolStats = await computeSymbolStats(id)
           await LiveSession.findByIdAndUpdate(id, { symbolStats })
-          io.emit('algo:session:update', { sessionId: id, symbolStats })
+          io.to(userRoom).emit('algo:session:update', { sessionId: id, symbolStats })
         } catch (statsErr) {
           console.error('[AlgoBot] symbolStats aggregation (stop) failed:', statsErr.message)
         }
@@ -457,7 +466,7 @@ async function handleEngineStats(req, res, next) {
 // DELETE /api/v1/algo/sessions/:id  — only allowed for stopped/error sessions
 async function deleteSession(req, res, next) {
   try {
-    const session = await LiveSession.findById(req.params.id)
+    const session = await LiveSession.findOne({ _id: req.params.id, userId: req.user.id })
     if (!session) throw new ApiError(404, 'SESSION_NOT_FOUND', 'Session not found')
     if (['running', 'starting', 'stopping'].includes(session.status)) {
       throw new ApiError(409, 'SESSION_ACTIVE', 'Stop the session before deleting it')
@@ -472,7 +481,7 @@ async function deleteSession(req, res, next) {
 // DELETE /api/v1/algo/sessions  — bulk delete all stopped/error sessions
 async function deleteAllStopped(req, res, next) {
   try {
-    const result = await LiveSession.deleteMany({ status: { $in: ['stopped', 'error'] } })
+    const result = await LiveSession.deleteMany({ userId: req.user.id, status: { $in: ['stopped', 'error'] } })
     res.json(ApiResponse.success({ deleted: result.deletedCount }))
   } catch (err) {
     next(err)
@@ -485,7 +494,7 @@ async function deleteAllStopped(req, res, next) {
 async function handleAlgoGetPosition(req, res) {
   try {
     const { symbol } = req.body
-    const headers = await _getBinanceHeaders()
+    const headers = await _getBinanceHeaders(req.params.id)
     const { data } = await engineClient.get('/trade/positions', { headers, params: { symbol } })
     const positions = data?.data || []
     const pos = Array.isArray(positions)
@@ -505,7 +514,7 @@ async function handleAlgoGetPosition(req, res) {
 async function handleAlgoGetOpenOrders(req, res) {
   try {
     const { symbol } = req.body
-    const headers = await _getBinanceHeaders()
+    const headers = await _getBinanceHeaders(req.params.id)
     const { data } = await engineClient.get('/trade/open-orders', { headers, params: { symbol } })
     res.json({ success: true, data: data?.data || [] })
   } catch (err) {
@@ -624,7 +633,10 @@ const CHAOS_SUPPORTED_TIMEFRAMES = ['1m','3m','5m','15m','30m','1h','2h','4h','6
 async function startChaos(req, res, next) {
   try {
     // ── 1. Load settings & known strategies ─────────────────────────────────
-    const savedSettings = await Settings.findById('global').lean() || {}
+    const savedSettings = await Settings.findOne({ userId: req.user.id }).lean() || {}
+    const chaosApiKey = savedSettings.encryptedApiKey ? decrypt(savedSettings.encryptedApiKey) : ''
+    const chaosApiSecret = savedSettings.encryptedApiSecret ? decrypt(savedSettings.encryptedApiSecret) : ''
+    if (!chaosApiKey || !chaosApiSecret) throw new ApiError(400, 'NO_CREDENTIALS', 'Binance API keys not configured. Add them in Settings.')
     const feeRate = savedSettings.takerFee ?? 0.0005
     const riskParams = resolveModelParams(savedSettings, null)
 
@@ -774,6 +786,7 @@ async function startChaos(req, res, next) {
       let session
       try {
         session = await LiveSession.create({
+          userId:       req.user.id,
           strategyId:   String(strategy._id),
           strategyName: stratName,
           symbols,
@@ -818,6 +831,9 @@ async function startChaos(req, res, next) {
           leverage:      Number(leverage),
           fee_rate:      feeRate,
           risk_params:   resolvedRisk,
+          user_id:       String(req.user.id),
+          api_key:       chaosApiKey,
+          api_secret:    chaosApiSecret,
         })
         await LiveSession.findByIdAndUpdate(session._id, { status: 'running' })
         created.push({ strategy: stratName, sessionId: String(session._id), symbols, status: 'running' })
@@ -888,17 +904,23 @@ module.exports = {
 // ── Internal handlers for real Binance order placement ──────────────────────
 // These are called by the Python engine, not the browser client.
 
-async function _getBinanceHeaders() {
-  const apiKey = process.env.BINANCE_TESTNET_API_KEY
-  const apiSecret = process.env.BINANCE_TESTNET_SECRET
-  if (!apiKey || !apiSecret) {
-    throw new Error('Binance Testnet API credentials not configured. Set BINANCE_TESTNET_API_KEY and BINANCE_TESTNET_SECRET in server/.env')
-  }
+async function _getBinanceHeaders(sessionId) {
+  const Settings = require('../models/Settings')
+  const { decrypt } = require('../utils/encryption')
+
+  const session = await LiveSession.findById(sessionId).select('userId').lean()
+  if (!session?.userId) throw new Error(`Session ${sessionId} has no userId`)
+
+  const settings = await Settings.findOne({ userId: session.userId })
+  const apiKey = settings?.encryptedApiKey ? decrypt(settings.encryptedApiKey) : ''
+  const apiSecret = settings?.encryptedApiSecret ? decrypt(settings.encryptedApiSecret) : ''
+
+  if (!apiKey || !apiSecret) throw new Error(`No Binance credentials configured for session ${sessionId}`)
 
   return {
     'X-Binance-API-Key': apiKey,
     'X-Binance-API-Secret': apiSecret,
-    'X-Binance-Mode': 'testnet',
+    'X-Binance-Mode': settings?.mode || 'testnet',
   }
 }
 
@@ -913,7 +935,7 @@ async function handleAlgoPlaceOrder(req, res, next) {
       throw new ApiError(409, 'SYMBOL_LOCKED', `Symbol ${symbol} is not locked by this bot session.`)
     }
 
-    const headers = await _getBinanceHeaders()
+    const headers = await _getBinanceHeaders(req.params.id)
 
     const { data } = await engineClient.post(
       '/trade/order/with_tp_sl',
@@ -941,7 +963,7 @@ async function handleAlgoClosePosition(req, res, next) {
       throw new ApiError(409, 'SYMBOL_LOCKED', `Symbol ${symbol} is not locked by this bot session.`)
     }
 
-    const headers = await _getBinanceHeaders()
+    const headers = await _getBinanceHeaders(req.params.id)
 
     const { data } = await engineClient.post('/trade/close-position', { symbol }, { headers })
     res.json({ success: true, data: data.data })
@@ -964,7 +986,7 @@ async function handleAlgoSetLeverage(req, res, next) {
       throw new ApiError(409, 'SYMBOL_LOCKED', `Symbol ${symbol} is not locked by this bot session.`)
     }
 
-    const headers = await _getBinanceHeaders()
+    const headers = await _getBinanceHeaders(req.params.id)
 
     await engineClient.post('/trade/leverage', { symbol, leverage }, { headers })
     res.json({ success: true })

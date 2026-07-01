@@ -21,6 +21,7 @@ from core.models import (
 from core.params import param_coerce, param_default, param_validate
 from core.pipeline import evaluate
 from services.trade_recorder import record_trade, build_trade_record
+from services.user_data_stream import UserDataStreamManager
 from services.pairlist import pairlist_from_config
 from utils.symbols import round_price, clamp_and_round_qty, clamp_leverage, get_ticker_data
 from core.kernel import ExecutionAdapter, ExecutionKernel
@@ -199,8 +200,8 @@ class LiveAdapter(ExecutionAdapter):
         if is_dca:
             try:
                 from services.binance_testnet import send_signed_request as _signed
-                _api_key = os.getenv("BINANCE_TESTNET_API_KEY")
-                _api_secret = os.getenv("BINANCE_TESTNET_SECRET")
+                _api_key = session.get("api_key", "")
+                _api_secret = session.get("api_secret", "")
                 if not _api_key or not _api_secret:
                     raise RuntimeError("Binance Testnet API credentials not configured")
 
@@ -261,8 +262,8 @@ class LiveAdapter(ExecutionAdapter):
             # F-003: Place orders directly on Binance instead of routing
             # through the engine→Node→engine→Binance hop chain.
             from services.binance_testnet import send_signed_request as _signed
-            _api_key = os.getenv("BINANCE_TESTNET_API_KEY")
-            _api_secret = os.getenv("BINANCE_TESTNET_SECRET")
+            _api_key = session.get("api_key", "")
+            _api_secret = session.get("api_secret", "")
             if not _api_key or not _api_secret:
                 raise RuntimeError("Binance Testnet API credentials not configured")
 
@@ -362,6 +363,7 @@ class LiveAdapter(ExecutionAdapter):
                             pnl_pct=str(round(_pos_e.pnl_pct, 2)) if _pos_e.pnl_pct else None,
                             fee=str(round(_fee_e, 2)) if _fee_e else None,
                             exit_reason="emergency_exit",
+                            user_id=session.get("user_id", ""),
                             session_id=self.session_id,
                             strategy_name=session.get("strategy_name"),
                             entry_time=datetime.now(timezone.utc),
@@ -464,8 +466,8 @@ class LiveAdapter(ExecutionAdapter):
         reduce_side = "SELL" if strategy.position.type == "long" else "BUY"
         try:
             from services.binance_testnet import send_signed_request as _signed
-            _api_key = os.getenv("BINANCE_TESTNET_API_KEY")
-            _api_secret = os.getenv("BINANCE_TESTNET_SECRET")
+            _api_key = session.get("api_key", "")
+            _api_secret = session.get("api_secret", "")
 
             sem = self.manager._order_semaphores.get(self.session_id)
             async with (sem if sem else asyncio.nullcontext()):
@@ -515,6 +517,7 @@ class LiveAdapter(ExecutionAdapter):
                 pnl_pct=None,
                 fee=str(round(fee, 2)) if fee else None,
                 exit_reason="scale_out",
+                user_id=session.get("user_id", ""),
                 session_id=self.session_id,
                 strategy_name=session.get("strategy_name"),
                 entry_time=datetime.now(timezone.utc),
@@ -573,8 +576,8 @@ class LiveAdapter(ExecutionAdapter):
         sem = self.manager._order_semaphores.get(self.session_id)
         try:
             from services.binance_testnet import send_signed_request as _signed
-            _api_key = os.getenv("BINANCE_TESTNET_API_KEY")
-            _api_secret = os.getenv("BINANCE_TESTNET_SECRET")
+            _api_key = session.get("api_key", "")
+            _api_secret = session.get("api_secret", "")
             if not _api_key or not _api_secret:
                 raise RuntimeError("Binance Testnet API credentials not configured")
 
@@ -639,6 +642,7 @@ class LiveAdapter(ExecutionAdapter):
             pnl_pct=str(round(pos.pnl_pct, 2)) if pos.pnl_pct else None,
             fee=str(round(fee, 2)) if fee else None,
             exit_reason=reason,
+            user_id=session.get("user_id", ""),
             session_id=self.session_id,
             strategy_name=session.get("strategy_name"),
             entry_time=entry_time,
@@ -720,6 +724,9 @@ class LiveBotManager:
         timeframe = session_config["timeframe"]
         params = session_config.get("params", {})
         risk_params = session_config.get("risk_params", {}) or {}
+        user_id = session_config.get("user_id", "")
+        api_key = session_config.get("api_key", "")
+        api_secret = session_config.get("api_secret", "")
 
         # Resolve pairlist pipeline if symbols not explicitly provided (A-004)
         pairlist_config = risk_params.get("pairlist")
@@ -759,6 +766,14 @@ class LiveBotManager:
         # Allow at most 2 concurrent Binance order calls per session
         self._order_semaphores[session_id] = asyncio.Semaphore(2)
 
+        # Per-session user data stream with the user's own credentials
+        uds = UserDataStreamManager(api_key=api_key, api_secret=api_secret)
+        try:
+            await uds.start()
+            logger.info(f"[AlgoBot] Session {session_id}: user data stream started")
+        except Exception as _uds_e:
+            logger.warning(f"[AlgoBot] Session {session_id}: user data stream failed to start: {_uds_e}")
+
         # Setup protections stack (A-001) from risk_params config
         protection_manager = ProtectionManager()
         prot_cfg = risk_params.get("protections", {}) or {}
@@ -778,6 +793,10 @@ class LiveBotManager:
 
         self.sessions[session_id] = {
             "session_id": session_id,
+            "user_id": user_id,
+            "api_key": api_key,
+            "api_secret": api_secret,
+            "uds": uds,
             "strategy_name": strategy_name,
             "symbols": symbols,
             "timeframe": timeframe,
@@ -876,6 +895,14 @@ class LiveBotManager:
             "status": "stopped",
             "event": "stopped",
         })
+
+        # Stop per-session user data stream
+        _uds = session.get("uds")
+        if _uds:
+            try:
+                await _uds.stop()
+            except Exception as _e:
+                logger.warning(f"[AlgoBot] Session {session_id}: UDS stop error: {_e}")
 
         # Cleanup
         self.sessions.pop(session_id, None)
@@ -994,8 +1021,8 @@ class LiveBotManager:
         # Clamp requested leverage to what Binance actually allows for this symbol.
         # Uses the signed /fapi/v1/leverageBracket endpoint if credentials are
         # available via env (the live path always has them set in server/.env).
-        api_key = os.getenv("BINANCE_TESTNET_API_KEY")
-        api_secret = os.getenv("BINANCE_TESTNET_SECRET")
+        api_key = session.get("api_key", "") if session else ""
+        api_secret = session.get("api_secret", "") if session else ""
         effective_leverage = await clamp_leverage(
             leverage, "Binance Futures", symbol,
             api_key=api_key, api_secret=api_secret, mode="testnet",
@@ -1069,10 +1096,10 @@ class LiveBotManager:
         # Register user data stream callback for event-driven fill detection
         # (F-020).  Triggers immediate reconciliation when an order fills
         # between candles — no need to wait for the next kline close.
-        from services.user_data_stream import user_data_stream as _uds
         from services.binance_testnet import send_signed_request as _uds_signed
+        _uds = session.get("uds") if session else None
         _fill_cb_registered = False
-        if _uds._running:
+        if _uds and _uds._running:
             async def _on_fill(order_data: dict) -> None:
                 symbol_s = order_data.get("s", "")
                 if symbol_s != symbol:
@@ -1095,8 +1122,8 @@ class LiveBotManager:
                         _peer_id = _aids.get("tp") if "sl" in client_algo_id else _aids.get("sl")
                         if _peer_id:
                             try:
-                                _api_key = os.environ.get("BINANCE_TESTNET_API_KEY", "")
-                                _api_secret = os.environ.get("BINANCE_TESTNET_SECRET", "")
+                                _api_key = session.get("api_key", "") if session else ""
+                                _api_secret = session.get("api_secret", "") if session else ""
                                 if _api_key and _api_secret:
                                     await _uds_signed(
                                         "DELETE", "/fapi/v1/algoOrder",
@@ -1319,8 +1346,8 @@ class LiveBotManager:
 
         try:
             from services.binance_testnet import send_signed_request as _signed
-            _api_key = os.getenv("BINANCE_TESTNET_API_KEY")
-            _api_secret = os.getenv("BINANCE_TESTNET_SECRET")
+            _api_key = session.get("api_key", "")
+            _api_secret = session.get("api_secret", "")
             if not _api_key or not _api_secret:
                 raise RuntimeError("Binance Testnet API credentials not configured")
 
@@ -1392,6 +1419,7 @@ class LiveBotManager:
                 pnl_pct=str(round(pos.pnl_pct, 2)) if pos.pnl_pct else None,
                 fee=str(round(fee, 2)) if fee else None,
                 exit_reason="session_stop",
+                user_id=session.get("user_id", ""),
                 session_id=session_id,
                 strategy_name=session.get("strategy_name"),
                 entry_time=entry_time,
@@ -1430,8 +1458,8 @@ class LiveBotManager:
 
         # ── 1. Query exchange state directly (F-003: no Node hop) ────────────
         from services.binance_testnet import send_signed_request as _signed
-        _api_key = os.getenv("BINANCE_TESTNET_API_KEY")
-        _api_secret = os.getenv("BINANCE_TESTNET_SECRET")
+        _api_key = session.get("api_key", "")
+        _api_secret = session.get("api_secret", "")
 
         exchange_pos = None
         open_orders = []
@@ -1634,6 +1662,7 @@ class LiveBotManager:
                 pnl_pct=str(round(pos.pnl_pct, 2)) if pos.pnl_pct else None,
                 fee=str(round(fee, 2)) if fee else None,
                 exit_reason="exchange_sync",
+                user_id=session.get("user_id", ""),
                 session_id=session_id,
                 strategy_name=session.get("strategy_name"),
                 entry_time=entry_time,

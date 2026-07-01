@@ -2,7 +2,9 @@ const mongoose = require('mongoose')
 
 const settingsSchema = new mongoose.Schema(
   {
-    _id: { type: String, default: 'global' },
+    userId: { type: String, required: true, unique: true, index: true },
+    encryptedApiKey:    { type: String, default: '' },
+    encryptedApiSecret: { type: String, default: '' },
     mode: {
       type: String,
       enum: ['testnet', 'mainnet'],

@@ -1,4 +1,32 @@
 ---
+## 2026-07-01 — Auth Branch Phase 5 (Client) COMPLETE ✅
+
+**Goal:** Add Google OAuth login page, auth guard, per-user Navbar (avatar + logout), AdminPanel, and API key entry to client.
+
+**Done this session:**
+- `client/src/lib/axios.js`: Added `withCredentials: true`
+- `client/src/lib/socket.js`: Added `withCredentials: true`
+- `client/src/hooks/useAuth.js` (new): `useAuth()` → TanStack Query `GET /api/v1/auth/me`, returns `{ user, isLoading, isAuthenticated }`; `useLogout()` → POSTs logout + clears cache + redirects to `/login`; 401 handled silently (returns null, no query error state)
+- `client/src/pages/Login.jsx` (new): ENMA landing page with Google OAuth button (`VITE_API_URL + /api/v1/auth/google`); shows `not_invited` error message from URL param
+- `client/src/pages/AdminPanel.jsx` (new): Email whitelist CRUD using `GET/POST/DELETE /api/v1/admin/allowed-emails`
+- `client/src/App.jsx` (rewritten): `ProtectedLayout` component (spinner → redirect to `/login` → Navbar+Outlet); `/login` is unprotected; all other routes nested under `ProtectedLayout`; `/admin` route added
+- `client/src/components/layout/Navbar.jsx`: Added user avatar/name with Google photo support, Admin link for admin role, LogOut button
+- `client/src/pages/Settings.jsx`: Added API key entry section (`POST /api/v1/trade/settings/keys`), shows saved status indicator; updated env copy; added `useQueryClient` + `useMutation` + `useQuery` for keys
+- `server/src/controllers/auth.controller.js`: Fixed redirect URLs — error goes to `/login?error=not_invited` (was `/?error=not_invited`), success goes to `/` (was `/dashboard`)
+
+**Files changed (Phase 5):**
+- `client/src/lib/axios.js`, `client/src/lib/socket.js`
+- `client/src/hooks/useAuth.js` (new)
+- `client/src/pages/Login.jsx` (new), `client/src/pages/AdminPanel.jsx` (new)
+- `client/src/App.jsx` (rewritten), `client/src/components/layout/Navbar.jsx`
+- `client/src/pages/Settings.jsx`
+- `server/src/controllers/auth.controller.js`
+
+**Next:** Phase 6 — update `workspace/docs/state/CURRENT_STATE.md` with auth branch changes. Then `/sync-spec`.
+
+**Open questions:** None.
+
+---
 ## 2026-06-24 — Risk Model Improvements (workstream #2) — ALL 5 STEPS COMPLETE ✅
 
 **Goal:** Five additive risk-model changes across `engine/core/models/risk.py`, `engine/core/models/portfolio.py`, `engine/services/backtest_runner.py`, `engine/core/live_bot_manager.py`.

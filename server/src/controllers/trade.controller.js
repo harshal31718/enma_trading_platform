@@ -1,4 +1,5 @@
 const Settings = require('../models/Settings')
+const { encrypt, decrypt } = require('../utils/encryption')
 const TradeOrder = require('../models/TradeOrder')
 const TradeExecution = require('../models/TradeExecution')
 const TradeTransaction = require('../models/TradeTransaction')
@@ -14,11 +15,12 @@ function handleEngineError(err, defaultMessage) {
   return new ApiError(err.response?.status || 500, 'ENGINE_ERROR', message)
 }
 
-async function upsertTradeOrder(orderDetails, fallback = {}) {
+async function upsertTradeOrder(orderDetails, fallback = {}, userId) {
   await TradeOrder.findOneAndUpdate(
     { orderId: String(orderDetails.orderId) },
     {
       $set: {
+        userId: userId || undefined,
         orderId: String(orderDetails.orderId),
         clientOrderId: orderDetails.clientOrderId || fallback.clientOrderId || '',
         symbol: orderDetails.symbol || fallback.symbol,
@@ -44,8 +46,12 @@ async function upsertTradeOrder(orderDetails, fallback = {}) {
 
 async function getSettingsKeys(req, res, next) {
   try {
-    const settings = await Settings.findById('global')
-    res.json(ApiResponse.success({ mode: settings?.mode ?? 'testnet' }))
+    const settings = await Settings.findOne({ userId: req.user.id })
+    res.json(ApiResponse.success({
+      mode: settings?.mode ?? 'testnet',
+      hasApiKey: !!(settings?.encryptedApiKey),
+      hasApiSecret: !!(settings?.encryptedApiSecret),
+    }))
   } catch (err) {
     next(err)
   }
@@ -53,19 +59,27 @@ async function getSettingsKeys(req, res, next) {
 
 async function saveSettingsKeys(req, res, next) {
   try {
-    const { mode } = req.body
-    if (!mode || !['testnet', 'mainnet'].includes(mode)) {
+    const { apiKey, apiSecret, mode } = req.body
+    if (mode && !['testnet', 'mainnet'].includes(mode)) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'mode must be "testnet" or "mainnet"')
     }
 
-    let settings = await Settings.findById('global')
-    if (!settings) {
-      settings = new Settings({ _id: 'global' })
-    }
-    settings.mode = mode
-    await settings.save()
+    const updates = {}
+    if (apiKey) updates.encryptedApiKey = encrypt(apiKey)
+    if (apiSecret) updates.encryptedApiSecret = encrypt(apiSecret)
+    if (mode) updates.mode = mode
 
-    res.json(ApiResponse.success({ saved: true, mode }))
+    if (Object.keys(updates).length === 0) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'Nothing to save')
+    }
+
+    await Settings.findOneAndUpdate(
+      { userId: req.user.id },
+      { $set: updates },
+      { upsert: true, new: true }
+    )
+
+    res.json(ApiResponse.success({ saved: true }))
   } catch (err) {
     next(err)
   }
@@ -73,20 +87,13 @@ async function saveSettingsKeys(req, res, next) {
 
 async function verifySettings(req, res, next) {
   try {
-    const settings = await Settings.findById('global')
+    const settings = await Settings.findOne({ userId: req.user.id })
     const mode = settings?.mode ?? 'testnet'
-
-    let apiKey, apiSecret
-    if (mode === 'mainnet') {
-      apiKey = process.env.BINANCE_LIVE_API_KEY
-      apiSecret = process.env.BINANCE_LIVE_API_SECRET
-    } else {
-      apiKey = process.env.BINANCE_TESTNET_API_KEY
-      apiSecret = process.env.BINANCE_TESTNET_API_SECRET
-    }
+    const apiKey = settings?.encryptedApiKey ? decrypt(settings.encryptedApiKey) : ''
+    const apiSecret = settings?.encryptedApiSecret ? decrypt(settings.encryptedApiSecret) : ''
 
     if (!apiKey || !apiSecret) {
-      throw new ApiError(400, 'NO_CREDENTIALS', `Binance ${mode} API credentials are not set in server .env`)
+      throw new ApiError(400, 'NO_CREDENTIALS', 'Binance API keys not configured. Add them in Settings.')
     }
 
     try {
@@ -97,12 +104,10 @@ async function verifySettings(req, res, next) {
       )
     } catch (engineErr) {
       const detail = engineErr.response?.data?.detail
-      const message =
-        typeof detail === 'string'
-          ? detail
-          : detail?.message || `Binance ${mode} verification failed`
+      const message = typeof detail === 'string' ? detail : detail?.message || `Binance ${mode} verification failed`
       throw new ApiError(400, 'VERIFICATION_FAILED', message)
     }
+
     res.json(ApiResponse.success({ verified: true, mode }))
   } catch (err) {
     next(err)
@@ -226,7 +231,7 @@ async function placeOrder(req, res, next) {
     )
     const orderDetails = data.data
     try {
-      await upsertTradeOrder(orderDetails, { symbol, side, type, quantity, price })
+      await upsertTradeOrder(orderDetails, { symbol, side, type, quantity, price }, req.user.id)
     } catch (dbErr) {
       console.error('Failed to save local order draft:', dbErr)
       throw new ApiError(500, 'DB_SYNC_ERROR', 'Order placed but local DB sync failed')
@@ -493,7 +498,7 @@ async function getTradeOrders(req, res, next) {
       synced = false
     }
 
-    const orders = await TradeOrder.find({ symbol }).sort({ time: -1 }).lean()
+    const orders = await TradeOrder.find({ userId: req.user.id, symbol }).sort({ time: -1 }).lean()
     res.json(ApiResponse.success({ orders, synced }))
   } catch (err) {
     next(err)
@@ -536,7 +541,7 @@ async function getTradeExecutions(req, res, next) {
       synced = false
     }
 
-    const executions = await TradeExecution.find({ symbol }).sort({ time: -1 }).lean()
+    const executions = await TradeExecution.find({ userId: req.user.id, symbol }).sort({ time: -1 }).lean()
     res.json(ApiResponse.success({ executions, synced }))
   } catch (err) {
     next(err)
@@ -578,7 +583,7 @@ async function getTradeTransactions(req, res, next) {
       synced = false
     }
 
-    const filter = symbol ? { symbol } : {}
+    const filter = symbol ? { userId: req.user.id, symbol } : { userId: req.user.id }
     const transactions = await TradeTransaction.find(filter).sort({ time: -1 }).lean()
     res.json(ApiResponse.success({ transactions, synced }))
   } catch (err) {

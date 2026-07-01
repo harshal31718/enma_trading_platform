@@ -33,6 +33,8 @@ class BacktestRequest(BaseModel):
     alphaParams:    dict  = {}
     # Risk model parameters (Tier 2) — override global settings for this run.
     riskParams:     dict  = {}
+    # User scoping — forwarded from Node server JWT context.
+    userId:         str   = ""
 
 
 class CancelRequest(BaseModel):
@@ -58,6 +60,7 @@ async def run_backtest(req: BacktestRequest):
             funding_rate=req.fundingRate,
             alpha_params=req.alphaParams,
             risk_params=req.riskParams,
+            user_id=req.userId,
         )
         return {"success": True, "data": res}
     except Exception as e:
@@ -78,6 +81,7 @@ async def run_backtest(req: BacktestRequest):
             {
                 "$set": {
                     "jobId": req.jobId,
+                    "userId": req.userId,
                     "strategyId": strategy_id,
                     "strategyName": strategy_name,
                     "exchange": req.exchange,

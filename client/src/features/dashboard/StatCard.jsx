@@ -6,8 +6,8 @@ export default function StatCard({ title, value, subtext, icon: Icon }) {
       <div className="flex items-center justify-between text-slate-400 text-[11px] font-semibold uppercase tracking-wider">
         <span>{title}</span>
         {Icon && (
-          <div className="bg-emerald-400/10 rounded-md p-1.5">
-            <Icon className="size-4 text-emerald-400" />
+          <div className="bg-emerald-400/10 p-1.5">
+            <Icon className="size-4 text-emerald-400" strokeWidth={2} />
           </div>
         )}
       </div>

@@ -2,6 +2,7 @@ const mongoose = require('mongoose')
 
 const TradeTransactionSchema = new mongoose.Schema(
   {
+    userId:     { type: String, index: true },
     tranId:     { type: String, required: true, unique: true, index: true },
     symbol:     { type: String, index: true },
     incomeType: { type: String, required: true, index: true },

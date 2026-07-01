@@ -5,7 +5,12 @@ const morgan = require('morgan')
 const mongoose = require('mongoose')
 const Redis = require('ioredis')
 const rateLimit = require('express-rate-limit')
+const cookieParser = require('cookie-parser')
 
+require('./config/passport')
+
+const authRoutes = require('./routes/auth.routes')
+const adminRoutes = require('./routes/admin.routes')
 const candleRoutes = require('./routes/candle.routes')
 const dashboardRoutes = require('./routes/dashboard.routes')
 const strategyRoutes = require('./routes/strategy.routes')
@@ -17,14 +22,19 @@ const settingsRoutes = require('./routes/settings.routes')
 const orderHistoryRoutes = require('./routes/orderHistory.routes')
 const riskRoutes = require('./routes/risk.routes')
 const errorHandler = require('./middleware/errorHandler')
+const { verifyJWT } = require('./middleware/auth.middleware')
 const ApiError = require('./utils/ApiError')
+
+const passport = require('passport')
 
 const app = express()
 
+app.use(cookieParser())
 app.use(helmet())
-app.use(cors({ origin: process.env.CLIENT_URL || 'http://localhost:5173' }))
+app.use(cors({ origin: process.env.CLIENT_URL || 'http://localhost:5173', credentials: true }))
 app.use(morgan('dev'))
 app.use(express.json())
+app.use(passport.initialize())
 
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -35,7 +45,7 @@ const apiLimiter = rateLimit({
 })
 app.use('/api/v1/', apiLimiter)
 
-// Health check — verifies live MongoDB and Redis connections
+// Unprotected
 app.get('/api/v1/health', async (req, res) => {
   const health = { status: 'ok', mongo: 'disconnected', redis: 'disconnected' }
 
@@ -62,6 +72,12 @@ app.get('/api/v1/health', async (req, res) => {
   res.status(statusCode).json(health)
 })
 
+app.use('/api/v1/auth', authRoutes)
+app.use('/internal', internalRoutes)
+
+// JWT gate — all routes below require a valid cookie
+app.use('/api/v1', verifyJWT)
+
 app.use('/api/v1/strategies', strategyRoutes)
 app.use('/api/v1/candles', candleRoutes)
 app.use('/api/v1/backtest', backtestRoutes)
@@ -71,7 +87,7 @@ app.use('/api/v1/algo', algoRoutes)
 app.use('/api/v1/settings', settingsRoutes)
 app.use('/api/v1/order-history', orderHistoryRoutes)
 app.use('/api/v1/risk', riskRoutes)
-app.use('/internal', internalRoutes)
+app.use('/api/v1/admin', adminRoutes)
 
 app.use(errorHandler)
 

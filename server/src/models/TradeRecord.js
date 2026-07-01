@@ -2,6 +2,7 @@ const mongoose = require('mongoose')
 
 const TradeRecordSchema = new mongoose.Schema(
   {
+    userId:           { type: String, required: false, index: true },
     tradeId:          { type: String, required: true, unique: true, index: true },
     source:           { type: String, enum: ['bot', 'manual'], required: true, index: true },
     executedBy:       { type: String, required: true, index: true },

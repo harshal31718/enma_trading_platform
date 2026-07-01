@@ -54,6 +54,10 @@ class StartSessionRequest(BaseModel):
     # any per-session override. Keyed by snake_case name (risk_pct, rrr,
     # liq_buffer_pct, max_session_dd); injected onto each strategy instance.
     risk_params: dict = {}
+    # Per-user credentials forwarded from Node server (multi-user support).
+    user_id: str = ""
+    api_key: str = ""
+    api_secret: str = ""
 
 
 class StopSessionRequest(BaseModel):

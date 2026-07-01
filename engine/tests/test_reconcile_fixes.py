@@ -33,7 +33,8 @@ class _FakeStrategy:
 
 
 def _make_session():
-    return {"open_positions": {}, "pnl": 0.0, "strategy_name": "X"}
+    return {"open_positions": {}, "pnl": 0.0, "strategy_name": "X",
+            "api_key": "k", "api_secret": "s", "user_id": ""}
 
 
 def _install_stub(monkeypatch, pos, algo_orders, open_orders=None):
@@ -49,8 +50,6 @@ def _install_stub(monkeypatch, pos, algo_orders, open_orders=None):
         return []
 
     monkeypatch.setattr(binance_mod, "send_signed_request", fake_signed)
-    monkeypatch.setenv("BINANCE_TESTNET_API_KEY", "k")
-    monkeypatch.setenv("BINANCE_TESTNET_SECRET", "s")
 
 
 def _run(mgr, sid, strat):

@@ -8,6 +8,7 @@ const BacktestResult = require('../models/BacktestResult')
 const worker = new Worker('backtest', async (job) => {
   const {
     jobId,
+    userId,
     strategyFile,
     exchange,
     symbol,
@@ -31,6 +32,7 @@ const worker = new Worker('backtest', async (job) => {
   try {
     await engineClient.post('/backtest/run', {
       jobId,
+      userId,
       strategyFile,
       exchange,
       symbol,

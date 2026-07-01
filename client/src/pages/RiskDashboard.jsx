@@ -235,10 +235,10 @@ export default function RiskDashboard() {
 
                 <div className="flex flex-col gap-4 font-mono text-xs">
                   <div>
-                    <label className="text-slate-400 block mb-1 text-[10px] uppercase">Max Leverage Allowed</label>
+                    <label className="text-slate-200 font-semibold block mb-1 text-[10px] uppercase">Max Leverage Allowed</label>
                     <input
                       type="number"
-                      className="bg-slate-900 border border-slate-800 w-full px-2.5 py-1.5 text-slate-200 outline-none focus:border-emerald-500"
+                      className="bg-slate-900 border border-slate-800/80 w-full px-2.5 py-1.5 text-slate-200 outline-none focus:border-emerald-500 placeholder-slate-600"
                       value={maxLeverageAllowed}
                       onChange={(e) => setMaxLeverageAllowed(e.target.value)}
                       min="1"
@@ -247,10 +247,10 @@ export default function RiskDashboard() {
                     />
                   </div>
                   <div>
-                    <label className="text-slate-400 block mb-1 text-[10px] uppercase">Max Session Drawdown %</label>
+                    <label className="text-slate-200 font-semibold block mb-1 text-[10px] uppercase">Max Session Drawdown %</label>
                     <input
                       type="number"
-                      className="bg-slate-900 border border-slate-800 w-full px-2.5 py-1.5 text-slate-200 outline-none focus:border-emerald-500"
+                      className="bg-slate-900 border border-slate-800/80 w-full px-2.5 py-1.5 text-slate-200 outline-none focus:border-emerald-500 placeholder-slate-600"
                       value={maxSessionDrawdown}
                       onChange={(e) => setMaxSessionDrawdown(e.target.value)}
                       min="5"
@@ -259,10 +259,10 @@ export default function RiskDashboard() {
                     />
                   </div>
                   <div>
-                    <label className="text-slate-400 block mb-1 text-[10px] uppercase">Max Risk % Per Trade</label>
+                    <label className="text-slate-200 font-semibold block mb-1 text-[10px] uppercase">Max Risk % Per Trade</label>
                     <input
                       type="number"
-                      className="bg-slate-900 border border-slate-800 w-full px-2.5 py-1.5 text-slate-200 outline-none focus:border-emerald-500"
+                      className="bg-slate-900 border border-slate-800/80 w-full px-2.5 py-1.5 text-slate-200 outline-none focus:border-emerald-500 placeholder-slate-600"
                       value={maxRiskPctPerTrade}
                       onChange={(e) => setMaxRiskPctPerTrade(e.target.value)}
                       min="0.1"
@@ -272,10 +272,10 @@ export default function RiskDashboard() {
                     />
                   </div>
                   <div>
-                    <label className="text-slate-400 block mb-1 text-[10px] uppercase">Cooldown Period (Hours)</label>
+                    <label className="text-slate-200 font-semibold block mb-1 text-[10px] uppercase">Cooldown Period (Hours)</label>
                     <input
                       type="number"
-                      className="bg-slate-900 border border-slate-800 w-full px-2.5 py-1.5 text-slate-200 outline-none focus:border-emerald-500"
+                      className="bg-slate-900 border border-slate-800/80 w-full px-2.5 py-1.5 text-slate-200 outline-none focus:border-emerald-500 placeholder-slate-600"
                       value={cooldownPeriodHours}
                       onChange={(e) => setCooldownPeriodHours(e.target.value)}
                       min="1"
@@ -287,7 +287,7 @@ export default function RiskDashboard() {
 
                 <button
                   type="submit"
-                  className="mt-6 w-full bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 text-slate-950 font-semibold py-2 px-4 transition-colors font-mono text-xs uppercase"
+                  className="mt-6 w-full bg-slate-800 hover:bg-slate-750 active:bg-slate-700 text-slate-200 border border-slate-700 py-2 px-4 font-mono text-xs uppercase transition-colors"
                   disabled={updateSettingsMutation.isPending}
                 >
                   {updateSettingsMutation.isPending ? 'Saving...' : 'Save Global Limits'}
@@ -351,7 +351,7 @@ export default function RiskDashboard() {
               <form onSubmit={handleAddStrategyOverride} className="border-t border-slate-800/60 pt-4">
                 <div className="grid grid-cols-2 gap-2 text-xs font-mono">
                   <div className="col-span-2">
-                    <label className="text-[9px] uppercase text-slate-500 tracking-wider block mb-0.5">Strategy Name</label>
+                    <label className="text-[9px] uppercase text-slate-200 font-semibold tracking-wider block mb-0.5">Strategy Name</label>
                     <select
                       className="bg-slate-900 border border-slate-800 w-full px-2 py-1 outline-none focus:border-emerald-500 text-slate-200 text-xs"
                       value={selectedStrategy}
@@ -367,10 +367,10 @@ export default function RiskDashboard() {
                     </select>
                   </div>
                   <div>
-                    <label className="text-[9px] uppercase text-slate-500 tracking-wider block mb-0.5">Risk %</label>
+                    <label className="text-[9px] uppercase text-slate-200 font-semibold tracking-wider block mb-0.5">Risk %</label>
                     <input
                       type="number"
-                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 outline-none focus:border-emerald-500 text-slate-200"
+                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 outline-none focus:border-emerald-500 text-slate-200 placeholder-slate-600"
                       value={stratRiskPct}
                       onChange={(e) => setStratRiskPct(e.target.value)}
                       placeholder="e.g. 1.5"
@@ -380,10 +380,10 @@ export default function RiskDashboard() {
                     />
                   </div>
                   <div>
-                    <label className="text-[9px] uppercase text-slate-500 tracking-wider block mb-0.5">RR Ratio</label>
+                    <label className="text-[9px] uppercase text-slate-200 font-semibold tracking-wider block mb-0.5">RR Ratio</label>
                     <input
                       type="number"
-                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 outline-none focus:border-emerald-500 text-slate-200"
+                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 outline-none focus:border-emerald-500 text-slate-200 placeholder-slate-600"
                       value={stratRRR}
                       onChange={(e) => setStratRRR(e.target.value)}
                       placeholder="e.g. 2.5"
@@ -393,10 +393,10 @@ export default function RiskDashboard() {
                     />
                   </div>
                   <div>
-                    <label className="text-[9px] uppercase text-slate-500 tracking-wider block mb-0.5">Max DD %</label>
+                    <label className="text-[9px] uppercase text-slate-200 font-semibold tracking-wider block mb-0.5">Max DD %</label>
                     <input
                       type="number"
-                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 outline-none focus:border-emerald-500 text-slate-200"
+                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 outline-none focus:border-emerald-500 text-slate-200 placeholder-slate-600"
                       value={stratMaxDrawdown}
                       onChange={(e) => setStratMaxDrawdown(e.target.value)}
                       placeholder="e.g. 15"
@@ -405,10 +405,10 @@ export default function RiskDashboard() {
                     />
                   </div>
                   <div>
-                    <label className="text-[9px] uppercase text-slate-500 tracking-wider block mb-0.5">Custom Stop ATR</label>
+                    <label className="text-[9px] uppercase text-slate-200 font-semibold tracking-wider block mb-0.5">Custom Stop ATR</label>
                     <input
                       type="number"
-                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 outline-none focus:border-emerald-500 text-slate-200"
+                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 outline-none focus:border-emerald-500 text-slate-200 placeholder-slate-600"
                       value={stratCustomAtr}
                       onChange={(e) => setStratCustomAtr(e.target.value)}
                       placeholder="e.g. 2.5"
@@ -479,10 +479,10 @@ export default function RiskDashboard() {
               <form onSubmit={handleAddSymbolOverride} className="border-t border-slate-800/60 pt-4">
                 <div className="grid grid-cols-2 gap-2 text-xs font-mono">
                   <div className="col-span-2">
-                    <label className="text-[9px] uppercase text-slate-500 tracking-wider block mb-0.5">Symbol</label>
+                    <label className="text-[9px] uppercase text-slate-200 font-semibold tracking-wider block mb-0.5">Symbol</label>
                     <input
                       type="text"
-                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 outline-none focus:border-emerald-500 text-slate-200 uppercase"
+                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 outline-none focus:border-emerald-500 text-slate-200 uppercase placeholder-slate-600"
                       value={selectedSymbol}
                       onChange={(e) => setSelectedSymbol(e.target.value)}
                       placeholder="e.g. BTCUSDT"
@@ -490,10 +490,10 @@ export default function RiskDashboard() {
                     />
                   </div>
                   <div>
-                    <label className="text-[9px] uppercase text-slate-500 tracking-wider block mb-0.5">Max Leverage</label>
+                    <label className="text-[9px] uppercase text-slate-200 font-semibold tracking-wider block mb-0.5">Max Leverage</label>
                     <input
                       type="number"
-                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 outline-none focus:border-emerald-500 text-slate-200"
+                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 outline-none focus:border-emerald-500 text-slate-200 placeholder-slate-600"
                       value={symMaxLeverage}
                       onChange={(e) => setSymMaxLeverage(e.target.value)}
                       placeholder="e.g. 10"
@@ -502,10 +502,10 @@ export default function RiskDashboard() {
                     />
                   </div>
                   <div>
-                    <label className="text-[9px] uppercase text-slate-500 tracking-wider block mb-0.5">Volatility Mult</label>
+                    <label className="text-[9px] uppercase text-slate-200 font-semibold tracking-wider block mb-0.5">Volatility Mult</label>
                     <input
                       type="number"
-                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 outline-none focus:border-emerald-500 text-slate-200"
+                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 outline-none focus:border-emerald-500 text-slate-200 placeholder-slate-600"
                       value={symVolMult}
                       onChange={(e) => setSymVolMult(e.target.value)}
                       placeholder="e.g. 1.2"
@@ -515,10 +515,10 @@ export default function RiskDashboard() {
                     />
                   </div>
                   <div className="col-span-2">
-                    <label className="text-[9px] uppercase text-slate-500 tracking-wider block mb-0.5">Max Exposure Notional ($)</label>
+                    <label className="text-[9px] uppercase text-slate-200 font-semibold tracking-wider block mb-0.5">Max Exposure Notional ($)</label>
                     <input
                       type="number"
-                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 outline-none focus:border-emerald-500 text-slate-200"
+                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 outline-none focus:border-emerald-500 text-slate-200 placeholder-slate-600"
                       value={symMaxExposure}
                       onChange={(e) => setSymMaxExposure(e.target.value)}
                       placeholder="e.g. 50000"

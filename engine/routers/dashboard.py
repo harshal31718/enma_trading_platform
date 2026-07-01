@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from config.mongo import get_database
 
 router = APIRouter()
@@ -13,11 +13,14 @@ def _safe_float(value, default=0.0):
 
 
 @router.get("/stats")
-async def get_dashboard_stats():
+async def get_dashboard_stats(userId: str = Query(default=None)):
     db = get_database()
-    total_runs = await db.backtestResults.count_documents({"status": "completed"})
+    _filter = {"status": "completed"}
+    if userId:
+        _filter["userId"] = userId
+    total_runs = await db.backtestResults.count_documents(_filter)
     completed_cursor = db.backtestResults.find(
-        {"status": "completed"},
+        _filter,
         {
             "jobId": 1,
             "strategyName": 1,
@@ -132,7 +135,7 @@ async def get_dashboard_stats():
 
 
 @router.get("/performance-calendar")
-async def get_performance_calendar():
+async def get_performance_calendar(userId: str = Query(default=None)):
     """Day-level P&L aggregation across ALL completed backtest trades.
 
     Queries the `backtestTrades` collection (minimal projection) and groups by
@@ -140,8 +143,11 @@ async def get_performance_calendar():
     sorted by date ascending.
     """
     db = get_database()
+    _trade_filter = {}
+    if userId:
+        _trade_filter["userId"] = userId
     cursor = db.backtestTrades.find(
-        {},
+        _trade_filter,
         {"exitAt": 1, "pnl": 1, "_id": 0},
     )
     trades = await cursor.to_list(length=100_000)

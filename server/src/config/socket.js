@@ -1,17 +1,47 @@
 const { Server } = require('socket.io')
+const jwt = require('jsonwebtoken')
+const User = require('../models/User')
 
 let io
+
+function parseCookies(cookieHeader = '') {
+  const cookies = {}
+  cookieHeader.split(';').forEach(pair => {
+    const [key, ...rest] = pair.trim().split('=')
+    if (key) cookies[decodeURIComponent(key.trim())] = decodeURIComponent(rest.join('=').trim())
+  })
+  return cookies
+}
 
 function initSocket(httpServer) {
   io = new Server(httpServer, {
     cors: {
       origin: process.env.CLIENT_URL || 'http://localhost:5173',
       methods: ['GET', 'POST'],
+      credentials: true,
     },
+  })
+
+  io.use(async (socket, next) => {
+    try {
+      const cookies = parseCookies(socket.handshake.headers.cookie)
+      const token = cookies.enma_jwt
+      if (!token) return next(new Error('UNAUTHORIZED'))
+
+      const decoded = jwt.verify(token, process.env.JWT_SECRET)
+      const user = await User.findById(decoded.userId).lean()
+      if (!user?.isActive) return next(new Error('UNAUTHORIZED'))
+
+      socket.user = user
+      next()
+    } catch {
+      next(new Error('UNAUTHORIZED'))
+    }
   })
 
   io.on('connection', (socket) => {
     console.log('[Socket.IO] client connected:', socket.id)
+    socket.join(`user:${socket.user._id}`)
 
     const trackedRooms = new Set()
 

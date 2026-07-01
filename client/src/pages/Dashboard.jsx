@@ -60,7 +60,9 @@ function RecentRunsPanel({ runs }) {
   return (
     <div className="divide-y divide-slate-700/30">
       {runs.length === 0 ? (
-        <div className="px-4 py-6 text-center text-slate-400 text-xs">No simulation history found.</div>
+        <div className="m-4 border border-dashed border-slate-700/30 py-6 px-4 text-center text-slate-500 text-xs">
+          No simulation history found.
+        </div>
       ) : (
         runs.map((run) => {
           const pnl = run.metrics ? formatPnl(run.metrics.netProfit) : null
@@ -110,7 +112,9 @@ function RecentLiveRunsPanel({ sessions }) {
   return (
     <div className="divide-y divide-slate-700/30">
       {sessions.length === 0 ? (
-        <div className="px-4 py-6 text-center text-slate-400 text-xs">No live session history found.</div>
+        <div className="m-4 border border-dashed border-slate-700/30 py-6 px-4 text-center text-slate-500 text-xs">
+          No live session history found.
+        </div>
       ) : (
         sessions.map((session) => {
           const pnlVal = parseFloat(session.pnl || '0')

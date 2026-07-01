@@ -123,7 +123,7 @@ export default function EquityCurve({ data = [], startingCapital, buyHoldReturnP
                 dataKey="balance"
                 name="balance"
                 stroke={equityColor}
-                strokeWidth={2}
+                strokeWidth={2.5}
                 dot={false}
                 activeDot={{ r: 4 }}
               />
@@ -131,10 +131,11 @@ export default function EquityCurve({ data = [], startingCapital, buyHoldReturnP
                 type="monotone"
                 dataKey="buyHold"
                 name="buyHold"
-                stroke="#6b7280"
+                stroke="#4b5563"
                 strokeDasharray="4 4"
                 strokeWidth={1.5}
                 dot={false}
+                opacity={0.35}
               />
             </LineChart>
           </ResponsiveContainer>
@@ -147,6 +148,12 @@ export default function EquityCurve({ data = [], startingCapital, buyHoldReturnP
         <div className="h-[120px] w-full">
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={chartData} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
+              <defs>
+                <linearGradient id="drawdownGradient" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#ef4444" stopOpacity={0} />
+                  <stop offset="100%" stopColor="#ef4444" stopOpacity={0.25} />
+                </linearGradient>
+              </defs>
               <CartesianGrid stroke="#1f2937" strokeDasharray="3 3" vertical={false} />
               <XAxis
                 dataKey="time"
@@ -177,8 +184,7 @@ export default function EquityCurve({ data = [], startingCapital, buyHoldReturnP
                 type="monotone"
                 dataKey="drawdown"
                 stroke="#ef4444"
-                fill="#b91c1c"
-                fillOpacity={0.25}
+                fill="url(#drawdownGradient)"
               />
             </AreaChart>
           </ResponsiveContainer>

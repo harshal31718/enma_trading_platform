@@ -11,7 +11,7 @@ async function getOrderHistory(req, res, next) {
     const skip = (page - 1) * limit
 
     const { symbol, source, side, executedBy } = req.query
-    const filter = {}
+    const filter = { userId: req.user.id }
 
     if (symbol) filter.symbol = symbol
     if (source) filter.source = source

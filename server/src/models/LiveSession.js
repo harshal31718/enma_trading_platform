@@ -1,6 +1,7 @@
 const mongoose = require('mongoose')
 
 const liveSessionSchema = new mongoose.Schema({
+  userId: { type: String, required: true, index: true },
   strategyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Strategy', required: true },
   strategyName: { type: String, required: true },
   symbols: [{ type: String, required: true }],

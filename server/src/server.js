@@ -9,13 +9,29 @@ require('./workers/backtest.worker')
 
 const PORT = process.env.PORT || 5000
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://mongodb:27017/enma_trading'
+const MONGO_DB = process.env.MONGO_DB || 'enma_trading'
 
 const { reconcileSymbolLocks } = require('./services/reconciliation')
+const PlatformConfig = require('./models/PlatformConfig')
+
+async function seedPlatformConfig() {
+  const adminEmail = process.env.ADMIN_EMAIL?.toLowerCase()
+  if (!adminEmail) return
+  const exists = await PlatformConfig.findById('platform')
+  if (!exists) {
+    await PlatformConfig.create({
+      _id: 'platform',
+      allowedEmails: [{ email: adminEmail, addedBy: 'system', addedAt: new Date() }],
+    })
+    console.log('PlatformConfig seeded with admin email:', adminEmail)
+  }
+}
 
 async function startServer() {
-  await mongoose.connect(MONGO_URI)
+  await mongoose.connect(MONGO_URI, { dbName: MONGO_DB })
   console.log('MongoDB connected')
 
+  await seedPlatformConfig()
   await reconcileSymbolLocks()
 
   const httpServer = http.createServer(app)

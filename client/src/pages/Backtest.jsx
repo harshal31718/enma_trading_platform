@@ -74,14 +74,14 @@ function PerformanceTable({ bySide }) {
   const getPnlClass = (val) => {
     const n = parseFloat(val)
     if (n > 0) return 'text-emerald-400 font-semibold'
-    if (n < 0) return 'text-red-400 font-semibold'
+    if (n < 0) return 'text-red-500 font-semibold'
     return 'text-gray-300'
   }
 
   const getPFClass = (val) => {
     const n = parseFloat(val)
     if (n >= 1) return 'text-emerald-400 font-semibold'
-    if (n > 0) return 'text-red-400 font-semibold'
+    if (n > 0) return 'text-red-500 font-semibold'
     return 'text-gray-300'
   }
 
@@ -497,18 +497,18 @@ export default function Backtest() {
                     const metrics = [
                       { label: 'Net Profit', value: formatPrice(m.netProfit), cls: getPnlClass(m.netProfit) },
                       { label: 'Net P&L %', value: formatSignedPct(m.netProfitPct), cls: getPnlClass(m.netProfit) },
-                      { label: 'Max Drawdown', value: `${formatPct(m.maxDrawdown)} / ${formatPct((activeResult.riskParams?.max_session_dd ?? 0.20) * 100)}`, cls: 'text-red-400' },
+                      { label: 'Max Drawdown', value: `${formatPct(m.maxDrawdown)} / ${formatPct((activeResult.riskParams?.max_session_dd ?? 0.20) * 100)}`, cls: 'text-red-500' },
                       { label: 'Win Rate', value: formatPct(parseFloat(m.winRate) * 100), cls: 'text-gray-100' },
                       { label: 'Total Trades', value: m.totalTrades ?? '-', cls: 'text-gray-100' },
-                      { label: 'Profit Factor', value: m.profitFactor ? parseFloat(m.profitFactor).toFixed(2) : '-', cls: m.profitFactor && parseFloat(m.profitFactor) >= 1 ? 'text-emerald-400' : 'text-red-400' },
+                      { label: 'Profit Factor', value: m.profitFactor ? parseFloat(m.profitFactor).toFixed(2) : '-', cls: m.profitFactor && parseFloat(m.profitFactor) >= 1 ? 'text-emerald-400' : 'text-red-500' },
                       { label: 'Sharpe', value: parseFloat(m.sharpeRatio || 0).toFixed(2), cls: 'text-gray-100' },
                       { label: 'Sortino', value: parseFloat(m.sortinoRatio || 0).toFixed(2), cls: 'text-gray-100' },
                       { label: 'Calmar', value: parseFloat(m.calmarRatio || 0).toFixed(2), cls: 'text-gray-100' },
                       { label: 'Expectancy', value: m.expectancy ? formatPnl(m.expectancy).value : '-', cls: m.expectancy ? getPnlClass(m.expectancy) : 'text-gray-300' },
                       { label: 'Leverage', value: `${activeResult.leverage}x`, cls: 'text-gray-100' },
                       { label: 'Fee Rate', value: `${((activeResult.feeRate || 0) * 100).toFixed(2)}%`, cls: 'text-gray-100' },
-                      { label: 'Total Fees', value: m.totalFees ? formatPrice(m.totalFees) : '-', cls: 'text-red-400' },
-                      { label: 'Liquidations', value: m.liquidations ?? 0, cls: (m.liquidations ?? 0) > 0 ? 'text-red-400' : 'text-gray-100' },
+                      { label: 'Total Fees', value: m.totalFees ? formatPrice(m.totalFees) : '-', cls: 'text-red-500' },
+                      { label: 'Liquidations', value: m.liquidations ?? 0, cls: (m.liquidations ?? 0) > 0 ? 'text-red-500' : 'text-gray-100' },
                     ]
                     return (
                       <div className="grid grid-cols-7 border-b border-slate-700/50 divide-x divide-y divide-slate-700/50">

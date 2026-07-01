@@ -49,7 +49,7 @@ async function runBacktest(req, res, next) {
     }
 
     // Load saved exchange settings — used as defaults when the client omits fee/slippage
-    const savedSettings = await Settings.findById('global') || {}
+    const savedSettings = await Settings.findOne({ userId: req.user.id }) || {}
     const defaultFeeRate = savedSettings.takerFee ?? 0.0005
     const defaultSlippage = savedSettings.slippagePct ?? 0.0005
     const defaultFunding = savedSettings.fundingEnabled ?? false
@@ -85,6 +85,7 @@ async function runBacktest(req, res, next) {
     const jobId = (clientJobId && UUID_RE.test(clientJobId)) ? clientJobId : uuidv4()
 
     await BacktestResult.create({
+      userId: req.user.id,
       jobId,
       strategyId: strategy._id,
       strategyName: strategy.name,
@@ -103,6 +104,7 @@ async function runBacktest(req, res, next) {
 
     await backtestQueue.add('run', {
       jobId,
+      userId: req.user.id,
       strategyFile: strategy.filePath,
       exchange,
       symbol,
@@ -129,8 +131,8 @@ async function getBacktest(req, res, next) {
   try {
     const { id } = req.params
     const query = mongoose.Types.ObjectId.isValid(id)
-      ? { $or: [{ _id: id }, { jobId: id }] }
-      : { jobId: id }
+      ? { userId: req.user.id, $or: [{ _id: id }, { jobId: id }] }
+      : { userId: req.user.id, jobId: id }
 
     const backtest = await BacktestResult.findOne(query).lean()
     if (!backtest) throw new ApiError(404, 'NOT_FOUND', 'Backtest result not found')
@@ -151,7 +153,7 @@ async function listBacktests(req, res, next) {
 
     const { strategyName, symbol, timeframe, status, createdAfter, createdBefore } = req.query
 
-    const filter = {}
+    const filter = { userId: req.user.id }
 
     if (strategyName) filter.strategyName = strategyName
     if (symbol) filter.symbol = symbol
@@ -230,8 +232,8 @@ async function getBacktestTrades(req, res, next) {
 
     // Resolve jobId — id may be a UUID (jobId) or a MongoDB ObjectId
     const query = mongoose.Types.ObjectId.isValid(id)
-      ? { $or: [{ _id: id }, { jobId: id }] }
-      : { jobId: id }
+      ? { userId: req.user.id, $or: [{ _id: id }, { jobId: id }] }
+      : { userId: req.user.id, jobId: id }
 
     const backtest = await BacktestResult.findOne(query).select('jobId tradeCount').lean()
     if (!backtest) throw new ApiError(404, 'NOT_FOUND', 'Backtest result not found')
@@ -268,8 +270,8 @@ async function getBacktestBenchmark(req, res, next) {
   try {
     const { id } = req.params
     const query = mongoose.Types.ObjectId.isValid(id)
-      ? { $or: [{ _id: id }, { jobId: id }] }
-      : { jobId: id }
+      ? { userId: req.user.id, $or: [{ _id: id }, { jobId: id }] }
+      : { userId: req.user.id, jobId: id }
 
     const backtest = await BacktestResult.findOne(query).select('jobId').lean()
     if (!backtest) throw new ApiError(404, 'NOT_FOUND', 'Backtest result not found')
@@ -285,8 +287,8 @@ async function cancelBacktest(req, res, next) {
   try {
     const { id } = req.params
     const query = mongoose.Types.ObjectId.isValid(id)
-      ? { $or: [{ _id: id }, { jobId: id }] }
-      : { jobId: id }
+      ? { userId: req.user.id, $or: [{ _id: id }, { jobId: id }] }
+      : { userId: req.user.id, jobId: id }
 
     const backtest = await BacktestResult.findOne(query).lean()
     if (!backtest) throw new ApiError(404, 'NOT_FOUND', 'Backtest result not found')

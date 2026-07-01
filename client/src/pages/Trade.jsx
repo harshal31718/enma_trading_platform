@@ -145,11 +145,11 @@ const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:5000'
 function fetchKlines(symbol, timeframe, series, chart, signal) {
   return fetch(
     `${API_BASE}/api/v1/trade/klines?symbol=${symbol}&interval=${timeframe}&limit=500`,
-    { signal }
+    { signal, credentials: 'include' }
   )
     .then((r) => r.json())
     .then((res) => {
-      if (!res.success) throw new Error(res.error || 'Failed to load candles')
+      if (!res.success) throw new Error(res.error?.message || 'Failed to load candles')
       const raw = res.data
       if (!Array.isArray(raw)) return
       const data = raw.map((k) => ({
@@ -297,7 +297,7 @@ const BookRow = memo(function BookRow({ price, qty, maxQty, side }) {
   return (
     <div className="relative flex items-center justify-between text-[11px] py-[3px] px-2 hover:bg-slate-800/40 cursor-default">
       <div
-        className={`absolute inset-y-0 right-0 opacity-[0.12] ${isAsk ? 'bg-red-500' : 'bg-emerald-500'}`}
+        className={`absolute inset-y-0 right-0 opacity-[0.08] ${isAsk ? 'bg-red-500' : 'bg-emerald-500'}`}
         style={{ width: `${barPct}%` }}
       />
       <span className={`tabular-nums z-10 ${isAsk ? 'text-red-400' : 'text-emerald-400'}`}>
@@ -1180,7 +1180,7 @@ function BottomPanel({ ocoToast, ocoBanner, onDismissBanner }) {
               `${i === 0 ? 'pl-2 pr-4' : 'px-4'} py-2 text-xs font-medium transition-colors whitespace-nowrap`,
               activeTab === key
                 ? 'text-gray-100 border-b-2 border-emerald-400 -mb-px'
-                : 'text-slate-400 hover:text-gray-300',
+                : 'text-slate-400 opacity-50 hover:opacity-100 hover:text-gray-300',
             ].join(' ')}
           >
             {label}
@@ -1521,7 +1521,7 @@ function OrderForm() {
                 onChange={(e) => setPrice(e.target.value)}
                 placeholder="0.00"
                 disabled={orderPending}
-                className="bg-[#0a0d13] border border-slate-700/50 rounded-lg px-3 py-2 text-xs text-gray-100 placeholder-slate-600 focus:outline-none focus:border-emerald-400 disabled:opacity-50 tabular-nums"
+                className="bg-[#0a0d13] border border-slate-600/50 rounded px-3 py-2 text-xs text-gray-100 placeholder-slate-600 focus:outline-none focus:border-emerald-400 disabled:opacity-50 tabular-nums"
               />
             </div>
           )}
@@ -1529,7 +1529,7 @@ function OrderForm() {
           {/* Quantity */}
           <div className="flex flex-col gap-1">
             <label className="text-[11px] text-slate-400">Size</label>
-            <div className="flex border border-slate-700/50 rounded overflow-hidden">
+            <div className="flex border border-slate-600/50 rounded overflow-hidden">
               <input
                 type="number"
                 value={qty}
@@ -1538,7 +1538,7 @@ function OrderForm() {
                 disabled={orderPending}
                 className="flex-1 bg-[#0a0d13] px-3 py-2 text-xs text-gray-100 placeholder-slate-600 focus:outline-none min-w-0 disabled:opacity-50 tabular-nums"
               />
-              <div className="flex shrink-0 border-l border-slate-700/50">
+              <div className="flex shrink-0 border-l border-slate-600/50">
                 {[base, quote].map((unit) => (
                   <button
                     key={unit}
@@ -1566,10 +1566,10 @@ function OrderForm() {
                 onClick={() => handlePctClick(p)}
                 disabled={orderPending}
                 className={[
-                  'flex-1 py-1.5 text-xs rounded transition-colors border',
+                  'flex-1 h-7 text-xs rounded transition-colors border flex items-center justify-center py-0 leading-none',
                   pct === p
                     ? 'bg-slate-700 border-slate-600 text-gray-100'
-                    : 'border-slate-700/50 text-slate-400 hover:text-gray-300 hover:border-slate-600',
+                    : 'border-slate-600/50 text-slate-400 hover:text-gray-300 hover:border-slate-600',
                 ].join(' ')}
               >
                 {p}%

@@ -2,6 +2,7 @@ const mongoose = require('mongoose')
 
 const BacktestResultSchema = new mongoose.Schema(
   {
+    userId: { type: String, index: true },
     jobId: { type: String, required: true, unique: true, index: true },
     strategyId: { type: String },
     strategyName: { type: String },
@@ -37,5 +38,6 @@ const BacktestResultSchema = new mongoose.Schema(
 BacktestResultSchema.index({ status: 1 })
 BacktestResultSchema.index({ symbol: 1 })
 BacktestResultSchema.index({ strategyId: 1, createdAt: -1 })
+BacktestResultSchema.index({ userId: 1, createdAt: -1 })
 
 module.exports = mongoose.model('BacktestResult', BacktestResultSchema)

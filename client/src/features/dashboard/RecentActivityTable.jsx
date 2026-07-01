@@ -33,7 +33,17 @@ export default function RecentActivityTable({ data }) {
       </CardHeader>
       <CardContent>
         {!data || data.length === 0 ? (
-          <p className="text-slate-400 text-sm text-center py-6">No simulation history found.</p>
+          <div className="border border-dashed border-slate-700/30 p-8 flex flex-col items-center justify-center text-center gap-3">
+            <p className="text-slate-500 text-xs">No simulation history found.</p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => navigate('/backtest')}
+              className="border-slate-700/50 text-slate-400 hover:text-gray-200 text-xs h-8 px-3"
+            >
+              Run Backtest
+            </Button>
+          </div>
         ) : (
           <Table>
             <TableHeader>

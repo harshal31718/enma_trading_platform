@@ -686,6 +686,7 @@ async def run_backtest_simulation(
     funding_rate: float | None = None,
     alpha_params: dict | None = None,
     risk_params: dict | None = None,
+    user_id: str = "",
 ) -> dict:
     # ── 1. Parse strategy name ──────────────────────────────────────────────
     parts = strategy_file.split("/")
@@ -1128,6 +1129,7 @@ async def run_backtest_simulation(
         {
             "$set": {
                 "jobId":        job_id,
+                "userId":       user_id,
                 "strategyId":   strategy_id,
                 "strategyName": strategy_name,
                 "exchange":     exchange,
@@ -1158,6 +1160,7 @@ async def run_backtest_simulation(
         trade_docs = [
             {
                 "jobId":       job_id,
+                "userId":      user_id,
                 "tradeIndex":  i + 1,
                 "type":        tr["type"],
                 "qty":         tr["qty"],

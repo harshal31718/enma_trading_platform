@@ -24,11 +24,31 @@ export default function CorrelationHeatmap({ matrix = {} }) {
 
   if (symbols.length === 0) {
     return (
-      <div className="bg-slate-950 border border-slate-800 p-5 shadow-2xl h-full flex flex-col justify-center items-center">
-        <h3 className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-2">
+      <div className="bg-slate-950 border border-slate-800 p-5 shadow-2xl h-full flex flex-col justify-center items-center relative overflow-hidden min-h-[220px]">
+        {/* Muted correlation matrix blueprint SVG background */}
+        <div className="absolute inset-0 opacity-[0.03] flex items-center justify-center pointer-events-none scale-110 blur-[0.5px]">
+          <svg width="100%" height="100%" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="10" y="10" width="40" height="40" stroke="#34d399" strokeWidth="2" strokeDasharray="2 2" />
+            <rect x="60" y="10" width="40" height="40" stroke="#34d399" strokeWidth="2" strokeDasharray="2 2" />
+            <rect x="110" y="10" width="40" height="40" stroke="#34d399" strokeWidth="2" strokeDasharray="2 2" />
+            <rect x="10" y="60" width="40" height="40" stroke="#34d399" strokeWidth="2" strokeDasharray="2 2" />
+            <rect x="60" y="60" width="40" height="40" stroke="#34d399" strokeWidth="2" />
+            <rect x="110" y="60" width="40" height="40" stroke="#34d399" strokeWidth="2" strokeDasharray="2 2" />
+            <rect x="10" y="110" width="40" height="40" stroke="#34d399" strokeWidth="2" strokeDasharray="2 2" />
+            <rect x="60" y="110" width="40" height="40" stroke="#34d399" strokeWidth="2" strokeDasharray="2 2" />
+            <rect x="110" y="110" width="40" height="40" stroke="#34d399" strokeWidth="2" />
+            <line x1="30" y1="30" x2="80" y2="80" stroke="#34d399" strokeWidth="2" strokeDasharray="3 3" />
+            <line x1="80" y1="80" x2="130" y2="130" stroke="#34d399" strokeWidth="2" strokeDasharray="3 3" />
+            <circle cx="30" cy="30" r="4" fill="#34d399" />
+            <circle cx="80" cy="80" r="4" fill="#34d399" />
+            <circle cx="130" cy="130" r="4" fill="#34d399" />
+          </svg>
+        </div>
+
+        <h3 className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-2 z-10">
           Rolling 30d Asset Correlation
         </h3>
-        <p className="text-xs text-slate-500">No active positions to correlate</p>
+        <p className="text-xs text-slate-500 z-10">No active positions to correlate</p>
       </div>
     )
   }

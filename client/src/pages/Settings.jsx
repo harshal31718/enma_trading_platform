@@ -1,13 +1,53 @@
 import { useState, useEffect, useRef } from 'react'
-import { Server, Zap, CheckCircle2, Clock, X, AlertTriangle } from 'lucide-react'
+import { Server, Zap, CheckCircle2, Clock, X, AlertTriangle, KeyRound } from 'lucide-react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import api from '../lib/axios'
 import PageWrapper from '@/components/layout/PageWrapper'
 import PageHeader from '@/components/ui/PageHeader'
 import { useExchangeSettings, useUpdateExchangeSettings } from '../hooks/useExchangeSettings'
 import RiskParamsFields, { RISK_DEFAULTS, riskDefaultsFromSettings, riskFieldsToPayload } from '../components/RiskParamsFields'
 
 export default function Settings() {
+  const queryClient = useQueryClient()
   const [showComingSoon, setShowComingSoon] = useState(false)
   const comingSoonTimerRef = useRef(null)
+
+  // ── API Keys form state ───────────────────────────────────────────────────
+  const [apiKey, setApiKey] = useState('')
+  const [apiSecret, setApiSecret] = useState('')
+  const [apiKeySaveSuccess, setApiKeySaveSuccess] = useState(false)
+  const apiKeyTimerRef = useRef(null)
+
+  const { data: keysStatus } = useQuery({
+    queryKey: ['trade', 'settings-keys'],
+    queryFn: async () => {
+      const res = await api.get('/api/v1/trade/settings/keys')
+      return res.data.data
+    },
+  })
+
+  const saveKeysMutation = useMutation({
+    mutationFn: async (payload) => {
+      const res = await api.post('/api/v1/trade/settings/keys', payload)
+      return res.data.data
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['trade', 'settings-keys'] })
+      setApiKey('')
+      setApiSecret('')
+      setApiKeySaveSuccess(true)
+      apiKeyTimerRef.current = setTimeout(() => setApiKeySaveSuccess(false), 3000)
+    },
+  })
+
+  function handleApiKeySubmit(e) {
+    e.preventDefault()
+    if (!apiKey && !apiSecret) return
+    const payload = {}
+    if (apiKey) payload.apiKey = apiKey
+    if (apiSecret) payload.apiSecret = apiSecret
+    saveKeysMutation.mutate(payload)
+  }
 
   // ── Exchange settings form state ──────────────────────────────────────────
   const [takerFee, setTakerFee] = useState('')
@@ -40,6 +80,7 @@ export default function Settings() {
       if (comingSoonTimerRef.current) clearTimeout(comingSoonTimerRef.current)
       if (successTimerRef.current) clearTimeout(successTimerRef.current)
       if (chaosSaveTimerRef.current) clearTimeout(chaosSaveTimerRef.current)
+      if (apiKeyTimerRef.current) clearTimeout(apiKeyTimerRef.current)
     }
   }, [])
 
@@ -177,8 +218,7 @@ export default function Settings() {
                   <CheckCircle2 size={12} className="text-yellow-400 ml-auto" />
                 </div>
                 <p className="text-xs text-slate-400 leading-relaxed">
-                  Paper trading on Binance Futures Demo. No real funds at risk. Uses{' '}
-                  <code className="text-slate-300">BINANCE_TESTNET_API_KEY</code>.
+                  Paper trading on Binance Futures Demo. No real funds at risk. Set your API keys below.
                 </p>
               </button>
 
@@ -205,9 +245,67 @@ export default function Settings() {
               </button>
             </div>
 
-            <p className="mt-5 text-[11px] text-slate-600">
-              Binance API keys are read from <code className="text-slate-500">server/.env</code> and are never stored in the database.
-            </p>
+            {/* ── Binance API Keys ─────────────────────────────────────── */}
+            <div className="mt-5 border-t border-slate-700/50 pt-5">
+              <div className="flex items-center gap-2 mb-3">
+                <KeyRound size={13} className="text-slate-400" />
+                <p className="text-gray-300 text-xs font-semibold">Binance API Keys (Testnet)</p>
+                <span className="ml-auto text-[10px] text-slate-500">
+                  {keysStatus?.hasApiKey && keysStatus?.hasApiSecret
+                    ? '● Keys saved'
+                    : '○ Not configured'}
+                </span>
+              </div>
+
+              {saveKeysMutation.isError && (
+                <div className="flex items-start gap-2 bg-red-950/20 border border-red-800/40 rounded-lg p-3 mb-3">
+                  <AlertTriangle size={14} className="text-red-400 mt-0.5 shrink-0" />
+                  <p className="text-red-400 text-xs">
+                    {saveKeysMutation.error?.response?.data?.message ?? 'Failed to save keys.'}
+                  </p>
+                </div>
+              )}
+              {apiKeySaveSuccess && (
+                <div className="bg-emerald-950/20 border border-emerald-800/40 rounded-lg p-3 mb-3">
+                  <p className="text-emerald-400 text-xs">API keys saved.</p>
+                </div>
+              )}
+
+              <form onSubmit={handleApiKeySubmit} className="space-y-3">
+                <div>
+                  <label className={labelCls}>API Key</label>
+                  <input
+                    type="password"
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    placeholder={keysStatus?.hasApiKey ? '••••••••  (leave blank to keep current)' : 'Paste your testnet API key'}
+                    className={inputCls}
+                    autoComplete="off"
+                  />
+                </div>
+                <div>
+                  <label className={labelCls}>API Secret</label>
+                  <input
+                    type="password"
+                    value={apiSecret}
+                    onChange={(e) => setApiSecret(e.target.value)}
+                    placeholder={keysStatus?.hasApiSecret ? '••••••••  (leave blank to keep current)' : 'Paste your testnet API secret'}
+                    className={inputCls}
+                    autoComplete="off"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={saveKeysMutation.isPending || (!apiKey && !apiSecret)}
+                  className="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+                >
+                  {saveKeysMutation.isPending ? 'Saving…' : 'Save API Keys'}
+                </button>
+              </form>
+              <p className="mt-3 text-[11px] text-slate-600">
+                Keys are encrypted (AES-256-GCM) before storage. They are never logged or sent to third parties.
+              </p>
+            </div>
           </div>
 
           {/* ── Chaos Setting (testnet) ─────────────────────────────────────────── */}

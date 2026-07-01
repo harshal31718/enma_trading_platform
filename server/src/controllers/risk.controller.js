@@ -6,10 +6,12 @@ const ApiError = require('../utils/ApiError')
 const redis = require('../config/redis')
 const engineClient = require('../services/engineClient')
 
-async function _getOrCreateSettings() {
-  let settings = await Settings.findById('global')
-  if (!settings) settings = await Settings.create({ _id: 'global' })
-  return settings
+async function _getOrCreateSettings(userId) {
+  return Settings.findOneAndUpdate(
+    { userId },
+    { $setOnInsert: { userId } },
+    { upsert: true, new: true }
+  )
 }
 
 /**
@@ -18,7 +20,7 @@ async function _getOrCreateSettings() {
  */
 async function getRiskSettings(req, res, next) {
   try {
-    const settings = await _getOrCreateSettings()
+    const settings = await _getOrCreateSettings(req.user.id)
     res.json(ApiResponse.success({
       globalHardLimits: settings.globalHardLimits || {},
       strategyOverrides: settings.strategyOverrides || {},
@@ -35,7 +37,7 @@ async function getRiskSettings(req, res, next) {
  */
 async function updateRiskSettings(req, res, next) {
   try {
-    const settings = await _getOrCreateSettings()
+    const settings = await _getOrCreateSettings(req.user.id)
     const { globalHardLimits, strategyOverrides, symbolOverrides } = req.body
 
     // 1. Update Global Hard Limits
@@ -166,7 +168,7 @@ async function updateRiskSettings(req, res, next) {
  */
 async function getLiveMetrics(req, res, next) {
   try {
-    const cacheKey = 'risk:live-metrics:global'
+    const cacheKey = `risk:live-metrics:${req.user.id}`
     const cached = await redis.get(cacheKey)
     if (cached) {
       return res.json(ApiResponse.success(JSON.parse(cached)))

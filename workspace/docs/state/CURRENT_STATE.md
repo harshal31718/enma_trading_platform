@@ -3,15 +3,26 @@
 **Authority:** This is the single source of truth for what ENMA currently does.
 Read this before starting any work. If this conflicts with chat history, this document wins.
 
-Last updated: 2026-06-25 (Phase 9 + Standardise audit fixes I-01…I-13)
+Last updated: 2026-07-01 (Auth branch — Phases 1–5 complete)
 
 ---
 
 ## Implemented Features
 
+### Auth & Access Control (Auth Branch — active)
+- **Google OAuth 2.0** via Passport.js (`passport-google-oauth20`), sessionless. Flow: `/api/v1/auth/google` → Google → `/api/v1/auth/google/callback` → JWT cookie set → redirect to `/`.
+- **JWT in `httpOnly` cookie** (`enma_jwt`, `sameSite: lax`, 7-day expiry). Verified by `verifyJWT` middleware globally applied at `app.use('/api/v1', verifyJWT)` (auth routes excluded).
+- **Email whitelist** — `PlatformConfig` MongoDB singleton (`_id: 'platform'`) stores allowed emails. Users not on the list are redirected to `/login?error=not_invited`. Admin email (`admin.enmaquant@gmail.com`) is auto-promoted to `role: 'admin'` on first login.
+- **User model**: `User.js` with `googleId`, `email`, `name`, `avatar`, `role` (`user`|`admin`), `isActive`.
+- **Admin panel**: `GET/POST/DELETE /api/v1/admin/allowed-emails` — admin-only, guarded by `requireAdmin` middleware. Client: `/admin` route, visible only to admin users in the Navbar.
+- **Per-user Settings**: `Settings` model scoped by `userId` (string). Each user's exchange settings, risk defaults, chaos settings, and encrypted Binance keys are stored per-user. `_getOrCreate(userId)` upserts on first access.
+- **Socket.IO rooms**: All `io.emit()` replaced with `io.to('user:' + userId).emit()`. Clients join their room on auth via `verifyJWT` in the Socket.IO auth handler.
+- **Client auth**: `useAuth()` hook (TanStack Query, `GET /api/v1/auth/me`, 5-min stale, 401 returns null silently). `ProtectedLayout` in `App.jsx` — spinner while loading, redirect to `/login` if not authenticated, then renders Navbar+Outlet. Navbar shows Google avatar, user name, Admin link (admin only), and logout button.
+- **Axios/Socket**: Both have `withCredentials: true` to send the `httpOnly` cookie cross-origin.
+
 ### Settings & Credentials
-- **No authentication layer.** This is a single-user, self-hosted platform — there are no register/login endpoints, no auth middleware, and `/api/v1/auth/*` is never mounted (see `DEPRECATED.md` → "Removed Server Modules"). The previously-orphaned auth scaffolding has now been **fully removed (2026-06-22)**: `bcryptjs` + `jsonwebtoken` deleted from `server/package.json`, `client/src/store/useAuthStore.js` deleted, and the JWT request / 401-redirect interceptors stripped from `client/src/lib/axios.js`.
-- Binance API key storage: AES-256 encrypted, stored in MongoDB `Settings` collection
+- Binance API key storage: AES-256 encrypted per-user, stored in MongoDB `Settings` collection
+- Key entry in Settings page (`POST /api/v1/trade/settings/keys`), status indicator shows if keys are saved
 - Key verification against Binance Testnet on save
 - **Exchange Settings**: Centralized configuration for trading fees, backtest defaults, bot defaults, simulation parameters (slippage, funding), and **risk-model defaults** (risk % per trade, reward:risk ratio, max session drawdown, liquidation buffer). All values stored as variables — no hardcoded numbers. Accessible via GET/PUT `/api/v1/settings/exchange`. Forms pre-fill from saved defaults.
 

@@ -15,7 +15,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import time
 
 import httpx
@@ -52,7 +51,9 @@ class UserDataStreamManager:
     symbol and invokes it asynchronously.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, api_key: str = "", api_secret: str = "") -> None:
+        self._api_key = api_key
+        self._api_secret = api_secret
         self._fill_callbacks: dict[str, list[callable]] = {}
         self._listen_key: str | None = None
         self._ws_task: asyncio.Task | None = None
@@ -125,43 +126,37 @@ class UserDataStreamManager:
 
     async def _create_listen_key(self) -> str:
         """POST /fapi/v1/listenKey returns a listen key."""
-        api_key = os.getenv("BINANCE_TESTNET_API_KEY")
-        api_secret = os.getenv("BINANCE_TESTNET_SECRET")
-        if not api_key or not api_secret:
-            raise RuntimeError("BINANCE_TESTNET_API_KEY / BINANCE_TESTNET_SECRET not set")
+        if not self._api_key or not self._api_secret:
+            raise RuntimeError("API credentials not set on UserDataStreamManager")
 
         # Use send_signed_request which handles HMAC; for listenKey a POST
         # with no params works.
         data = await send_signed_request(
             "POST", "/fapi/v1/listenKey",
-            api_key, api_secret, mode="testnet",
+            self._api_key, self._api_secret, mode="testnet",
         )
         return data["listenKey"]
 
     async def _delete_listen_key(self) -> None:
         """DELETE /fapi/v1/listenKey to clean up."""
-        api_key = os.getenv("BINANCE_TESTNET_API_KEY")
-        api_secret = os.getenv("BINANCE_TESTNET_SECRET")
-        if not api_key or not api_secret:
+        if not self._api_key or not self._api_secret:
             return
         try:
             await send_signed_request(
                 "DELETE", "/fapi/v1/listenKey",
-                api_key, api_secret, mode="testnet",
+                self._api_key, self._api_secret, mode="testnet",
             )
         except Exception as e:
             logger.warning(f"[UserDataStream] Listen key delete failed: {e}")
 
     async def _keepalive_listen_key(self) -> None:
         """PUT /fapi/v1/listenKey to extend the TTL."""
-        api_key = os.getenv("BINANCE_TESTNET_API_KEY")
-        api_secret = os.getenv("BINANCE_TESTNET_SECRET")
-        if not api_key or not api_secret:
+        if not self._api_key or not self._api_secret:
             return
         try:
             await send_signed_request(
                 "PUT", "/fapi/v1/listenKey",
-                api_key, api_secret, mode="testnet",
+                self._api_key, self._api_secret, mode="testnet",
             )
             logger.debug("[UserDataStream] Listen key keep-alive OK")
         except Exception as e:
@@ -281,5 +276,5 @@ class UserDataStreamManager:
             )
 
 
-# Singleton — one user data stream per API credentials
-user_data_stream = UserDataStreamManager()
+# No module-level singleton — each live session creates its own
+# UserDataStreamManager(api_key=..., api_secret=...) in live_bot_manager.py.

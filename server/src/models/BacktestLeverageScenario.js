@@ -2,6 +2,7 @@ const mongoose = require('mongoose')
 
 const BacktestLeverageScenarioSchema = new mongoose.Schema(
   {
+    userId: { type: String, index: true },
     sourceJobId: { type: String, required: true, index: true },
     leverage: { type: Number, required: true },
     netProfitPct: { type: String, required: true },

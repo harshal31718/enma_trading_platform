@@ -198,10 +198,21 @@ The server owns the routing, auth, and job queue layers. Database ownership is s
 - server/ never writes `metrics`, `trades`, or `equityCurve` to `backtestResults` or individual trades to `backtestTrades` — engine is the sole writer for result data; server only updates the `status` and `error` fields
 - `metrics`, `trades`, and `equityCurve` are defined as `mongoose.Schema.Types.Mixed` in `BacktestResult.js` to make engine ownership explicit; do not add typed Array or Object schema definitions for these fields
 - `CandleImport` model, `candle.worker.js`, `candleQueue.js`, `liveQueue.js`, `live.worker.js` — none exist; do not create them
-- No `auth.routes.js` or `auth.controller.js` — auth routes are not yet mounted; do not add auth scaffolding
 - Strategy code lives on engine disk — server never reads strategy files directly; always proxy via `GET engine:8000/strategies/:name/code`
 - Strategy metadata (name, description, filePath) lives in MongoDB `strategies` collection, owned by server
-- No `user_id` on any Mongoose model — this is a single-user platform
+- **`userId` is required** on all mutable Mongoose models (`BacktestResult`, `BacktestTrade`, `BacktestLeverageScenario`, `LiveSession`, `Settings`, `TradeOrder`, `TradeExecution`, `TradeTransaction`, `TradeRecord`). Every controller query must include `userId: req.user.id` in the filter. `Strategy` is the only model WITHOUT `userId` — strategies are shared across all users.
+
+### Auth architecture
+
+- **Google OAuth 2.0** via Passport.js, sessionless (`passport.initialize()` only — no `passport.session()`).
+- **JWT in `httpOnly` cookie** (`enma_jwt`, `sameSite: lax`, 7-day expiry). Verified by `verifyJWT` middleware.
+- Route mounting order in `app.js`: `auth.routes` and `/internal` are unprotected; `app.use('/api/v1', verifyJWT)` gates all other routes.
+- `req.user` is a Mongoose `.lean()` User document — available in every protected controller.
+- `requireAdmin` middleware (checks `req.user.role === 'admin'`) is applied at the router level in `admin.routes.js`.
+- **Socket.IO**: `io.use()` middleware parses the `enma_jwt` cookie, verifies JWT, and attaches `socket.user`. On connection, the socket joins `user:<userId>` room. All `io.emit()` calls must be `io.to('user:<userId>').emit()` — never broadcast globally.
+- **Internal routes** (`/internal/*`) have no `req.user` — they carry session context via `req.params.id` (LiveSession ID). Use `_getBinanceHeaders(sessionId)` which looks up `userId` via `LiveSession.findById`.
+- Admin panel: `GET/POST/DELETE /api/v1/admin/allowed-emails`. The `ADMIN_EMAIL` from env cannot be removed via API (enforced in `admin.controller.js`).
+- `PlatformConfig` singleton (`_id: 'platform'`) holds the allowed-email whitelist. Created on server startup if absent.
 
 ### Dashboard proxy rules
 
@@ -220,4 +231,5 @@ The server owns the routing, auth, and job queue layers. Database ownership is s
 - Use `process.exit()` — use proper error handling
 - Add new npm packages without updating root CLAUDE.md stack table
 - Connect to TimescaleDB — only engine queries candle data
-- Add user_id fields to any Mongoose model (see root CLAUDE.md for platform-wide rules)
+- Omit `userId` from any controller query on mutable models — every read/write must be scoped to `req.user.id`
+- Add `userId` to the `Strategy` model — strategies are global/shared

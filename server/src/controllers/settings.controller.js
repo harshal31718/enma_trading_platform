@@ -38,15 +38,17 @@ const FIELD_RULES = {
 
 const CHAOS_TIMEFRAME_ALLOWLIST = ['1m','3m','5m','15m','30m','1h','2h','4h','6h','8h','12h','1d']
 
-async function _getOrCreate() {
-  let settings = await Settings.findById('global')
-  if (!settings) settings = await Settings.create({ _id: 'global' })
-  return settings
+async function _getOrCreate(userId) {
+  return Settings.findOneAndUpdate(
+    { userId },
+    { $setOnInsert: { userId } },
+    { upsert: true, new: true }
+  )
 }
 
 async function getExchangeSettings(req, res, next) {
   try {
-    const settings = await _getOrCreate()
+    const settings = await _getOrCreate(req.user.id)
     const data = {}
     for (const field of EXCHANGE_FIELDS) {
       data[field] = settings[field]
@@ -107,8 +109,8 @@ async function updateExchangeSettings(req, res, next) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'No valid fields to update')
     }
 
-    const settings = await Settings.findByIdAndUpdate(
-      'global',
+    const settings = await Settings.findOneAndUpdate(
+      { userId: req.user.id },
       { $set: updates },
       { new: true, upsert: true }
     )
