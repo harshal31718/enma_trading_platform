@@ -1,19 +1,6 @@
 version: "3.9"
 
 services:
-  mongodb:
-    image: mongo:7
-    ports:
-      - "27017:27017"
-    volumes:
-      - enma_mongo_data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-
   redis:
     image: redis:7-alpine
     ports:
@@ -53,8 +40,6 @@ services:
     env_file:
       - ./.env
     depends_on:
-      mongodb:
-        condition: service_healthy
       timescaledb:
         condition: service_healthy
       redis:
@@ -86,8 +71,6 @@ services:
     env_file:
       - ./.env
     depends_on:
-      mongodb:
-        condition: service_healthy
       redis:
         condition: service_healthy
       engine:
@@ -129,7 +112,6 @@ services:
           path: ./client/package.json
 
 volumes:
-  enma_mongo_data:
   enma_redis_data:
   enma_timescale_data:
   enma_server_node_modules:

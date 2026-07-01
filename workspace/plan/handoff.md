@@ -1,4 +1,43 @@
 ---
+## 2026-07-02 — UI Refinement Phase 3 (UX Polish & Responsiveness) — ALL STEPS COMPLETE ✅
+
+**Goal:** Complete all tasks for Phase 3 UI Refinement (Code Quality/Refactoring, Design System Sweep, Mobile Responsiveness) and remaining items from `workspace/plan/ui_refinement.md`.
+
+**Done this session:**
+- **Table Responsive wrappers & min-h chart (§4.3.7/§4.3.2)**: Wrapped `PositionsTable` and `OpenOrdersTable` in `overflow-x-auto` layouts inside `Trade.jsx`. Set chart container height constraint `min-h-[300px] lg:min-h-0` in `Trade.jsx` to prevent flex collapse on mobile.
+- **Mobile Dialog steps indicator collapse (§4.3.6)**: Refactored `NewBacktestWizard.jsx` and `ChaosWizard.jsx` steps progress bar to collapse to a clear current step fraction (`Step X of Y: Label`) under `sm` screens.
+- **Global axios connectivity toast interceptor (§4.7)**: Configured a response interceptor in `axios.js` to toast connectivity or 5xx server issues, automatically deduplicating parallel requests to avoid toast clutter.
+- **Visual & Design System Standardisation**:
+  - Centralized `<Badge>` component in `client/src/components/ui/badge.jsx` with variants and mappings to support status labels, buy/sell indicators, long/short types, and bot/manual orders.
+  - Replaced custom div elements with `<Card>` panels inside `StrategyCard.jsx` and `AdminPanel.jsx`.
+  - Refactored raw button elements to standard `<Button>` components in `Settings.jsx`.
+  - Swept skeleton loaders in `AlgoTrading.jsx`, `NewSessionWizard.jsx`, and `NewBacktestWizard.jsx` to slate colors.
+- **Mobile Grid Columns breakpoints**: Added responsive grid columns on `Backtest.jsx` metrics and settings layout.
+- **Optimized bundle size via lazy loading**: Configured dynamic imports (`React.lazy`) and `<Suspense>` on heavy widgets, wizards, and matrices.
+- **Verification**: Production build compiles in 8.01 seconds; backend boundary test suite passes 20/20.
+
+**Files changed:**
+- `client/src/components/algo/ChaosWizard.jsx`
+- `client/src/components/algo/NewSessionWizard.jsx`
+- `client/src/components/algo/SessionCard.jsx`
+- `client/src/components/ui/badge.jsx`
+- `client/src/features/backtest/NewBacktestWizard.jsx`
+- `client/src/features/strategies/StrategyCard.jsx`
+- `client/src/lib/axios.js`
+- `client/src/pages/AdminPanel.jsx`
+- `client/src/pages/AlgoTrading.jsx`
+- `client/src/pages/Backtest.jsx`
+- `client/src/pages/RiskDashboard.jsx`
+- `client/src/pages/Settings.jsx`
+- `client/src/pages/Trade.jsx`
+- `workspace/docs/state/CURRENT_STATE.md`
+- `workspace/plan/handoff.md`
+
+**Next session:** Complete. All UI Refinement phase workstreams have been fully resolved, documented, and verified.
+
+**Open questions:** None.
+
+---
 ## 2026-07-02 — UI Refinement Phase 2 (Structural & Convention) — ALL STEPS COMPLETE ✅
 
 **Goal:** Complete all remaining deferred items from Phase 2 UI Refinement (Toasts, ARIA/A11y sweep, polling indicators, table sorting, empty states).
