@@ -1,6 +1,16 @@
 # Deployment Plan: Production Setup on Oracle Cloud Free Tier
 
-This document outlines the step-by-step plan for deploying the Enma trading platform live to production using **Oracle Cloud Infrastructure (OCI) Always Free Tier**.
+Step-by-step plan for deploying the Enma trading platform to production on **Oracle Cloud Infrastructure (OCI) Always Free Tier** (ARM64 Ampere VPS), with Nginx TLS termination, MongoDB Atlas, and self-hosted TimescaleDB/Redis via Docker Compose.
+
+**Every environment variable name in this document is verified against the code** (`server/src/**`, `engine/config/*`, `client/src/lib/*`). Do not substitute names from generic tutorials — the services read exactly these keys.
+
+---
+
+## Prerequisites (hard requirements — resolve before Step 1)
+
+1. **A domain name.** Google OAuth does not accept raw IP addresses as authorized origins, and Let's Encrypt does not issue certificates for IPs. A free DDNS name (e.g. DuckDNS) is acceptable. Everywhere below, replace `yourdomain.com`.
+2. **DNS A record** pointing `yourdomain.com` → the VPS public IP (needed before the certbot step).
+3. **Code changes on `dev` before deploying** — see [Pre-Deploy Code Changes](#pre-deploy-code-changes-required). The plan assumes these are merged.
 
 ---
 
@@ -9,352 +19,476 @@ This document outlines the step-by-step plan for deploying the Enma trading plat
 ```mermaid
 flowchart TD
     subgraph Client [User Browser]
-        UI[React Frontend]
+        UI[React Frontend - static assets]
     end
 
     subgraph VPS [Oracle Cloud VPS - ARM64]
-        Nginx[Nginx Reverse Proxy]
-        Server[Node.js API Gateway]
-        Engine[Python Quant Engine]
-        Redis[(Redis Cache/Queue)]
-        Timescale[(TimescaleDB)]
+        Nginx[Nginx: TLS termination + static /dist + reverse proxy]
+        Server[Node.js API Gateway :5000 - bound to 127.0.0.1]
+        Engine[Python Quant Engine :8000 - Docker network only]
+        Redis[(Redis - Docker network only)]
+        Timescale[(TimescaleDB - Docker network only)]
     end
 
-    subgraph External [External APIs]
+    subgraph External [External Services]
         Binance[Binance Futures Testnet API]
         Google[Google OAuth API]
         Mongo[MongoDB Atlas Cloud]
     end
 
-    UI -->|HTTPS / WSS| Nginx
-    Nginx -->|Port 3000| Server
-    Server -->|HTTP Port 8000| Engine
-    Server -->|BullMQ / PubSub| Redis
-    Engine -->|Websocket / REST| Binance
-    Server -->|Mongoose| Mongo
-    Engine -->|TimescaleDB Connection| Timescale
+    UI -->|HTTPS / WSS 443| Nginx
+    Nginx -->|/api + /socket.io → 127.0.0.1:5000| Server
+    Server -->|http://engine:8000 + X-API-Key| Engine
+    Server -->|BullMQ / PubSub REDIS_URL| Redis
+    Engine -->|WebSocket / REST| Binance
+    Server -->|Mongoose MONGO_URI| Mongo
+    Engine -->|motor MONGO_URI| Mongo
+    Engine -->|asyncpg TIMESCALE_URL| Timescale
 ```
+
+Exposure policy:
+- **Nginx** is the only process listening on public ports (80/443).
+- **Server** binds `127.0.0.1:5000` on the host — reachable by Nginx, not the internet.
+- **Engine, Redis, TimescaleDB** publish no host ports at all — Docker-network only. The engine's `X-API-Key` auth is defense-in-depth, not the perimeter.
 
 ---
 
 ## Step 1: Oracle Cloud VPS Setup
 
-1. **Sign Up:** Register for the **Oracle Cloud Free Tier**.
+1. **Sign up** for the Oracle Cloud Free Tier.
 2. **Create Compute Instance:**
    - **Name:** `enma-production`
-   - **Image:** Ubuntu 24.04 (or 22.04) LTS.
+   - **Image:** Ubuntu 24.04 LTS (aarch64).
    - **Shape:** `VM.Standard.A1.Flex` (ARM64 Ampere).
-   - **Resources:** Allocate 2 to 4 OCPUs and 8 to 16 GB RAM (within the 24 GB / 4 OCPU always-free limit).
-   - **SSH Keys:** Generate and download your private key.
-3. **Configure Virtual Cloud Network (VCN):**
-   - Go to your instance details -> click on the Subnet -> click on the Default Security List.
-   - Add **Ingress Rules** to allow:
-     - Port `80` (HTTP) from `0.0.0.0/0`
-     - Port `443` (HTTPS) from `0.0.0.0/0`
-     - Port `22` (SSH) from your IP address.
+   - **Resources:** 4 OCPUs / 24 GB RAM (use the full always-free allotment — see the idle-reclamation note; being one large VM also helps utilization stay above reclaim thresholds).
+   - **SSH Keys:** generate and download the private key.
+3. **Configure the VCN Security List** (instance → Subnet → Default Security List → Ingress Rules):
+   - Port `80` (TCP) from `0.0.0.0/0`
+   - Port `443` (TCP) from `0.0.0.0/0`
+   - Port `22` (TCP) from your IP only.
+
+> [!WARNING]
+> **Oracle's Ubuntu images ship with restrictive host-level iptables rules** (`/etc/iptables/rules.v4`) that REJECT everything except SSH — the cloud Security List alone is NOT enough. After SSH-ing in (Step 3), open 80/443 at the host too:
+> ```bash
+> sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 80 -j ACCEPT
+> sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 443 -j ACCEPT
+> sudo netfilter-persistent save
+> ```
+> Symptom if skipped: Security List looks correct but curl to the public IP times out.
 
 ---
 
 ## Step 2: Set Up External Resources
 
-### 1. MongoDB Atlas (Database)
-* Create a free cluster on MongoDB Atlas.
-* Whitelist the IP address of your Oracle VPS.
-* Obtain the connection string (e.g., `mongodb+srv://...`).
+### 2.1 MongoDB Atlas (Metadata DB)
 
-### 3. Google Cloud Console (OAuth Sign-In)
-* Create a project in Google Cloud Console.
-* Go to **Credentials** -> Create OAuth 2.0 Client ID (Web Application).
-* **Authorized Javascript Origins:** `https://yourdomain.com` (or your VPS public IP / DDNS).
-* **Authorized Redirect URIs:** `https://yourdomain.com/api/v1/auth/google/callback`.
-* Save the `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
+* Create a free **M0** cluster.
+* **Network Access:** whitelist the VPS public IP (avoid `0.0.0.0/0`).
+* Create a database user; note the connection string (`mongodb+srv://...`).
+* The database name is `enma_trading` (matches `MONGO_DB` below).
+
+### 2.2 Google Cloud Console (OAuth Sign-In)
+
+* Create a project → **Credentials** → OAuth 2.0 Client ID (Web application).
+* **Authorized JavaScript origins:** `https://yourdomain.com`
+* **Authorized redirect URIs:** `https://yourdomain.com/api/v1/auth/google/callback`
+  (This exact path is hardcoded in `server/src/routes/auth.routes.js`; the base URL is supplied via `GOOGLE_CALLBACK_URL` — see Step 4.)
+* Save `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
 
 ---
 
-## Step 3: VPS Environment Configuration
+## Step 3: VPS Base Setup
 
-1. **SSH into the VPS:**
+1. **SSH in:**
    ```bash
-   ssh -i /path/to/key.key ubuntu@<YOUR_VPS_PUBLIC_IP>
+   ssh -i /path/to/key.key ubuntu@<VPS_PUBLIC_IP>
    ```
 
-2. **Update Packages & Install Docker:**
+2. **Open host firewall for 80/443** (see the warning in Step 1 — do it now).
+
+3. **Install Docker (with Compose v2), Nginx, Certbot:**
    ```bash
    sudo apt update && sudo apt upgrade -y
-   sudo apt install -y docker.io docker-compose git certbot
-   sudo systemctl enable --now docker
+   sudo apt install -y docker.io docker-compose-v2 nginx certbot python3-certbot-nginx git
+   sudo systemctl enable --now docker nginx
+   sudo usermod -aG docker ubuntu   # re-login for this to take effect
    ```
+   > Use the `docker compose` (v2 plugin) syntax throughout — not the legacy `docker-compose` v1 binary.
 
-3. **Clone the Repository:**
+4. **Clone the repository:**
    ```bash
-   git clone <YOUR_REPOSITORY_URL> /opt/enma
+   sudo git clone <YOUR_REPOSITORY_URL> /opt/enma
+   sudo chown -R ubuntu:ubuntu /opt/enma
    cd /opt/enma
-   ```
-
-4. **Configure Production `.env`:**
-   Create `/opt/enma/.env` (using values tailored for production):
-   ```env
-   # General
-   NODE_ENV=production
-   PORT=5000
-   CLIENT_URL=https://yourdomain.com
-   SERVER_URL=https://yourdomain.com
-
-   # MongoDB
-   MONGO_URI=mongodb+srv://<user>:<password>@cluster.mongodb.net/enma
-
-   # Google OAuth
-   GOOGLE_CLIENT_ID=your-google-client-id
-   GOOGLE_CLIENT_SECRET=your-google-client-secret
-   ADMIN_EMAIL=your-admin-email@gmail.com
-   JWT_SECRET=your-secure-random-jwt-secret
-   ENCRYPTION_KEY=your-32-byte-hex-encryption-key
-
-   # TimescaleDB (Self-hosted on the VPS via Docker)
-   TIMESCALE_HOST=timescaledb
-   TIMESCALE_PORT=5432
-   TIMESCALE_USER=enma
-   TIMESCALE_PASSWORD=your-secure-postgres-password
-   TIMESCALE_DB=enma_candles
-
-   # Redis
-   REDIS_HOST=redis
-   REDIS_PORT=6379
-
-   # Client Build-time APIs (passed to Vite)
-   VITE_API_URL=https://yourdomain.com
-   VITE_SOCKET_URL=https://yourdomain.com
+   git checkout main
    ```
 
 ---
 
-## Step 4: Reverse Proxy & SSL (Nginx)
+## Step 4: Production `.env`
 
-To secure the platform with HTTPS and allow WebSockets to pass through correctly, we use **Nginx** as a reverse proxy.
+Create `/opt/enma/.env` (git-ignored; both `server` and `engine` containers load it via `env_file`, and Compose uses it for `${...}` interpolation in the YAML).
 
-1. **Obtain SSL Certificate (Let's Encrypt):**
-   ```bash
-   sudo certbot certonly --standalone -d yourdomain.com
-   ```
+> [!IMPORTANT]
+> **`SERVER_URL` vs `GOOGLE_CALLBACK_URL` — do not "fix" this to the public domain.**
+> `SERVER_URL` is read by the **engine** (`engine/core/live_bot_manager.py`, `engine/scripts/chaos_runner.py`) to call the Node server's internal callback routes over the Docker network — it must stay `http://server:5000`. The public OAuth callback is configured separately via `GOOGLE_CALLBACK_URL`, which `server/src/config/passport.js` reads with priority over `SERVER_URL`.
 
-2. **Create Nginx Configuration (`/etc/nginx/sites-available/enma`):**
-   Configure Nginx to terminate SSL, serve client static assets directly for maximum efficiency, and proxy API/Socket requests:
+```env
+# ── Runtime ──────────────────────────────────────
+NODE_ENV=production
+PYTHON_ENV=production
+PORT=5000
+
+# ── URLs ─────────────────────────────────────────
+# Public origin of the app (CORS + post-login redirect)
+CLIENT_URL=https://yourdomain.com
+# INTERNAL Docker-network URL of the Node server (used by engine) — do NOT set to the domain
+SERVER_URL=http://server:5000
+# Public OAuth callback (overrides the SERVER_URL-derived default in passport.js)
+GOOGLE_CALLBACK_URL=https://yourdomain.com/api/v1/auth/google/callback
+# Internal Docker-network URL of the Python engine (used by server)
+ENGINE_URL=http://engine:8000
+
+# ── Auth & Secrets ───────────────────────────────
+GOOGLE_CLIENT_ID=your-google-client-id
+GOOGLE_CLIENT_SECRET=your-google-client-secret
+ADMIN_EMAIL=your-admin-email@gmail.com
+JWT_SECRET=<64-char random string: openssl rand -hex 32>
+JWT_EXPIRES_IN=7d
+JWT_REFRESH_EXPIRES_IN=30d
+ENCRYPTION_KEY=<32-byte hex: openssl rand -hex 32>
+# Shared secret between server and engine (X-API-Key header)
+ENGINE_API_KEY=<random string: openssl rand -hex 24>
+
+# ── MongoDB Atlas ────────────────────────────────
+MONGO_URI=mongodb+srv://<user>:<password>@cluster.mongodb.net/enma_trading
+MONGO_DB=enma_trading
+
+# ── TimescaleDB (self-hosted container) ──────────
+# Single DSN — the engine reads TIMESCALE_URL, not discrete HOST/USER/PASSWORD vars
+TIMESCALE_PASSWORD=<strong password>
+TIMESCALE_URL=postgresql://enma:<same strong password>@timescaledb:5432/enma_candles
+
+# ── Redis ────────────────────────────────────────
+# Both server and engine read REDIS_URL (not REDIS_HOST/REDIS_PORT)
+REDIS_URL=redis://redis:6379
+
+# ── Binance ──────────────────────────────────────
+BINANCE_API_KEY=
+BINANCE_SECRET=
+BINANCE_TESTNET=true
+BINANCE_FETCH_DELAY_MS=200
+```
+
+Variable-to-consumer map (for auditing):
+
+| Variable | Read by |
+|---|---|
+| `PORT`, `MONGO_URI`, `ADMIN_EMAIL` | `server/src/server.js`, `passport.js`, `admin.controller.js` |
+| `CLIENT_URL` | server CORS (`app.js`), Socket.IO (`config/socket.js`), OAuth redirects (`auth.controller.js`), engine CORS (`main.py`) |
+| `SERVER_URL` | engine → server internal callbacks (`live_bot_manager.py`) |
+| `GOOGLE_CALLBACK_URL` | `server/src/config/passport.js` (takes priority over `SERVER_URL`) |
+| `ENGINE_URL`, `ENGINE_API_KEY` | `server/src/services/engineClient.js` → validated in `engine/main.py` |
+| `REDIS_URL` | `server/src/config/redis.js`, `socketEmitter.js`, engine `services/progress.py`, `backtest_runner.py` |
+| `TIMESCALE_URL` | `engine/config/timescale.py` (asyncpg DSN) |
+| `MONGO_URI` + `MONGO_DB` | `engine/config/mongo.py` (motor) |
+| `JWT_SECRET`, `JWT_EXPIRES_IN` | `auth.controller.js`, `auth.middleware.js`, `config/socket.js` |
+| `ENCRYPTION_KEY` | `server/src/utils/encryption.js` (AES for Binance keys) |
+
+---
+
+## Step 5: Build the Client (static assets)
+
+The client container is **not** run in production. Host Nginx serves the compiled bundle from `/opt/enma/client/dist`.
+
+Vite bakes `VITE_API_URL` / `VITE_SOCKET_URL` into the bundle at build time from `client/.env.production` (tracked in git — see Pre-Deploy Code Changes). Build with a throwaway Node container so the VPS never needs a host Node install:
+
+```bash
+cd /opt/enma
+docker run --rm -v /opt/enma/client:/app -w /app node:20-alpine \
+  sh -c "npm ci && npm run build"
+```
+
+This produces `/opt/enma/client/dist`. Re-run this command on every release that touches `client/`.
+
+---
+
+## Step 6: Nginx Reverse Proxy + TLS
+
+1. **Create `/etc/nginx/sites-available/enma`** (HTTP-only first; certbot upgrades it):
    ```nginx
    server {
        listen 80;
        server_name yourdomain.com;
-       return 301 https://$host$request_uri;
-   }
 
-   server {
-       listen 443 ssl;
-       server_name yourdomain.com;
+       # Compiled static client
+       root /opt/enma/client/dist;
+       index index.html;
 
-       ssl_certificate /etc/letsencrypt/live/yourdomain.com/fullchain.pem;
-       ssl_certificate_key /etc/letsencrypt/live/yourdomain.com/privkey.pem;
-       ssl_protocols TLSv1.2 TLSv1.3;
-       ssl_ciphers HIGH:!aNULL:!MD5;
-
-       # Serve compiled static assets
        location / {
-           root /opt/enma/client/dist;
-           index index.html;
            try_files $uri $uri/ /index.html;
        }
 
        # Node.js API Gateway
        location /api {
-           proxy_pass http://localhost:5000;
+           proxy_pass http://127.0.0.1:5000;
            proxy_http_version 1.1;
-           proxy_set_header Upgrade $http_upgrade;
-           proxy_set_header Connection 'upgrade';
            proxy_set_header Host $host;
-           proxy_cache_bypass $http_upgrade;
            proxy_set_header X-Real-IP $remote_addr;
            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+           proxy_set_header X-Forwarded-Proto $scheme;
        }
 
-       # Socket.IO Handshake & Connection
+       # Socket.IO (WebSocket upgrade)
        location /socket.io/ {
-           proxy_pass http://localhost:5000/socket.io/;
+           proxy_pass http://127.0.0.1:5000/socket.io/;
            proxy_http_version 1.1;
            proxy_set_header Upgrade $http_upgrade;
            proxy_set_header Connection "Upgrade";
            proxy_set_header Host $host;
            proxy_set_header X-Real-IP $remote_addr;
            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+           proxy_set_header X-Forwarded-Proto $scheme;
+           proxy_read_timeout 86400;   # keep long-lived WS connections alive
        }
    }
    ```
-   Enable the site configuration and reload Nginx:
+
+2. **Enable and validate:**
    ```bash
    sudo ln -s /etc/nginx/sites-available/enma /etc/nginx/sites-enabled/
-   sudo systemctl reload nginx
+   sudo rm -f /etc/nginx/sites-enabled/default
+   sudo nginx -t && sudo systemctl reload nginx
+   ```
+
+3. **Obtain the certificate with the nginx plugin** (edits the config in place, adds the 443 server block + HTTP→HTTPS redirect, and installs auto-renewal that works while nginx is running — do not use `--standalone`, its renewals conflict with nginx on port 80):
+   ```bash
+   sudo certbot --nginx -d yourdomain.com
+   ```
+
+4. **Verify auto-renewal:**
+   ```bash
+   sudo certbot renew --dry-run
    ```
 
 ---
 
-## Step 5: Production Docker Configuration
+## Step 7: Production Docker Compose
 
-To optimize CPU and memory footprint on ARM64 VMs:
-1. **Serve Static Client via Host Nginx (Recommended)**:
-   In production, we do not run the client container. We build the client assets once on the VPS and let the host Nginx serve them directly:
-   ```bash
-   cd /opt/enma/client
-   npm install
-   npm run build
-   ```
-   This generates the `/opt/enma/client/dist` static directory referenced by Nginx.
+Create `docker-compose.prod.yml` at the repo root (tracked in git — see Pre-Deploy Code Changes). Key differences from the dev compose:
 
-2. **Configure `docker-compose.prod.yml`**:
-   For running server, engine, redis, and timescaledb in background mode, configure a production-specific file:
-   ```yaml
-   version: "3.9"
+- `command:` overrides put server/engine in **production mode** — the checked-in Dockerfiles' CMDs are dev-mode (`nodemon`, `uvicorn --reload`, `npm install` on every start) and must not run in prod.
+- **Healthchecks are defined for every service** — `depends_on: condition: service_healthy` is invalid without them (Compose refuses to start).
+- Server binds `127.0.0.1` only; engine/redis/timescaledb publish **no host ports**.
+- A named volume persists `engine/strategies/` so user-created strategy files survive image rebuilds (the volume seeds itself from the image on first run; the startup seeder only adds missing strategies).
 
-   services:
-     redis:
-       image: redis:7-alpine
-       restart: unless-stopped
-       volumes:
-         - enma_redis_data:/data
+```yaml
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - enma_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
 
-     timescaledb:
-       image: timescale/timescaledb:latest-pg16
-       restart: unless-stopped
-       environment:
-         POSTGRES_DB: enma_candles
-         POSTGRES_USER: enma
-         POSTGRES_PASSWORD: your-secure-postgres-password
-       volumes:
-         - enma_timescale_data:/var/lib/postgresql/data
-         - ./docker/timescale/init.sql:/docker-entrypoint-initdb.d/init.sql
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: enma_candles
+      POSTGRES_USER: enma
+      POSTGRES_PASSWORD: ${TIMESCALE_PASSWORD}
+    volumes:
+      - enma_timescale_data:/var/lib/postgresql/data
+      - ./docker/timescale/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U enma -d enma_candles"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
-     engine:
-       build: ./engine
-       restart: unless-stopped
-       ports:
-         - "8000:8000"
-       env_file:
-         - .env
-       depends_on:
-         timescaledb:
-           condition: service_healthy
-         redis:
-           condition: service_healthy
+  engine:
+    build: ./engine
+    restart: unless-stopped
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+    env_file:
+      - ./.env
+    volumes:
+      - enma_engine_strategies:/app/strategies
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
-     server:
-       build: ./server
-       restart: unless-stopped
-       ports:
-         - "5000:5000"
-       env_file:
-         - .env
-       depends_on:
-         redis:
-           condition: service_healthy
-         engine:
-           condition: service_healthy
+  server:
+    build: ./server
+    restart: unless-stopped
+    command: ["node", "src/server.js"]
+    ports:
+      - "127.0.0.1:5000:5000"
+    env_file:
+      - ./.env
+    depends_on:
+      redis:
+        condition: service_healthy
+      engine:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
-   volumes:
-     enma_redis_data:
-     enma_timescale_data:
-   ```
+volumes:
+  enma_redis_data:
+  enma_timescale_data:
+  enma_engine_strategies:
+```
+
+> [!NOTE]
+> **Docker publishes ports via its own iptables chain, bypassing UFW/host INPUT rules.** A `ports: "8000:8000"` line would expose the engine to the internet regardless of firewall settings (the OCI Security List would still block it, but don't rely on a single layer). This is why only the server maps a port, and only on `127.0.0.1`.
 
 ---
 
-## Step 6: Deploy & Verify
+## Step 8: Deploy & Verify
 
-1. **Build & Run the Stack:**
+1. **Build & start** (TA-Lib compiles from source on first engine build — 3–5 min on ARM is expected):
    ```bash
-   docker-compose -f docker-compose.prod.yml up -d --build
+   cd /opt/enma
+   docker compose -f docker-compose.prod.yml up -d --build
    ```
-2. **Check Container Status:**
+
+2. **Verification checklist:**
    ```bash
-   docker-compose -f docker-compose.prod.yml ps
+   docker compose -f docker-compose.prod.yml ps          # all services "healthy"
+   curl -s http://127.0.0.1:5000/api/v1/health           # {"status":"ok","mongo":"connected","redis":"connected"}
+   curl -s https://yourdomain.com/api/v1/health          # same, via nginx
    ```
-3. **Verify Connection:**
-   * Open `https://yourdomain.com` in your browser.
-   * Verify redirect to Google login works.
-   * Whitelist your admin/user email inside MongoDB Atlas or via the `/admin` view.
-   * Verify you can authorize and load the dashboard.
-   * Verify all Socket.IO status badges display connected green status.
+   Then in the browser:
+   - `https://yourdomain.com` loads the login page.
+   - Sign in with the `ADMIN_EMAIL` Google account (the admin email is auto-provisioned by the server startup; other users must first be added under `/admin` → allowed emails).
+   - Dashboard loads; Socket.IO status badges show connected (emerald).
+   - `/admin` panel is reachable for the admin account.
+   - Run a small backtest end-to-end (exercises engine → TimescaleDB candle fetch → Redis progress → Socket.IO relay).
+
+---
+
+## Pre-Deploy Code Changes Required
+
+Apply these on `dev` (and promote to `main`) **before** the first deployment:
+
+1. **`server/src/app.js` — trust the proxy.** Add `app.set('trust proxy', 1)` right after `const app = express()`. Behind Nginx, `express-rate-limit` v7 errors on the `X-Forwarded-For` header without this, and `req.ip` would otherwise log Nginx's address for every client.
+
+2. **Create `client/.env.production`** (tracked in git — the root `.gitignore`'s `.env` pattern does not match it):
+   ```env
+   VITE_API_URL=https://yourdomain.com
+   VITE_SOCKET_URL=https://yourdomain.com
+   ```
+   Vite's mode-specific files take priority over plain `.env`, so the git-ignored `client/.env` (localhost values) keeps working for `npm run dev` while `npm run build` picks up production values.
+
+3. **Create `docker-compose.prod.yml`** at the repo root with the content from Step 7 (tracked in git).
+
+4. **Update root `.env.example`** to include the auth-era keys that are currently missing (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`, `ADMIN_EMAIL`, `ENCRYPTION_KEY`, `JWT_EXPIRES_IN`, `JWT_REFRESH_EXPIRES_IN`), so the example file stays the canonical key list.
+
+---
+
+## Release / Update Workflow
+
+```bash
+# On your machine: promote a release
+git checkout main && git merge dev && git push origin main
+
+# On the VPS:
+cd /opt/enma
+git pull origin main
+docker compose -f docker-compose.prod.yml up -d --build   # rebuild server/engine
+# Only if client/ changed in this release:
+docker run --rm -v /opt/enma/client:/app -w /app node:20-alpine sh -c "npm ci && npm run build"
+```
+
+Rollback: `git checkout <previous-tag-or-sha>` then re-run the same two build commands. Tag releases (`git tag v1.x`) to make this trivial.
+
+**Data safety across updates:** Timescale candles and Redis queues live in named volumes; Mongo lives in Atlas. `docker compose up --build` does not touch volumes. Never run `docker compose down -v` on the VPS (it deletes the candle store).
 
 ---
 
 ## Important Considerations & Troubleshooting
 
 ### 1. ⚠️ Idle Instance Reclamation (Oracle's "Catch")
-Oracle periodically shuts down or reclaims Always Free VMs that appear idle over a 7-day period. The instance is deemed idle if **CPU, network, and memory utilization (all three)** stay below 20% at the 95th percentile.
 
-#### **Mitigation Script**
-To prevent reclamation, you can set up a simple `cron` job on the VPS that runs a lightweight CPU utilization script periodically.
-1. Create a script `/opt/enma/keep_alive.sh`:
-   ```bash
-   #!/bin/bash
-   # Run a dummy benchmark calculation to generate brief CPU activity
-   openssl speed -multi 2 > /dev/null 2>&1
-   ```
-2. Make it executable:
-   ```bash
-   chmod +x /opt/enma/keep_alive.sh
-   ```
-3. Add it to `crontab` to run every 6 hours:
-   ```bash
-   # Run crontab -e and add this line at the bottom:
-   0 */6 * * * /opt/enma/keep_alive.sh
-   ```
+Oracle reclaims Always Free VMs deemed idle over a 7-day window — idle means CPU, network, **and** memory all below thresholds (~20% at 95th percentile). A running Enma stack (engine WebSocket streams, Redis, TimescaleDB) generates steady baseline activity, but as insurance add a cron job:
 
-### 2. ⚠️ Out of Host Capacity Error
-Because ARM64 resources are highly popular in Always Free regions (like Mumbai), you might see a `Temporary lack of host capacity` error when trying to provision the `VM.Standard.A1.Flex` shape.
-* **Workaround:** Keep trying periodically, or check during off-peak hours (early morning/late night). Alternatively, if your region supports multiple Availability Domains, try switching the Availability Domain in the Placement section.
+```bash
+cat <<'EOF' | sudo tee /opt/enma/keep_alive.sh
+#!/bin/bash
+# Brief CPU burst so 95th-percentile utilization stays above Oracle's idle threshold
+openssl speed -multi 2 > /dev/null 2>&1
+EOF
+sudo chmod +x /opt/enma/keep_alive.sh
+# crontab -e → add:
+# 0 */6 * * * /opt/enma/keep_alive.sh
+```
 
-### 3. 🛡️ ARM64 (Aarch64) Compatibility
-Since the instance runs on an Ampere Arm processor, all Docker containers must build and run on ARM64:
-* Enma's default Node, Python, Redis, and TimescaleDB Docker images support ARM64 natively.
-* The TA-Lib C library compilation during the Docker build process is compatible with ARM64 and will compile natively on the VPS during `docker-compose build`.
+Upgrading the account to Pay-As-You-Go (still $0 within always-free limits, but requires a card) permanently exempts the instance from idle reclamation — the more reliable fix.
+
+### 2. ⚠️ "Out of Host Capacity" When Provisioning
+
+ARM shapes in popular regions (e.g. Mumbai) frequently show `Out of host capacity` for `VM.Standard.A1.Flex`. Workarounds: retry at off-peak hours, try a different Availability Domain, or upgrade to Pay-As-You-Go (paid-tier customers get priority on capacity even when usage stays within free limits).
+
+### 3. 🛡️ ARM64 (aarch64) Compatibility
+
+All images used here publish ARM64 variants: `node:20-alpine`, `python:3.11-slim`, `redis:7-alpine`, `timescale/timescaledb:latest-pg16`. TA-Lib compiles from source inside the engine image and builds natively on aarch64 — no changes needed.
+
+### 4. 🔐 Layered Firewall Summary
+
+| Layer | Controls | Configured in |
+|---|---|---|
+| OCI Security List | 22/80/443 from internet | Cloud console (Step 1) |
+| Host iptables | Same — Oracle images REJECT by default | Step 3 (netfilter-persistent) |
+| Docker port bindings | Only `127.0.0.1:5000` published | `docker-compose.prod.yml` |
+
+Remember: Docker-published ports bypass host INPUT rules — the compose file's bindings are themselves a firewall decision.
 
 ---
 
-## Brainstorming: Cross-Branch Environment & URL Management (Best Practices)
+## Cross-Branch Environment & URL Management (Best Practices)
 
-To ensure that the development branch (`dev`) and the production branch (`main`) do not suffer from code drift or merge conflicts due to different hardcoded API endpoints, database credentials, or redirect links, we should adopt the following best practices:
+Keeps `dev` and `main` byte-identical so releases are pure merges — no environment-specific find-and-replace, ever.
 
-### 1. The Single-Codebase Invariant (12-Factor App)
-* **Rule:** The code in the `dev` branch and the `main` branch must remain **100% identical** with respect to configuration. There should be **no** hardcoded URLs, server ports, or API endpoints anywhere in the source repository.
-* **Mechanism:** All configurations are loaded dynamically from environment variables at runtime (for Python/Node) or build-time (for Vite). 
-* **Benefit:** You can merge `dev` directly into `main` with zero merge conflicts or manual find-and-replace, and be confident that the code behaves identically in both environments.
+### 1. The Single-Codebase Invariant (12-Factor)
 
-### 2. Vite Build-Time API Injection
-Since React runs purely in the user's browser, it cannot access server-side environment variables at runtime. Vite handles this by injecting variables prefixed with `VITE_` during the `vite build` process:
-* **In the Code:** Always use `import.meta.env.VITE_API_URL` and `import.meta.env.VITE_SOCKET_URL`.
-* **Tracked Environment Files:**
-  - Create and track `.env.development` in git:
-    ```env
-    VITE_API_URL=http://localhost:5000
-    VITE_SOCKET_URL=http://localhost:5000
-    ```
-  - Create and track `.env.production` in git:
-    ```env
-    VITE_API_URL=https://yourdomain.com
-    VITE_SOCKET_URL=https://yourdomain.com
-    ```
-* **How it works:** When running `npm run dev` locally, Vite automatically loads `.env.development`. When you compile on the VPS using `npm run build`, Vite automatically compiles the static assets using the values in `.env.production`. 
+No hardcoded URLs, ports, or credentials in source. All configuration comes from environment variables — runtime for Node/Python, build-time for Vite. `dev` merges into `main` with zero config-related conflicts.
 
-### 3. Server-Side Runtime Environment Variables
-Node.js and Python load configuration dynamically from the local `.env` file at startup.
-* **Dev/Local Environment:**
-  - You maintain a local, git-ignored `.env` containing local MongoDB URIs (`mongodb://localhost:27017`), dev Google Client IDs, and `PORT=5000`.
-* **Prod/VPS Environment:**
-  - The VPS holds its own local, git-ignored `/opt/enma/.env` with production Atlas connection strings, prod Google secrets, and `PORT=5000`.
-* **Mechanism:** Git-ignore the `.env` file globally. Keep a `.env.example` in git that lists all required keys without their values:
-  ```env
-  GOOGLE_CLIENT_ID=
-  GOOGLE_CLIENT_SECRET=
-  MONGO_URI=
-  ...
-  ```
+### 2. Vite Build-Time Injection
 
-### 4. Git Branching & Promotion Workflow
+The browser can't read server-side env vars, so Vite bakes `VITE_`-prefixed values in at build time:
+
+- Code always uses `import.meta.env.VITE_API_URL` / `VITE_SOCKET_URL` (already the case — `client/src/lib/axios.js`, `client/src/lib/socket.js`).
+- `client/.env` (git-ignored) holds localhost values for `npm run dev`.
+- `client/.env.production` (tracked) holds the public domain for `npm run build` — mode-specific files override plain `.env`.
+
+### 3. Server-Side Runtime Variables
+
+- **Dev:** git-ignored root `.env` with Docker-service-name hosts (`redis`, `timescaledb`, `engine`) and dev Google credentials.
+- **Prod:** git-ignored `/opt/enma/.env` (Step 4) with Atlas URI and production secrets.
+- **Contract:** root `.env.example` (tracked) lists every required key with no values — it is the single source of truth for "what must be set."
+
+### 4. Branch Promotion Workflow
+
 ```mermaid
 gitGraph
     commit id: "Init"
@@ -363,16 +497,9 @@ gitGraph
     commit id: "Feature 1"
     commit id: "Feature 2"
     checkout main
-    merge dev id: "Release 1.0"
+    merge dev id: "Release 1.0" tag: "v1.0"
 ```
-1. **Local Development (`dev`):**
-   * Code references `process.env.GOOGLE_CLIENT_ID` or `import.meta.env.VITE_API_URL`.
-   * Developer runs `npm run dev` / `docker compose up`. Local Vite server loads `.env.development`.
-2. **Feature Merges:**
-   * Features are branched from `dev`, tested, and merged back into `dev`.
-3. **Production Release (`main`):**
-   * When a release is ready, `dev` is merged into `main`.
-   * The VPS pull hook triggers `git pull origin main`.
-   * The build step `npm run build` runs on the host client directory. Vite reads `.env.production` and bakes `https://yourdomain.com` into the static JS chunks.
-   * Docker containers restart (`docker-compose -f docker-compose.prod.yml restart`), loading the production secrets from the VPS-local `.env` file.
 
+1. Features branch from `dev`, merge back into `dev`.
+2. Release = merge `dev` → `main`, tag it.
+3. VPS pulls `main`, rebuilds containers, rebuilds the client bundle (Step 5 command) if `client/` changed.
