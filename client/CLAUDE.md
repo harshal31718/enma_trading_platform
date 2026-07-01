@@ -19,6 +19,7 @@
 - Axios for HTTP requests (configured instance in `src/lib/axios.js`)
 - Radix UI primitives (`@radix-ui/react-dialog`, `-alert-dialog` (used by `components/ui/confirm-dialog.jsx`), `-dropdown-menu`, `-label`, `-select`, `-tabs`, `-tooltip`) — unstyled accessible components
 - `lucide-react` for icons
+- `react-hot-toast` for application-wide notifications
 - `clsx` + `tailwind-merge` + `class-variance-authority` — utility-class helpers (used in `src/lib/utils.js`)
 - **Dev:** `vitest`, `@testing-library/react`, `msw` (API mocking), `puppeteer` (E2E)
 

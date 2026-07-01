@@ -1,9 +1,10 @@
 import { useNavigate } from 'react-router-dom'
 import { ChevronRight } from 'lucide-react'
-import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../../components/ui/table'
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell, SortableHeader } from '../../components/ui/table'
 import { Card, CardHeader, CardTitle, CardContent } from '../../components/ui/card'
 import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
+import { useTableSort } from '../../hooks/useTableSort'
 import { formatPnl, formatPct, formatSignedPct } from '../../utils/formatters'
 
 function formatDate(dateStr) {
@@ -25,6 +26,12 @@ function statusVariant(status) {
 
 export default function RecentActivityTable({ data }) {
   const navigate = useNavigate()
+  const { sortedRows, sortState, onSort } = useTableSort(data, {
+    getValue: (row, key) => {
+      if (key === 'pnl') return row.metrics?.netProfit ?? 0
+      return row[key]
+    }
+  })
 
   return (
     <Card>
@@ -48,16 +55,16 @@ export default function RecentActivityTable({ data }) {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Strategy</TableHead>
-                <TableHead>Market</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Run Date</TableHead>
-                <TableHead className="text-right">Net P&L</TableHead>
+                <SortableHeader sortKey="strategyName" sortState={sortState} onSort={onSort}>Strategy</SortableHeader>
+                <SortableHeader sortKey="symbol" sortState={sortState} onSort={onSort}>Market</SortableHeader>
+                <SortableHeader sortKey="status" sortState={sortState} onSort={onSort}>Status</SortableHeader>
+                <SortableHeader sortKey="createdAt" sortState={sortState} onSort={onSort}>Run Date</SortableHeader>
+                <SortableHeader sortKey="pnl" sortState={sortState} onSort={onSort} className="text-right">Net P&L</SortableHeader>
                 <TableHead></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {data.map((run) => {
+              {sortedRows.map((run) => {
                 const pnl = run.metrics ? formatPnl(run.metrics.netProfit) : null
                 return (
                   <TableRow key={run.jobId}>

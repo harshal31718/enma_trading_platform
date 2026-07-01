@@ -78,6 +78,7 @@ export default function BacktestHistory({
                   : 'text-gray-500 hover:text-gray-300'
               )}
               title="Filters"
+              aria-label="Toggle filters"
             >
               <Filter className="size-3.5" />
             </button>
@@ -85,6 +86,7 @@ export default function BacktestHistory({
               onClick={onRefresh}
               className="p-1.5 rounded text-gray-500 hover:text-emerald-400 transition-colors"
               title="Refresh"
+              aria-label="Refresh history"
             >
               <RefreshCw className="size-3.5" />
             </button>
@@ -189,10 +191,10 @@ export default function BacktestHistory({
               </button>
             </div>
           ) : !data || data.length === 0 ? (
-            <div className="m-4 border border-dashed border-slate-700/30 p-8 flex flex-col items-center justify-center text-center">
-              <p className="text-slate-400 text-xs">No backtest runs yet.</p>
-              <p className="text-[10px] text-slate-600 mt-1">Run new backtests to compare performance.</p>
-            </div>
+            <EmptyState
+              title="No backtest runs yet"
+              description="Run new backtests to compare performance."
+            />
           ) : (
             <>
               {pagedData.map((b) => {
@@ -216,6 +218,7 @@ export default function BacktestHistory({
                     {/* Clickable main area */}
                     <button
                       onClick={() => onSelect(b.jobId)}
+                      aria-label={`Select backtest run for ${b.strategyName}`}
                       className="w-full h-full text-left px-3 pr-8 flex flex-col justify-center"
                     >
                       <div className="flex items-center justify-between w-full">
@@ -256,6 +259,7 @@ export default function BacktestHistory({
                       <button
                         onClick={(e) => { e.stopPropagation(); onToggleComparison?.(b.jobId) }}
                         title={isCompared ? 'Remove from comparison' : 'Add to comparison'}
+                        aria-label={isCompared ? 'Remove from comparison' : 'Add to comparison'}
                         className={cn(
                           'absolute right-1 top-1/2 -translate-y-1/2 p-1.5 rounded transition-colors',
                           isCompared

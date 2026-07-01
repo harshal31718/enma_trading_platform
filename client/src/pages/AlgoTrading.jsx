@@ -16,7 +16,7 @@ export default function AlgoTrading() {
   const [showChaosWizard, setShowChaosWizard] = useState(false)
   const [chaosError, setChaosError] = useState(null)
   const [confirmClearOpen, setConfirmClearOpen] = useState(false)
-  const { data: sessions = [], isLoading } = useAlgoSessions()
+  const { data: sessions = [], isLoading, isFetching } = useAlgoSessions()
   const stopSession = useStopSession()
   const deleteAllStopped = useDeleteAllStopped()
   const qc = useQueryClient()
@@ -54,7 +54,14 @@ export default function AlgoTrading() {
   return (
     <PageWrapper>
       <PageHeader
-        title="Algo Trading"
+        title={
+          <div className="flex items-center gap-2">
+            <span>Algo Trading</span>
+            {isFetching && (
+              <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-ping shrink-0" />
+            )}
+          </div>
+        }
         actions={
           <div className="flex items-center gap-2">
             {hasStopped && (
@@ -140,4 +147,22 @@ export default function AlgoTrading() {
             onSuccess={() => {
               setShowWizard(false)
               qc.invalidateQueries({ queryKey: ['algo', 'sessions'] })
-  
+            }}
+          />
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showChaosWizard} onOpenChange={(open) => { if (!open) setShowChaosWizard(false) }}>
+        <DialogContent className="w-[920px] max-w-[95vw] max-h-[88vh] flex flex-col overflow-hidden gap-0 p-0 bg-title-bg border-slate-700/50">
+          <ChaosWizard
+            onCancel={() => setShowChaosWizard(false)}
+            onSuccess={() => {
+              setShowChaosWizard(false)
+              qc.invalidateQueries({ queryKey: ['algo', 'sessions'] })
+            }}
+          />
+        </DialogContent>
+      </Dialog>
+    </PageWrapper>
+  )
+}

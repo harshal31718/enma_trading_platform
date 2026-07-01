@@ -4,4 +4,10 @@ import './index.css'
 import App from './App'
 import ErrorBoundary from './components/ErrorBoundary'
 
-createRoot(document.getElementById('root')
+createRoot(document.getElementById('root')).render(
+  <StrictMode>
+    <ErrorBoundary label="Application">
+      <App />
+    </ErrorBoundary>
+  </StrictMode>
+)

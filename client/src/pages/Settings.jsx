@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Server, Zap, CheckCircle2, Clock, X, AlertTriangle, KeyRound } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import toast from 'react-hot-toast'
 import api from '../lib/axios'
 import PageWrapper from '@/components/layout/PageWrapper'
 import PageHeader from '@/components/ui/PageHeader'
@@ -15,8 +16,6 @@ export default function Settings() {
   // ── API Keys form state ───────────────────────────────────────────────────
   const [apiKey, setApiKey] = useState('')
   const [apiSecret, setApiSecret] = useState('')
-  const [apiKeySaveSuccess, setApiKeySaveSuccess] = useState(false)
-  const apiKeyTimerRef = useRef(null)
 
   const { data: keysStatus } = useQuery({
     queryKey: ['trade', 'settings-keys'],
@@ -35,9 +34,11 @@ export default function Settings() {
       queryClient.invalidateQueries({ queryKey: ['trade', 'settings-keys'] })
       setApiKey('')
       setApiSecret('')
-      setApiKeySaveSuccess(true)
-      apiKeyTimerRef.current = setTimeout(() => setApiKeySaveSuccess(false), 3000)
+      toast.success('API keys saved successfully')
     },
+    onError: (err) => {
+      toast.error(err.response?.data?.error?.message || err.message || 'Failed to save API keys')
+    }
   })
 
   function handleApiKeySubmit(e) {
@@ -60,8 +61,6 @@ export default function Settings() {
   const [fundingEnabled, setFundingEnabled] = useState(false)
   const [fundingRate, setFundingRate] = useState('')
   const [risk, setRisk] = useState(RISK_DEFAULTS)
-  const [saveSuccess, setSaveSuccess] = useState(false)
-  const successTimerRef = useRef(null)
 
   // ── Chaos settings form state ─────────────────────────────────────────────
   const [chaosMaxStrategies, setChaosMaxStrategies] = useState('10')
@@ -69,8 +68,6 @@ export default function Settings() {
   const [chaosDefaultCapital, setChaosDefaultCapital] = useState('500')
   const [chaosDefaultLeverage, setChaosDefaultLeverage] = useState('50')
   const [chaosDefaultTimeframe, setChaosDefaultTimeframe] = useState('1m')
-  const [chaosSaveSuccess, setChaosSaveSuccess] = useState(false)
-  const chaosSaveTimerRef = useRef(null)
 
   const { data: exchangeSettings, isLoading: settingsLoading } = useExchangeSettings()
   const updateMutation = useUpdateExchangeSettings()
@@ -78,9 +75,6 @@ export default function Settings() {
   useEffect(() => {
     return () => {
       if (comingSoonTimerRef.current) clearTimeout(comingSoonTimerRef.current)
-      if (successTimerRef.current) clearTimeout(successTimerRef.current)
-      if (chaosSaveTimerRef.current) clearTimeout(chaosSaveTimerRef.current)
-      if (apiKeyTimerRef.current) clearTimeout(apiKeyTimerRef.current)
     }
   }, [])
 
@@ -107,8 +101,6 @@ export default function Settings() {
 
   function handleExchangeSubmit(e) {
     e.preventDefault()
-    setSaveSuccess(false)
-    if (successTimerRef.current) clearTimeout(successTimerRef.current)
     updateMutation.mutate(
       {
         takerFee:         parseFloat(takerFee) / 100,
@@ -124,17 +116,17 @@ export default function Settings() {
       },
       {
         onSuccess: () => {
-          setSaveSuccess(true)
-          successTimerRef.current = setTimeout(() => setSaveSuccess(false), 3000)
+          toast.success('Exchange settings saved successfully')
         },
+        onError: (err) => {
+          toast.error(err.response?.data?.error?.message || err.message || 'Failed to save settings')
+        }
       }
     )
   }
 
   function handleChaosSubmit(e) {
     e.preventDefault()
-    setChaosSaveSuccess(false)
-    if (chaosSaveTimerRef.current) clearTimeout(chaosSaveTimerRef.current)
     updateMutation.mutate(
       {
         chaosMaxStrategies:    parseInt(chaosMaxStrategies, 10),
@@ -145,9 +137,11 @@ export default function Settings() {
       },
       {
         onSuccess: () => {
-          setChaosSaveSuccess(true)
-          chaosSaveTimerRef.current = setTimeout(() => setChaosSaveSuccess(false), 3000)
+          toast.success('Chaos settings saved successfully')
         },
+        onError: (err) => {
+          toast.error(err.response?.data?.error?.message || err.message || 'Failed to save settings')
+        }
       }
     )
   }
@@ -257,19 +251,7 @@ export default function Settings() {
                 </span>
               </div>
 
-              {saveKeysMutation.isError && (
-                <div className="flex items-start gap-2 bg-red-950/20 border border-red-800/40 rounded-lg p-3 mb-3">
-                  <AlertTriangle size={14} className="text-red-400 mt-0.5 shrink-0" />
-                  <p className="text-red-400 text-xs">
-                    {saveKeysMutation.error?.response?.data?.message ?? 'Failed to save keys.'}
-                  </p>
-                </div>
-              )}
-              {apiKeySaveSuccess && (
-                <div className="bg-emerald-950/20 border border-emerald-800/40 rounded-lg p-3 mb-3">
-                  <p className="text-emerald-400 text-xs">API keys saved.</p>
-                </div>
-              )}
+              {/* API Key feedback is handled by toast notifications */}
 
               <form onSubmit={handleApiKeySubmit} className="space-y-3">
                 <div>
@@ -322,20 +304,7 @@ export default function Settings() {
               </span>
             </div>
 
-            {updateMutation.isError && (
-              <div className="flex items-start gap-2 bg-red-950/20 border border-red-800/40 rounded-lg p-3 mb-4">
-                <AlertTriangle size={14} className="text-red-400 mt-0.5 shrink-0" />
-                <p className="text-red-400 text-xs">
-                  {updateMutation.error?.response?.data?.message ?? updateMutation.error?.message ?? 'Failed to save settings.'}
-                </p>
-              </div>
-            )}
-
-            {chaosSaveSuccess && (
-              <div className="bg-purple-950/20 border border-purple-800/40 rounded-lg p-3 mb-4">
-                <p className="text-purple-400 text-xs">Chaos settings saved.</p>
-              </div>
-            )}
+            {/* Chaos settings feedback is handled by toast notifications */}
 
             <form onSubmit={handleChaosSubmit} noValidate>
               {/* ── Caps ──────────────────────────────────────────────────────── */}
@@ -411,20 +380,7 @@ export default function Settings() {
             <h2 className="text-gray-100 text-sm font-medium">Exchange Settings</h2>
           </div>
 
-          {updateMutation.isError && (
-            <div className="flex items-start gap-2 bg-red-950/20 border border-red-800/40 rounded-lg p-3 mb-4">
-              <AlertTriangle size={14} className="text-red-400 mt-0.5 shrink-0" />
-              <p className="text-red-400 text-xs">
-                {updateMutation.error?.response?.data?.message ?? updateMutation.error?.message ?? 'Failed to save settings.'}
-              </p>
-            </div>
-          )}
-
-          {saveSuccess && (
-            <div className="bg-emerald-950/20 border border-emerald-800/40 rounded-lg p-3 mb-4">
-              <p className="text-emerald-400 text-xs">Exchange settings saved.</p>
-            </div>
-          )}
+          {/* Exchange settings feedback is handled by toast notifications */}
 
           <form onSubmit={handleExchangeSubmit} noValidate>
 

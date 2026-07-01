@@ -1,8 +1,18 @@
-import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../../components/ui/table'
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell, SortableHeader } from '../../components/ui/table'
 import { Card, CardHeader, CardTitle, CardContent } from '../../components/ui/card'
+import { useTableSort } from '../../hooks/useTableSort'
 import { formatPrice, formatPct } from '../../utils/formatters'
 
 export default function StrategyLeaderboard({ data }) {
+  const { sortedRows, sortState, onSort } = useTableSort(data, {
+    getValue: (row, key) => {
+      if (key === 'avgProfit') return parseFloat(row.averageNetProfit)
+      if (key === 'avgWinRate') return parseFloat(row.averageWinRate)
+      if (key === 'avgSharpe') return parseFloat(row.averageSharpe)
+      return row[key]
+    }
+  })
+
   return (
     <Card>
       <CardHeader>
@@ -15,15 +25,15 @@ export default function StrategyLeaderboard({ data }) {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Strategy</TableHead>
-                <TableHead className="text-center">Runs</TableHead>
-                <TableHead className="text-right">Avg Win Rate</TableHead>
-                <TableHead className="text-right">Avg Net Profit</TableHead>
-                <TableHead className="text-right">Avg Sharpe</TableHead>
+                <SortableHeader sortKey="strategyName" sortState={sortState} onSort={onSort}>Strategy</SortableHeader>
+                <SortableHeader sortKey="runs" sortState={sortState} onSort={onSort} className="text-center">Runs</SortableHeader>
+                <SortableHeader sortKey="avgWinRate" sortState={sortState} onSort={onSort} className="text-right">Avg Win Rate</SortableHeader>
+                <SortableHeader sortKey="avgProfit" sortState={sortState} onSort={onSort} className="text-right">Avg Net Profit</SortableHeader>
+                <SortableHeader sortKey="avgSharpe" sortState={sortState} onSort={onSort} className="text-right">Avg Sharpe</SortableHeader>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {data.map((item, idx) => {
+              {sortedRows.map((item, idx) => {
                 const avgProfit = parseFloat(item.averageNetProfit)
                 return (
                   <TableRow key={item.strategyName}>

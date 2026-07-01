@@ -112,4 +112,37 @@ type SymbolLock = { reason: "bot"|"manual", sessionId: string|null, lockedAt: st
 - **`GET /api/v1/algo/chaos/symbols`** -> `{ tieredSymbols: { symbol, tier: "high"|"mid"|"low" }[] }`
 - **`GET /api/v1/algo/sessions`** -> `{ sessions: LiveSession[] }`
 - **`GET /api/v1/algo/sessions/:id`** -> `{ session: LiveSession }`
-- **`GET /api/v1/algo/sessions/:id/equity`** -> `{ equity: 
+- **`GET /api/v1/algo/sessions/:id/equity`** -> `{ equity: string, pnl: string }`
+- **`POST /api/v1/algo/sessions/:id/stop`** -> `{ status: "stopping" }`
+- **`DELETE /api/v1/algo/sessions/:id`** -> `{ deleted: true }` (stopped sessions only)
+- **`DELETE /api/v1/algo/sessions`** -> `{ deleted: number }` (bulk delete all stopped)
+- **`GET /api/v1/algo/symbols/locked`** -> `{ locked: { [symbol]: SymbolLock } }`
+
+### Order History
+```typescript
+type TradeRecord = { tradeId: string, source: "bot"|"manual", executedBy: string, symbol: string, side: "long"|"short", qty: string, entryPrice: string, exitPrice: string, slOrderPrice?: string, tpOrderPrice?: string, margin?: string, liquidationPrice?: string, leverage?: number, netPnl: string, pnlPct?: string, fee?: string, exitReason: string, sessionId?: string, strategyName?: string, entryTime: string, exitTime: string, createdAt: string }
+```
+- **`GET /api/v1/order-history`** -> Query: `?symbol?&source?&side?&executedBy?&page?&limit?` -> `{ records: TradeRecord[], pagination: Pagination }` (default page=1, limit=50, max limit=200; sorted by exitTime DESC; engine is sole writer, server reads)
+
+### Engine ↔ Node (Internal — not exposed to client)
+- **`PATCH /internal/algo/sessions/:id/stats`** (Engine → Node) -> Req: `{ pnl, openPositions, status?, event?, eventData? }`
+- **`POST /internal/algo/sessions/:id/place-order`** (Engine → Node) -> Binance order proxied through server credentials
+- **`POST /internal/algo/sessions/:id/close-position`** (Engine → Node) -> Market reduceOnly close via server credentials
+- **`POST /internal/algo/sessions/:id/set-leverage`** (Engine → Node) -> Set leverage via server credentials
+- **`POST /internal/algo/sessions/:id/get-position`** (Engine → Node) -> Query current position via server credentials
+
+### Engine AlgoTrading Routes (Node → Engine)
+- **`POST /algo/sessions`** -> Req: `{ session_id, strategy_name, symbols, timeframe, params, capital, leverage, fee_rate }` (no `paper_trading` field — engine always targets Binance Testnet; `fee_rate` injected from Exchange Settings)
+- **`POST /algo/sessions/:id/stop`**
+- **`GET /algo/sessions/:id/status`** -> `{ status, pnl, openPositions }`
+
+## Socket.IO Events
+- Envelope: `{ event: string, data: any }`
+- `backtest:progress` -> `{ jobId, pct, message }`
+- `backtest:complete` -> `{ jobId, resultId }`
+- `algo:session:update` -> `{ sessionId, status?, pnl?, openPositions?, symbolStats? }` — **partial**: clients merge only the fields present. Most emits carry `status`/`pnl`/`openPositions`; the per-symbol aggregation emits carry only `symbolStats` (a `{ [symbol]: { trades, qty, notional, realisedPnl, leverage } }` map re-derived from `tradeRecords` on each close and on session stop; also persisted on the `LiveSession` doc).
+- `algo:position:open` -> `{ sessionId, symbol, side, qty, price, leverage, timestamp }` (`leverage` = per-symbol clamped value)
+- `algo:position:close` -> `{ sessionId, symbol, pnl, exitPrice, exitReason, timestamp }`
+
+## Error Codes
+`AUTH_REQUIRED`, `AUTH_INVALID`, `NOT_FOUND`, `VALIDATION_ERROR`, `STRATEGY_ERROR`, `ENGINE_UNAVAILABLE`, `INSUFFICIENT_CANDLES`, `EXCHANGE_ERROR`, `JOB_FAILED`, `TOO_MANY_REQUESTS`, `DB_SYNC_ERROR`, `SYMBOL_LOCKED`, `SESSION_NOT_FOUND`, `SESSION_NOT_RUNNING`, `BOT_START_FAILED`.

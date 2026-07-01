@@ -5,6 +5,7 @@ import api from '../lib/axios'
 import PageWrapper from '@/components/layout/PageWrapper'
 import PageHeader from '@/components/ui/PageHeader'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import EmptyState from '@/components/ui/empty-state'
 
 export default function AdminPanel() {
   const queryClient = useQueryClient()
@@ -100,7 +101,10 @@ export default function AdminPanel() {
               ))}
             </div>
           ) : emails.length === 0 ? (
-            <p className="text-slate-400 text-sm text-center py-4">No emails on the whitelist yet.</p>
+            <EmptyState
+              title="Whitelist is empty"
+              description="Users will only be able to sign up if their email address is whitelisted here."
+            />
           ) : (
             <ul className="space-y-2">
               {emails.map((item) => (

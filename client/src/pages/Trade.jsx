@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import ErrorBoundary from '@/components/ErrorBoundary'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import axios from 'axios'
 import api from '@/lib/axios'
 import { createChart, CandlestickSeries } from 'lightweight-charts'
 import useBinanceWS from '@/hooks/useBinanceWS'
@@ -28,6 +29,7 @@ import SymbolSearchBar from '@/components/SymbolSearchBar'
 import { SYMBOL_LIMITS } from '@/utils/symbolLimits'
 import { useSymbols } from '@/hooks/useCandles'
 import { formatDateTime } from '@/utils/formatters'
+import EmptyState from '@/components/ui/empty-state'
 
 const BOTTOM_TABS = ['Positions', 'Open Orders', 'Order History', 'Trade History', 'Transaction History', 'Assets']
 
@@ -223,7 +225,11 @@ function ChartContainer({ timeframe, setTimeframe }) {
 
     if (seriesRef.current) seriesRef.current.setData([])
     fetchKlines(symbol, timeframe, seriesRef.current, chartRef.current, ac.signal)
-      .catch((err) => { if (err.name !== 'AbortError') setChartError(err.message) })
+      .catch((err) => {
+        if (err.name !== 'AbortError' && !axios.isCancel(err)) {
+          setChartError(err.message)
+        }
+      })
       .finally(() => {
         fetchingRef.current = false
         setLoading(false)
@@ -272,6 +278,8 @@ function ChartContainer({ timeframe, setTimeframe }) {
           <button
             key={tf.interval}
             onClick={() => setTimeframe(tf.interval)}
+            aria-pressed={timeframe === tf.interval}
+            aria-label={`Timeframe ${tf.label}`}
             className={[
               'px-2.5 py-1 text-xs rounded transition-colors font-medium',
               timeframe === tf.interval
@@ -466,8 +474,11 @@ function SkeletonRow({ cols }) {
 function EmptyRow({ message }) {
   return (
     <tr>
-      <td colSpan={99} className="py-8 text-center text-slate-400 text-xs">
-        {message}
+      <td colSpan={99} className="py-2 text-center text-slate-400 text-xs">
+        <EmptyState
+          title={message}
+          className="py-4"
+        />
       </td>
     </tr>
   )
@@ -1136,18 +1147,18 @@ function BottomPanel({ ocoToast, ocoBanner, onDismissBanner }) {
   const [activeTab, setActiveTab] = useState('Positions')
 
   const { symbol } = useCurrentSymbol()
-  const { data: positions, isLoading: posLoading } = useTradePositions()
-  const { data: openOrders, isLoading: ordLoading } = useTradeOpenOrders()
-  const { data: account, isLoading: accLoading } = useTradeAccount()
-  const { data: ordersRaw, isLoading: ordHistoryLoading } = useTradeOrders(symbol, {
+  const { data: positions, isLoading: posLoading, isFetching: posFetching } = useTradePositions()
+  const { data: openOrders, isLoading: ordLoading, isFetching: ordFetching } = useTradeOpenOrders()
+  const { data: account, isLoading: accLoading, isFetching: accFetching } = useTradeAccount()
+  const { data: ordersRaw, isLoading: ordHistoryLoading, isFetching: ordHistoryFetching } = useTradeOrders(symbol, {
     enabled: activeTab === 'Order History' && !!symbol,
     refetchInterval: 8000,
   })
-  const { data: execRaw, isLoading: execLoading } = useTradeExecutions(symbol, {
+  const { data: execRaw, isLoading: execLoading, isFetching: execFetching } = useTradeExecutions(symbol, {
     enabled: activeTab === 'Trade History' && !!symbol,
     refetchInterval: 8000,
   })
-  const { data: txRaw, isLoading: txLoading } = useTradeTransactions(symbol, {
+  const { data: txRaw, isLoading: txLoading, isFetching: txFetching } = useTradeTransactions(symbol, {
     enabled: activeTab === 'Transaction History',
     refetchInterval: 8000,
   })
@@ -1181,24 +1192,27 @@ function BottomPanel({ ocoToast, ocoBanner, onDismissBanner }) {
     <div className="bg-title-bg border-t border-slate-700/50 flex flex-col shrink-0 h-[200px]">
       <div className="flex border-b border-slate-700/50 shrink-0 title-fade bg-title-bg">
         {[
-          { key: 'Positions', label: `Positions(${posCount})` },
-          { key: 'Open Orders', label: `Open Orders(${ordCount})` },
-          { key: 'Order History', label: 'Order History' },
-          { key: 'Trade History', label: 'Trade History' },
-          { key: 'Transaction History', label: 'Transaction History' },
-          { key: 'Assets', label: 'Assets' },
-        ].map(({ key, label }, i) => (
+          { key: 'Positions', label: `Positions(${posCount})`, isRefreshing: posFetching },
+          { key: 'Open Orders', label: `Open Orders(${ordCount})`, isRefreshing: ordFetching },
+          { key: 'Order History', label: 'Order History', isRefreshing: ordHistoryFetching },
+          { key: 'Trade History', label: 'Trade History', isRefreshing: execFetching },
+          { key: 'Transaction History', label: 'Transaction History', isRefreshing: txFetching },
+          { key: 'Assets', label: 'Assets', isRefreshing: accFetching },
+        ].map(({ key, label, isRefreshing }, i) => (
           <button
             key={key}
             onClick={() => setActiveTab(key)}
             className={[
-              `${i === 0 ? 'pl-2 pr-4' : 'px-4'} py-2 text-xs font-medium transition-colors whitespace-nowrap`,
+              `${i === 0 ? 'pl-2 pr-4' : 'px-4'} py-2 text-xs font-medium transition-colors whitespace-nowrap flex items-center gap-1.5`,
               activeTab === key
                 ? 'text-gray-100 border-b-2 border-emerald-400 -mb-px'
                 : 'text-slate-400 opacity-50 hover:opacity-100 hover:text-gray-300',
             ].join(' ')}
           >
-            {label}
+            <span>{label}</span>
+            {isRefreshing && (
+              <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-ping shrink-0" />
+            )}
           </button>
         ))}
       </div>
@@ -1659,4 +1673,43 @@ function TradeInner() {
 
       {/* Short-lived toast notification */}
       {ocoToast && (
-        <div className="absolute top-20 r
+        <div className="absolute top-20 right-4 z-50 bg-title-bg border border-slate-700/50 rounded-lg px-4 py-2.5 text-xs text-gray-100 shadow-2xl max-w-xs animate-fade-in">
+          {ocoToast}
+        </div>
+      )}
+
+      {/* Main content — fills remaining height */}
+      <div className="flex flex-1 min-h-0">
+
+        {/* Left col — chart + bottom panel (fills remaining width) */}
+        <div className="flex flex-col flex-1 min-w-0 min-h-0 border-r border-slate-700/50">
+          <ChartContainer timeframe={timeframe} setTimeframe={setTimeframe} />
+          <BottomPanel
+            ocoBanner={ocoBanner}
+            onDismissBanner={() => setOcoBanner(null)}
+          />
+        </div>
+
+        {/* Middle col — order book + recent trades, fixed width */}
+        <div className="flex flex-col min-h-0 shrink-0 w-[200px]">
+          <OrderBook />
+          <RecentTrades />
+        </div>
+
+        {/* Right col — order form, fixed width */}
+        <div className="flex flex-col min-h-0 shrink-0 w-[260px]">
+          <OrderForm />
+        </div>
+
+      </div>
+    </div>
+  )
+}
+
+export default function Trade() {
+  return (
+    <SymbolProvider>
+      <TradeInner />
+    </SymbolProvider>
+  )
+}

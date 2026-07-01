@@ -367,6 +367,8 @@ export default function SessionCard({ session, onStop, stopping }) {
               <button
                 onClick={(e) => { e.stopPropagation(); onStop() }}
                 disabled={stopping}
+                aria-label="Stop session"
+                aria-busy={stopping}
                 className="flex items-center justify-center gap-1.5 w-full py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-medium rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all"
               >
                 <Square size={12} className={stopping ? 'animate-pulse' : ''} />
@@ -396,6 +398,8 @@ export default function SessionCard({ session, onStop, stopping }) {
           </div>
           <button
             onClick={(e) => { e.stopPropagation(); setExpanded(!expanded) }}
+            aria-label={expanded ? 'Collapse session details' : 'Expand session details'}
+            aria-expanded={expanded}
             className="p-1.5 bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white rounded-lg transition-colors shrink-0"
           >
             {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
@@ -574,4 +578,21 @@ export default function SessionCard({ session, onStop, stopping }) {
                           </td>
                           <td className="py-2.5 pr-3 text-right font-mono text-gray-100">{row.leverage != null ? `${row.leverage}x` : '—'}</td>
                           <td className="py-2.5 pr-3 text-right font-mono text-gray-100">{row.trades || '—'}</td>
-                          <td className="py-2.5 pr-3 text-right font-mono text-gray-1
+                          <td className="py-2.5 pr-3 text-right font-mono text-gray-100">{row.qty ? fmtNum(row.qty) : '—'}</td>
+                          <td className="py-2.5 pr-3 text-right font-mono text-gray-100">{row.notional ? fmtNum(row.notional) : '—'}</td>
+                          <td className={`py-2.5 pr-3 text-right font-mono ${row.realisedPnl ? pnlColor(row.realisedPnl) : 'text-gray-100'}`}>
+                            {row.realisedPnl != null ? fmtPnl(row.realisedPnl) : '—'}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}

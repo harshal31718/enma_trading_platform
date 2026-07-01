@@ -168,6 +168,11 @@ export default function SymbolSearchBar() {
                 onChange={(e) => { setQuery(e.target.value); setHighlightIdx(0) }}
                 onKeyDown={handleKeyDown}
                 placeholder="Search symbol…"
+                role="combobox"
+                aria-expanded={open}
+                aria-autocomplete="list"
+                aria-controls="symbol-search-list"
+                aria-activedescendant={filtered[highlightIdx] ? `symbol-opt-${filtered[highlightIdx]}` : undefined}
                 className="w-full bg-gray-800 border border-gray-700 rounded pl-7 pr-3 py-1.5 text-xs text-gray-100 placeholder-gray-500 focus:outline-none focus:border-gray-500 transition-colors"
               />
             </div>
@@ -205,7 +210,7 @@ export default function SymbolSearchBar() {
                     <th className="text-right pb-1.5 pr-1">24h</th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody id="symbol-search-list" role="listbox" aria-label="Trading Symbols">
                   {filtered.map((sym, idx) => {
                     const ticker = marketTickers[sym]
                     const pct = ticker ? parseFloat(ticker.changePct) : null
@@ -215,6 +220,9 @@ export default function SymbolSearchBar() {
                     return (
                       <tr
                         key={sym}
+                        id={`symbol-opt-${sym}`}
+                        role="option"
+                        aria-selected={idx === highlightIdx}
                         onClick={() => selectSymbol(sym)}
                         onMouseEnter={() => setHighlightIdx(idx)}
                         className={[

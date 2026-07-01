@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import toast from 'react-hot-toast'
 import api from '../lib/axios'
 
 export function useAlgoSessions() {
@@ -32,7 +33,11 @@ export function useStartSession() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['algo', 'sessions'] })
+      toast.success('Trading session started successfully')
     },
+    onError: (err) => {
+      toast.error(err.response?.data?.error?.message || err.message || 'Failed to start trading session')
+    }
   })
 }
 
@@ -45,7 +50,11 @@ export function useStopSession() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['algo', 'sessions'] })
+      toast.success('Trading session stopped')
     },
+    onError: (err) => {
+      toast.error(err.response?.data?.error?.message || err.message || 'Failed to stop trading session')
+    }
   })
 }
 
@@ -56,7 +65,13 @@ export function useDeleteSession() {
       const res = await api.delete(`/api/v1/algo/sessions/${id}`)
       return res.data.data
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['algo', 'sessions'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['algo', 'sessions'] })
+      toast.success('Trading session deleted')
+    },
+    onError: (err) => {
+      toast.error(err.response?.data?.error?.message || err.message || 'Failed to delete trading session')
+    }
   })
 }
 
@@ -67,7 +82,13 @@ export function useDeleteAllStopped() {
       const res = await api.delete('/api/v1/algo/sessions')
       return res.data.data
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['algo', 'sessions'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['algo', 'sessions'] })
+      toast.success('All stopped trading sessions cleared')
+    },
+    onError: (err) => {
+      toast.error(err.response?.data?.error?.message || err.message || 'Failed to clear stopped sessions')
+    }
   })
 }
 
@@ -80,7 +101,11 @@ export function useStartChaos() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['algo', 'sessions'] })
+      toast.success('Chaos mode started successfully')
     },
+    onError: (err) => {
+      toast.error(err.response?.data?.error?.message || err.message || 'Failed to start Chaos mode')
+    }
   })
 }
 

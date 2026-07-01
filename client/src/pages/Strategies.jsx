@@ -6,6 +6,7 @@ import StrategyCard from '../features/strategies/StrategyCard'
 import StrategyCreateDialog from '../features/strategies/StrategyCreateDialog'
 import { Skeleton } from '../components/ui/skeleton'
 import { useStrategies } from '../hooks/useStrategies'
+import EmptyState from '../components/ui/empty-state'
 
 export default function Strategies() {
   const { data: strategies, isLoading, isError } = useStrategies()
@@ -53,11 +54,15 @@ export default function Strategies() {
             <p className="text-red-400 text-sm">Failed to load strategies.</p>
           )}
           {strategies?.length === 0 && !isLoading && (
-            <div className="flex flex-col items-center justify-center py-16 text-center">
-              <Code2 className="w-10 h-10 text-gray-600 mb-3" />
-              <p className="text-gray-100 font-medium">No strategies found</p>
-              <p className="text-slate-400 text-sm mt-1">Default strategies will appear here after engine startup.</p>
-            </div>
+            <EmptyState
+              icon={Code2}
+              title="No strategies found"
+              description="Default strategies will appear here after engine startup."
+              action={{
+                label: 'Create Strategy',
+                onClick: openNewStrategy
+              }}
+            />
           )}
           {strategies?.length > 0 && (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-0">

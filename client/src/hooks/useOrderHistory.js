@@ -17,4 +17,8 @@ export function useOrderHistory({ page = 1, limit = 50, filters = {}, sort, orde
         }
       })
 
-      con
+      const res = await api.get(`/api/v1/order-history?${params.toString()}`)
+      return res.data.data
+    },
+  })
+}

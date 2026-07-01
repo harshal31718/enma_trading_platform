@@ -26,4 +26,33 @@ async function getOrderHistory(req, res, next) {
     if (executedBy) filter.executedBy = executedBy
 
     const sortField = SORTABLE_FIELDS.has(req.query.sort) ? req.query.sort : 'exitTime'
-    const sortOrder = req.query.order === 'a
+    const sortOrder = req.query.order === 'asc' ? 1 : -1
+
+    const [records, total] = await Promise.all([
+      TradeRecord.find(filter)
+        .sort({ [sortField]: sortOrder })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      TradeRecord.countDocuments(filter),
+    ])
+
+    res.json(ApiResponse.success({
+      records,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+      sort: sortField,
+      order: sortOrder === 1 ? 'asc' : 'desc',
+    }))
+  } catch (err) {
+    next(err)
+  }
+}
+
+module.exports = {
+  getOrderHistory,
+}

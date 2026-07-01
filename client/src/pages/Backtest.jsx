@@ -1,5 +1,6 @@
 import { useState, useEffect, lazy, Suspense } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import toast from 'react-hot-toast'
 import {
   TrendingUp,
   Percent,
@@ -293,6 +294,7 @@ export default function Backtest() {
         setProgressMessage('')
         setSelectedResultId(data.resultId)
         setTradePage(1)
+        toast.success('Backtest simulation completed successfully')
         // Invalidate both the list and the individual result so they refetch
         queryClient.invalidateQueries({ queryKey: ['backtests'] })
         queryClient.invalidateQueries({ queryKey: ['backtests', data.resultId] })
@@ -305,6 +307,7 @@ export default function Backtest() {
         setProgressPct(0)
         setProgressMessage('')
         setErrorMessage(`Simulation failed: ${data.error}`)
+        toast.error(`Backtest simulation failed: ${data.error}`)
         refetchHistory()
       }
     }
@@ -337,14 +340,15 @@ export default function Backtest() {
 
     try {
       await runMutation.mutateAsync({ ...config, jobId })
+      toast.success('Backtest run queued successfully')
     } catch (err) {
       // Roll back: clear active state so the UI doesn't hang
       setActiveJobId(null)
       setProgressPct(0)
       setProgressMessage('')
-      setErrorMessage(
-        `Failed to start backtest: ${err.response?.data?.error?.message || err.message}`
-      )
+      const errorMsg = err.response?.data?.error?.message || err.message || 'Failed to start backtest'
+      setErrorMessage(`Failed to start backtest: ${errorMsg}`)
+      toast.error(errorMsg)
     }
   }
 

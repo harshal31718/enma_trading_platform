@@ -52,8 +52,9 @@ export default function RiskParamsFields({ values = RISK_DEFAULTS, onChange, inp
     <div className="grid grid-cols-2 gap-3">
       {FIELDS.map((f) => (
         <div key={f.key} className="flex flex-col gap-1.5">
-          <label className={labelCls}>{f.label}</label>
+          <label htmlFor={`risk-param-${f.key}`} className={labelCls}>{f.label}</label>
           <input
+            id={`risk-param-${f.key}`}
             type="number"
             step={f.step}
             min="0"

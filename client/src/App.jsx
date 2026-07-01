@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom'
 import { QueryClientProvider } from '@tanstack/react-query'
+import { Toaster } from 'react-hot-toast'
 import queryClient from '@/lib/queryClient'
 import Navbar from '@/components/layout/Navbar'
 import { useAuth } from '@/hooks/useAuth'
@@ -42,6 +43,31 @@ export default function App() {
   return (
     <div className="dark">
       <QueryClientProvider client={queryClient}>
+        <Toaster
+          position="top-right"
+          toastOptions={{
+            duration: 4000,
+            style: {
+              background: '#0d1117',
+              color: '#cbd5e1',
+              border: '1px solid rgba(51, 65, 85, 0.5)',
+              fontFamily: 'monospace',
+              fontSize: '12px',
+            },
+            success: {
+              iconTheme: {
+                primary: '#34d399',
+                secondary: '#0d1117',
+              },
+            },
+            error: {
+              iconTheme: {
+                primary: '#f87171',
+                secondary: '#0d1117',
+              },
+            },
+          }}
+        />
         <BrowserRouter>
           <Routes>
             <Route path="/login" element={<Login />} />
@@ -57,4 +83,10 @@ export default function App() {
               <Route path="/risk-dashboard" element={<RiskDashboard />} />
               <Route path="/admin" element={<AdminPanel />} />
             </Route>
-            <Route path="*" element={<NotFound />} 
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </BrowserRouter>
+      </QueryClientProvider>
+    </div>
+  )
+}

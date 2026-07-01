@@ -1,6 +1,7 @@
-import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../../components/ui/table'
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell, SortableHeader } from '../../components/ui/table'
 import { Card, CardHeader, CardTitle, CardContent } from '../../components/ui/card'
 import { Badge } from '../../components/ui/badge'
+import { useTableSort } from '../../hooks/useTableSort'
 
 function formatDate(dateStr) {
   if (!dateStr) return '-'
@@ -12,6 +13,13 @@ function formatDate(dateStr) {
 }
 
 export default function CachedCandlesTable({ data }) {
+  const { sortedRows, sortState, onSort } = useTableSort(data, {
+    getValue: (row, key) => {
+      if (key === 'candles') return row.total_candles
+      return row[key]
+    }
+  })
+
   return (
     <Card>
       <CardHeader>
@@ -24,17 +32,17 @@ export default function CachedCandlesTable({ data }) {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Symbol</TableHead>
-                <TableHead>Timeframe</TableHead>
-                <TableHead>Exchange</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Start Date</TableHead>
-                <TableHead>End Date</TableHead>
-                <TableHead className="text-right">Total Candles</TableHead>
+                <SortableHeader sortKey="symbol" sortState={sortState} onSort={onSort}>Symbol</SortableHeader>
+                <SortableHeader sortKey="timeframe" sortState={sortState} onSort={onSort}>Timeframe</SortableHeader>
+                <SortableHeader sortKey="exchange" sortState={sortState} onSort={onSort}>Exchange</SortableHeader>
+                <SortableHeader sortKey="instrument_type" sortState={sortState} onSort={onSort}>Type</SortableHeader>
+                <SortableHeader sortKey="start_date" sortState={sortState} onSort={onSort}>Start Date</SortableHeader>
+                <SortableHeader sortKey="end_date" sortState={sortState} onSort={onSort}>End Date</SortableHeader>
+                <SortableHeader sortKey="candles" sortState={sortState} onSort={onSort} className="text-right">Total Candles</SortableHeader>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {data.map((item, idx) => (
+              {sortedRows.map((item, idx) => (
                 <TableRow key={`${item.symbol}-${item.timeframe}-${idx}`}>
                   <TableCell className="font-semibold text-emerald-400">{item.symbol}</TableCell>
                   <TableCell className="font-mono text-xs">{item.timeframe}</TableCell>

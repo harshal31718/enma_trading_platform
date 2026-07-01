@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import toast from 'react-hot-toast'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -65,6 +66,7 @@ export default function StrategyCreateDialog({
                 sourceName: mode === 'clone' ? sourceStrategy?.name : undefined,
                 template: mode === 'blank' ? 'blank' : undefined,
             })
+            toast.success(`Strategy ${name.trim()} created successfully`)
             onOpenChange(false)
         } catch (err) {
             setErrorMessage(err?.response?.data?.error?.message || err.message || 'Failed to create strategy.')

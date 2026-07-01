@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react'
+import toast from 'react-hot-toast'
 import { AlertTriangle, X } from 'lucide-react'
 import { ConfirmDialog } from '../components/ui/confirm-dialog'
 import PageWrapper from '@/components/layout/PageWrapper'
@@ -65,8 +66,7 @@ export default function RiskDashboard() {
   const [symVolMult, setSymVolMult] = useState('')
   const [symMaxExposure, setSymMaxExposure] = useState('')
 
-  // Success Feedback Timers
-  const [saveSuccess, setSaveSuccess] = useState(false)
+  // Success Feedback is handled by toast notifications
 
   // ── Per-section error banners ─────────────────────────────────────────────
   const globalLimitsError = useBannerError()
@@ -104,8 +104,7 @@ export default function RiskDashboard() {
 
     try {
       await updateSettingsMutation.mutateAsync(payload)
-      setSaveSuccess(true)
-      setTimeout(() => setSaveSuccess(false), 3000)
+      toast.success('Global hard limits saved successfully')
     } catch (err) {
       globalLimitsError.setError(`Save failed: ${err.response?.data?.error?.message || err.message}`)
     }
@@ -134,6 +133,7 @@ export default function RiskDashboard() {
 
     try {
       await updateSettingsMutation.mutateAsync(payload)
+      toast.success(`Strategy override added/saved for ${selectedStrategy}`)
       setSelectedStrategy('')
       setStratRiskPct('')
       setStratRRR('')
@@ -159,6 +159,7 @@ export default function RiskDashboard() {
 
     try {
       await updateSettingsMutation.mutateAsync(payload)
+      toast.success(`Strategy override removed for ${stratName}`)
     } catch (err) {
       stratOverrideError.setError(`Remove failed: ${err.response?.data?.error?.message || err.message}`)
     }
@@ -184,6 +185,7 @@ export default function RiskDashboard() {
 
     try {
       await updateSettingsMutation.mutateAsync(payload)
+      toast.success(`Symbol override added/saved for ${selectedSymbol.toUpperCase()}`)
       setSelectedSymbol('')
       setSymMaxLeverage('')
       setSymVolMult('')
@@ -206,6 +208,7 @@ export default function RiskDashboard() {
 
     try {
       await updateSettingsMutation.mutateAsync(payload)
+      toast.success(`Symbol override removed for ${symbol}`)
     } catch (err) {
       symOverrideError.setError(`Remove failed: ${err.response?.data?.error?.message || err.message}`)
     }
@@ -342,11 +345,6 @@ export default function RiskDashboard() {
                 </button>
               </form>
 
-              {saveSuccess && (
-                <div className="mt-3 text-center text-xs font-mono text-emerald-400 py-1 border border-emerald-500/20 bg-emerald-500/5">
-                  ✓ Settings saved successfully.
-                </div>
-              )}
               {globalLimitsError.banner}
             </div>
 
@@ -543,4 +541,54 @@ export default function RiskDashboard() {
                     <label className="text-[9px] uppercase text-slate-200 font-semibold tracking-wider block mb-0.5">Max Leverage</label>
                     <input
                       type="number"
-                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 o
+                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 outline-none focus:border-emerald-500 text-slate-200 placeholder-slate-600"
+                      value={symMaxLeverage}
+                      onChange={(e) => setSymMaxLeverage(e.target.value)}
+                      placeholder="e.g. 20"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[9px] uppercase text-slate-200 font-semibold tracking-wider block mb-0.5">Volatility Multiplier</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 outline-none focus:border-emerald-500 text-slate-200 placeholder-slate-600"
+                      value={symVolMult}
+                      onChange={(e) => setSymVolMult(e.target.value)}
+                      placeholder="e.g. 1.5"
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="text-[9px] uppercase text-slate-200 font-semibold tracking-wider block mb-0.5">Max Exposure Notional ($)</label>
+                    <input
+                      type="number"
+                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 outline-none focus:border-emerald-500 text-slate-200 placeholder-slate-600"
+                      value={symMaxExposure}
+                      onChange={(e) => setSymMaxExposure(e.target.value)}
+                      placeholder="e.g. 5000"
+                    />
+                  </div>
+                </div>
+                <button
+                  type="submit"
+                  className="mt-4 w-full bg-slate-800 hover:bg-slate-750 active:bg-slate-700 text-slate-200 border border-slate-700 py-1.5 px-4 font-mono text-xs uppercase"
+                  disabled={!selectedSymbol}
+                >
+                  Add / Save Override
+                </button>
+              </form>
+              {symOverrideError.banner}
+            </div>
+
+          </div>
+
+          {/* ────────────────── ZONE 3: HISTORICAL RISK PROFILER ────────────────── */}
+          <div className="grid grid-cols-1 gap-6">
+            <SimulationResults />
+          </div>
+
+        </div>
+      )}
+    </PageWrapper>
+  )
+}

@@ -106,6 +106,7 @@ export default function Navbar() {
             <NavLink
               to="/settings"
               title="Settings"
+              aria-label="Settings"
               className={({ isActive }) =>
                 [
                   'p-1.5 text-slate-400 hover:text-gray-100 hover:bg-slate-800/50 rounded transition-colors',
@@ -202,4 +203,20 @@ export default function Navbar() {
                   isActive
                     ? 'text-emerald-400 bg-emerald-400/10'
                     : 'text-slate-400 hover:text-gray-100 hover:bg-slate-800/50',
-                ].joi
+                ].join(' ')
+              }
+            >
+              <Icon size={16} className="shrink-0" />
+              <span>{label}</span>
+              {label === 'AlgoTrading' && runningCount > 0 && (
+                <span className="ml-auto text-xs bg-emerald-600 text-white px-1.5 py-0.5 rounded-full leading-none">
+                  {runningCount}
+                </span>
+              )}
+            </NavLink>
+          ))}
+        </div>
+      )}
+    </header>
+  )
+}

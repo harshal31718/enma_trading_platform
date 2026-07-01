@@ -5,8 +5,9 @@ export default function ParamsForm({ params, values, onChange }) {
     <div className="space-y-4">
       {Object.entries(params).map(([key, meta]) => (
         <div key={key}>
-          <label className="block text-sm text-gray-300 mb-1">{meta.label}</label>
+          <label htmlFor={`param-input-${key}`} className="block text-sm text-gray-300 mb-1">{meta.label}</label>
           <input
+            id={`param-input-${key}`}
             type="number"
             value={values[key] ?? meta.default}
             min={meta.min}

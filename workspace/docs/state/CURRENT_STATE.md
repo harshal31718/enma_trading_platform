@@ -183,6 +183,18 @@ Last updated: 2026-07-01 (Auth branch — Phases 1–5 complete)
 - Dark theme throughout (`bg-gray-950` base)
 - All financial P&L: `emerald-400` (profit) / `red-400` (loss)
 
+### UI Polish & Hardening (Phase 2)
+- **Toast Notifications**: Centralized toast alert system powered by `react-hot-toast` configured with midnight-blue styling. Emits success/error toasts for Settings (Exchange, Chaos, API keys), Strategy creation/cloning, Backtest run queues/completions/failures, and live Algo bot session controls (Start/Stop/Delete, Clear stopped, Chaos mode).
+- **ARIA & Accessibility Sweep**: Semantic markup and screen-reader accessibility sweep completed:
+  - Icon-only NavLinks (e.g. Settings) and control buttons (Filters, Refresh, Select run) tagged with explicit `aria-label`.
+  - Combobox and listbox search controls in SymbolSearchBar set with proper `role`, `aria-expanded`, `aria-autocomplete`, and `aria-selected` tracking active list items.
+  - Algo SessionCard controls linked with `aria-busy` (for pending stops) and `aria-expanded` (for accordion chevrons).
+  - Timeframe selector buttons explicitly configured with `aria-pressed`.
+  - Param form inputs associated with labels using `id` and `htmlFor` bindings.
+- **Background Polling Indicators**: Destructured `isFetching` from query hooks and mapped active background refreshes to small, non-obtrusive pulsating status dots next to bottom panel tabs (Positions, Orders, History) and the Algo Trading page header.
+- **Dynamic Table Sorting**: Wired client-side column sorting via the `useTableSort` state hook and `<SortableHeader>` UI components in RecentActivityTable, StrategyLeaderboard, and CachedCandlesTable.
+- **Richer Empty States**: Replaced all generic centered text placeholders with the styled, interactive `<EmptyState>` component across Trade tabs, Backtest runs history, Strategies, and the Admin whitelist email log.
+
 ---
 
 ## In Progress
@@ -228,9 +240,7 @@ Last updated: 2026-07-01 (Auth branch — Phases 1–5 complete)
 | Feature | Notes |
 |---------|-------|
 | **Mainnet trading** | `fapi.binance.com` not implemented; all orders go to Testnet. Adding mainnet = swap base URL + mode selector in settings. |
-| **Mainnet trading** | `fapi.binance.com` not implemented; all orders go to Testnet. |
 | **Multi-exchange support** | Binance only. |
-| **Authentication** | Not implemented. The single-user model needs no login gate; add register/login + middleware only if multi-user support is ever introduced. |
 
 ---
 
