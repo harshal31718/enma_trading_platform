@@ -1,4 +1,24 @@
 ---
+## 2026-07-02 — Deployment Plan Refinement + Pre-Deploy Changes — COMPLETE ✅
+
+**Goal:** Merge `auth` into `dev`, rewrite `workspace/plan/deployment_plan.md` verified against actual code, and implement its pre-deploy code changes on `dev`.
+
+**Done this session:**
+- **Merged `auth` → `dev`** (clean fast-forward, 13 commits; `auth` untouched).
+- **Rewrote `deployment_plan.md`** (`d838fb9`): fixed env var names to match code (`TIMESCALE_URL`, `REDIS_URL`, `MONGO_DB`, `ENGINE_API_KEY`), documented the `SERVER_URL` (internal Docker URL for engine callbacks) vs `GOOGLE_CALLBACK_URL` (public OAuth callback, priority override in `passport.js`) split, added nginx install + Oracle host-iptables gotcha + containerized client build + `certbot --nginx` renewal + release/rollback workflow.
+- **Implemented pre-deploy changes** (`b0518d4`, `10ea1c5`):
+  - `server/src/app.js`: `app.set('trust proxy', 1)` (required behind nginx for express-rate-limit v7, `req.ip`, secure cookies). Boot-verified in a container: trust proxy = 1.
+  - `docker-compose.prod.yml` (new, repo root): prod commands (`node src/server.js`, uvicorn without `--reload`), healthchecks on all services, server bound `127.0.0.1:5000` only, engine/redis/timescale publish no host ports, `enma_engine_strategies` volume. Validates via `docker compose config`.
+  - `client/.env.production` (new, tracked): prod Vite URLs; required a `!client/.env.production` exception in `.gitignore` (blanket `.env.production` ignore was blocking it).
+  - `.env.example`: added `GOOGLE_CLIENT_ID/SECRET`, `GOOGLE_CALLBACK_URL`, `ADMIN_EMAIL`, `ENCRYPTION_KEY`, `SERVER_URL`.
+
+**Files changed:** `workspace/plan/deployment_plan.md`, `server/src/app.js`, `docker-compose.prod.yml`, `client/.env.production`, `.env.example`, `.gitignore` — all on `dev` only.
+
+**Next session:** Deployment itself is manual (OCI account, domain, DNS, VPS steps in the plan). Before first deploy: replace `yourdomain.com` placeholder in `client/.env.production` with the real domain. Promote `dev` → `main` when releasing.
+
+**Open questions:** None.
+
+---
 ## 2026-07-02 — UI Refinement Phase 3 (UX Polish & Responsiveness) — ALL STEPS COMPLETE ✅
 
 **Goal:** Complete all tasks for Phase 3 UI Refinement (Code Quality/Refactoring, Design System Sweep, Mobile Responsiveness) and remaining items from `workspace/plan/ui_refinement.md`.
