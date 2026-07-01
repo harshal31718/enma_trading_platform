@@ -1,4 +1,29 @@
 ---
+## 2026-07-02 — Deployment Kickoff: Domain Decision + Config Finalized — CODE-SIDE COMPLETE ✅
+
+**Goal:** Proceed with `deployment_plan.md`. Verified repo deploy-readiness, resolved the domain decision, finalized all domain-dependent config.
+
+**Done this session:**
+- **Verified deploy-readiness:** `trust proxy` present in `server/src/app.js:34`; `docker-compose.prod.yml`, `client/.env.production`, `.env.example` all tracked; `dev` = `main` = `origin/main` = `origin/dev` at `7339fb3` — no promotion needed.
+- **Domain decision:** User initially wanted to drop domains entirely; pushed back (raw IP breaks Google OAuth login — origins/redirect URIs reject IPs — and secure cookies). User agreed to free DuckDNS and claimed **`enmaquant.duckdns.org`**.
+- **`client/.env.production`:** placeholder replaced with `https://enmaquant.duckdns.org` (both `VITE_API_URL` and `VITE_SOCKET_URL`).
+- **`deployment_plan.md`:** all `yourdomain.com` occurrences replaced with `enmaquant.duckdns.org`; prerequisites rewritten (domain done; DuckDNS A-record note; reserved-public-IP recommendation; benign ipv6 notice); OAuth section notes to edit the existing client rather than create a new one.
+
+**⚠️ Critical gotcha recorded:** DuckDNS auto-filled the user's home ISP IP (`152.59.186.180`) at claim time. **The DuckDNS IP must be updated to the VPS public IP once the OCI instance exists — before the certbot step.**
+
+**Files changed:** `client/.env.production`, `workspace/plan/deployment_plan.md`, `workspace/plan/handoff.md` — uncommitted on `dev`.
+
+**Next session / remaining (all manual, user-driven — follow deployment_plan.md top to bottom):**
+1. OCI signup + `VM.Standard.A1.Flex` instance (Step 1) — user had nothing provisioned as of this session.
+2. Update DuckDNS IP to the VPS public IP.
+3. Google OAuth console: add `https://enmaquant.duckdns.org` origin + `/api/v1/auth/google/callback` redirect to the existing client (user reports Atlas + OAuth otherwise done).
+4. Atlas: whitelist the VPS public IP.
+5. VPS Steps 3–8 (base setup, `.env`, client build, nginx+certbot, compose up, verify).
+6. Commit the config changes and merge `dev` → `main` before the VPS clones.
+
+**Open questions:** None.
+
+---
 ## 2026-07-02 — Deployment Plan Refinement + Pre-Deploy Changes — COMPLETE ✅
 
 **Goal:** Merge `auth` into `dev`, rewrite `workspace/plan/deployment_plan.md` verified against actual code, and implement its pre-deploy code changes on `dev`.

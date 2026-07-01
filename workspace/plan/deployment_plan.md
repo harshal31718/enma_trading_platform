@@ -8,8 +8,8 @@ Step-by-step plan for deploying the Enma trading platform to production on **Ora
 
 ## Prerequisites (hard requirements — resolve before Step 1)
 
-1. **A domain name.** Google OAuth does not accept raw IP addresses as authorized origins, and Let's Encrypt does not issue certificates for IPs. A free DDNS name (e.g. DuckDNS) is acceptable. Everywhere below, replace `yourdomain.com`.
-2. **DNS A record** pointing `yourdomain.com` → the VPS public IP (needed before the certbot step).
+1. **Domain — done (2026-07-02): `enmaquant.duckdns.org`** (free DuckDNS subdomain). Google OAuth does not accept raw IP addresses as authorized origins, and an IP-only deployment would break login entirely. All commands below already use this domain.
+2. **DNS record:** DuckDNS manages the A record — **after the VPS exists, update the IP at <https://www.duckdns.org> to the VPS public IP** (at claim time it auto-filled the home ISP IP, which is wrong for deployment). Must be done before the certbot step. Assign a **reserved public IP** to the OCI instance (free) so the IP survives instance stop/start and the DNS entry never goes stale. Ignore DuckDNS's "ipv6 address was already not updated" notice — IPv6 is unused.
 3. **Code changes on `dev` before deploying** — see [Pre-Deploy Code Changes](#pre-deploy-code-changes-required). The plan assumes these are merged.
 
 ---
@@ -90,10 +90,11 @@ Exposure policy:
 ### 2.2 Google Cloud Console (OAuth Sign-In)
 
 * Create a project → **Credentials** → OAuth 2.0 Client ID (Web application).
-* **Authorized JavaScript origins:** `https://yourdomain.com`
-* **Authorized redirect URIs:** `https://yourdomain.com/api/v1/auth/google/callback`
+* **Authorized JavaScript origins:** `https://enmaquant.duckdns.org`
+* **Authorized redirect URIs:** `https://enmaquant.duckdns.org/api/v1/auth/google/callback`
   (This exact path is hardcoded in `server/src/routes/auth.routes.js`; the base URL is supplied via `GOOGLE_CALLBACK_URL` — see Step 4.)
 * Save `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
+* **If the OAuth client already exists** (created with localhost/dev origins), don't create a new one — edit it and add the production origin + redirect URI above alongside the dev entries.
 
 ---
 
@@ -141,11 +142,11 @@ PORT=5000
 
 # ── URLs ─────────────────────────────────────────
 # Public origin of the app (CORS + post-login redirect)
-CLIENT_URL=https://yourdomain.com
+CLIENT_URL=https://enmaquant.duckdns.org
 # INTERNAL Docker-network URL of the Node server (used by engine) — do NOT set to the domain
 SERVER_URL=http://server:5000
 # Public OAuth callback (overrides the SERVER_URL-derived default in passport.js)
-GOOGLE_CALLBACK_URL=https://yourdomain.com/api/v1/auth/google/callback
+GOOGLE_CALLBACK_URL=https://enmaquant.duckdns.org/api/v1/auth/google/callback
 # Internal Docker-network URL of the Python engine (used by server)
 ENGINE_URL=http://engine:8000
 
@@ -156,7 +157,7 @@ ADMIN_EMAIL=your-admin-email@gmail.com
 JWT_SECRET=<64-char random string: openssl rand -hex 32>
 JWT_EXPIRES_IN=7d
 JWT_REFRESH_EXPIRES_IN=30d
-ENCRYPTION_KEY=<32-byte hex: openssl rand -hex 32>
+ENCRYPTION_KEY=<EXACTLY 32 chars: openssl rand -hex 16 — encryption.js requires a 32-byte utf8 string; a 64-char value silently falls back to the insecure dev key>
 # Shared secret between server and engine (X-API-Key header)
 ENGINE_API_KEY=<random string: openssl rand -hex 24>
 
@@ -174,8 +175,13 @@ TIMESCALE_URL=postgresql://enma:<same strong password>@timescaledb:5432/enma_can
 REDIS_URL=redis://redis:6379
 
 # ── Binance ──────────────────────────────────────
-BINANCE_API_KEY=
-BINANCE_SECRET=
+# Intentionally unset in production — each user adds their own keys via the Settings
+# page (stored AES-encrypted in Mongo). The only env consumer is reconciliation.js,
+# which uses them at startup to force-close orphaned positions; without them it
+# safely skips that (sessions are still marked stopped and locks released, but a
+# position left open on Binance after a crash must be closed manually).
+# BINANCE_TESTNET_API_KEY=
+# BINANCE_TESTNET_SECRET=
 BINANCE_TESTNET=true
 BINANCE_FETCH_DELAY_MS=200
 ```
@@ -219,7 +225,7 @@ This produces `/opt/enma/client/dist`. Re-run this command on every release that
    ```nginx
    server {
        listen 80;
-       server_name yourdomain.com;
+       server_name enmaquant.duckdns.org;
 
        # Compiled static client
        root /opt/enma/client/dist;
@@ -263,7 +269,7 @@ This produces `/opt/enma/client/dist`. Re-run this command on every release that
 
 3. **Obtain the certificate with the nginx plugin** (edits the config in place, adds the 443 server block + HTTP→HTTPS redirect, and installs auto-renewal that works while nginx is running — do not use `--standalone`, its renewals conflict with nginx on port 80):
    ```bash
-   sudo certbot --nginx -d yourdomain.com
+   sudo certbot --nginx -d enmaquant.duckdns.org
    ```
 
 4. **Verify auto-renewal:**
@@ -376,10 +382,10 @@ volumes:
    ```bash
    docker compose -f docker-compose.prod.yml ps          # all services "healthy"
    curl -s http://127.0.0.1:5000/api/v1/health           # {"status":"ok","mongo":"connected","redis":"connected"}
-   curl -s https://yourdomain.com/api/v1/health          # same, via nginx
+   curl -s https://enmaquant.duckdns.org/api/v1/health          # same, via nginx
    ```
    Then in the browser:
-   - `https://yourdomain.com` loads the login page.
+   - `https://enmaquant.duckdns.org` loads the login page.
    - Sign in with the `ADMIN_EMAIL` Google account (the admin email is auto-provisioned by the server startup; other users must first be added under `/admin` → allowed emails).
    - Dashboard loads; Socket.IO status badges show connected (emerald).
    - `/admin` panel is reachable for the admin account.
@@ -389,16 +395,15 @@ volumes:
 
 ## Pre-Deploy Code Changes Required
 
-> **Status: all four items below are implemented on `dev`.** The only remaining manual
-> step is replacing the `yourdomain.com` placeholder in `client/.env.production` once
-> the production domain exists.
+> **Status: all four items below are implemented on `dev`, and `client/.env.production`
+> now carries the real domain (`enmaquant.duckdns.org`) — no code-side work remains.**
 
 1. **`server/src/app.js` — trust the proxy.** Add `app.set('trust proxy', 1)` right after `const app = express()`. Behind Nginx, `express-rate-limit` v7 errors on the `X-Forwarded-For` header without this, and `req.ip` would otherwise log Nginx's address for every client.
 
 2. **Create `client/.env.production`** (tracked in git — the root `.gitignore`'s `.env` pattern does not match it):
    ```env
-   VITE_API_URL=https://yourdomain.com
-   VITE_SOCKET_URL=https://yourdomain.com
+   VITE_API_URL=https://enmaquant.duckdns.org
+   VITE_SOCKET_URL=https://enmaquant.duckdns.org
    ```
    Vite's mode-specific files take priority over plain `.env`, so the git-ignored `client/.env` (localhost values) keeps working for `npm run dev` while `npm run build` picks up production values.
 
