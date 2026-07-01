@@ -302,7 +302,7 @@ SELECT create_hypertable('candles', 'time');
 CREATE INDEX ON candles (exchange, symbol, timeframe, time DESC);
 ```
 
-No `user_id` column — this is a single-user platform.
+No `user_id` column — candles are shared globally across users.
 
 **Rules:**
 - **Never write candle data to MongoDB.** TimescaleDB is the exclusive candle store.
