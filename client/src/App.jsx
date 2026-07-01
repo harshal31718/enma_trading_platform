@@ -13,6 +13,7 @@ import AlgoTrading from '@/pages/AlgoTrading'
 import OrderHistory from '@/pages/OrderHistory'
 import RiskDashboard from '@/pages/RiskDashboard'
 import AdminPanel from '@/pages/AdminPanel'
+import NotFound from '@/pages/NotFound'
 
 function ProtectedLayout() {
   const { isAuthenticated, isLoading } = useAuth()
@@ -56,9 +57,4 @@ export default function App() {
               <Route path="/risk-dashboard" element={<RiskDashboard />} />
               <Route path="/admin" element={<AdminPanel />} />
             </Route>
-          </Routes>
-        </BrowserRouter>
-      </QueryClientProvider>
-    </div>
-  )
-}
+            <Route path="*" element={<NotFound />} 

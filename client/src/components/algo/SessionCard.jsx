@@ -5,6 +5,8 @@ import { useSocket } from '../../hooks/useSocket'
 import { useDeleteSession } from '../../hooks/useAlgoSessions'
 import useBinanceWS from '../../hooks/useBinanceWS'
 import api from '../../lib/axios'
+import { ConfirmDialog } from '../ui/confirm-dialog'
+import { formatDateTime } from '../../utils/formatters'
 
 const STATUS_STYLES = {
   starting: 'bg-yellow-400/10 text-yellow-400 border border-yellow-400/20',
@@ -24,8 +26,9 @@ const LogIcon = ({ type }) => {
   }
 }
 
+// Compact HH:MM, always UTC — matches the page-wide timestamp convention (client/CLAUDE.md).
 const formatTime = (t) =>
-  new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+  new Date(t).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' })
 
 const fmtPnl = (v) => `${v >= 0 ? '+' : '-'}$${Math.abs(v).toFixed(2)}`
 const pnlColor = (v) => (v > 0 ? 'text-emerald-400' : v < 0 ? 'text-red-400' : 'text-gray-200')
@@ -51,7 +54,7 @@ const EquityTooltip = ({ active, payload }) => {
   const { t, balance } = payload[0].payload
   return (
     <div className="bg-gray-950 border border-gray-800 rounded-md px-2.5 py-1.5 text-xs shadow-xl">
-      <div className="text-gray-500 font-mono mb-0.5">{new Date(t).toLocaleString([], { hour12: false })}</div>
+      <div className="text-gray-500 font-mono mb-0.5">{formatDateTime(t)}</div>
       <div className="font-mono font-semibold text-gray-100">
         ${balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
       </div>
@@ -69,6 +72,7 @@ export default function SessionCard({ session, onStop, stopping }) {
   const [positionDetails, setPositionDetails] = useState(() => session.positionDetails || {})
   const [prices, setPrices] = useState({})
   const deleteSession = useDeleteSession()
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false)
 
   const onTickers = useCallback((payload) => {
     if (!Array.isArray(payload)) return
@@ -148,8 +152,7 @@ export default function SessionCard({ session, onStop, stopping }) {
 
   const formatStarted = (dateString) => {
     if (!dateString) return ''
-    const d = new Date(dateString)
-    return `${d.toLocaleTimeString([], { hour12: false })} ${d.toLocaleDateString()}`
+    return formatDateTime(dateString)
   }
 
   // Build a timeline-aware equity series: baseline → each realized point → live value.
@@ -343,7 +346,7 @@ export default function SessionCard({ session, onStop, stopping }) {
               <span className="text-slate-600"> / </span>
               <span className="text-gray-100">{closedTrades}</span>
             </div>
-            <div className="text-[9px] text-slate-500 uppercase tracking-wider -mt-0.5">open / closed</div>
+            <div className="text-[9px] text-slate-400 uppercase tracking-wider -mt-0.5">open / closed</div>
           </div>
         </div>
 
@@ -371,14 +374,24 @@ export default function SessionCard({ session, onStop, stopping }) {
               </button>
             )}
             {isStopped && (
-              <button
-                onClick={(e) => { e.stopPropagation(); deleteSession.mutate(String(session._id)) }}
-                disabled={deleteSession.isPending}
-                className="p-1.5 hover:bg-red-500/10 text-gray-600 hover:text-red-400 rounded-lg border border-transparent hover:border-red-500/20 disabled:opacity-40 transition-all flex items-center justify-center"
-                title="Delete session"
-              >
-                <Trash2 size={14} />
-              </button>
+              <>
+                <button
+                  onClick={(e) => { e.stopPropagation(); setConfirmDeleteOpen(true) }}
+                  disabled={deleteSession.isPending}
+                  aria-label="Delete session"
+                  className="p-1.5 hover:bg-red-500/10 text-gray-600 hover:text-red-400 rounded-lg border border-transparent hover:border-red-500/20 disabled:opacity-40 transition-all flex items-center justify-center"
+                >
+                  <Trash2 size={14} />
+                </button>
+                <ConfirmDialog
+                  open={confirmDeleteOpen}
+                  onOpenChange={setConfirmDeleteOpen}
+                  title="Delete this session?"
+                  description="The session record and all associated logs will be permanently removed."
+                  confirmLabel="Delete"
+                  onConfirm={() => { setConfirmDeleteOpen(false); deleteSession.mutate(String(session._id)) }}
+                />
+              </>
             )}
           </div>
           <button
@@ -502,12 +515,12 @@ export default function SessionCard({ session, onStop, stopping }) {
               </div>
               <div className="bg-[#060a0f] border border-slate-700/30 rounded-lg p-3 overflow-y-auto max-h-52 space-y-2 [&::-webkit-scrollbar]:hidden [scrollbar-width:none]">
                 {logs.length === 0 ? (
-                  <div className="text-center text-xs text-slate-500 py-6">No activity yet</div>
+                  <div className="text-center text-xs text-slate-400 py-6">No activity yet</div>
                 ) : (
                   logs.map((log, i) => (
                     <div key={i} className="flex items-start gap-2 text-xs">
                       <span className="text-gray-500 font-mono shrink-0 tabular-nums pt-px">
-                        {new Date(log.timestamp).toLocaleTimeString([], { hour12: false })}
+                        {new Date(log.timestamp).toLocaleTimeString('en-US', { hour12: false, timeZone: 'UTC' })}
                       </span>
                       <LogIcon type={log.type} />
                       <span
@@ -561,22 +574,4 @@ export default function SessionCard({ session, onStop, stopping }) {
                           </td>
                           <td className="py-2.5 pr-3 text-right font-mono text-gray-100">{row.leverage != null ? `${row.leverage}x` : '—'}</td>
                           <td className="py-2.5 pr-3 text-right font-mono text-gray-100">{row.trades || '—'}</td>
-                          <td className="py-2.5 pr-3 text-right font-mono text-gray-100">{row.qty ? fmtNum(row.qty) : '—'}</td>
-                          <td className="py-2.5 pr-3 text-right font-mono text-gray-100">{row.notional ? `$${fmtNum(row.notional)}` : '—'}</td>
-                          <td className={`py-2.5 text-right font-mono ${row.realisedPnl == null ? 'text-gray-100' : pnlColor(row.realisedPnl)}`}>
-                            {row.realisedPnl == null ? '—' : fmtPnl(row.realisedPnl)}
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-
-        </div>
-      )}
-    </div>
-  )
-}
+                          <td className="py-2.5 pr-3 text-right font-mono text-gray-1

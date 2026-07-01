@@ -36,9 +36,15 @@ client/
 │   │   │                   original StatCard.jsx have been deleted — they were never imported.
 │   │   ├── charts/      ← Recharts wrappers (EquityCurve.jsx only — DrawdownChart/CandleChart do not exist)
 │   │   ├── layout/      ← Navbar.jsx, PageWrapper.jsx (no Sidebar)
+│   │   ├── risk/        ← Risk Intelligence Dashboard visualizations
+│   │   │   ├── AggregateMarginGauge.jsx ← locked margin / free balance / leverage gauge (Zone 1)
+│   │   │   ├── CorrelationHeatmap.jsx   ← rolling 30-day close-return correlation heatmap (Zone 1)
+│   │   │   ├── NetExposureBar.jsx       ← stacked long/short notional exposure bar (Zone 1)
+│   │   │   └── SimulationResults.jsx    ← Monte Carlo / leverage-scenario results (Zone 3)
 │   │   ├── algo/        ← AlgoTrading feature components
 │   │   │   ├── NewSessionWizard.jsx  ← multi-step wizard for starting a bot session
 │   │   │   ├── SessionCard.jsx       ← single live session display card
+│   │   │   ├── ChaosWizard.jsx       ← 4-step Chaos Mode wizard dialog
 │   │   │   ├── SymbolPicker.jsx      ← symbol multi-select for bot session
 │   │   │   └── ParamsForm.jsx        ← strategy param inputs for bot session
 │   ├── RiskParamsFields.jsx       ← shared risk-model parameter fields (pre-filled from settings, used by backtest & algo wizards)
@@ -53,7 +59,8 @@ client/
 │   │   │   ├── StatCard.jsx            ← single numeric metric card (canonical — only this one exists)
 │   │   │   ├── CachedCandlesTable.jsx  ← TimescaleDB candle cache summary table
 │   │   │   ├── RecentActivityTable.jsx ← last 5 backtest runs with View deep-links
-│   │   │   └── StrategyLeaderboard.jsx ← per-strategy averaged metrics
+│   │   │   ├── StrategyLeaderboard.jsx ← per-strategy averaged metrics
+│   │   │   └── DashboardCalendar.jsx   ← performance-calendar component; currently unused (not wired into Dashboard.jsx — candidate for removal or wiring in a future pass)
 │   │   └── strategies/
 │   │       ├── CodeViewer.jsx          ← read-only pre block rendered in a Dialog
 │   │       ├── StrategyCard.jsx        ← card: name, description, type badge, View button
@@ -69,6 +76,8 @@ client/
 │   │   ├── useExchangeSettings.js ← TanStack Query hooks for /api/v1/settings/exchange
 │   │   ├── useOcoMonitor.js       ← monitors OCO order fill/cancel state via polling
 │   │   ├── useOrderHistory.js     ← useOrderHistory({ page, limit, filters }) → GET /api/v1/order-history
+│   │   ├── useAuth.js             ← TanStack Query: useAuth() (GET /api/v1/auth/me, 5-min stale, 401→null), useLogout()
+│   │   ├── useRiskSettings.js     ← TanStack Query hooks for /api/v1/risk/* (settings, live metrics, simulation, overrides)
 │   │   └── useBinanceWS.js        ← registers/unregisters callbacks on the binanceWS singleton
 
 │   ├── context/
@@ -86,17 +95,27 @@ client/
 │   │   ├── Settings.jsx       ← route: /settings
 │   │   ├── Trade.jsx          ← route: /trade/:symbol (manual trading terminal)
 │   │   ├── AlgoTrading.jsx    ← route: /algo (algo bot session management)
-│   │   └── OrderHistory.jsx   ← route: /order-history (paginated trade log; not in navbar)
+│   │   ├── OrderHistory.jsx   ← route: /order-history (paginated trade log; not in navbar)
+│   │   ├── Login.jsx          ← route: /login (Google OAuth entry point, public)
+│   │   ├── AdminPanel.jsx     ← route: /admin (admin-only, allowed-emails CRUD)
+│   │   ├── RiskDashboard.jsx  ← route: /risk-dashboard (Zone 1/2/3 risk intelligence, see CURRENT_STATE.md)
+│   │   └── NotFound.jsx       ← route: * (catch-all 404, "Go to Dashboard" CTA)
 │   ├── store/
 │   │       Note: useUIStore.js has been deleted — it tracked sidebar state that no longer exists.
 │   ├── utils/
-│   │   ├── formatters.js    ← formatQty, formatPrice, formatPct, formatPnl, formatSignedPct
-│   │   └── symbolLimits.js  ← per-symbol precision/tick-size rules for order form validation
+│   │   ├── formatters.js         ← formatQty, formatPrice, formatPct, formatPnl, formatSignedPct
+│   │   ├── backtest-analytics.js ← Performance Calendar bucketing (Day/Week/Month/Quarter) over backtestTrades
+│   │   ├── exporters.js          ← client-side JSON/CSV export helpers for backtest results
+│   │   └── symbolLimits.js       ← per-symbol precision/tick-size rules for order form validation
 │   │       ├── formatQty(value)        → max 6 decimal places, trimmed
 │   │       ├── formatPrice(value)      → "$1,234.56" (2 dp, thousands sep)
 │   │       ├── formatPct(value)        → "32.41%" (unsigned)
 │   │       ├── formatPnl(value)        → { value: "+$123.45", isPositive: bool }
-│   │       └── formatSignedPct(value)  → "+32.41%" or "-8.20%" (always shows sign)
+│   │       ├── formatSignedPct(value)  → "+32.41%" or "-8.20%" (always shows sign)
+│   │       ├── formatCompact(value, {prefix, decimals}) → "$1.2M" / "1.5K" — abbreviated large numbers
+│   │       ├── formatPercent(value, decimals=2) → "32.41%" (unsigned, configurable precision)
+│   │       ├── formatDateTime(iso, {local}) → "Jul 1, 2026, 14:03:22 UTC" by default; local tz if {local:true}
+│   │       └── formatDate(iso, {local})     → "Jul 1, 2026" date-only, UTC by default
 │   └── main.jsx         ← entry point
 ├── index.html
 ├── vite.config.js
@@ -195,13 +214,15 @@ WebSocket stream (`@kline_<interval>`) — only the initial REST fetch is affect
 
 ## Layout rules
 
-- **Navbar:** fixed top, full width, 56px tall, `bg-[#0a0d13] border-b border-slate-700/50`
-  - Logo: "Enma" text, `text-emerald-400 font-medium`, left-aligned
-  - Nav items: horizontal, left-aligned after logo — **Dashboard, Strategies, Backtest, Trade, AlgoTrading, Settings** (6 items; Import Candles is removed permanently)
-  - Nav item default: `text-slate-400`, transparent bg
+- **Navbar:** fixed top, full width, 56px tall, `bg-title-bg` (`#0a0d13`) `border-b border-slate-700/50`
+  - Logo: "ENMA" text, `text-emerald-400 font-medium`, left-aligned
+  - Nav items (desktop, `md:flex`, hidden below `md`): **Dashboard, Trade, Strategies, Risk Dashboard, Backtest, AlgoTrading, Order History** (7 items). `Settings` is a standalone icon button next to the avatar (not in the nav item list). This order supersedes the old 6-item spec — updated 2026-07-01 (UI Refinement Phase 2, decision 5.1: keep code, update docs).
+  - Nav item default: `text-slate-400`, transparent bg, `border-b-2 border-transparent`
   - Nav item hover: `text-gray-100`, `bg-slate-800/50`
   - Nav item active: `text-emerald-400`, `bg-emerald-400/10`, `border-b-2 border-emerald-400`
-  - Desktop only — no mobile hamburger menu
+  - Nav item focus (keyboard): `focus-visible:ring-2 focus-visible:ring-emerald-500`
+  - **Mobile (`<md`):** hamburger toggle (`Menu`/`X` icon, `aria-label`/`aria-expanded`/`aria-controls="mobile-nav-menu"`) opens a full-width drawer (`#mobile-nav-menu`) listing the same 7 items + a running-session count badge on AlgoTrading. This is an intentional improvement over the original "desktop only" spec.
+  - Avatar button: `aria-haspopup="menu"`, `aria-expanded`, `aria-label="User menu"`. Circle shape uses the Tailwind arbitrary class `[border-radius:50%]` (not inline `style=`) because the global `tailwind.config.js` sets `borderRadius: 0`, so `rounded-full` resolves to square corners.
 - **PageWrapper:** `pt-[56px]` to clear navbar, `bg-[#060a0f]` (deepest layer), full width, **no padding** — content is edge-to-edge
 - **PageHeader:** full-width bar with `px-6 py-3 border-b border-slate-700/50 bg-title-bg title-fade` — not a floating title, it's a connected header row
 - **Page content padding:** none — panels go edge-to-edge; use `border-r`/`border-b`/`divide-*` for separation
@@ -285,57 +306,4 @@ Both hooks follow the standard TanStack Query pattern used by all other hooks in
 ## useCandles.js rules
 
 - Only `useSymbols()` hook is exported — `useAvailableImports()` and `useImportCandles()` are removed
-- `useSymbols()` calls `GET /api/v1/candles/symbols` and returns `{ futures, spot }`
-- No other candle hooks exist in this file
-
----
-
-## Styling rules
-
-> **Single source of truth:** `workspace/docs/core/UI_STYLE_GUIDE.md` — the canonical
-> midnight-blue trading-terminal palette, typography, component patterns, and the full
-> **What to Avoid** list. Read it before writing or changing any `className`. To restyle an
-> existing component/page to the guide, run the **`/restyle-ui`** skill. The rules below are the
-> condensed working set; if they ever disagree with the guide, the guide wins.
-
-- Dark theme by default — the app is a trading dashboard, always dark
-- Color palette (use these Tailwind classes consistently — midnight blue, not warm gray):
-  - Page / deepest layer: `bg-[#060a0f]` (also terminal/log boxes)
-  - Panel rows: `bg-[#080b10]` (row 1) / `bg-[#0a0d13]` (row 2, inputs/selects)
-  - Card / panel base: `bg-[#0d1117]`
-  - Borders: cards/dividers `border-slate-700/50`; inner tiles `border-slate-700/40`; table rows `border-slate-700/30`
-  - Text primary / values: `text-gray-100`
-  - Text secondary labels: `text-slate-400`; muted/supporting: `text-slate-500`; section titles: `text-gray-300`
-  - Profit/positive P&L: `text-emerald-400`, `bg-emerald-400/10` — **never `text-green-400`**
-  - Loss/negative P&L: `text-red-400`, `bg-red-400/10`
-  - Primary action: `bg-emerald-600 hover:bg-emerald-700`; destructive: `bg-red-600 hover:bg-red-700`
-  - Warning / caution: `text-amber-400`, `bg-amber-400/10`
-  - Monospaced data (prices, qty, timestamps): `font-mono tabular-nums`
-- **Avoid** `bg-gray-900`/`bg-gray-800` panel backgrounds (too warm), `text-gray-500` labels
-  (use `text-slate-400`), glass buttons for primary/destructive actions, `opacity-50` to dim rows,
-  and inline styles. See the guide's "What to Avoid".
-- **Favorites & Highlights:** Stars and interactive favorites elements follow standard highlighting (yellow when selected; e.g., `text-yellow-400`). P&L coloring rules (`text-emerald-400` / `text-red-400`) apply to green/red ticker price feeds only.
-
----
-
-## Chart rules (Recharts)
-
-- Equity curve: `LineChart` with `CartesianGrid`, `Tooltip`, `ResponsiveContainer`
-- Drawdown: `AreaChart` with negative fill
-- Trade distribution: `BarChart`
-- All charts use dark theme colors matching the palette above:
-  - Axis ticks `fill: '#94a3b8'` (slate-400), axis/grid stroke `#1e293b` (slate-800)
-  - Baseline reference line `stroke="#4B5563" strokeDasharray="3 3"`
-  - Equity line `#34d399` (emerald-400) when positive, `#f87171` (red-400) when negative
-- Chart wrappers live in `src/components/charts/`
-- Never use chart libraries other than Recharts
-
----
-
-## What Claude Code must NOT do in client/
-
-- Add a state management library other than Zustand + TanStack Query
-- Use CSS modules, styled-components, or inline styles
-- Call the Python engine directly (all calls go through `server/`)
-- Store sensitive data (API keys, tokens beyond JWT) in localStorage or state
-- Use class components or legacy React patterns
+- `useSymbols()` calls `GET /api/v1/candles/symbols` a

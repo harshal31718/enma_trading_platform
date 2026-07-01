@@ -1,3 +1,4 @@
+import { ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 export function Table({ className, wrapperClassName, ...props }) {
@@ -48,14 +49,7 @@ export function TableHead({ className, ...props }) {
   )
 }
 
-export function TableCell({ className, ...props }) {
-  return (
-    <td
-      className={cn(
-        'px-4 py-2 align-middle [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]',
-        className
-      )}
-      {...props}
-    />
-  )
-}
+/**
+ * TableHead variant that toggles sort direction and exposes aria-sort.
+ * sortKey: the field name this header controls
+ * sortState: { key, dir: 'asc'|'desc' } | null — the table's c

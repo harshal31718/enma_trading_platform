@@ -1,5 +1,9 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import ErrorBoundary from '@/components/ErrorBoundary'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import api from '@/lib/axios'
 import { createChart, CandlestickSeries } from 'lightweight-charts'
 import useBinanceWS from '@/hooks/useBinanceWS'
 import {
@@ -23,6 +27,7 @@ import { SymbolProvider, useCurrentSymbol } from '@/context/SymbolContext'
 import SymbolSearchBar from '@/components/SymbolSearchBar'
 import { SYMBOL_LIMITS } from '@/utils/symbolLimits'
 import { useSymbols } from '@/hooks/useCandles'
+import { formatDateTime } from '@/utils/formatters'
 
 const BOTTOM_TABS = ['Positions', 'Open Orders', 'Order History', 'Trade History', 'Transaction History', 'Assets']
 
@@ -140,17 +145,12 @@ const TIMEFRAMES = [
   { label: '1d', interval: '1d' },
 ]
 
-const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:5000'
-
 function fetchKlines(symbol, timeframe, series, chart, signal) {
-  return fetch(
-    `${API_BASE}/api/v1/trade/klines?symbol=${symbol}&interval=${timeframe}&limit=500`,
-    { signal, credentials: 'include' }
-  )
-    .then((r) => r.json())
+  return api
+    .get('/api/v1/trade/klines', { params: { symbol, interval: timeframe, limit: 500 }, signal })
     .then((res) => {
-      if (!res.success) throw new Error(res.error?.message || 'Failed to load candles')
-      const raw = res.data
+      if (!res.data.success) throw new Error(res.data.error?.message || 'Failed to load candles')
+      const raw = res.data.data
       if (!Array.isArray(raw)) return
       const data = raw.map((k) => ({
         time: Math.floor(k[0] / 1000),
@@ -351,8 +351,8 @@ function OrderBook() {
       </div>
 
       <div className="flex justify-between px-2 py-1 shrink-0">
-        <span className="text-[10px] text-slate-500">Price (USDT)</span>
-        <span className="text-[10px] text-slate-500">Size (BTC)</span>
+        <span className="text-[10px] text-slate-400">Price (USDT)</span>
+        <span className="text-[10px] text-slate-400">Size (BTC)</span>
       </div>
 
       {/* Asks reversed — lowest ask closest to spread */}
@@ -400,7 +400,9 @@ function RecentTrades() {
         id: data.a,
         price: parseFloat(data.p),
         qty: parseFloat(data.q),
-        time: new Date(data.T).toLocaleTimeString('en-US', { hour12: false }),
+        // Recent-trades blotter needs a compact HH:MM:SS — always UTC (see "Time (UTC)" header) to
+        // match the rest of the page's timestamp convention (client/CLAUDE.md: dates/times default UTC).
+        time: new Date(data.T).toLocaleTimeString('en-US', { hour12: false, timeZone: 'UTC' }),
         isBuyerMaker: data.m,
       }
       const next = [entry, ...prev]
@@ -417,9 +419,9 @@ function RecentTrades() {
         <span className="text-xs font-semibold text-gray-200">Trades</span>
       </div>
       <div className="flex justify-between px-2 py-1 shrink-0">
-        <span className="text-[10px] text-slate-500">Price (USDT)</span>
-        <span className="text-[10px] text-slate-500">Amount (BTC)</span>
-        <span className="text-[10px] text-slate-500">Time</span>
+        <span className="text-[10px] text-slate-400">Price (USDT)</span>
+        <span className="text-[10px] text-slate-400">Amount (BTC)</span>
+        <span className="text-[10px] text-slate-400">Time (UTC)</span>
       </div>
       <div className="flex-1 overflow-hidden min-h-0">
         {trades.length === 0 ? (
@@ -438,7 +440,7 @@ function RecentTrades() {
                 {t.price.toFixed(1)}
               </span>
               <span className="text-gray-400 tabular-nums">{t.qty.toFixed(3)}</span>
-              <span className="text-slate-500 tabular-nums">{t.time}</span>
+              <span className="text-slate-400 tabular-nums">{t.time}</span>
             </div>
           ))
         )}
@@ -464,7 +466,7 @@ function SkeletonRow({ cols }) {
 function EmptyRow({ message }) {
   return (
     <tr>
-      <td colSpan={99} className="py-8 text-center text-slate-500 text-xs">
+      <td colSpan={99} className="py-8 text-center text-slate-400 text-xs">
         {message}
       </td>
     </tr>
@@ -540,29 +542,24 @@ function TpSlModal({ position, onClose }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
-      <div
-        className="bg-title-bg border border-slate-700/50 rounded-xl w-80 flex flex-col shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700/50">
-          <span className="text-sm font-semibold text-gray-100">Take Profit / Stop Loss</span>
-          <button onClick={onClose} className="text-slate-400 hover:text-gray-300 transition-colors text-base leading-none">✕</button>
-        </div>
+    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
+      <DialogContent className="w-80 p-0 gap-0">
+        <DialogHeader className="flex flex-row items-center justify-between px-4 py-3 border-b border-slate-700/50 space-y-0">
+          <DialogTitle className="text-sm font-semibold text-gray-100">Take Profit / Stop Loss</DialogTitle>
+        </DialogHeader>
 
         {/* Direction indicator (read-only, matches position) */}
         <div className="flex mx-4 mt-3 rounded-lg overflow-hidden text-xs font-semibold">
-          <div className={`flex-1 py-2 text-center rounded-l-lg ${isLong ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-500'}`}>
+          <div className={`flex-1 py-2 text-center rounded-l-lg ${isLong ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400'}`}>
             Buy / Long
           </div>
-          <div className={`flex-1 py-2 text-center rounded-r-lg ${!isLong ? 'bg-red-600 text-white' : 'bg-slate-800 text-slate-500'}`}>
+          <div className={`flex-1 py-2 text-center rounded-r-lg ${!isLong ? 'bg-red-600 text-white' : 'bg-slate-800 text-slate-400'}`}>
             Sell / Short
           </div>
         </div>
 
         <div className="flex flex-col px-4 pt-3 pb-1">
-          <div className="text-[10px] text-slate-500 mb-2 tabular-nums">
+          <div className="text-[10px] text-slate-400 mb-2 tabular-nums">
             Mark: {fmtPriceForSymbol(markPrice, position.symbol)} · Entry: {fmtPriceForSymbol(entryPrice, position.symbol)} · Qty: {fmtQtyForSymbol(quantity, position.symbol)} {position.symbol.replace('USDT', '')}
           </div>
 
@@ -667,8 +664,8 @@ function TpSlModal({ position, onClose }) {
             {isPending ? 'Confirming…' : 'Confirm'}
           </button>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -678,6 +675,7 @@ function PositionsTable({ data, isLoading, account }) {
   const cols = ['Symbol', 'Size', 'Entry Price', 'Mark Price', 'Liq Price', 'Margin Ratio', 'Unrealized PnL', '']
   const [closeError, setCloseError] = useState(null)
   const [tpslPosition, setTpslPosition] = useState(null) // position object for modal
+  const [confirmCloseSymbol, setConfirmCloseSymbol] = useState(null)
 
   const navigate = useNavigate()
   const { symbol: activeSymbol } = useCurrentSymbol()
@@ -719,6 +717,14 @@ function PositionsTable({ data, isLoading, account }) {
       {tpslPosition && (
         <TpSlModal position={tpslPosition} onClose={() => setTpslPosition(null)} />
       )}
+      <ConfirmDialog
+        open={!!confirmCloseSymbol}
+        onOpenChange={(v) => { if (!v) setConfirmCloseSymbol(null) }}
+        title={`Close ${confirmCloseSymbol} position?`}
+        description="This will send a market close order. This cannot be undone."
+        confirmLabel="Close Position"
+        onConfirm={() => { const s = confirmCloseSymbol; setConfirmCloseSymbol(null); handleClose(s) }}
+      />
 
       <table className="w-full text-xs">
         <thead>
@@ -786,11 +792,11 @@ function PositionsTable({ data, isLoading, account }) {
                       <div className="flex items-center gap-1.5">
                         <button
                           disabled={isClosing}
-                          onClick={(e) => { e.stopPropagation(); handleClose(p.symbol) }}
+                          onClick={(e) => { e.stopPropagation(); setConfirmCloseSymbol(p.symbol) }}
                           className={[
                             'px-3 py-1 text-[10px] rounded border transition-colors whitespace-nowrap',
                             isClosing
-                              ? 'border-slate-700/50 text-slate-500 cursor-not-allowed'
+                              ? 'border-slate-700/50 text-slate-400 cursor-not-allowed'
                               : 'border-slate-600 text-gray-300 hover:bg-slate-700/50 cursor-pointer',
                           ].join(' ')}
                         >
@@ -826,6 +832,7 @@ function OpenOrdersTable({ data, isLoading, onOcoBannerEvent }) {
   const cols = ['Symbol', 'Type', 'Side', 'Price', 'Amount', 'Filled', 'Status', 'OCO Group', '']
   const { mutate: execCancel, isPending: cancelPending, variables: cancelVars } = useCancelOrder()
   const { mutate: execCancelAll, isPending: cancelAllPending } = useCancelAllOrders()
+  const [confirmCancelAllOpen, setConfirmCancelAllOpen] = useState(false)
 
   function handleCancelOco(ocoId) {
     // Cancel both legs by cancelling all orders for the symbol — the cleanest
@@ -841,6 +848,14 @@ function OpenOrdersTable({ data, isLoading, onOcoBannerEvent }) {
 
   return (
     <div className="w-full">
+      <ConfirmDialog
+        open={confirmCancelAllOpen}
+        onOpenChange={setConfirmCancelAllOpen}
+        title="Cancel all open orders?"
+        description={`This will cancel all open orders for ${symbol}. This cannot be undone.`}
+        confirmLabel="Cancel All"
+        onConfirm={() => { setConfirmCancelAllOpen(false); execCancelAll({ symbol }, { onSuccess: () => onOcoBannerEvent?.('All orders cancelled.') }) }}
+      />
       <table className="w-full text-xs">
         <thead>
           <tr className="text-gray-400 border-b border-slate-700/50 bg-title-bg title-fade">
@@ -850,7 +865,7 @@ function OpenOrdersTable({ data, isLoading, onOcoBannerEvent }) {
                   <th key="cancel-all" className="pr-2 text-right align-middle">
                     <button
                       disabled={cancelAllPending || !data?.length}
-                      onClick={() => execCancelAll({ symbol }, { onSuccess: () => onOcoBannerEvent?.('All orders cancelled.') })}
+                      onClick={() => setConfirmCancelAllOpen(true)}
                       className="px-3 py-1 text-[10px] rounded border border-slate-600 text-gray-400 hover:bg-slate-700/50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors font-medium"
                     >
                       {cancelAllPending ? 'Cancelling…' : 'Cancel All'}
@@ -902,7 +917,7 @@ function OpenOrdersTable({ data, isLoading, onOcoBannerEvent }) {
                         className={[
                           'px-3 py-1 text-[10px] rounded border transition-colors',
                           isCancelling
-                            ? 'border-slate-700/50 text-slate-500 cursor-not-allowed'
+                            ? 'border-slate-700/50 text-slate-400 cursor-not-allowed'
                             : 'border-slate-600 text-gray-400 hover:bg-slate-700/50 cursor-pointer',
                         ].join(' ')}
                       >
@@ -1004,7 +1019,7 @@ function OrderHistoryTable({ data, isLoading, synced = true }) {
               const isNew = o.status === 'NEW'
               return (
                 <tr key={o.orderId} className="border-b border-slate-700/30 hover:bg-slate-800/20">
-                  <td className="py-2 pr-6 whitespace-nowrap text-slate-400 pl-2">{new Date(o.time).toLocaleString()}</td>
+                  <td className="py-2 pr-6 whitespace-nowrap text-slate-400 pl-2">{formatDateTime(o.time)}</td>
                   <td className="py-2 pr-6 whitespace-nowrap text-gray-100">{o.symbol.replace('USDT', '-USDT')}</td>
                   <td className="py-2 pr-6 whitespace-nowrap">{o.type}</td>
                   <td className={`py-2 pr-6 whitespace-nowrap font-medium ${side === 'BUY' ? 'text-emerald-400' : 'text-red-400'}`}>{side}</td>
@@ -1054,7 +1069,7 @@ function TradeHistoryTable({ data, isLoading, synced = true }) {
               return (
                 <tr key={t.id} className="border-b border-slate-700/30 hover:bg-slate-800/20">
                   <td className="py-2 pr-6 whitespace-nowrap text-slate-400 tabular-nums pl-2">{t.orderId}</td>
-                  <td className="py-2 pr-6 whitespace-nowrap text-slate-400">{new Date(t.time).toLocaleString()}</td>
+                  <td className="py-2 pr-6 whitespace-nowrap text-slate-400">{formatDateTime(t.time)}</td>
                   <td className="py-2 pr-6 whitespace-nowrap text-gray-100">{t.symbol.replace('USDT', '-USDT')}</td>
                   <td className={`py-2 pr-6 whitespace-nowrap font-medium ${side === 'BUY' ? 'text-emerald-400' : 'text-red-400'}`}>{side}</td>
                   <td className="py-2 pr-6 whitespace-nowrap tabular-nums">{fmtPrice(t.price)}</td>
@@ -1100,7 +1115,7 @@ function TransactionHistoryTable({ data, isLoading, synced = true }) {
               const income = parseFloat(tx.income || '0')
               return (
                 <tr key={tx.tranId} className="border-b border-slate-700/30 hover:bg-slate-800/20">
-                  <td className="py-2 pr-6 whitespace-nowrap text-slate-400 pl-2">{new Date(tx.time).toLocaleString()}</td>
+                  <td className="py-2 pr-6 whitespace-nowrap text-slate-400 pl-2">{formatDateTime(tx.time)}</td>
                   <td className="py-2 pr-6 whitespace-nowrap">{tx.incomeType}</td>
                   <td className={`py-2 pr-6 whitespace-nowrap font-medium tabular-nums ${income >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                     {income >= 0 ? '+' : ''}{parseFloat(tx.income).toFixed(4)}
@@ -1235,12 +1250,11 @@ function LeverageModal({ current, onConfirm, onClose, isLoading }) {
   const [draft, setDraft] = useState(current ?? 20)
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="bg-title-bg border border-slate-700/50 rounded-xl p-5 w-72 flex flex-col gap-4">
-        <div className="flex items-center justify-between">
-          <span className="text-sm font-semibold text-gray-100">Adjust Leverage</span>
-          <button onClick={onClose} className="text-slate-400 hover:text-gray-300 text-sm leading-none">✕</button>
-        </div>
+    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
+      <DialogContent className="w-72 p-5 flex flex-col gap-4">
+        <DialogHeader>
+          <DialogTitle className="text-sm font-semibold text-gray-100">Adjust Leverage</DialogTitle>
+        </DialogHeader>
 
         <div className="flex items-center justify-center">
           <span className="text-4xl font-bold text-yellow-400">{draft}x</span>
@@ -1256,7 +1270,7 @@ function LeverageModal({ current, onConfirm, onClose, isLoading }) {
           className="w-full accent-yellow-400"
         />
 
-        <div className="flex justify-between text-[10px] text-slate-500">
+        <div className="flex justify-between text-[10px] text-slate-400">
           <span>1x</span>
           <span>25x</span>
           <span>50x</span>
@@ -1271,8 +1285,8 @@ function LeverageModal({ current, onConfirm, onClose, isLoading }) {
         >
           {isLoading ? 'Updating…' : 'Confirm'}
         </button>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -1548,7 +1562,7 @@ function OrderForm() {
                       'px-2.5 text-xs transition-colors font-medium',
                       qtyUnit === unit
                         ? 'bg-slate-700 text-gray-100'
-                        : 'bg-slate-800 text-slate-500 hover:text-gray-300',
+                        : 'bg-slate-800 text-slate-400 hover:text-gray-300',
                     ].join(' ')}
                   >
                     {unit}
@@ -1582,24 +1596,28 @@ function OrderForm() {
             <button
               onClick={() => handleSubmit('BUY')}
               disabled={orderPending}
-              className="flex-1 py-3 rounded text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center"
+              aria-busy={orderPending}
+              aria-label={orderPending ? 'Placing buy order…' : 'Buy / Long'}
+              className="flex-1 py-3 rounded text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
             >
               {orderPending
-                ? <span className="inline-block w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                ? <><span className="inline-block w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" /><span>Placing…</span></>
                 : 'Buy/Long'}
             </button>
             <button
               onClick={() => handleSubmit('SELL')}
               disabled={orderPending}
-              className="flex-1 py-3 rounded text-xs font-semibold bg-red-600 hover:bg-red-700 text-white transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center"
+              aria-busy={orderPending}
+              aria-label={orderPending ? 'Placing sell order…' : 'Sell / Short'}
+              className="flex-1 py-3 rounded text-xs font-semibold bg-red-600 hover:bg-red-700 text-white transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
             >
               {orderPending
-                ? <span className="inline-block w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                ? <><span className="inline-block w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" /><span>Placing…</span></>
                 : 'Sell/Short'}
             </button>
           </div>
 
-          <p className="text-[10px] text-slate-500 text-center mt-1">
+          <p className="text-[10px] text-slate-400 text-center mt-1">
             Set TP/SL on open positions in the Positions tab below
           </p>
         </div>
@@ -1641,43 +1659,4 @@ function TradeInner() {
 
       {/* Short-lived toast notification */}
       {ocoToast && (
-        <div className="absolute top-20 right-4 z-50 bg-title-bg border border-slate-700/50 rounded-lg px-4 py-2.5 text-xs text-gray-100 shadow-2xl max-w-xs animate-fade-in">
-          {ocoToast}
-        </div>
-      )}
-
-      {/* Main content — fills remaining height */}
-      <div className="flex flex-1 min-h-0">
-
-        {/* Left col — chart + bottom panel (fills remaining width) */}
-        <div className="flex flex-col flex-1 min-w-0 min-h-0 border-r border-slate-700/50">
-          <ChartContainer timeframe={timeframe} setTimeframe={setTimeframe} />
-          <BottomPanel
-            ocoBanner={ocoBanner}
-            onDismissBanner={() => setOcoBanner(null)}
-          />
-        </div>
-
-        {/* Middle col — order book + recent trades, fixed width */}
-        <div className="flex flex-col min-h-0 shrink-0 w-[200px]">
-          <OrderBook />
-          <RecentTrades />
-        </div>
-
-        {/* Right col — order form, fixed width */}
-        <div className="flex flex-col min-h-0 shrink-0 w-[260px]">
-          <OrderForm />
-        </div>
-
-      </div>
-    </div>
-  )
-}
-
-export default function Trade() {
-  return (
-    <SymbolProvider>
-      <TradeInner />
-    </SymbolProvider>
-  )
-}
+        <div className="absolute top-20 r

@@ -7,8 +7,6 @@ import {
   DollarSign,
   Activity,
   Loader2,
-  ChevronRight,
-  ChevronLeft,
   Download,
   Plus,
   Square,
@@ -16,11 +14,13 @@ import {
 
 import PageWrapper from '../components/layout/PageWrapper'
 import PageHeader from '../components/ui/PageHeader'
+import ErrorBoundary from '../components/ErrorBoundary'
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../components/ui/table'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Dialog, DialogContent } from '../components/ui/dialog'
+import { Pagination } from '../components/ui/pagination'
 const EquityCurve = lazy(() => import('../components/charts/EquityCurve'))
 import NewBacktestWizard from '../features/backtest/NewBacktestWizard'
 import BacktestHistory from '../features/backtest/BacktestHistory'
@@ -74,14 +74,14 @@ function PerformanceTable({ bySide }) {
   const getPnlClass = (val) => {
     const n = parseFloat(val)
     if (n > 0) return 'text-emerald-400 font-semibold'
-    if (n < 0) return 'text-red-500 font-semibold'
+    if (n < 0) return 'text-red-400 font-semibold'
     return 'text-gray-300'
   }
 
   const getPFClass = (val) => {
     const n = parseFloat(val)
     if (n >= 1) return 'text-emerald-400 font-semibold'
-    if (n > 0) return 'text-red-500 font-semibold'
+    if (n > 0) return 'text-red-400 font-semibold'
     return 'text-gray-300'
   }
 
@@ -184,22 +184,39 @@ function ComparisonTable({ results }) {
   )
 }
 
+const HISTORY_FILTER_KEYS = ['strategyName', 'symbol', 'timeframe', 'status', 'createdAfter', 'createdBefore']
+
 export default function Backtest() {
   const queryClient = useQueryClient()
-  const [historyFilters, setHistoryFilters] = useState({
-    strategyName: '',
-    symbol: '',
-    timeframe: '',
-    status: '',
-    createdAfter: '',
-    createdBefore: '',
-  })
+  const [searchParams, setSearchParams] = useSearchParams()
+  const jobIdParam = searchParams.get('jobId')
+
+  // History filters live in the URL (?strategyName=&symbol=&...) per §3.4 — shareable,
+  // survives refresh, back-button-able. jobId is a separate, pre-existing deep-link param.
+  const historyFilters = {
+    strategyName: searchParams.get('strategyName') || '',
+    symbol: searchParams.get('symbol') || '',
+    timeframe: searchParams.get('timeframe') || '',
+    status: searchParams.get('status') || '',
+    createdAfter: searchParams.get('createdAfter') || '',
+    createdBefore: searchParams.get('createdBefore') || '',
+  }
+
+  function setHistoryFilters(nextFilters) {
+    const next = new URLSearchParams(searchParams)
+    HISTORY_FILTER_KEYS.forEach((key) => {
+      const value = nextFilters[key]
+      if (value === undefined || value === null || value === '') next.delete(key)
+      else next.set(key, value)
+    })
+    setSearchParams(next)
+  }
 
   const [comparisonIds, setComparisonIds] = useState([])
   const [compareError, setCompareError] = useState('')
   const [showWizard, setShowWizard] = useState(false)
 
-  const { data: listData, isLoading: loadingHistory, refetch: refetchHistory } = useBacktestsList(1, 20, historyFilters)
+  const { data: listData, isLoading: loadingHistory, isError: historyError, refetch: refetchHistory } = useBacktestsList(1, 20, historyFilters)
 
   const [activeJobId, setActiveJobId] = useState(null)
   const [progressPct, setProgressPct] = useState(0)
@@ -209,13 +226,10 @@ export default function Backtest() {
   const [tradePage, setTradePage] = useState(1)
   const TRADES_PER_PAGE = 20
 
-  const [searchParams] = useSearchParams()
-  const jobIdParam = searchParams.get('jobId')
-
   const runMutation = useRunBacktest()
   const cancelMutation = useCancelBacktest()
 
-  const { data: activeResult, isLoading: loadingResult } = useBacktestResult(
+  const { data: activeResult, isLoading: loadingResult, isError: resultError } = useBacktestResult(
     selectedResultId || null
   )
 
@@ -401,6 +415,7 @@ export default function Backtest() {
             onSelect={(id) => { setSelectedResultId(id); setTradePage(1) }}
             onRefresh={refetchHistory}
             isLoading={loadingHistory}
+            isError={historyError}
             filters={historyFilters}
             onApplyFilters={(nextFilters) => setHistoryFilters(nextFilters)}
             onClearFilters={(nextFilters) => setHistoryFilters(nextFilters)}
@@ -453,6 +468,30 @@ export default function Backtest() {
                 <span className="text-gray-400 text-sm">Fetching backtest details...</span>
               </div>
             </Card>
+          ) : resultError ? (
+            <Card className="h-full flex justify-center items-center py-32">
+              <div className="flex flex-col items-center gap-4 text-center">
+                <AlertTriangle className="size-8 text-red-400" />
+                <div>
+                  <p className="text-sm font-medium text-slate-200">
+                    {jobIdParam ? 'Result not found' : 'Failed to load result'}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    {jobIdParam
+                      ? 'The backtest result linked in the URL could not be found.'
+                      : 'Something went wrong loading the result.'}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => refetchHistory()}
+                    className="px-3 py-1.5 text-xs border border-slate-700 rounded-lg text-slate-300 hover:bg-slate-800 transition-colors"
+                  >
+                    Browse all runs
+                  </button>
+                </div>
+              </div>
+            </Card>
           ) : activeResult ? (
             <Tabs defaultValue="overview" className="w-full h-full flex flex-col">
               {/* ── Tabs header bar — matches BacktestHistory header height ── */}
@@ -481,34 +520,43 @@ export default function Backtest() {
 
               {/* ── Scrollable content area ── */}
               <div className="flex-1 overflow-hidden flex flex-col relative">
-                {activeResult.status === 'failed' && (
-                  <div className="bg-red-950/20 border border-red-800/40 rounded-lg p-4 m-4 flex items-center gap-3 text-red-400 text-sm shrink-0">
-                    <AlertTriangle className="size-5 shrink-0" />
-                    <div>
-                      <span className="font-semibold">Execution Failed:</span>{' '}
-                      {activeResult.error || 'Unknown error occurred.'}
+                {activeResult.status === 'failed' ? (
+                  <div className="flex flex-col items-center justify-center gap-4 p-8 text-center">
+                    <div className="bg-red-950/20 border border-red-800/40 rounded-lg p-5 flex items-start gap-3 text-red-400 text-sm max-w-md w-full">
+                      <AlertTriangle className="size-5 shrink-0 mt-0.5" />
+                      <div className="text-left">
+                        <p className="font-semibold mb-1">Backtest failed</p>
+                        <p className="text-red-300/80 text-xs">{activeResult.error || 'Unknown error occurred.'}</p>
+                      </div>
                     </div>
+                    <button
+                      onClick={() => setShowWizard(true)}
+                      className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm rounded-lg transition-colors"
+                    >
+                      <Plus size={14} />
+                      Run Again
+                    </button>
                   </div>
-                )}
+                ) : null}
 
-                <TabsContent value="overview" className="h-full w-full m-0 outline-none data-[state=active]:block overflow-y-auto">
+                <TabsContent value="overview" className={`h-full w-full m-0 outline-none overflow-y-auto ${activeResult.status === 'failed' ? 'hidden' : 'data-[state=active]:block'}`}>
                   {activeResult.metrics && (() => {
                     const m = activeResult.metrics
                     const metrics = [
                       { label: 'Net Profit', value: formatPrice(m.netProfit), cls: getPnlClass(m.netProfit) },
                       { label: 'Net P&L %', value: formatSignedPct(m.netProfitPct), cls: getPnlClass(m.netProfit) },
-                      { label: 'Max Drawdown', value: `${formatPct(m.maxDrawdown)} / ${formatPct((activeResult.riskParams?.max_session_dd ?? 0.20) * 100)}`, cls: 'text-red-500' },
+                      { label: 'Max Drawdown', value: `${formatPct(m.maxDrawdown)} / ${formatPct((activeResult.riskParams?.max_session_dd ?? 0.20) * 100)}`, cls: 'text-red-400' },
                       { label: 'Win Rate', value: formatPct(parseFloat(m.winRate) * 100), cls: 'text-gray-100' },
                       { label: 'Total Trades', value: m.totalTrades ?? '-', cls: 'text-gray-100' },
-                      { label: 'Profit Factor', value: m.profitFactor ? parseFloat(m.profitFactor).toFixed(2) : '-', cls: m.profitFactor && parseFloat(m.profitFactor) >= 1 ? 'text-emerald-400' : 'text-red-500' },
+                      { label: 'Profit Factor', value: m.profitFactor ? parseFloat(m.profitFactor).toFixed(2) : '-', cls: m.profitFactor && parseFloat(m.profitFactor) >= 1 ? 'text-emerald-400' : 'text-red-400' },
                       { label: 'Sharpe', value: parseFloat(m.sharpeRatio || 0).toFixed(2), cls: 'text-gray-100' },
                       { label: 'Sortino', value: parseFloat(m.sortinoRatio || 0).toFixed(2), cls: 'text-gray-100' },
                       { label: 'Calmar', value: parseFloat(m.calmarRatio || 0).toFixed(2), cls: 'text-gray-100' },
                       { label: 'Expectancy', value: m.expectancy ? formatPnl(m.expectancy).value : '-', cls: m.expectancy ? getPnlClass(m.expectancy) : 'text-gray-300' },
                       { label: 'Leverage', value: `${activeResult.leverage}x`, cls: 'text-gray-100' },
                       { label: 'Fee Rate', value: `${((activeResult.feeRate || 0) * 100).toFixed(2)}%`, cls: 'text-gray-100' },
-                      { label: 'Total Fees', value: m.totalFees ? formatPrice(m.totalFees) : '-', cls: 'text-red-500' },
-                      { label: 'Liquidations', value: m.liquidations ?? 0, cls: (m.liquidations ?? 0) > 0 ? 'text-red-500' : 'text-gray-100' },
+                      { label: 'Total Fees', value: m.totalFees ? formatPrice(m.totalFees) : '-', cls: 'text-red-400' },
+                      { label: 'Liquidations', value: m.liquidations ?? 0, cls: (m.liquidations ?? 0) > 0 ? 'text-red-400' : 'text-gray-100' },
                     ]
                     return (
                       <div className="grid grid-cols-7 border-b border-slate-700/50 divide-x divide-y divide-slate-700/50">
@@ -528,14 +576,16 @@ export default function Backtest() {
                       <span className="text-sm font-semibold text-gray-100">Performance Charts</span>
                     </div>
                     <div className="p-4">
-                      <Suspense fallback={<div className="h-48 flex items-center justify-center"><Loader2 className="size-6 animate-spin text-emerald-400" /></div>}>
-                        <EquityCurve
-                          data={activeResult.equityCurve}
-                          startingCapital={activeResult.capital}
-                          buyHoldReturnPct={activeResult.metrics?.buyHoldReturnPct || 0}
-                          benchmark={benchmarkData ?? null}
-                        />
-                      </Suspense>
+                      <ErrorBoundary label="Equity chart">
+                        <Suspense fallback={<div className="h-48 flex items-center justify-center"><Loader2 className="size-6 animate-spin text-emerald-400" /></div>}>
+                          <EquityCurve
+                            data={activeResult.equityCurve}
+                            startingCapital={activeResult.capital}
+                            buyHoldReturnPct={activeResult.metrics?.buyHoldReturnPct || 0}
+                            benchmark={benchmarkData ?? null}
+                          />
+                        </Suspense>
+                      </ErrorBoundary>
                     </div>
                   </div>
 
@@ -550,7 +600,7 @@ export default function Backtest() {
 
                 </TabsContent>
 
-                <TabsContent value="performance" className="h-full w-full m-0 outline-none data-[state=active]:flex flex-col overflow-hidden">
+                <TabsContent value="performance" className={`h-full w-full m-0 outline-none flex-col overflow-hidden ${activeResult.status === 'failed' ? 'hidden' : 'data-[state=active]:flex'}`}>
                   {activeResult.metrics?.bySide ? (
                     <PerformanceTable bySide={activeResult.metrics.bySide} />
                   ) : (
@@ -561,7 +611,7 @@ export default function Backtest() {
                     </div>
                   )}
                 </TabsContent>
-                <TabsContent value="trades" className="h-full w-full m-0 outline-none data-[state=active]:flex flex-col overflow-hidden">
+                <TabsContent value="trades" className={`h-full w-full m-0 outline-none flex-col overflow-hidden ${activeResult.status === 'failed' ? 'hidden' : 'data-[state=active]:flex'}`}>
                   <div className="bg-title-bg border border-slate-700/50 overflow-hidden flex-1 flex flex-col">
                     {tradesData?.trades && tradesData.trades.length > 0 ? (() => {
                       const totalTrades = tradesData.pagination.total
@@ -603,10 +653,11 @@ export default function Backtest() {
                                     <TableCell className="font-mono text-xs">{formatQty(tr.qty)}</TableCell>
                                     <TableCell className="font-mono text-xs">{formatPrice(tr.entryPrice)}</TableCell>
                                     <TableCell className="font-mono text-xs">{formatPrice(tr.exitPrice)}</TableCell>
-                                    <TableCell className="text-slate-500 text-xs font-mono tabular-nums">
+                                    <TableCell className="text-slate-400 text-xs font-mono tabular-nums">
                                       {new Date(tr.entryAt).toLocaleDateString('en-US', {
                                         month: 'short', day: 'numeric',
                                         hour: '2-digit', minute: '2-digit',
+                                        timeZone: 'UTC',
                                       })}
                                     </TableCell>
                                     <TableCell className="font-mono text-xs text-emerald-400">
@@ -637,25 +688,7 @@ export default function Backtest() {
                               <span className="text-[10px] text-gray-500 font-mono">
                                 {(tradePage - 1) * TRADES_PER_PAGE + 1}–{Math.min(tradePage * TRADES_PER_PAGE, totalTrades)} of {totalTrades}
                               </span>
-                              <div className="flex items-center gap-1">
-                                <button
-                                  onClick={() => setTradePage((p) => Math.max(1, p - 1))}
-                                  disabled={tradePage === 1}
-                                  className="p-1 rounded text-gray-500 hover:text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                                >
-                                  <ChevronLeft className="size-3.5" />
-                                </button>
-                                <span className="text-[10px] text-gray-500 font-mono min-w-[32px] text-center">
-                                  {tradePage}/{totalPages}
-                                </span>
-                                <button
-                                  onClick={() => setTradePage((p) => Math.min(totalPages, p + 1))}
-                                  disabled={tradePage >= totalPages}
-                                  className="p-1 rounded text-gray-500 hover:text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                                >
-                                  <ChevronRight className="size-3.5" />
-                                </button>
-                              </div>
+                              <Pagination page={tradePage} totalPages={totalPages} onPageChange={setTradePage} />
                             </div>
                           )}
                         </>
@@ -668,7 +701,7 @@ export default function Backtest() {
                   </div>
                 </TabsContent>
 
-                <TabsContent value="comparison" className="h-full w-full m-0 outline-none data-[state=active]:flex flex-col overflow-hidden">
+                <TabsContent value="comparison" className={`h-full w-full m-0 outline-none flex-col overflow-hidden ${activeResult.status === 'failed' ? 'hidden' : 'data-[state=active]:flex'}`}>
                   {compareError && (
                     <div className="shrink-0 mb-3 flex items-center gap-2 px-3 py-2 rounded-md bg-amber-500/10 border border-amber-500/25 text-amber-400 text-xs">
                       <AlertTriangle className="size-3.5 shrink-0" />
@@ -690,47 +723,7 @@ export default function Backtest() {
                       </CardContent>
                     </Card>
                   ) : comparisonLoading ? (
-                    <Card className="flex justify-center items-center py-24">
-                      <div className="flex flex-col items-center gap-3">
-                        <Loader2 className="size-8 animate-spin text-emerald-400" />
-                        <span className="text-gray-400 text-sm">Loading comparison data…</span>
-                      </div>
+                    <Card className="h-full flex justify-center items-center py-32">
+                      <Loader2 className="size-8 animate-spin text-emerald-400" />
                     </Card>
-                  ) : comparisonResults.length >= 2 ? (
-                    <ComparisonTable results={comparisonResults} />
-                  ) : (
-                    <Card>
-                      <CardContent className="py-10 text-center text-gray-500 text-sm">
-                        Could not load data for the selected runs.
-                      </CardContent>
-                    </Card>
-                  )}
-                </TabsContent>
-              </div>
-            </Tabs>
-          ) : (
-            <Card className="h-full flex flex-col justify-center items-center py-20 px-6 text-center">
-              <Activity className="size-10 text-gray-700 mb-3" />
-              <h3 className="text-gray-300 font-semibold mb-1">No Simulation Results Loaded</h3>
-              <p className="text-gray-500 text-sm max-w-sm">
-                Select a previous run from History on the left, or configure and launch a new backtest simulation.
-              </p>
-            </Card>
-          )}
-        </div>
-      </div>
-
-      <Dialog open={showWizard} onOpenChange={(open) => { if (!open) setShowWizard(false) }}>
-        <DialogContent className="w-[920px] max-w-[95vw] max-h-[88vh] flex flex-col overflow-hidden gap-0 p-0 bg-title-bg">
-          <NewBacktestWizard
-            onCancel={() => setShowWizard(false)}
-            onRun={(config) => {
-              setShowWizard(false)
-              handleRun(config)
-            }}
-          />
-        </DialogContent>
-      </Dialog>
-    </PageWrapper>
-  )
-}
+       

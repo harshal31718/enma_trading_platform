@@ -71,7 +71,8 @@ export default function NewBacktestWizard({ onCancel, onRun }) {
     }
   }, [exchangeSettings])
 
-  const symbolList = exchange === 'Binance Futures' ? (symbolData?.futures || []) : (symbolData?.spot || [])
+  // Engine only supports USD-M Futures — always use the futures symbol list
+  const symbolList = symbolData?.futures || []
 
   // Default the symbol to the first available whenever the list/exchange changes
   // and the current pick is no longer valid.
@@ -263,8 +264,8 @@ export default function NewBacktestWizard({ onCancel, onRun }) {
             <div>
               <label className="block text-sm text-gray-300 mb-1">Exchange</label>
               <select value={exchange} onChange={(e) => setExchange(e.target.value)} className={inputCls}>
-                <option value="Binance Futures">Binance Futures</option>
-                <option value="Binance Spot">Binance Spot</option>
+                <option value="Binance Futures">Binance Futures (USD-M)</option>
+                <option value="Binance Spot" disabled className="text-slate-400">Binance Spot (coming soon)</option>
               </select>
             </div>
             <div>
@@ -437,10 +438,4 @@ export default function NewBacktestWizard({ onCancel, onRun }) {
         {error && (
           <div className="flex items-start gap-2 bg-red-950/20 border border-red-800/40 rounded-lg p-3 text-sm text-red-400">
             <AlertTriangle size={16} className="mt-0.5 shrink-0" />
-            <span>{error}</span>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
+            <span>{err

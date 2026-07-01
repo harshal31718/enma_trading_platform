@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react'
+import { AlertTriangle, X } from 'lucide-react'
+import { ConfirmDialog } from '../components/ui/confirm-dialog'
 import PageWrapper from '@/components/layout/PageWrapper'
 import PageHeader from '@/components/ui/PageHeader'
 import {
@@ -12,10 +14,30 @@ import AggregateMarginGauge from '../components/risk/AggregateMarginGauge'
 import NetExposureBar from '../components/risk/NetExposureBar'
 import SimulationResults from '../components/risk/SimulationResults'
 
+function InlineError({ error, onClear }) {
+  if (!error) return null
+  return (
+    <div role="alert" className="flex items-start gap-2 rounded-lg border border-red-800/40 bg-red-950/20 px-3 py-2 text-sm text-red-400">
+      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+      <span className="flex-1">{error}</span>
+      <button onClick={onClear} aria-label="Dismiss error" className="shrink-0 hover:text-red-300">
+        <X className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  )
+}
+
+function useBannerError() {
+  const [error, setError] = useState(null)
+  const clearError = () => setError(null)
+  const banner = <InlineError error={error} onClear={clearError} />
+  return { error, setError, clearError, banner }
+}
+
 export default function RiskDashboard() {
   const { data: settings, isLoading: settingsLoading } = useRiskSettings()
   const updateSettingsMutation = useUpdateRiskSettings()
-  
+
   // Live polling metrics (automatically refetches every 10s)
   const { data: liveMetrics, isLoading: liveLoading } = useLiveRiskMetrics()
 
@@ -45,6 +67,15 @@ export default function RiskDashboard() {
 
   // Success Feedback Timers
   const [saveSuccess, setSaveSuccess] = useState(false)
+
+  // ── Per-section error banners ─────────────────────────────────────────────
+  const globalLimitsError = useBannerError()
+  const stratOverrideError = useBannerError()
+  const symOverrideError = useBannerError()
+
+  // ── Confirm dialogs for destructive actions ───────────────────────────────
+  const [confirmDeleteStrat, setConfirmDeleteStrat] = useState(null)
+  const [confirmDeleteSym, setConfirmDeleteSym] = useState(null)
 
   useEffect(() => {
     if (settings) {
@@ -76,7 +107,7 @@ export default function RiskDashboard() {
       setSaveSuccess(true)
       setTimeout(() => setSaveSuccess(false), 3000)
     } catch (err) {
-      alert(`Save failed: ${err.response?.data?.error?.message || err.message}`)
+      globalLimitsError.setError(`Save failed: ${err.response?.data?.error?.message || err.message}`)
     }
   }
 
@@ -111,7 +142,7 @@ export default function RiskDashboard() {
       setStratMinEdge('')
       setStratCustomAtr('')
     } catch (err) {
-      alert(`Add failed: ${err.response?.data?.error?.message || err.message}`)
+      stratOverrideError.setError(`Add failed: ${err.response?.data?.error?.message || err.message}`)
     }
   }
 
@@ -129,7 +160,7 @@ export default function RiskDashboard() {
     try {
       await updateSettingsMutation.mutateAsync(payload)
     } catch (err) {
-      alert(`Remove failed: ${err.response?.data?.error?.message || err.message}`)
+      stratOverrideError.setError(`Remove failed: ${err.response?.data?.error?.message || err.message}`)
     }
   }
 
@@ -158,7 +189,7 @@ export default function RiskDashboard() {
       setSymVolMult('')
       setSymMaxExposure('')
     } catch (err) {
-      alert(`Add failed: ${err.response?.data?.error?.message || err.message}`)
+      symOverrideError.setError(`Add failed: ${err.response?.data?.error?.message || err.message}`)
     }
   }
 
@@ -176,7 +207,7 @@ export default function RiskDashboard() {
     try {
       await updateSettingsMutation.mutateAsync(payload)
     } catch (err) {
-      alert(`Remove failed: ${err.response?.data?.error?.message || err.message}`)
+      symOverrideError.setError(`Remove failed: ${err.response?.data?.error?.message || err.message}`)
     }
   }
 
@@ -184,8 +215,25 @@ export default function RiskDashboard() {
     <PageWrapper>
       <PageHeader title="Risk Intelligence Dashboard" subtitle="Manage safety circuit breakers and trade risk profiles" />
 
+      <ConfirmDialog
+        open={!!confirmDeleteStrat}
+        onOpenChange={(v) => { if (!v) setConfirmDeleteStrat(null) }}
+        title={`Delete strategy override for ${confirmDeleteStrat}?`}
+        description="The custom risk rules for this strategy will be removed."
+        confirmLabel="Delete"
+        onConfirm={() => { const s = confirmDeleteStrat; setConfirmDeleteStrat(null); handleRemoveStrategyOverride(s) }}
+      />
+      <ConfirmDialog
+        open={!!confirmDeleteSym}
+        onOpenChange={(v) => { if (!v) setConfirmDeleteSym(null) }}
+        title={`Delete symbol override for ${confirmDeleteSym}?`}
+        description="The custom risk rules for this symbol will be removed."
+        confirmLabel="Delete"
+        onConfirm={() => { const s = confirmDeleteSym; setConfirmDeleteSym(null); handleRemoveSymbolOverride(s) }}
+      />
+
       {settingsLoading && (
-        <div className="text-center font-mono py-12 text-xs text-slate-500 italic">
+        <div className="text-center font-mono py-12 text-xs text-slate-400 italic">
           Loading risk configurations...
         </div>
       )}
@@ -208,15 +256,15 @@ export default function RiskDashboard() {
           {liveMetrics && (
             <div className="bg-[#0b0f19] border border-slate-800 p-4 grid grid-cols-1 md:grid-cols-3 gap-4 font-mono text-center">
               <div>
-                <span className="text-[9px] uppercase tracking-wider text-slate-500 block">Value-at-Risk (95% 1d)</span>
+                <span className="text-[9px] uppercase tracking-wider text-slate-400 block">Value-at-Risk (95% 1d)</span>
                 <span className="text-sm font-semibold text-red-400">${parseFloat(liveMetrics.valueAtRisk.var95_1d).toFixed(2)}</span>
               </div>
               <div>
-                <span className="text-[9px] uppercase tracking-wider text-slate-500 block">Value-at-Risk (99% 1d)</span>
+                <span className="text-[9px] uppercase tracking-wider text-slate-400 block">Value-at-Risk (99% 1d)</span>
                 <span className="text-sm font-semibold text-red-400">${parseFloat(liveMetrics.valueAtRisk.var99_1d).toFixed(2)}</span>
               </div>
               <div>
-                <span className="text-[9px] uppercase tracking-wider text-slate-500 block">Conditional VaR (95% 1d)</span>
+                <span className="text-[9px] uppercase tracking-wider text-slate-400 block">Conditional VaR (95% 1d)</span>
                 <span className="text-sm font-semibold text-red-400">${parseFloat(liveMetrics.valueAtRisk.cvar95_1d).toFixed(2)}</span>
               </div>
             </div>
@@ -231,7 +279,7 @@ export default function RiskDashboard() {
                 <h3 className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider mb-2">
                   Global Hard Limits
                 </h3>
-                <p className="text-xs text-slate-500 mb-4">Hard constraints acting as platform circuit breakers</p>
+                <p className="text-xs text-slate-400 mb-4">Hard constraints acting as platform circuit breakers</p>
 
                 <div className="flex flex-col gap-4 font-mono text-xs">
                   <div>
@@ -299,6 +347,7 @@ export default function RiskDashboard() {
                   ✓ Settings saved successfully.
                 </div>
               )}
+              {globalLimitsError.banner}
             </div>
 
             {/* Strategy Overrides Editor */}
@@ -307,7 +356,7 @@ export default function RiskDashboard() {
                 <h3 className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider mb-2">
                   Strategy Overrides
                 </h3>
-                <p className="text-xs text-slate-500 mb-4">Set overrides specifically matching strategy classes</p>
+                <p className="text-xs text-slate-400 mb-4">Set overrides specifically matching strategy classes</p>
 
                 {/* Overrides Table */}
                 <div className="border border-slate-850 max-h-40 overflow-y-auto mb-4 font-mono text-xs">
@@ -316,7 +365,7 @@ export default function RiskDashboard() {
                   ) : (
                     <table className="w-full text-left">
                       <thead>
-                        <tr className="border-b border-slate-800 bg-slate-900/40 text-[9px] uppercase text-slate-500 tracking-wider">
+                        <tr className="border-b border-slate-800 bg-slate-900/40 text-[9px] uppercase text-slate-400 tracking-wider">
                           <th className="p-2">Strategy</th>
                           <th className="p-2">Risk/RR/Drawdown</th>
                           <th className="p-2 text-right">Action</th>
@@ -333,7 +382,7 @@ export default function RiskDashboard() {
                             </td>
                             <td className="p-2 text-right">
                               <button
-                                onClick={() => handleRemoveStrategyOverride(stratName)}
+                                onClick={() => setConfirmDeleteStrat(stratName)}
                                 className="text-red-400 hover:text-red-300 text-[10px] font-bold uppercase"
                               >
                                 Delete
@@ -427,6 +476,7 @@ export default function RiskDashboard() {
                   Add / Save Override
                 </button>
               </form>
+              {stratOverrideError.banner}
             </div>
 
             {/* Symbol Overrides Editor */}
@@ -435,7 +485,7 @@ export default function RiskDashboard() {
                 <h3 className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider mb-2">
                   Symbol Overrides
                 </h3>
-                <p className="text-xs text-slate-500 mb-4">Set overrides specifically matching traded assets</p>
+                <p className="text-xs text-slate-400 mb-4">Set overrides specifically matching traded assets</p>
 
                 {/* Overrides Table */}
                 <div className="border border-slate-850 max-h-40 overflow-y-auto mb-4 font-mono text-xs">
@@ -444,7 +494,7 @@ export default function RiskDashboard() {
                   ) : (
                     <table className="w-full text-left">
                       <thead>
-                        <tr className="border-b border-slate-800 bg-slate-900/40 text-[9px] uppercase text-slate-500 tracking-wider">
+                        <tr className="border-b border-slate-800 bg-slate-900/40 text-[9px] uppercase text-slate-400 tracking-wider">
                           <th className="p-2">Symbol</th>
                           <th className="p-2">Leverage/Vol/Exposure</th>
                           <th className="p-2 text-right">Action</th>
@@ -461,7 +511,7 @@ export default function RiskDashboard() {
                             </td>
                             <td className="p-2 text-right">
                               <button
-                                onClick={() => handleRemoveSymbolOverride(symbol)}
+                                onClick={() => setConfirmDeleteSym(symbol)}
                                 className="text-red-400 hover:text-red-300 text-[10px] font-bold uppercase"
                               >
                                 Delete
@@ -493,59 +543,4 @@ export default function RiskDashboard() {
                     <label className="text-[9px] uppercase text-slate-200 font-semibold tracking-wider block mb-0.5">Max Leverage</label>
                     <input
                       type="number"
-                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 outline-none focus:border-emerald-500 text-slate-200 placeholder-slate-600"
-                      value={symMaxLeverage}
-                      onChange={(e) => setSymMaxLeverage(e.target.value)}
-                      placeholder="e.g. 10"
-                      min="1"
-                      max="125"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[9px] uppercase text-slate-200 font-semibold tracking-wider block mb-0.5">Volatility Mult</label>
-                    <input
-                      type="number"
-                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 outline-none focus:border-emerald-500 text-slate-200 placeholder-slate-600"
-                      value={symVolMult}
-                      onChange={(e) => setSymVolMult(e.target.value)}
-                      placeholder="e.g. 1.2"
-                      min="0.1"
-                      max="10"
-                      step="0.1"
-                    />
-                  </div>
-                  <div className="col-span-2">
-                    <label className="text-[9px] uppercase text-slate-200 font-semibold tracking-wider block mb-0.5">Max Exposure Notional ($)</label>
-                    <input
-                      type="number"
-                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 outline-none focus:border-emerald-500 text-slate-200 placeholder-slate-600"
-                      value={symMaxExposure}
-                      onChange={(e) => setSymMaxExposure(e.target.value)}
-                      placeholder="e.g. 50000"
-                      min="100"
-                    />
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  className="mt-4 w-full bg-slate-800 hover:bg-slate-750 active:bg-slate-700 text-slate-200 border border-slate-700 py-1.5 px-4 font-mono text-xs uppercase"
-                  disabled={!selectedSymbol}
-                >
-                  Add / Save Override
-                </button>
-              </form>
-            </div>
-
-          </div>
-
-          {/* ────────────────── ZONE 3: HISTORICAL RISK PROFILER ────────────────── */}
-          <div className="grid grid-cols-1 gap-6">
-            <SimulationResults />
-          </div>
-
-        </div>
-      )}
-    </PageWrapper>
-  )
-}
+                      className="bg-slate-900 border border-slate-800 w-full px-2 py-1 o

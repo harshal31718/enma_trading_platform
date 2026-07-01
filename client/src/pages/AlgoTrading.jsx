@@ -9,11 +9,13 @@ import ChaosWizard from '../components/algo/ChaosWizard'
 import PageWrapper from '../components/layout/PageWrapper'
 import PageHeader from '../components/ui/PageHeader'
 import { Dialog, DialogContent } from '../components/ui/dialog'
+import { ConfirmDialog } from '../components/ui/confirm-dialog'
 
 export default function AlgoTrading() {
   const [showWizard, setShowWizard] = useState(false)
   const [showChaosWizard, setShowChaosWizard] = useState(false)
   const [chaosError, setChaosError] = useState(null)
+  const [confirmClearOpen, setConfirmClearOpen] = useState(false)
   const { data: sessions = [], isLoading } = useAlgoSessions()
   const stopSession = useStopSession()
   const deleteAllStopped = useDeleteAllStopped()
@@ -56,15 +58,25 @@ export default function AlgoTrading() {
         actions={
           <div className="flex items-center gap-2">
             {hasStopped && (
-              <button
-                onClick={() => deleteAllStopped.mutate()}
-                disabled={deleteAllStopped.isPending}
-                className="flex items-center gap-2 px-3 py-2 bg-transparent hover:bg-red-500/10 text-gray-500 hover:text-red-400 text-sm rounded-lg border border-gray-700 hover:border-red-500/30 disabled:opacity-40 transition-all"
-                title="Clear all stopped sessions"
-              >
-                <Trash2 size={14} />
-                Clear stopped
-              </button>
+              <>
+                <button
+                  onClick={() => setConfirmClearOpen(true)}
+                  disabled={deleteAllStopped.isPending}
+                  className="flex items-center gap-2 px-3 py-2 bg-transparent hover:bg-red-500/10 text-gray-500 hover:text-red-400 text-sm rounded-lg border border-gray-700 hover:border-red-500/30 disabled:opacity-40 transition-all"
+                  title="Clear all stopped sessions"
+                >
+                  <Trash2 size={14} />
+                  Clear stopped
+                </button>
+                <ConfirmDialog
+                  open={confirmClearOpen}
+                  onOpenChange={setConfirmClearOpen}
+                  title="Clear all stopped sessions?"
+                  description="This will permanently delete all stopped and errored sessions. This cannot be undone."
+                  confirmLabel="Clear all"
+                  onConfirm={() => { setConfirmClearOpen(false); deleteAllStopped.mutate() }}
+                />
+              </>
             )}
             <button
               onClick={() => setShowChaosWizard(true)}
@@ -128,22 +140,4 @@ export default function AlgoTrading() {
             onSuccess={() => {
               setShowWizard(false)
               qc.invalidateQueries({ queryKey: ['algo', 'sessions'] })
-            }}
-          />
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={showChaosWizard} onOpenChange={(open) => { if (!open) setShowChaosWizard(false) }}>
-        <DialogContent className="w-[920px] max-w-[95vw] max-h-[88vh] flex flex-col overflow-hidden gap-0 p-0 bg-title-bg border-slate-700/50">
-          <ChaosWizard
-            onCancel={() => setShowChaosWizard(false)}
-            onSuccess={() => {
-              setShowChaosWizard(false)
-              qc.invalidateQueries({ queryKey: ['algo', 'sessions'] })
-            }}
-          />
-        </DialogContent>
-      </Dialog>
-    </PageWrapper>
-  )
-}
+  

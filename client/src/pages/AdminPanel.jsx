@@ -4,10 +4,12 @@ import { Shield, Plus, Trash2, AlertTriangle } from 'lucide-react'
 import api from '../lib/axios'
 import PageWrapper from '@/components/layout/PageWrapper'
 import PageHeader from '@/components/ui/PageHeader'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 
 export default function AdminPanel() {
   const queryClient = useQueryClient()
   const [newEmail, setNewEmail] = useState('')
+  const [confirmRemoveEmail, setConfirmRemoveEmail] = useState(null)
 
   const { data: emails = [], isLoading } = useQuery({
     queryKey: ['admin', 'allowed-emails'],
@@ -89,29 +91,20 @@ export default function AdminPanel() {
               ))}
             </div>
           ) : emails.length === 0 ? (
-            <p className="text-slate-500 text-sm text-center py-4">No emails on the whitelist yet.</p>
+            <p className="text-slate-400 text-sm text-center py-4">No emails on the whitelist yet.</p>
           ) : (
+            <ConfirmDialog
+              open={!!confirmRemoveEmail}
+              onOpenChange={(v) => { if (!v) setConfirmRemoveEmail(null) }}
+              title="Remove from whitelist?"
+              description={`${confirmRemoveEmail} will lose access immediately.`}
+              confirmLabel="Remove"
+              onConfirm={() => { const e = confirmRemoveEmail; setConfirmRemoveEmail(null); removeMutation.mutate(e) }}
+            />
             <ul className="space-y-2">
               {emails.map((item) => (
                 <li
                   key={item.email}
                   className="flex items-center justify-between px-3 py-2.5 rounded-lg border border-slate-700/30 bg-slate-800/20"
                 >
-                  <span className="text-sm text-gray-300">{item.email}</span>
-                  <button
-                    onClick={() => removeMutation.mutate(item.email)}
-                    disabled={removeMutation.isPending}
-                    className="text-slate-500 hover:text-red-400 transition-colors disabled:opacity-40"
-                    aria-label={`Remove ${item.email}`}
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </div>
-    </PageWrapper>
-  )
-}
+                  <span clas

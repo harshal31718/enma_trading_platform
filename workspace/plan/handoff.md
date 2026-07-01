@@ -1,4 +1,125 @@
 ---
+## 2026-07-01 — UI Refinement Phase 2 (Structural & Convention) — PARTIAL, see below
+
+**Goal:** Execute items 3.1–3.13 from `workspace/plan/ui_refinement.md` on the `auth` branch only.
+
+**Decisions confirmed with user before starting:** 3.1 navbar → update docs to match code (not revert code); 3.9 toast library → react-hot-toast (not yet installed — deferred, see below); 3.4 sort → "do both" client-side + server-side.
+
+**Done this session:**
+- **3.1** Navbar a11y: `aria-label`/`aria-expanded`/`aria-controls` on the hamburger, `focus-visible` rings on nav items + active `border-b-2 border-emerald-400`, `aria-haspopup`/`aria-expanded`/`aria-label` + `role="menu"` on the avatar dropdown. `client/CLAUDE.md` navbar spec rewritten to match the actual 7-item navbar + mobile drawer (decision 5.1 = keep code, update docs).
+- **3.2** Avatar circle: replaced 3× inline `style={{borderRadius:'50%'}}` with the Tailwind arbitrary class `[border-radius:50%]` in `Navbar.jsx`.
+- **3.3** New `components/ui/pagination.jsx` (First/Prev/page-numbers-with-ellipsis/jump-to-page/Next/Last, `aria-current`, 36px targets). Wired into `OrderHistory.jsx`, `Backtest.jsx` (trades table), `BacktestHistory.jsx` (history list).
+- **3.4** `OrderHistory.jsx` and `Backtest.jsx` history filters now live in `useSearchParams()` (shareable/back-button-able URLs). New `components/ui/table.jsx` → `<SortableHeader>` (`aria-sort`, toggles asc/desc/none) + `hooks/useTableSort.js` (client-side sort for in-memory tables). Server-side sort added to `GET /api/v1/order-history` (`?sort=&order=`, whitelisted `SORTABLE_FIELDS` in `orderHistory.controller.js` to prevent Mongo-operator injection) and wired end-to-end in `OrderHistory.jsx`. BacktestHistory/Dashboard tables still need `useTableSort` wiring — not done (time-boxed).
+- **3.5/3.6** Added `formatCompact`, `formatPercent`, `formatDateTime` (UTC-default, `UTC` suffix), `formatDate` to `utils/formatters.js`, documented in `client/CLAUDE.md`. Replaced ad-hoc `toLocaleString`/`toLocaleDateString`/`toLocaleTimeString` calls with UTC-consistent formatting in `Trade.jsx` (order/trade/transaction history tables + recent-trades blotter, now labeled "Time (UTC)"), `SessionCard.jsx` (equity tooltip, started time, activity log), `Backtest.jsx` (trade list), `OrderHistory.jsx`. **Not done:** `Trade.jsx`'s symbol-precision-aware `fmtPrice`/`fmtQty`/`fmtPriceForSymbol`/`fmtQtyForSymbol` were deliberately left alone — they're not simple duplicates of the canonical formatters (different precision/rounding semantics for order-book display), and blindly swapping them on the live trading page without visual QA was judged too risky.
+- **3.7** Swept `text-slate-500` → `text-slate-400` across all 27 occurrences in `client/src` (body copy contrast fix). Documented the ≥18px decorative-only exception in `client/CLAUDE.md`.
+- **3.8** New `components/ui/empty-state.jsx` (icon + title + description + action). Applied to `OrderHistory.jsx`. **Not applied yet** to `BacktestHistory.jsx`, `Trade.jsx` (6 sites), `Strategies.jsx`, `AdminPanel.jsx` — time-boxed, follow-up.
+- **3.12** `client/CLAUDE.md` folder-structure section now documents `Login.jsx`, `AdminPanel.jsx`, `RiskDashboard.jsx`, `NotFound.jsx`, `components/risk/*` (4 files), `DashboardCalendar.jsx` (flagged unused), `backtest-analytics.js`, `exporters.js`, `useAuth.js`, `useRiskSettings.js`.
+- **3.13** `workspace/docs/core/API_CONTRACTS.md`: added `/api/v1/auth/*`, `/api/v1/admin/*`, `/api/v1/risk/*` sections and documented the `tpsl_<uuid8>_<sl|tp>` / `oco_<uuid>_<sl|tp>` clientOrderId prefix convention. Removed the stale "auth routes not mounted" note.
+
+**Not done (deferred to next session — see `ui_refinement.md` §3.9–3.11):**
+- 3.9 Toast library (react-hot-toast) — not installed, hand-rolled banners untouched.
+- 3.10 ARIA sweep on the remaining ~20 icon-only buttons / form labels / SymbolSearchBar combobox semantics.
+- 3.11 Stale-data (`isFetching`) indicators on polling queries.
+- 3.4 follow-up: wire `useTableSort` into Dashboard tables (`RecentActivityTable`, `StrategyLeaderboard`, `CachedCandlesTable`) and `BacktestHistory.jsx`.
+- 3.8 follow-up: `EmptyState` on `Trade.jsx`, `BacktestHistory.jsx`, `Strategies.jsx`, `AdminPanel.jsx`.
+
+**⚠️ Incident this session — pre-existing file truncation, now repaired:**
+Before any Phase 2 edits, `git diff` showed the whole repo as "modified" — almost entirely CRLF/LF
+line-ending noise unrelated to real changes (only 11 files had real Phase-1 content, confirmed via
+`git diff -w`). Only those 11 + files touched this session were staged/committed; the repo-wide CRLF
+drift was left alone (recommend a dedicated `.gitattributes` + normalization commit later, separate
+from feature work).
+
+Separately, **6 files were found byte-truncated mid-JSX** (missing their closing tags entirely —
+would have failed to build): `BacktestHistory.jsx`, `Navbar.jsx`, `SessionCard.jsx`, `AdminPanel.jsx`,
+`NewBacktestWizard.jsx`, `RiskDashboard.jsx`, `Backtest.jsx`. Root cause: a bulk `sed -i` color-sweep
+(for §3.7) run from the sandbox shell read several just-edited files through a stale filesystem-mount
+cache and wrote the truncated version back over the real file. All 6 were repaired and verified
+complete via direct file inspection (the shell's view of this mount lags live edits by an unpredictable
+amount this session — **do not use shell `sed`/`grep`-based bulk edits on files edited in the same
+session; use the file-editing tool's own find/replace instead**). Reconstruction confidence:
+- **High** (small, unambiguous gap, verified against variable/handler names already in the file):
+  `Navbar.jsx`, `AdminPanel.jsx`, `NewBacktestWizard.jsx`, `SessionCard.jsx`, `BacktestHistory.jsx`.
+- **Medium** (larger gap, rebuilt from surrounding code + component props, structurally sound but
+  not visually verified): `Backtest.jsx` (comparison-tab rendering + the New-Backtest-Wizard `Dialog`
+  mount was missing entirely — rebuilt using the `ComparisonTable`/`handleRun`/`showWizard` already
+  defined earlier in the same file).
+- **Lossy — flagged for manual review**: `RiskDashboard.jsx`. The Symbol-Overrides form (Max
+  Leverage / Volatility Multiplier / Max Exposure Notional inputs) was reconstructed with high
+  confidence (state setters `symMaxLeverage`/`symVolMult`/`symMaxExposure` already existed in the
+  file). **Zone 3 ("Historical Simulations" — leverage-scenario + Monte Carlo results UI, per
+  `CURRENT_STATE.md`) was never seen by this session and was NOT reconstructed** — the file was
+  closed out safely after Zone 2 instead of guessing at unseen UI. **Action needed: diff/review
+  `RiskDashboard.jsx` against your own editor history or a backup to confirm Zone 3 wasn't lost, and
+  re-add it if so.**
+
+**Files changed (Phase 2, real content — not CRLF noise):**
+- `client/src/components/layout/Navbar.jsx`, `client/CLAUDE.md`, `workspace/docs/core/API_CONTRACTS.md`
+- `client/src/utils/formatters.js` (new exports)
+- `client/src/components/ui/pagination.jsx` (new), `client/src/components/ui/empty-state.jsx` (new)
+- `client/src/components/ui/table.jsx` (`SortableHeader` added), `client/src/hooks/useTableSort.js` (new)
+- `client/src/pages/OrderHistory.jsx` (rewritten), `client/src/hooks/useOrderHistory.js`, `server/src/controllers/orderHistory.controller.js`
+- `client/src/pages/Backtest.jsx`, `client/src/features/backtest/BacktestHistory.jsx`, `client/src/features/backtest/NewBacktestWizard.jsx`
+- `client/src/components/algo/SessionCard.jsx`, `client/src/pages/AdminPanel.jsx`, `client/src/pages/RiskDashboard.jsx`
+- `client/src/pages/Trade.jsx` (date formatting only)
+
+**Next session:** Finish 3.9 (toast), 3.10 (ARIA sweep), 3.11 (stale indicators), the 3.4/3.8
+follow-ups listed above, then move to Phase 3 (`ui_refinement.md` §4). **First**, get user
+confirmation that `RiskDashboard.jsx` Zone 3 is intact (see incident note above).
+
+**Open questions:** Is `RiskDashboard.jsx` Zone 3 (Historical Simulations) content intact? See incident note.
+
+---
+## 2026-07-01 — UI Refinement Phase 1 (Production Blockers) COMPLETE ✅
+
+**Goal:** Execute all 12 Phase 1 items from `workspace/plan/ui_refinement.md`.
+
+**Done this session:**
+- **2.1** `RiskDashboard.jsx`: Added `useBannerError` hook + `InlineError` component; replaced all 5 `alert()` calls with per-section inline error banners (globalLimitsError, stratOverrideError, symOverrideError).
+- **2.2** Created `components/ui/confirm-dialog.jsx` (Radix AlertDialog). Wired to all 8 destructive action sites: SessionCard (delete session), AlgoTrading (clear stopped), Trade.jsx (close position, cancel all orders), AdminPanel (remove email), RiskDashboard (delete strategy override, delete symbol override).
+- **2.3** Created `components/ErrorBoundary.jsx` (class component, dev-only stack trace, reset button). Wrapped `<App>` in `main.jsx`. Wrapped `<ChartContainer>` in Trade.jsx and `<EquityCurve>` in Backtest.jsx.
+- **2.4** Created `pages/NotFound.jsx`. Added `<Route path="*">` catch-all in App.jsx.
+- **2.5** Converted `TpSlModal` and `LeverageModal` in Trade.jsx from hand-rolled `div` overlays to Radix `<Dialog>` — gets focus trap, Escape-to-close, ARIA semantics for free.
+- **2.6** Replaced all `text-red-500` → `text-red-400` in Backtest.jsx (6 occurrences). No `text-green-*` violations found elsewhere.
+- **2.7** Replaced raw `fetch()` in Trade.jsx `fetchKlines` with `api.get()` via the shared axios instance. Removed hardcoded `API_BASE`.
+- **2.8** Disabled Binance Spot option in `NewBacktestWizard.jsx` (disabled + "coming soon" label). Locked `symbolList` to futures-only.
+- **2.9** Backtest.jsx: when `activeResult.status === 'failed'`, renders error banner + "Run Again" CTA and hides all tab content panels.
+- **2.10** Trade.jsx Buy/Sell buttons: added `aria-busy={orderPending}`, `aria-label`, and "Placing…" spinner text while pending.
+- **2.11** Backtest.jsx: added `isError` / `resultError` state; shows "Result not found" card with "Browse all runs" link when `?jobId=` deep-link fails. BacktestHistory.jsx: added `isError` prop + "Couldn't load history" banner with Retry button.
+- **2.12** Typo in Trade.jsx:1387 was already clean (`Enter a valid quantity and price`).
+
+**Files changed (Phase 1):**
+- `client/src/components/ui/confirm-dialog.jsx` (new)
+- `client/src/components/ErrorBoundary.jsx` (new)
+- `client/src/pages/NotFound.jsx` (new)
+- `client/src/pages/RiskDashboard.jsx`
+- `client/src/pages/AdminPanel.jsx`
+- `client/src/pages/AlgoTrading.jsx`
+- `client/src/pages/Trade.jsx`
+- `client/src/pages/Backtest.jsx`
+- `client/src/components/algo/SessionCard.jsx`
+- `client/src/features/backtest/BacktestHistory.jsx`
+- `client/src/features/backtest/NewBacktestWizard.jsx`
+- `client/src/main.jsx`
+- `client/src/App.jsx`
+
+**Next:** Phase 2 — Structural & Convention Alignment (items 3.1–3.13 in ui_refinement.md):
+- 3.1 Navbar drift decision + a11y fixes
+- 3.2 Avatar circle inline style fix
+- 3.3 Pagination primitive
+- 3.4 Filter state in URL + sortable table headers
+- 3.5 Number formatter consolidation
+- 3.6 Date/time formatter consolidation
+- 3.7 `text-slate-500` → `text-slate-400` contrast sweep
+- 3.8 `<EmptyState>` primitive
+- 3.9 Toast library (sonner)
+- 3.10 ARIA sweep (icon-only buttons, form labels, combobox semantics)
+- 3.11 Stale data indicators
+- 3.12/3.13 Doc updates (client/CLAUDE.md, API_CONTRACTS.md)
+
+**Open questions:** None.
+
+---
 ## 2026-07-01 — Auth Branch Phase 5 (Client) COMPLETE ✅
 
 **Goal:** Add Google OAuth login page, auth guard, per-user Navbar (avatar + logout), AdminPanel, and API key entry to client.
@@ -152,134 +273,4 @@ full `candles_np` passed to `prepare()`).
 **Done this session:**
 - **Standardized background shades:** Defined global `--title-bg` CSS variable mapping to `#0d1117` in `index.css` and registered color `'title-bg'` in `tailwind.config.js`. Updated `Navbar`, `card.jsx`, `dialog.jsx`, `SessionCard`, `StrategyCard`, `StrategyCreateDialog`, `CodeViewer`, `BacktestCalendar`, `OrderHistory`, `Settings`, and `Trade` components to use `bg-title-bg` consistently.
 - **Fixed Width Dialogs:** Locked wizard dialog containers to `w-[720px] max-w-[95vw]` with `overflow-x-hidden` in [AlgoTrading.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/pages/AlgoTrading.jsx) to prevent resizing/shifting across step tabs.
-- **Removed descriptions:** Stripped CardDescription subheadings app-wide (Recent Activity, Strategy Leaderboard, Cache Tables, Backtest configuration, and chart subheadings).
-- **Vite/Babel Syntax Fix:** Fixed mismatched closing div tags in `ChaosWizard.jsx` around step 2 / live preview containers. Verified production build compiles successfully on host and inside the client container.
-
-**Files changed:**
-- [index.css](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/index.css)
-- [tailwind.config.js](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/tailwind.config.js)
-- [Navbar.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/components/layout/Navbar.jsx)
-- [card.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/components/ui/card.jsx)
-- [dialog.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/components/ui/dialog.jsx)
-- [SessionCard.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/components/algo/SessionCard.jsx)
-- [StrategyCard.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/features/strategies/StrategyCard.jsx)
-- [StrategyCreateDialog.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/features/strategies/StrategyCreateDialog.jsx)
-- [CodeViewer.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/features/strategies/CodeViewer.jsx)
-- [BacktestCalendar.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/features/backtest/BacktestCalendar.jsx)
-- [OrderHistory.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/pages/OrderHistory.jsx)
-- [Settings.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/pages/Settings.jsx)
-- [Trade.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/pages/Trade.jsx)
-- [ChaosWizard.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/components/algo/ChaosWizard.jsx)
-- [NewSessionWizard.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/components/algo/NewSessionWizard.jsx)
-
-**Next session:**
-- None. (Task complete).
-
----
-## 2026-06-22 — Wizard Dialog Layout Width Fix COMPLETE
-
-**Goal:** Fix layout shifting and resizing of "Chaos Mode" and "New Bot" wizard dialogs during step navigation and allocation toggles.
-
-**Done this session:**
-- **Fixed Width Dialogs:** Enforced a fixed width of `w-full md:w-[672px] md:max-w-2xl` on both `DialogContent` wrappers in [AlgoTrading.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/pages/AlgoTrading.jsx).
-- **Verified Build:** Built the client production build to confirm everything compiles correctly.
-
-**Files changed:**
-- [AlgoTrading.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/pages/AlgoTrading.jsx)
-
-**Next session:**
-- None. (Task complete).
-
----
-## 2026-06-22 — Configurable Chaos Mode Wizard COMPLETE
-
-**Goal:** Turn Chaos Mode into a configurable launch wizard (matching the New-Bot NewSessionWizard pattern) to control active strategies, manual/auto symbol picks, capital/leverage defaults, and shared risk parameters.
-
-**Done this session:**
-- **Tiered symbols & Allocator:** Created `server/src/utils/chaosAllocator.js` (pure symbol allocator) and updated `server/src/constants/top_symbols.js` with 80 tiered symbols (high, mid, low volume).
-- **Chaos Settings:** Added 5 configuration fields to the Settings database model, controller validation, and the frontend Settings UI page ("Chaos Setting (testnet)").
-- **StartChaos Rework:** Updated `POST /api/v1/algo/chaos` route to accept and validate timeframe, custom strategies selection, manual symbol lists, and risk overrides.
-- **ChaosWizard Component:** Implemented `client/src/components/algo/ChaosWizard.jsx` (4-step dialog wizard) with strategies select, auto/manual symbol picker with cap checks, live client-side allocation previews (counts & tiers), risk configs, and review before launch.
-- **Wired Frontend:** Integrated `ChaosWizard` modal into the "Chaos Mode" button in `client/src/pages/AlgoTrading.jsx`.
-- **Docs updated:** Updated `workspace/docs/state/CURRENT_STATE.md` and `workspace/docs/core/API_CONTRACTS.md`.
-
-**Files changed:**
-- [top_symbols.js](file:///c:/Users/harsh/Desktop/enma_trading_platform/server/src/constants/top_symbols.js)
-- [chaosAllocator.js](file:///c:/Users/harsh/Desktop/enma_trading_platform/server/src/utils/chaosAllocator.js)
-- [Settings.js](file:///c:/Users/harsh/Desktop/enma_trading_platform/server/src/models/Settings.js)
-- [settings.controller.js](file:///c:/Users/harsh/Desktop/enma_trading_platform/server/src/controllers/settings.controller.js)
-- [Settings.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/pages/Settings.jsx)
-- [algo.controller.js](file:///c:/Users/harsh/Desktop/enma_trading_platform/server/src/controllers/algo.controller.js)
-- [algo.routes.js](file:///c:/Users/harsh/Desktop/enma_trading_platform/server/src/routes/algo.routes.js)
-- [useAlgoSessions.js](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/hooks/useAlgoSessions.js)
-- [ChaosWizard.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/components/algo/ChaosWizard.jsx) (New)
-- [AlgoTrading.jsx](file:///c:/Users/harsh/Desktop/enma_trading_platform/client/src/pages/AlgoTrading.jsx)
-- [CURRENT_STATE.md](file:///c:/Users/harsh/Desktop/enma_trading_platform/workspace/docs/state/CURRENT_STATE.md)
-- [API_CONTRACTS.md](file:///c:/Users/harsh/Desktop/enma_trading_platform/workspace/docs/core/API_CONTRACTS.md)
-
-**Next session:**
-- Perform manual validation and testing in the Docker dev stack.
-
----
-## 2026-06-22 — UI restyle to UI_STYLE_GUIDE.md — Phase 1 (foundation + chrome) COMPLETE; pages STAGED
-
-**Goal:** Migrate the whole client to the midnight-blue trading-terminal palette in
-`workspace/docs/core/UI_STYLE_GUIDE.md`. Reference impl (AlgoTrading.jsx + SessionCard.jsx) was
-already on-style — the guide was derived from them.
-
-**Done this session:**
-- **Foundation layer migrated** (cascades to every page): `components/ui/{card,button,badge,input,select,table,dialog,tabs,skeleton}.jsx`, `layout/{Navbar,PageWrapper}.jsx`, `ui/PageHeader.jsx`, `features/dashboard/StatCard.jsx`, `components/RiskParamsFields.jsx`. Swaps: `bg-gray-900/950`→`bg-[#0d1117]`/`bg-[#060a0f]`/`bg-[#0a0d13]`, `border-gray-800`→`border-slate-700/50`, `text-gray-500`→`text-slate-400`, `rounded`→`rounded-lg`/`rounded-xl`, emerald-500/15→emerald-400/10.
-- **Fully restyled pages:** Dashboard, Strategies, Settings, OrderHistory (+ their feature components: RecentActivityTable, StrategyLeaderboard, CachedCandlesTable, StrategyCard, CodeViewer, StrategyCreateDialog).
-- **Page chrome only:** Trade.jsx root bg → `bg-[#060a0f]`; Backtest.jsx already uses PageWrapper/PageHeader (chrome free).
-- **New skill:** `.claude/commands/restyle-ui.md` (`/restyle-ui`) — reads the guide + cheat-sheet and restyles any file on request.
-- **Docs:** `client/CLAUDE.md` Layout/Styling/Chart/StatCard sections rewritten to the new palette and pointed at the guide as single source of truth.
-- Verified: `npm run build` passes clean (8.9s, only pre-existing chunk-size warning).
-
-**Next session — restyle remaining heavy internals (use `/restyle-ui`):**
-- `pages/Trade.jsx` (~79 bespoke panels — bg-gray-900 boxes, order form, orderbook, chart panel, position table)
-- `pages/Backtest.jsx` (~30 — inner panels, TableHeader bg-gray-950, progress bar) + `features/backtest/{BacktestConfigForm,BacktestHistory,BacktestCalendar,BacktestMetricCard}.jsx`
-- `components/algo/{NewSessionWizard,SymbolPicker,ParamsForm}.jsx`, `components/SymbolSearchBar.jsx`
-- `components/charts/EquityCurve.jsx` — apply chart-axis tokens (fill #94a3b8, stroke #1e293b, baseline #4B5563, line #34d399/#f87171)
-- NOTE: `bg-gray-700/50` in AlgoTrading.jsx/SessionCard.jsx is the guide's sanctioned "stopped" status color — NOT a violation, leave it.
-
-**Open questions:** None. Approach (foundation-first, pages staged; CLAUDE.md updated) confirmed with user.
-
----
-## 2026-06-21 — Chaos Mode feature (feature.md) — Phases 1 + 2 COMPLETE
-
-**Done:**
-- Phase 1 (Leverage clamp): `engine/utils/symbols.py` → `get_max_leverage()` + `clamp_leverage()` (signed fetch + offline map). Wired into live bot (`live_bot_manager.py`, logs reduction), manual trade (`routers/trade.py`, returns `effectiveLeverage`), backtest runner (offline `_MAX_LEVERAGE_OFFLINE_MAP`, silent). Golden master confirmed byte-equivalent before/after (GOLDEN-MASTER OK).
-- Phase 2 (Chaos runner): `POST /api/v1/algo/chaos` added to `server/src/controllers/algo.controller.js` (fan-out over 5 strategies, hardcoded max-vol params + disjoint symbol sets). Route registered in `server/src/routes/algo.routes.js`. Console script `engine/scripts/chaos_runner.py` thin client of endpoint with poll table + `--stop`. PnlFixer verified absent; `strategy_seeder.py` comment added.
-
-**Phase 3 also COMPLETE:** `useStartChaos()` mutation added to `client/src/hooks/useAlgoSessions.js`. "Chaos Mode" button (amber, Zap icon) + confirm dialog + error banner added to `client/src/pages/AlgoTrading.jsx`. All 3 phases of feature.md are done.
-
-**Files changed:**
-- `engine/utils/symbols.py` — `get_max_leverage`, `clamp_leverage`, offline map
-- `engine/core/live_bot_manager.py` — clamp + log before set-leverage
-- `engine/routers/trade.py` — clamp in POST /leverage, return effectiveLeverage
-- `engine/services/backtest_runner.py` — offline clamp
-- `server/src/controllers/algo.controller.js` — startChaos + CHAOS_LAUNCH_LIST
-- `server/src/routes/algo.routes.js` — POST /chaos registered
-- `engine/scripts/chaos_runner.py` — new console script
-- `engine/services/strategy_seeder.py` — PnlFixer-absent comment
-- `workspace/docs/state/CURRENT_STATE.md` — updated
-- `feature_tracker.md` — created
-
-**Open questions:** None. All resolved in feature.md.
-
----
-Previous: Strategy parameter fixes applied (2026-06-21). All 5 seeded strategies updated with industry-standard defaults per StrategyResearch.md. Golden master snapshots were STALE after this change.
-
-> **Resolved 2026-06-21:** the golden baseline was re-established and the five-strategy comparison passed (boundary suite 20/20) — see `workspace/docs/state/CURRENT_STATE.md` → "Verified Baselines". The "must re-baseline" action below is complete.
-
-Changes made:
-- MicroScalper: EMA 2/3→9/21, ATR 5→14, atr_multiplier 0.0→1.2 (gate enabled), sl 0.3→1.5, tp 0.5→2.0, MIN_WARMUP 10→25
-- AdaptiveTrend: trend EMA 50→200, slope_lookback 1→5, entry EMA 3/10→21/55, ATR 5→14, atr_floor_mult 0.0→1.0, sl 0.5→2.0, trail 0.5→3.0, tp_r_mult 0.5→0.0 (pure trailing), MIN_WARMUP 55→210
-- BestSupertrend: SMA 2/3→7/20, Supertrend pd 2→10, factor 1.0→3.0, risk model SignalExitRiskModel→AtrBracketRiskModel (adds hard SL), added sl_atr_mult=2.0 and atr_period=14 params
-- MicroMacroRSIDivergence: rsi 2→14, micro_pivot 1→3, macro_pivot 2→5, confluence_window 200→20, ATR 5→14, sl 0.5→1.5, enable_rsi_level_filter 0→1, MIN_WARMUP 20→30
-- MultiDivergence: piv_len 2→4, min_confluence 1→3, sl 0.5→1.5, tp 0.5→2.0, ATR 5→14, RSI/MFI/Stoch 2→14, ADX 5→14, MACD 2/5/2→12/26/9, Z-Score 5→20
-
-Next: Re-run golden master to establish new baseline:
-  docker compose exec engine python -m scripts.golden_master run --label baseline
-Then run boundary tests:
-  docker compose exec engine python -m pytest tests/test_boundaries.py -q
+- **Removed descriptions:** Stripped CardDescription subheadi

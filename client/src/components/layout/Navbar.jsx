@@ -60,7 +60,10 @@ export default function Navbar() {
         <button
           id="mobile-menu-toggle"
           onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-          className="md:hidden p-1 text-slate-400 hover:text-gray-100 transition-colors focus:outline-none"
+          aria-label={mobileMenuOpen ? 'Close menu' : 'Open menu'}
+          aria-expanded={mobileMenuOpen}
+          aria-controls="mobile-nav-menu"
+          className="md:hidden p-1 text-slate-400 hover:text-gray-100 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 rounded"
         >
           {mobileMenuOpen ? <X size={20} /> : <Menu size={20} />}
         </button>
@@ -78,10 +81,10 @@ export default function Navbar() {
             title={label}
             className={({ isActive }) =>
               [
-                'inline-flex items-center gap-2 px-3 py-2 text-sm transition-colors rounded font-medium',
+                'inline-flex items-center gap-2 px-3 py-2 text-sm transition-colors rounded font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500',
                 isActive
-                  ? 'text-emerald-400 bg-emerald-400/10'
-                  : 'text-slate-400 hover:text-gray-100 hover:bg-slate-800/50',
+                  ? 'text-emerald-400 bg-emerald-400/10 border-b-2 border-emerald-400'
+                  : 'text-slate-400 hover:text-gray-100 hover:bg-slate-800/50 border-b-2 border-transparent',
               ].join(' ')
             }
           >
@@ -116,20 +119,20 @@ export default function Navbar() {
             <div className="relative" ref={dropdownRef}>
               <button
                 onClick={() => setDropdownOpen(!dropdownOpen)}
-                className="flex items-center justify-center hover:ring-2 hover:ring-emerald-500/50 transition-all focus:outline-none"
-                style={{ borderRadius: '50%' }}
+                aria-haspopup="menu"
+                aria-expanded={dropdownOpen}
+                aria-label="User menu"
+                className="flex items-center justify-center [border-radius:50%] hover:ring-2 hover:ring-emerald-500/50 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
               >
               {user.avatar ? (
                 <img
                   src={user.avatar}
                   alt={user.name}
-                  className="w-8 h-8 ring-1 ring-slate-700 object-cover"
-                  style={{ borderRadius: '50%' }}
+                  className="w-8 h-8 [border-radius:50%] ring-1 ring-slate-700 object-cover"
                 />
               ) : (
-                <div 
-                  className="w-8 h-8 bg-emerald-600/20 ring-1 ring-emerald-600/40 flex items-center justify-center"
-                  style={{ borderRadius: '50%' }}
+                <div
+                  className="w-8 h-8 [border-radius:50%] bg-emerald-600/20 ring-1 ring-emerald-600/40 flex items-center justify-center"
                 >
                   <span className="text-emerald-400 text-sm font-medium">
                     {user.name?.[0]?.toUpperCase() ?? '?'}
@@ -139,9 +142,9 @@ export default function Navbar() {
             </button>
 
             {dropdownOpen && (
-              <div className="absolute right-0 mt-2 w-48 bg-[#0d1117] border border-slate-700/50 shadow-2xl py-1 z-50 animate-in fade-in slide-in-from-top-1 duration-150 origin-top-right">
+              <div role="menu" className="absolute right-0 mt-2 w-48 bg-[#0d1117] border border-slate-700/50 shadow-2xl py-1 z-50 animate-in fade-in slide-in-from-top-1 duration-150 origin-top-right">
                 <div className="px-4 py-2 border-b border-slate-800">
-                  <p className="text-xs text-slate-500">Logged in as</p>
+                  <p className="text-xs text-slate-400">Logged in as</p>
                   <p className="text-sm font-medium text-slate-200 truncate" title={user.name}>
                     {user.name}
                   </p>
@@ -182,7 +185,8 @@ export default function Navbar() {
 
       {/* Mobile Drawer menu overlay */}
       {mobileMenuOpen && (
-        <div 
+        <div
+          id="mobile-nav-menu"
           className="absolute top-14 left-0 right-0 bg-[#0d1117] border-b border-slate-700/50 z-45 flex flex-col p-4 gap-1 md:hidden animate-in slide-in-from-top duration-150"
           ref={mobileMenuRef}
         >
@@ -198,20 +202,4 @@ export default function Navbar() {
                   isActive
                     ? 'text-emerald-400 bg-emerald-400/10'
                     : 'text-slate-400 hover:text-gray-100 hover:bg-slate-800/50',
-                ].join(' ')
-              }
-            >
-              <Icon size={16} className="shrink-0" />
-              <span>{label}</span>
-              {label === 'AlgoTrading' && runningCount > 0 && (
-                <span className="ml-auto text-xs bg-emerald-600 text-white px-1.5 py-0.5 rounded-full leading-none">
-                  {runningCount}
-                </span>
-              )}
-            </NavLink>
-          ))}
-        </div>
-      )}
-    </header>
-  )
-}
+                ].joi

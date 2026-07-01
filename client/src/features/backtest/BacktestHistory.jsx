@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react'
-import { RefreshCw, Loader2, Filter, X, GitCompareArrows, CheckSquare, Square, ChevronLeft, ChevronRight } from 'lucide-react'
+import { RefreshCw, Loader2, Filter, X, GitCompareArrows, CheckSquare, Square, FlaskConical } from 'lucide-react'
 import { Badge } from '../../components/ui/badge'
 import { Input } from '../../components/ui/input'
 import { Select } from '../../components/ui/select'
 import { Button } from '../../components/ui/button'
+import { Pagination } from '../../components/ui/pagination'
+import { EmptyState } from '../../components/ui/empty-state'
 import { cn } from '../../lib/utils'
 
 const formatTime = (dateStr) => {
@@ -30,6 +32,7 @@ export default function BacktestHistory({
   onSelect,
   onRefresh,
   isLoading,
+  isError,
   filters,
   onApplyFilters,
   onClearFilters,
@@ -175,9 +178,19 @@ export default function BacktestHistory({
             <div className="flex justify-center p-6">
               <Loader2 className="size-5 animate-spin text-gray-600" />
             </div>
+          ) : isError ? (
+            <div className="m-4 border border-dashed border-red-800/30 p-8 flex flex-col items-center justify-center text-center gap-3">
+              <p className="text-red-400 text-xs">Couldn't load backtest history.</p>
+              <button
+                onClick={onRefresh}
+                className="px-3 py-1 text-[10px] border border-slate-700 rounded text-slate-400 hover:bg-slate-800 transition-colors"
+              >
+                Retry
+              </button>
+            </div>
           ) : !data || data.length === 0 ? (
             <div className="m-4 border border-dashed border-slate-700/30 p-8 flex flex-col items-center justify-center text-center">
-              <p className="text-slate-500 text-xs">No backtest runs yet.</p>
+              <p className="text-slate-400 text-xs">No backtest runs yet.</p>
               <p className="text-[10px] text-slate-600 mt-1">Run new backtests to compare performance.</p>
             </div>
           ) : (
@@ -261,7 +274,7 @@ export default function BacktestHistory({
               })}
               {pagedData.length < 5 && (
                 <div className="m-4 border border-dashed border-slate-700/30 p-6 flex flex-col items-center justify-center text-center">
-                  <p className="text-[10px] text-slate-500 font-medium">Run new backtests</p>
+                  <p className="text-[10px] text-slate-400 font-medium">Run new backtests</p>
                   <p className="text-[9px] text-slate-600 mt-1">to compare performance here.</p>
                 </div>
               )}
@@ -271,30 +284,14 @@ export default function BacktestHistory({
       </div>
 
       {/* ── Pagination footer ── */}
-      <div className="shrink-0 border-t border-slate-700/50 px-3 py-2 flex items-center justify-between">
-        <span className="text-[10px] text-gray-500 font-mono">
-          {totalItems === 0 ? 0 : (histPage - 1) * HIST_PER_PAGE + 1}–{Math.min(histPage * HIST_PER_PAGE, totalItems)} of {totalItems}
-        </span>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => setHistPage((p) => Math.max(1, p - 1))}
-            disabled={histPage === 1}
-            className="p-1 rounded text-gray-500 hover:text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-          >
-            <ChevronLeft className="size-3.5" />
-          </button>
-          <span className="text-[10px] text-gray-500 font-mono min-w-[32px] text-center">
-            {histPage}/{totalHistPages}
+      {totalHistPages > 1 && (
+        <div className="shrink-0 border-t border-slate-700/50 px-3 py-2 flex items-center justify-between">
+          <span className="text-[10px] text-gray-500 font-mono">
+            {totalItems === 0 ? 0 : (histPage - 1) * HIST_PER_PAGE + 1}–{Math.min(histPage * HIST_PER_PAGE, totalItems)} of {totalItems}
           </span>
-          <button
-            onClick={() => setHistPage((p) => Math.min(totalHistPages, p + 1))}
-            disabled={histPage >= totalHistPages}
-            className="p-1 rounded text-gray-500 hover:text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-          >
-            <ChevronRight className="size-3.5" />
-          </button>
+          <Pagination page={histPage} totalPages={totalHistPages} onPageChange={setHistPage} />
         </div>
-      </div>
+      )}
     </div>
   )
 }

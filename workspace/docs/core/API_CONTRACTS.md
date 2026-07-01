@@ -19,7 +19,29 @@ type Balance = { asset: string, walletBalance: string, availableBalance: string,
 
 ## Client ↔ Server (REST)
 
-> **Note:** Auth routes (`/api/v1/auth/register`, `/login`) are not yet mounted — no route file or controller exists. Remove from any active implementation reference.
+> All `/api/v1/*` routes require `verifyJWT` (httpOnly `enma_jwt` cookie) except `/api/v1/auth/*` and `/api/v1/health`. See Auth section below — added 2026-07-01 (UI Refinement Phase 2, §3.13).
+
+### Auth
+- **`GET /api/v1/auth/google`** -> redirects to Google OAuth consent (Passport `passport-google-oauth20`, scopes `profile email`, sessionless)
+- **`GET /api/v1/auth/google/callback`** -> Google redirects here. On success: signs a 7-day JWT (`{ userId, role }`), sets it as `enma_jwt` (`httpOnly`, `sameSite: lax`, `secure` in prod), redirects to `CLIENT_URL/`. On failure (email not in whitelist): redirects to `CLIENT_URL/login?error=not_invited`.
+- **`POST /api/v1/auth/logout`** -> clears the `enma_jwt` cookie -> `{ success: true, data: null }`
+- **`GET /api/v1/auth/me`** -> requires `verifyJWT` -> `{ id, email, name, avatar, role: "user"|"admin" }`
+
+### Admin (admin-only, `requireAdmin` middleware)
+- **`GET /api/v1/admin/allowed-emails`** -> `{ success: true, data: { email, addedBy, addedAt }[] }`
+- **`POST /api/v1/admin/allowed-emails`** -> Req: `{ email }` -> `{ email }`. 409 `CONFLICT` if already whitelisted.
+- **`DELETE /api/v1/admin/allowed-emails/:email`** -> `{ success: true, data: null }`. 403 `FORBIDDEN` if attempting to remove the env `ADMIN_EMAIL`.
+
+### Risk (Risk Intelligence Dashboard, `/risk-dashboard`)
+```typescript
+type GlobalHardLimits = { maxLeverageAllowed: number, maxSessionDrawdown: number, maxRiskPctPerTrade: number, cooldownPeriodHours: number }
+type StrategyOverride = { riskPct?: number, riskRewardRatio?: number, maxSessionDrawdown?: number, liqBufferPct?: number, minEdgeMult?: number, customAtrMult?: number }
+type SymbolOverride = { maxLeverage?: number, volatilityMultiplier?: number, maxExposureNotional?: number }
+```
+- **`GET /api/v1/risk/settings`** -> `{ globalHardLimits: GlobalHardLimits, strategyOverrides: { [strategyName]: StrategyOverride }, symbolOverrides: { [symbol]: SymbolOverride } }` (per-user `Settings` doc, upserted on first access)
+- **`PUT /api/v1/risk/settings`** -> Req: `{ globalHardLimits?, strategyOverrides?, symbolOverrides? }` (partial; overrides keyed by name/symbol are replaced wholesale, not merged) -> same shape as GET. Server-side range validation per field (400 `VALIDATION_ERROR` with field detail on violation); `strategyOverrides` keys must match an existing `Strategy.name`.
+- **`GET /api/v1/risk/live-metrics`** -> requires Binance headers (`requireBinanceCredentials`) -> proxies to engine `GET /risk/live-metrics`, cached 10s server-side in Redis per-user (`risk:live-metrics:{userId}`) -> locked margin, free balance, net leverage, long/short notional exposure, 1-day VaR/CVaR (95%/99%), 30-day correlation heatmap (Zone 1 data).
+- **`GET /api/v1/risk/backtest/:id/simulation`** -> 404 if backtest not found, 400 if not `status: "completed"` -> proxies to engine `POST /backtest/run/leverage-sensitivity` -> leverage-scenario `[1,2,5,10,20]` re-runs + Monte Carlo (N=2000) ruin-probability/drawdown-exceedance curves (Zone 3 data).
 
 ### Settings
 - **`GET /api/v1/trade/settings/keys`** -> `{ mode: "testnet" | "mainnet" }`
@@ -58,8 +80,8 @@ type Balance = { asset: string, walletBalance: string, availableBalance: string,
 - **`POST /api/v1/trade/leverage`** -> Req: `{ symbol, leverage }` -> `{ symbol, leverage, maxNotionalValue, effectiveLeverage: number }` (effectiveLeverage = min(requested, symbol_max); may be lower than requested if symbol cap exceeded)
 - **`POST /api/v1/trade/margin-type`** -> Req: `{ symbol, marginType: "ISOLATED" | "CROSSED" }` -> `{ code: 200, msg: "success" }`
 - **`POST /api/v1/trade/order`** -> Req: `{ symbol, side, type, quantity, price? }` -> `Order`
-- **`POST /api/v1/trade/order/with_tp_sl`** -> Req: `{ symbol, side, type, quantity, price?, stopLoss, takeProfit }` -> `{ entry: Order, sl: Order, tp: Order }`
-- **`POST /api/v1/trade/order/oco_futures`** -> Req: `{ symbol, side, quantity, stopPrice?, takeProfitPrice? }` -> `{ orders: Order[] }`
+- **`POST /api/v1/trade/order/with_tp_sl`** -> Req: `{ symbol, side, type, quantity, price?, stopLoss, takeProfit }` -> `{ entry: Order, sl: Order, tp: Order, tpslId: string }`. Per CORE RULE 5 (OCO), the SL and TP legs share a `clientAlgoId` prefix `tpsl_<uuid8>_` (suffixed `sl`/`tp`) so they can be tracked and peer-cancelled as one-updates-the-other (OUO) — see `_reconcile_exchange_state()` / F-019 in CURRENT_STATE.md. Manual OCO via `/oco_futures` uses the same prefix format from `oco_<uuid>_`.
+- **`POST /api/v1/trade/order/oco_futures`** -> Req: `{ symbol, side, quantity, stopPrice?, takeProfitPrice? }` -> `{ orders: Order[] }`. Shares the `oco_<uuid>_<sl|tp>` clientOrderId prefix convention.
 - **`POST /api/v1/trade/order/close`** -> Req: `{ symbol }` -> `Order` (market reduceOnly fill)
 - **`DELETE /api/v1/trade/order`** -> Req: `?symbol=&orderId=` -> `Order` (cancelled)
 - **`DELETE /api/v1/trade/all-orders`** -> Req: `?symbol=` -> `Order[]` (cancelled)
@@ -90,37 +112,4 @@ type SymbolLock = { reason: "bot"|"manual", sessionId: string|null, lockedAt: st
 - **`GET /api/v1/algo/chaos/symbols`** -> `{ tieredSymbols: { symbol, tier: "high"|"mid"|"low" }[] }`
 - **`GET /api/v1/algo/sessions`** -> `{ sessions: LiveSession[] }`
 - **`GET /api/v1/algo/sessions/:id`** -> `{ session: LiveSession }`
-- **`GET /api/v1/algo/sessions/:id/equity`** -> `{ equity: string, pnl: string }`
-- **`POST /api/v1/algo/sessions/:id/stop`** -> `{ status: "stopping" }`
-- **`DELETE /api/v1/algo/sessions/:id`** -> `{ deleted: true }` (stopped sessions only)
-- **`DELETE /api/v1/algo/sessions`** -> `{ deleted: number }` (bulk delete all stopped)
-- **`GET /api/v1/algo/symbols/locked`** -> `{ locked: { [symbol]: SymbolLock } }`
-
-### Order History
-```typescript
-type TradeRecord = { tradeId: string, source: "bot"|"manual", executedBy: string, symbol: string, side: "long"|"short", qty: string, entryPrice: string, exitPrice: string, slOrderPrice?: string, tpOrderPrice?: string, margin?: string, liquidationPrice?: string, leverage?: number, netPnl: string, pnlPct?: string, fee?: string, exitReason: string, sessionId?: string, strategyName?: string, entryTime: string, exitTime: string, createdAt: string }
-```
-- **`GET /api/v1/order-history`** -> Query: `?symbol?&source?&side?&executedBy?&page?&limit?` -> `{ records: TradeRecord[], pagination: Pagination }` (default page=1, limit=50, max limit=200; sorted by exitTime DESC; engine is sole writer, server reads)
-
-### Engine ↔ Node (Internal — not exposed to client)
-- **`PATCH /internal/algo/sessions/:id/stats`** (Engine → Node) -> Req: `{ pnl, openPositions, status?, event?, eventData? }`
-- **`POST /internal/algo/sessions/:id/place-order`** (Engine → Node) -> Binance order proxied through server credentials
-- **`POST /internal/algo/sessions/:id/close-position`** (Engine → Node) -> Market reduceOnly close via server credentials
-- **`POST /internal/algo/sessions/:id/set-leverage`** (Engine → Node) -> Set leverage via server credentials
-- **`POST /internal/algo/sessions/:id/get-position`** (Engine → Node) -> Query current position via server credentials
-
-### Engine AlgoTrading Routes (Node → Engine)
-- **`POST /algo/sessions`** -> Req: `{ session_id, strategy_name, symbols, timeframe, params, capital, leverage, fee_rate }` (no `paper_trading` field — engine always targets Binance Testnet; `fee_rate` injected from Exchange Settings)
-- **`POST /algo/sessions/:id/stop`**
-- **`GET /algo/sessions/:id/status`** -> `{ status, pnl, openPositions }`
-
-## Socket.IO Events
-- Envelope: `{ event: string, data: any }`
-- `backtest:progress` -> `{ jobId, pct, message }`
-- `backtest:complete` -> `{ jobId, resultId }`
-- `algo:session:update` -> `{ sessionId, status?, pnl?, openPositions?, symbolStats? }` — **partial**: clients merge only the fields present. Most emits carry `status`/`pnl`/`openPositions`; the per-symbol aggregation emits carry only `symbolStats` (a `{ [symbol]: { trades, qty, notional, realisedPnl, leverage } }` map re-derived from `tradeRecords` on each close and on session stop; also persisted on the `LiveSession` doc).
-- `algo:position:open` -> `{ sessionId, symbol, side, qty, price, leverage, timestamp }` (`leverage` = per-symbol clamped value)
-- `algo:position:close` -> `{ sessionId, symbol, pnl, exitPrice, exitReason, timestamp }`
-
-## Error Codes
-`AUTH_REQUIRED`, `AUTH_INVALID`, `NOT_FOUND`, `VALIDATION_ERROR`, `STRATEGY_ERROR`, `ENGINE_UNAVAILABLE`, `INSUFFICIENT_CANDLES`, `EXCHANGE_ERROR`, `JOB_FAILED`, `TOO_MANY_REQUESTS`, `DB_SYNC_ERROR`, `SYMBOL_LOCKED`, `SESSION_NOT_FOUND`, `SESSION_NOT_RUNNING`, `BOT_START_FAILED`.
+- **`GET /api/v1/algo/sessions/:id/equity`** -> `{ equity: 

@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { AlertTriangle, ChevronLeft, ChevronRight } from 'lucide-react'
+import { useSearchParams } from 'react-router-dom'
+import { AlertTriangle, History } from 'lucide-react'
 import PageWrapper from '@/components/layout/PageWrapper'
 import PageHeader from '@/components/ui/PageHeader'
 import {
@@ -8,10 +8,13 @@ import {
   TableBody,
   TableRow,
   TableHead,
+  SortableHeader,
   TableCell,
 } from '@/components/ui/table'
+import { Pagination } from '@/components/ui/pagination'
+import { EmptyState } from '@/components/ui/empty-state'
 import { useOrderHistory } from '@/hooks/useOrderHistory'
-import { formatPrice, formatPnl, formatIsoDate } from '@/utils/formatters'
+import { formatPrice, formatPnl, formatDateTime } from '@/utils/formatters'
 
 const LIMIT = 50
 
@@ -43,25 +46,49 @@ function NullablePrice({ value }) {
   return <>{formatPrice(value)}</>
 }
 
+// Query-param state lives entirely in the URL (per §3.4): ?symbol=&side=&page=&sort=&order=
+// so filters/sort/page survive refresh and are shareable/back-button-able.
 export default function OrderHistory() {
-  const [page, setPage] = useState(1)
-  const [filters, setFilters] = useState({ symbol: '', side: '' })
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10) || 1)
+  const symbol = searchParams.get('symbol') || ''
+  const side = searchParams.get('side') || ''
+  const sort = searchParams.get('sort') || 'exitTime'
+  const order = searchParams.get('order') || 'desc'
+  const sortState = { key: sort, dir: order }
 
   const { data, isLoading, isError, error } = useOrderHistory({
     page,
     limit: LIMIT,
-    filters: Object.fromEntries(
-      Object.entries(filters).filter(([, v]) => v !== '')
-    ),
+    filters: { symbol, side },
+    sort,
+    order,
   })
 
   const records = data?.records ?? []
   const pagination = data?.pagination ?? { page: 1, totalPages: 1, total: 0 }
 
+  function updateParams(patch) {
+    const next = new URLSearchParams(searchParams)
+    Object.entries(patch).forEach(([key, value]) => {
+      if (value === undefined || value === null || value === '') next.delete(key)
+      else next.set(key, String(value))
+    })
+    setSearchParams(next)
+  }
+
   function handleFilterChange(e) {
     const { name, value } = e.target
-    setFilters((prev) => ({ ...prev, [name]: value }))
-    setPage(1)
+    updateParams({ [name]: value, page: 1 })
+  }
+
+  function handleSort(key) {
+    if (sort === key) {
+      updateParams({ order: order === 'asc' ? 'desc' : 'asc', page: 1 })
+    } else {
+      updateParams({ sort: key, order: 'asc', page: 1 })
+    }
   }
 
   return (
@@ -70,16 +97,24 @@ export default function OrderHistory() {
         title="Order History"
         actions={
           <div className="flex items-center gap-3">
+            <label htmlFor="oh-symbol-filter" className="sr-only">
+              Filter by symbol
+            </label>
             <input
+              id="oh-symbol-filter"
               name="symbol"
-              value={filters.symbol}
+              value={symbol}
               onChange={handleFilterChange}
               placeholder="Symbol (e.g. BTCUSDT)"
               className="bg-[#0a0d13] border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-gray-100 placeholder-slate-600 focus:outline-none focus:border-emerald-500 w-44 transition-colors"
             />
+            <label htmlFor="oh-side-filter" className="sr-only">
+              Filter by side
+            </label>
             <select
+              id="oh-side-filter"
               name="side"
-              value={filters.side}
+              value={side}
               onChange={handleFilterChange}
               className="bg-[#0a0d13] border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-emerald-500 transition-colors"
             >
@@ -92,7 +127,7 @@ export default function OrderHistory() {
       />
 
       {isError && (
-        <div className="flex items-center gap-3 bg-red-950/20 border border-red-800/40 rounded-lg p-4 mb-4 text-red-400">
+        <div role="alert" className="flex items-center gap-3 bg-red-950/20 border border-red-800/40 rounded-lg p-4 mb-4 text-red-400">
           <AlertTriangle size={16} className="shrink-0" />
           <span className="text-sm">
             {error?.response?.data?.message ?? error?.message ?? 'Failed to load order history'}
@@ -105,17 +140,27 @@ export default function OrderHistory() {
           <TableHeader>
             <TableRow>
               <TableHead>ID</TableHead>
-              <TableHead>Symbol</TableHead>
-              <TableHead>Side</TableHead>
+              <SortableHeader sortKey="symbol" sortState={sortState} onSort={handleSort}>
+                Symbol
+              </SortableHeader>
+              <SortableHeader sortKey="side" sortState={sortState} onSort={handleSort}>
+                Side
+              </SortableHeader>
               <TableHead>Executed By</TableHead>
               <TableHead>Entry</TableHead>
               <TableHead>SL</TableHead>
               <TableHead>TP</TableHead>
               <TableHead>Exit</TableHead>
-              <TableHead>Margin</TableHead>
+              <SortableHeader sortKey="margin" sortState={sortState} onSort={handleSort}>
+                Margin
+              </SortableHeader>
               <TableHead>Liq. Price</TableHead>
-              <TableHead>Net P&L</TableHead>
-              <TableHead className="text-right">Time</TableHead>
+              <SortableHeader sortKey="netPnl" sortState={sortState} onSort={handleSort}>
+                Net P&amp;L
+              </SortableHeader>
+              <SortableHeader sortKey="exitTime" sortState={sortState} onSort={handleSort} className="text-right">
+                Time (UTC)
+              </SortableHeader>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -132,8 +177,12 @@ export default function OrderHistory() {
 
             {!isLoading && records.length === 0 && (
               <TableRow>
-                <TableCell colSpan={12} className="text-center text-slate-400 py-16">
-                  No trades recorded yet.
+                <TableCell colSpan={12} className="p-0">
+                  <EmptyState
+                    icon={History}
+                    title="No trades recorded yet"
+                    description="Completed bot and manual round-trip trades will show up here once you close a position."
+                  />
                 </TableCell>
               </TableRow>
             )}
@@ -141,7 +190,7 @@ export default function OrderHistory() {
             {!isLoading &&
               records.map((r) => (
                 <TableRow key={r.tradeId}>
-                  <TableCell className="font-mono tabular-nums text-xs text-slate-500">
+                  <TableCell className="font-mono tabular-nums text-xs text-slate-400">
                     {r.tradeId.replace('trade_', '')}
                   </TableCell>
                   <TableCell className="font-medium text-gray-100">{r.symbol}</TableCell>
@@ -158,46 +207,4 @@ export default function OrderHistory() {
                   </TableCell>
                   <TableCell>{formatPrice(r.exitPrice)}</TableCell>
                   <TableCell className="text-gray-300">
-                    <NullablePrice value={r.margin} />
-                  </TableCell>
-                  <TableCell className="text-yellow-400/80">
-                    <NullablePrice value={r.liquidationPrice} />
-                  </TableCell>
-                  <TableCell>
-                    <PnlCell value={r.netPnl} />
-                  </TableCell>
-                  <TableCell className="text-right text-slate-500 text-xs font-mono tabular-nums">
-                    {formatIsoDate(r.exitTime)}
-                  </TableCell>
-                </TableRow>
-              ))}
-          </TableBody>
-        </Table>
-
-        {!isLoading && pagination.totalPages > 1 && (
-          <div className="flex items-center justify-between px-4 py-3 border-t border-slate-700/50">
-            <span className="text-sm text-slate-400">
-              {pagination.total} trades · page {pagination.page} of {pagination.totalPages}
-            </span>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                disabled={page <= 1}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-gray-100 hover:bg-slate-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-              >
-                <ChevronLeft size={16} />
-              </button>
-              <button
-                onClick={() => setPage((p) => Math.min(pagination.totalPages, p + 1))}
-                disabled={page >= pagination.totalPages}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-gray-100 hover:bg-slate-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-              >
-                <ChevronRight size={16} />
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-    </PageWrapper>
-  )
-}
+                    <NullablePrice value={r.ma
