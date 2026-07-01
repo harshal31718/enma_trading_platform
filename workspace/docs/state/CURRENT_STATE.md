@@ -195,6 +195,22 @@ Last updated: 2026-07-01 (Auth branch — Phases 1–5 complete)
 - **Dynamic Table Sorting**: Wired client-side column sorting via the `useTableSort` state hook and `<SortableHeader>` UI components in RecentActivityTable, StrategyLeaderboard, and CachedCandlesTable.
 - **Richer Empty States**: Replaced all generic centered text placeholders with the styled, interactive `<EmptyState>` component across Trade tabs, Backtest runs history, Strategies, and the Admin whitelist email log.
 
+- **UI Polish & Responsiveness (Phase 3)**:
+  - **Code Quality & Refactoring**:
+    - Migrated local state equity fetching in `SessionCard.jsx` to a TanStack Query `useQuery` hook with automatic enabled/disabled state on accordion toggle. Reactive close positions socket events update the query cache via `queryClient.setQueryData`.
+    - Converted custom overlays (TP/SL, Leverage) in `Trade.jsx` to Radix-based `<Dialog>` components to guarantee focus trapping.
+    - Surfaced console error catches into real-time user-facing toast alerts on the live Algo bot dashboards.
+    - Enabled lazy loading (`React.lazy()`) and `<Suspense>` wrappers on heavy visual sub-components (`CorrelationHeatmap`, `AggregateMarginGauge`, `NetExposureBar`, `SimulationResults`, `BacktestCalendar`, `NewSessionWizard`, `NewBacktestWizard`, `ChaosWizard`) to decrease initial chunk loads.
+  - **Design System Sweep**:
+    - Created a shared `<Badge>` component in `client/src/components/ui/badge.jsx` with logical aliases (`long`/`short`, `buy`/`sell`, `running`/`stopped`, `bot`/`manual`) mapping to correct HSL color tokens.
+    - Replaced raw container divs with `<Card>` panels inside `StrategyCard.jsx` and `AdminPanel.jsx`.
+    - Standardized form submit and control buttons to standard `<Button>` components in `Settings.jsx`.
+    - Updated raw skeletons (`AlgoTrading.jsx`, `NewSessionWizard.jsx`, `NewBacktestWizard.jsx`) from raw grays to the midnight-approved `bg-slate-800/50` / `bg-slate-800/20` class tokens.
+  - **Mobile Responsiveness**:
+    - Refactored `Trade.jsx` to use a responsive tab bar layout selecting between Chart, Order Book, Recent Trades, and Order Form on viewports below `1024px` while keeping the desktop side-by-side terminal intact.
+    - Wrapped tables (`PositionsTable` and `OpenOrdersTable`) in `overflow-x-auto` layouts to prevent text clipping.
+    - Added responsive columns (`grid-cols-2 sm:grid-cols-4 lg:grid-cols-7` and `grid-cols-1 sm:grid-cols-2`) to backtest metric grids and wizards.
+
 ---
 
 ## In Progress

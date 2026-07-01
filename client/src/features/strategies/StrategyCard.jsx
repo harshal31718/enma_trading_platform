@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { Code2 } from 'lucide-react'
 import CodeViewer from './CodeViewer'
 
@@ -18,7 +19,7 @@ export default function StrategyCard({ strategy, onClone }) {
 
   return (
     <>
-      <div className="h-full bg-title-bg border border-slate-700/50 rounded-xl p-5 flex flex-col justify-between gap-3 overflow-hidden hover:border-slate-600/70 hover:shadow-2xl hover:shadow-black/20 transition-all duration-300">
+      <Card className="h-full rounded-xl p-5 flex flex-col justify-between gap-3 overflow-hidden hover:border-slate-600/70 hover:shadow-2xl hover:shadow-black/20 transition-all duration-300">
         <div className="flex flex-col gap-3">
           <div className="flex items-start justify-between -mx-5 -mt-5 px-5 pt-5 pb-3 title-fade">
             <div className="flex items-center gap-2">
@@ -60,7 +61,7 @@ export default function StrategyCard({ strategy, onClone }) {
             </button>
           </div>
         </div>
-      </div>
+      </Card>
       <CodeViewer
         strategyId={strategy.id}
         strategyName={strategy.name}

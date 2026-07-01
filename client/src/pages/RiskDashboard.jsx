@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, Suspense } from 'react'
 import toast from 'react-hot-toast'
 import { AlertTriangle, X } from 'lucide-react'
 import { ConfirmDialog } from '../components/ui/confirm-dialog'
@@ -10,10 +10,11 @@ import {
   useLiveRiskMetrics
 } from '../hooks/useRiskSettings'
 import { useStrategies } from '../hooks/useStrategies'
-import CorrelationHeatmap from '../components/risk/CorrelationHeatmap'
-import AggregateMarginGauge from '../components/risk/AggregateMarginGauge'
-import NetExposureBar from '../components/risk/NetExposureBar'
-import SimulationResults from '../components/risk/SimulationResults'
+
+const CorrelationHeatmap = React.lazy(() => import('../components/risk/CorrelationHeatmap'))
+const AggregateMarginGauge = React.lazy(() => import('../components/risk/AggregateMarginGauge'))
+const NetExposureBar = React.lazy(() => import('../components/risk/NetExposureBar'))
+const SimulationResults = React.lazy(() => import('../components/risk/SimulationResults'))
 
 function InlineError({ error, onClear }) {
   if (!error) return null
@@ -246,13 +247,19 @@ export default function RiskDashboard() {
           
           {/* ────────────────── ZONE 1: REAL-TIME PORTFOLIO RISK ────────────────── */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <AggregateMarginGauge
-              marginUsed={liveMetrics?.aggregateMarginUsed}
-              walletBalance={liveMetrics?.aggregateWalletBalance}
-              netLeverage={liveMetrics?.netLeverage}
-            />
-            <NetExposureBar exposures={liveMetrics?.exposures} />
-            <CorrelationHeatmap matrix={liveMetrics?.correlationMatrix} />
+            <Suspense fallback={<div className="h-44 bg-slate-950 border border-slate-850 animate-pulse rounded-lg" />}>
+              <AggregateMarginGauge
+                marginUsed={liveMetrics?.aggregateMarginUsed}
+                walletBalance={liveMetrics?.aggregateWalletBalance}
+                netLeverage={liveMetrics?.netLeverage}
+              />
+            </Suspense>
+            <Suspense fallback={<div className="h-44 bg-slate-950 border border-slate-850 animate-pulse rounded-lg" />}>
+              <NetExposureBar exposures={liveMetrics?.exposures} />
+            </Suspense>
+            <Suspense fallback={<div className="h-44 bg-slate-950 border border-slate-850 animate-pulse rounded-lg" />}>
+              <CorrelationHeatmap matrix={liveMetrics?.correlationMatrix} />
+            </Suspense>
           </div>
 
           {/* Live VaR Banner */}
@@ -584,7 +591,9 @@ export default function RiskDashboard() {
 
           {/* ────────────────── ZONE 3: HISTORICAL RISK PROFILER ────────────────── */}
           <div className="grid grid-cols-1 gap-6">
-            <SimulationResults />
+            <Suspense fallback={<div className="h-96 bg-slate-950 border border-slate-850 animate-pulse rounded-lg" />}>
+              <SimulationResults />
+            </Suspense>
           </div>
 
         </div>

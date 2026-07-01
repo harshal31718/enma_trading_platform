@@ -6,6 +6,7 @@ import PageWrapper from '@/components/layout/PageWrapper'
 import PageHeader from '@/components/ui/PageHeader'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import EmptyState from '@/components/ui/empty-state'
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 
 export default function AdminPanel() {
   const queryClient = useQueryClient()
@@ -51,12 +52,12 @@ export default function AdminPanel() {
     <PageWrapper>
       <PageHeader title="Admin Panel" />
 
-      <div className="mx-auto max-w-2xl">
-        <div className="bg-title-bg border border-slate-700/50 rounded-xl p-6">
-          <div className="flex items-center gap-2 -mx-6 -mt-6 px-6 py-4 mb-6 rounded-t-xl title-fade border-b border-slate-700/50">
-            <Shield size={15} className="text-emerald-400" />
-            <h2 className="text-gray-100 text-sm font-medium">Email Whitelist</h2>
-          </div>
+      <Card className="mx-auto max-w-2xl rounded-xl">
+        <CardHeader className="flex flex-row items-center gap-2 border-b border-slate-700/50 mb-6">
+          <Shield size={15} className="text-emerald-400" />
+          <CardTitle className="text-sm font-medium">Email Whitelist</CardTitle>
+        </CardHeader>
+        <CardContent className="p-6 pt-0">
 
           {addMutation.isError && (
             <div className="flex items-start gap-2 bg-red-950/20 border border-red-800/40 rounded-lg p-3 mb-4">
@@ -124,8 +125,8 @@ export default function AdminPanel() {
               ))}
             </ul>
           )}
-        </div>
-      </div>
+        </CardContent>
+      </Card>
     </PageWrapper>
   )
 }

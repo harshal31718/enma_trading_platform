@@ -1,15 +1,16 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, Suspense, lazy } from 'react'
 import { Plus, Trash2, Bot, Zap } from 'lucide-react'
 import { useAlgoSessions, useStopSession, useDeleteAllStopped } from '../hooks/useAlgoSessions'
 import { useSocket } from '../hooks/useSocket'
 import { useQueryClient } from '@tanstack/react-query'
 import SessionCard from '../components/algo/SessionCard'
-import NewSessionWizard from '../components/algo/NewSessionWizard'
-import ChaosWizard from '../components/algo/ChaosWizard'
 import PageWrapper from '../components/layout/PageWrapper'
 import PageHeader from '../components/ui/PageHeader'
 import { Dialog, DialogContent } from '../components/ui/dialog'
 import { ConfirmDialog } from '../components/ui/confirm-dialog'
+
+const NewSessionWizard = lazy(() => import('../components/algo/NewSessionWizard'))
+const ChaosWizard = lazy(() => import('../components/algo/ChaosWizard'))
 
 export default function AlgoTrading() {
   const [showWizard, setShowWizard] = useState(false)
@@ -116,7 +117,7 @@ export default function AlgoTrading() {
       {isLoading ? (
         <div className="border border-slate-700/50">
           {[1, 2, 3].map((i) => (
-            <div key={i} className="bg-gray-900 border-b border-gray-800 p-4 animate-pulse h-24" />
+            <div key={i} className="bg-slate-800/20 border-b border-slate-700/30 p-4 animate-pulse h-24" />
           ))}
         </div>
       ) : sessions.length === 0 ? (
@@ -142,25 +143,29 @@ export default function AlgoTrading() {
 
       <Dialog open={showWizard} onOpenChange={(open) => { if (!open) setShowWizard(false) }}>
         <DialogContent className="w-[920px] max-w-[95vw] max-h-[88vh] flex flex-col overflow-hidden gap-0 p-0 bg-title-bg">
-          <NewSessionWizard
-            onCancel={() => setShowWizard(false)}
-            onSuccess={() => {
-              setShowWizard(false)
-              qc.invalidateQueries({ queryKey: ['algo', 'sessions'] })
-            }}
-          />
+          <Suspense fallback={<div className="p-8 text-center font-mono text-xs text-slate-400">Loading Wizard...</div>}>
+            <NewSessionWizard
+              onCancel={() => setShowWizard(false)}
+              onSuccess={() => {
+                setShowWizard(false)
+                qc.invalidateQueries({ queryKey: ['algo', 'sessions'] })
+              }}
+            />
+          </Suspense>
         </DialogContent>
       </Dialog>
 
       <Dialog open={showChaosWizard} onOpenChange={(open) => { if (!open) setShowChaosWizard(false) }}>
         <DialogContent className="w-[920px] max-w-[95vw] max-h-[88vh] flex flex-col overflow-hidden gap-0 p-0 bg-title-bg border-slate-700/50">
-          <ChaosWizard
-            onCancel={() => setShowChaosWizard(false)}
-            onSuccess={() => {
-              setShowChaosWizard(false)
-              qc.invalidateQueries({ queryKey: ['algo', 'sessions'] })
-            }}
-          />
+          <Suspense fallback={<div className="p-8 text-center font-mono text-xs text-slate-400">Loading Wizard...</div>}>
+            <ChaosWizard
+              onCancel={() => setShowChaosWizard(false)}
+              onSuccess={() => {
+                setShowChaosWizard(false)
+                qc.invalidateQueries({ queryKey: ['algo', 'sessions'] })
+              }}
+            />
+          </Suspense>
         </DialogContent>
       </Dialog>
     </PageWrapper>

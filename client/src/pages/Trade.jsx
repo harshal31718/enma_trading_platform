@@ -270,7 +270,7 @@ function ChartContainer({ timeframe, setTimeframe }) {
         </div>
       )}
 
-      <div ref={containerRef} className="flex-1 min-h-0" />
+      <div ref={containerRef} className="flex-1 min-h-[300px] lg:min-h-0" />
 
       {/* Timeframe buttons — absolute overlay, aligned with TradingView logo */}
       <div className="absolute bottom-8 left-12 z-10 flex items-center gap-0.5">
@@ -737,7 +737,8 @@ function PositionsTable({ data, isLoading, account }) {
         onConfirm={() => { const s = confirmCloseSymbol; setConfirmCloseSymbol(null); handleClose(s) }}
       />
 
-      <table className="w-full text-xs">
+      <div className="w-full overflow-x-auto">
+        <table className="w-full text-xs">
         <thead>
           <tr className="text-gray-400 border-b border-slate-700/50 bg-title-bg title-fade">
             {cols.map((c, i) => (
@@ -828,6 +829,7 @@ function PositionsTable({ data, isLoading, account }) {
           )}
         </tbody>
       </table>
+      </div>
     </>
   )
 }
@@ -858,7 +860,7 @@ function OpenOrdersTable({ data, isLoading, onOcoBannerEvent }) {
   }
 
   return (
-    <div className="w-full">
+    <div className="w-full overflow-x-auto">
       <ConfirmDialog
         open={confirmCancelAllOpen}
         onOpenChange={setConfirmCancelAllOpen}
@@ -1645,6 +1647,7 @@ function OrderForm() {
 function TradeInner() {
   const { symbol } = useCurrentSymbol()
   const [timeframe, setTimeframe] = useState('1m')
+  const [activeTab, setActiveTab] = useState('chart')
   const [ocoToast, setOcoToast] = useState(null)
   const [ocoBanner, setOcoBanner] = useState(null)
   const toastTimerRef = useRef(null)
@@ -1671,6 +1674,34 @@ function TradeInner() {
     <div className="bg-[#060a0f] text-gray-100 flex flex-col h-[calc(100vh-56px)] overflow-hidden mt-14">
       <TickerBar />
 
+      {/* Mobile Tab Bar */}
+      <div className="flex border-b border-slate-700/50 bg-[#0a0d13] lg:hidden select-none">
+        <button
+          onClick={() => setActiveTab('chart')}
+          className={`flex-1 py-2 text-xs font-semibold text-center border-b-2 transition-colors ${activeTab === 'chart' ? 'border-emerald-400 text-emerald-400' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
+        >
+          Chart
+        </button>
+        <button
+          onClick={() => setActiveTab('book')}
+          className={`flex-1 py-2 text-xs font-semibold text-center border-b-2 transition-colors ${activeTab === 'book' ? 'border-emerald-400 text-emerald-400' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
+        >
+          Order Book
+        </button>
+        <button
+          onClick={() => setActiveTab('trades')}
+          className={`flex-1 py-2 text-xs font-semibold text-center border-b-2 transition-colors ${activeTab === 'trades' ? 'border-emerald-400 text-emerald-400' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
+        >
+          Recent Trades
+        </button>
+        <button
+          onClick={() => setActiveTab('form')}
+          className={`flex-1 py-2 text-xs font-semibold text-center border-b-2 transition-colors ${activeTab === 'form' ? 'border-emerald-400 text-emerald-400' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
+        >
+          Trade
+        </button>
+      </div>
+
       {/* Short-lived toast notification */}
       {ocoToast && (
         <div className="absolute top-20 right-4 z-50 bg-title-bg border border-slate-700/50 rounded-lg px-4 py-2.5 text-xs text-gray-100 shadow-2xl max-w-xs animate-fade-in">
@@ -1679,25 +1710,33 @@ function TradeInner() {
       )}
 
       {/* Main content — fills remaining height */}
-      <div className="flex flex-1 min-h-0">
+      <div className="flex flex-col lg:flex-row flex-1 min-h-0 overflow-y-auto lg:overflow-hidden">
 
         {/* Left col — chart + bottom panel (fills remaining width) */}
-        <div className="flex flex-col flex-1 min-w-0 min-h-0 border-r border-slate-700/50">
-          <ChartContainer timeframe={timeframe} setTimeframe={setTimeframe} />
-          <BottomPanel
-            ocoBanner={ocoBanner}
-            onDismissBanner={() => setOcoBanner(null)}
-          />
+        <div className="flex flex-col flex-1 min-w-0 min-h-0 border-b lg:border-b-0 lg:border-r border-slate-700/50">
+          <div className={`${activeTab === 'chart' ? 'flex' : 'hidden'} lg:flex flex-col flex-1 min-h-0`}>
+            <ChartContainer timeframe={timeframe} setTimeframe={setTimeframe} />
+          </div>
+          <div className="flex flex-col min-h-0">
+            <BottomPanel
+              ocoBanner={ocoBanner}
+              onDismissBanner={() => setOcoBanner(null)}
+            />
+          </div>
         </div>
 
         {/* Middle col — order book + recent trades, fixed width */}
-        <div className="flex flex-col min-h-0 shrink-0 w-[200px]">
-          <OrderBook />
-          <RecentTrades />
+        <div className={`${activeTab === 'book' || activeTab === 'trades' ? 'flex' : 'hidden'} lg:flex flex-col min-h-0 shrink-0 w-full lg:w-[200px] border-b lg:border-b-0 lg:border-r border-slate-700/50`}>
+          <div className={`${activeTab === 'book' ? 'flex' : 'hidden'} lg:flex flex-col min-h-0 flex-1 border-b border-slate-700/50`}>
+            <OrderBook />
+          </div>
+          <div className={`${activeTab === 'trades' ? 'flex' : 'hidden'} lg:flex flex-col min-h-0 flex-1`}>
+            <RecentTrades />
+          </div>
         </div>
 
         {/* Right col — order form, fixed width */}
-        <div className="flex flex-col min-h-0 shrink-0 w-[260px]">
+        <div className={`${activeTab === 'form' ? 'flex' : 'hidden'} lg:flex flex-col min-h-0 shrink-0 w-full lg:w-[260px]`}>
           <OrderForm />
         </div>
 

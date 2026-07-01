@@ -23,10 +23,11 @@ import { Button } from '../components/ui/button'
 import { Dialog, DialogContent } from '../components/ui/dialog'
 import { Pagination } from '../components/ui/pagination'
 const EquityCurve = lazy(() => import('../components/charts/EquityCurve'))
-import NewBacktestWizard from '../features/backtest/NewBacktestWizard'
 import BacktestHistory from '../features/backtest/BacktestHistory'
 import BacktestMetricCard from '../features/backtest/BacktestMetricCard'
-import BacktestCalendar from '../features/backtest/BacktestCalendar'
+
+const NewBacktestWizard = lazy(() => import('../features/backtest/NewBacktestWizard'))
+const BacktestCalendar = lazy(() => import('../features/backtest/BacktestCalendar'))
 
 import {
   useRunBacktest,
@@ -410,9 +411,9 @@ export default function Backtest() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-0 h-[calc(100vh-100px)] overflow-hidden">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-0 h-auto lg:h-[calc(100vh-100px)] overflow-y-auto lg:overflow-hidden">
         {/* Left Column — Run History */}
-        <div className="lg:col-span-1 border-r border-slate-700/50 h-full overflow-hidden">
+        <div className="lg:col-span-1 border-b lg:border-b-0 lg:border-r border-slate-700/50 h-[320px] lg:h-full overflow-hidden">
           <BacktestHistory
             data={listData?.backtests}
             selectedId={selectedResultId}
@@ -429,7 +430,7 @@ export default function Backtest() {
         </div>
 
         {/* Right Column */}
-        <div className="lg:col-span-3 h-full overflow-hidden flex flex-col">
+        <div className="lg:col-span-3 h-[600px] lg:h-full overflow-hidden flex flex-col">
           {activeJobId ? (
             <Card className="h-fit flex flex-col items-center justify-start py-12 px-6">
               <div className="space-y-6 text-center max-w-md w-full">
@@ -563,7 +564,7 @@ export default function Backtest() {
                       { label: 'Liquidations', value: m.liquidations ?? 0, cls: (m.liquidations ?? 0) > 0 ? 'text-red-400' : 'text-gray-100' },
                     ]
                     return (
-                      <div className="grid grid-cols-7 border-b border-slate-700/50 divide-x divide-y divide-slate-700/50">
+                      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 border-b border-slate-700/50 divide-x divide-y divide-slate-700/50">
                         {metrics.map(({ label, value, cls }) => (
                           <div key={label} className="flex flex-col justify-center px-3 h-11 bg-title-bg">
                             <span className="text-[9px] uppercase tracking-wider text-gray-500 leading-none mb-1">{label}</span>
@@ -595,10 +596,12 @@ export default function Backtest() {
 
                   {allTradesData && allTradesData.length > 0 && (
                     <div className="border-b border-slate-700/50">
-                      <BacktestCalendar
-                        trades={allTradesData}
-                        onSelectPeriod={(trades) => { }}
-                      />
+                      <Suspense fallback={<div className="h-48 flex items-center justify-center"><Loader2 className="size-6 animate-spin text-emerald-400" /></div>}>
+                        <BacktestCalendar
+                          trades={allTradesData}
+                          onSelectPeriod={(trades) => { }}
+                        />
+                      </Suspense>
                     </div>
                   )}
 
@@ -749,10 +752,12 @@ export default function Backtest() {
 
         <Dialog open={showWizard} onOpenChange={setShowWizard}>
           <DialogContent className="max-w-2xl bg-title-bg border-slate-700/50">
-            <NewBacktestWizard
-              onCancel={() => setShowWizard(false)}
-              onRun={(config) => { setShowWizard(false); handleRun(config) }}
-            />
+            <Suspense fallback={<div className="p-8 text-center font-mono text-xs text-slate-400">Loading Wizard...</div>}>
+              <NewBacktestWizard
+                onCancel={() => setShowWizard(false)}
+                onRun={(config) => { setShowWizard(false); handleRun(config) }}
+              />
+            </Suspense>
           </DialogContent>
         </Dialog>
     </PageWrapper>

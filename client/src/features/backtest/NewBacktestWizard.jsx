@@ -169,26 +169,39 @@ export default function NewBacktestWizard({ onCancel, onRun }) {
         </button>
 
         {/* Center: Steps */}
-        <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 flex-1 min-w-0">
-          {stepLabels.map((label, i) => (
-            <div key={i} className="flex items-center gap-2">
-              <div
-                className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium ${
-                  i + 1 < step
-                    ? 'bg-emerald-600 text-white'
-                    : i + 1 === step
-                    ? 'bg-emerald-600/30 text-emerald-400 border border-emerald-500'
-                    : 'bg-gray-800 text-gray-500'
-                }`}
-              >
-                {i + 1}
+        <div className="flex-1 flex justify-center min-w-0">
+          {/* Mobile step info */}
+          <div className="flex sm:hidden flex-col items-center select-none font-mono">
+            <span className="text-[10px] text-slate-500 uppercase tracking-widest leading-none mb-1">
+              Step {step} of {totalSteps}
+            </span>
+            <span className="text-xs text-gray-200 font-semibold truncate leading-none">
+              {stepLabels[step - 1]}
+            </span>
+          </div>
+
+          {/* Desktop steps list */}
+          <div className="hidden sm:flex flex-wrap items-center justify-center gap-x-4 gap-y-2">
+            {stepLabels.map((label, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <div
+                  className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium ${
+                    i + 1 < step
+                      ? 'bg-emerald-600 text-white'
+                      : i + 1 === step
+                      ? 'bg-emerald-600/30 text-emerald-400 border border-emerald-500'
+                      : 'bg-slate-800 text-gray-500'
+                  }`}
+                >
+                  {i + 1}
+                </div>
+                <span className={`text-xs ${i + 1 === step ? 'text-gray-200' : 'text-gray-500'}`}>
+                  {label}
+                </span>
+                {i < stepLabels.length - 1 && <ChevronRight size={14} className="text-gray-600" />}
               </div>
-              <span className={`text-xs ${i + 1 === step ? 'text-gray-200' : 'text-gray-500'}`}>
-                {label}
-              </span>
-              {i < stepLabels.length - 1 && <ChevronRight size={14} className="text-gray-600" />}
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
 
         {/* Right: Next / Run */}
@@ -222,7 +235,7 @@ export default function NewBacktestWizard({ onCancel, onRun }) {
             {loadingStrategies ? (
               <div className="space-y-2">
                 {[1, 2, 3].map((i) => (
-                  <div key={i} className="h-14 bg-gray-800 rounded animate-pulse" />
+                  <div key={i} className="h-14 bg-slate-800/50 rounded animate-pulse" />
                 ))}
               </div>
             ) : (
@@ -329,14 +342,14 @@ export default function NewBacktestWizard({ onCancel, onRun }) {
         {logical === 4 && (
           <div className="space-y-4">
             <h3 className="text-sm font-medium text-gray-300 mb-4">Simulation Settings</h3>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <DateInput label="Start Date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
               <DateInput label="End Date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
             </div>
             {!datesValid && (
               <p className="text-yellow-500 text-xs">End date must be after start date.</p>
             )}
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm text-gray-300 mb-1">Starting Capital (USDT)</label>
                 <input

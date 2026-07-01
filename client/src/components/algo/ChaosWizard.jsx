@@ -341,26 +341,39 @@ export default function ChaosWizard({ onCancel, onSuccess }) {
         </button>
 
         {/* Center: Steps */}
-        <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 flex-1 min-w-0">
-          {stepLabels.map((label, i) => (
-            <div key={i} className="flex items-center gap-2">
-              <div
-                className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-semibold ${
-                  i + 1 < step
-                    ? 'bg-purple-600 text-white'
-                    : i + 1 === step
-                    ? 'bg-purple-600/30 text-purple-400 border border-purple-500'
-                    : 'bg-slate-800 text-slate-400'
-                }`}
-              >
-                {i + 1}
+        <div className="flex-1 flex justify-center min-w-0">
+          {/* Mobile step info */}
+          <div className="flex sm:hidden flex-col items-center select-none font-mono">
+            <span className="text-[10px] text-slate-500 uppercase tracking-widest leading-none mb-1">
+              Step {step} of 4
+            </span>
+            <span className="text-xs text-gray-200 font-semibold truncate leading-none">
+              {stepLabels[step - 1]}
+            </span>
+          </div>
+
+          {/* Desktop steps list */}
+          <div className="hidden sm:flex flex-wrap items-center justify-center gap-x-4 gap-y-2">
+            {stepLabels.map((label, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <div
+                  className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-semibold ${
+                    i + 1 < step
+                      ? 'bg-purple-600 text-white'
+                      : i + 1 === step
+                      ? 'bg-purple-600/30 text-purple-400 border border-purple-500'
+                      : 'bg-slate-800 text-slate-400'
+                  }`}
+                >
+                  {i + 1}
+                </div>
+                <span className={`text-xs ${i + 1 === step ? 'text-gray-200 font-medium' : 'text-slate-400'}`}>
+                  {label}
+                </span>
+                {i < stepLabels.length - 1 && <ChevronRight size={14} className="text-slate-700" />}
               </div>
-              <span className={`text-xs ${i + 1 === step ? 'text-gray-200 font-medium' : 'text-slate-400'}`}>
-                {label}
-              </span>
-              {i < stepLabels.length - 1 && <ChevronRight size={14} className="text-slate-700" />}
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
 
         {/* Right: Next / Activate */}

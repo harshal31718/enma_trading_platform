@@ -1,6 +1,8 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { ChevronDown, ChevronUp, Square, ArrowUpCircle, ArrowDownCircle, CheckCircle2, Info, AlertTriangle, Activity, Trash2, TrendingUp, BarChart2, ScrollText } from 'lucide-react'
 import { LineChart, Line, ResponsiveContainer, XAxis, YAxis, ReferenceLine, Tooltip } from 'recharts'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import toast from 'react-hot-toast'
 import { useSocket } from '../../hooks/useSocket'
 import { useDeleteSession } from '../../hooks/useAlgoSessions'
 import useBinanceWS from '../../hooks/useBinanceWS'
@@ -63,8 +65,8 @@ const EquityTooltip = ({ active, payload }) => {
 }
 
 export default function SessionCard({ session, onStop, stopping }) {
+  const qc = useQueryClient()
   const [expanded, setExpanded] = useState(false)
-  const [equity, setEquity] = useState([])
   const [logs, setLogs] = useState(() => [...(session.logs || [])].reverse())
   // Seed from the persisted session snapshot so live PnL resolves on first
   // render / after reload — not just for positions opened while the socket was
@@ -90,15 +92,21 @@ export default function SessionCard({ session, onStop, stopping }) {
   const baselineVal = parseFloat(session.capital || 0)
   const currentVal = baselineVal + pnlNum
 
-  // Fetch realized-equity history (tradeHistory) on expand — for running and stopped alike
+  const { data: equity = [], error: equityError } = useQuery({
+    queryKey: ['algo', 'sessions', session._id, 'equity'],
+    queryFn: async () => {
+      const res = await api.get(`/api/v1/algo/sessions/${session._id}/equity`)
+      return res.data.data?.equity || []
+    },
+    enabled: expanded,
+    staleTime: 5000,
+  })
+
   useEffect(() => {
-    if (!expanded) return
-    let cancelled = false
-    api.get(`/api/v1/algo/sessions/${session._id}/equity`)
-      .then(res => { if (!cancelled) setEquity(res.data.data?.equity || []) })
-      .catch(console.error)
-    return () => { cancelled = true }
-  }, [expanded, session._id])
+    if (equityError) {
+      toast.error(`Failed to load equity history: ${equityError.response?.data?.error?.message || equityError.message}`)
+    }
+  }, [equityError])
 
   const handleLog = useCallback((data) => {
     if (String(data.sessionId) === String(session._id)) {
@@ -141,7 +149,7 @@ export default function SessionCard({ session, onStop, stopping }) {
     })
     const tradePnl = parseFloat(data.pnl)
     if (!Number.isNaN(tradePnl)) {
-      setEquity(prev => {
+      qc.setQueryData(['algo', 'sessions', session._id, 'equity'], (prev = []) => {
         const last = prev.length ? parseFloat(prev[prev.length - 1].balance) : baselineVal
         return [...prev, { timestamp: new Date().toISOString(), balance: String(last + tradePnl) }]
       })
@@ -468,7 +476,7 @@ export default function SessionCard({ session, onStop, stopping }) {
               </div>
               <div className="space-y-2">
                 {/* Row 1 — trade counts & rates */}
-                <div className="grid grid-cols-4 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   <StatTile label="Open trades" value={openTrades} />
                   <StatTile label="Closed trades" value={closedTrades} />
                   <StatTile
@@ -482,7 +490,7 @@ export default function SessionCard({ session, onStop, stopping }) {
                   />
                 </div>
                 {/* Row 2 — live / realised pnl & drawdown */}
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   <StatTile
                     label="Live PnL"
                     value={livePnl == null ? '—' : fmtPnl(livePnl)}

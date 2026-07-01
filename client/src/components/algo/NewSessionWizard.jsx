@@ -177,7 +177,7 @@ export default function NewSessionWizard({ onCancel, onSuccess }) {
             {loadingStrategies ? (
               <div className="space-y-2">
                 {[1, 2, 3].map((i) => (
-                  <div key={i} className="h-14 bg-gray-800 rounded animate-pulse" />
+                  <div key={i} className="h-14 bg-slate-800/50 rounded animate-pulse" />
                 ))}
               </div>
             ) : (

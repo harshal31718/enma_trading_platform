@@ -5,6 +5,7 @@ import toast from 'react-hot-toast'
 import api from '../lib/axios'
 import PageWrapper from '@/components/layout/PageWrapper'
 import PageHeader from '@/components/ui/PageHeader'
+import { Button } from '@/components/ui/button'
 import { useExchangeSettings, useUpdateExchangeSettings } from '../hooks/useExchangeSettings'
 import RiskParamsFields, { RISK_DEFAULTS, riskDefaultsFromSettings, riskFieldsToPayload } from '../components/RiskParamsFields'
 
@@ -276,13 +277,13 @@ export default function Settings() {
                     autoComplete="off"
                   />
                 </div>
-                <button
+                <Button
                   type="submit"
                   disabled={saveKeysMutation.isPending || (!apiKey && !apiSecret)}
-                  className="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+                  variant="secondary"
                 >
                   {saveKeysMutation.isPending ? 'Saving…' : 'Save API Keys'}
-                </button>
+                </Button>
               </form>
               <p className="mt-3 text-[11px] text-slate-600">
                 Keys are encrypted (AES-256-GCM) before storage. They are never logged or sent to third parties.
@@ -362,13 +363,13 @@ export default function Settings() {
               </div>
 
               <div className="mt-6">
-                <button
+                <Button
                   type="submit"
                   disabled={updateMutation.isPending || settingsLoading}
-                  className="bg-purple-700 hover:bg-purple-800 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+                  className="bg-purple-700 hover:bg-purple-800 text-white"
                 >
                   {updateMutation.isPending ? 'Saving…' : 'Save Chaos Settings'}
-                </button>
+                </Button>
               </div>
             </form>
           </div>
@@ -505,13 +506,12 @@ export default function Settings() {
             </div>
 
             <div className="mt-6">
-              <button
+              <Button
                 type="submit"
                 disabled={updateMutation.isPending || settingsLoading}
-                className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
               >
                 {updateMutation.isPending ? 'Saving…' : 'Save Exchange Settings'}
-              </button>
+              </Button>
             </div>
           </form>
         </div>
