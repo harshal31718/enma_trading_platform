@@ -17,7 +17,7 @@
 - Socket.IO client 4 for realtime
 - React Router 6 for routing
 - Axios for HTTP requests (configured instance in `src/lib/axios.js`)
-- Radix UI primitives (`@radix-ui/react-dialog`, `-dropdown-menu`, `-label`, `-select`, `-tabs`, `-tooltip`) — unstyled accessible components
+- Radix UI primitives (`@radix-ui/react-dialog`, `-alert-dialog` (used by `components/ui/confirm-dialog.jsx`), `-dropdown-menu`, `-label`, `-select`, `-tabs`, `-tooltip`) — unstyled accessible components
 - `lucide-react` for icons
 - `clsx` + `tailwind-merge` + `class-variance-authority` — utility-class helpers (used in `src/lib/utils.js`)
 - **Dev:** `vitest`, `@testing-library/react`, `msw` (API mocking), `puppeteer` (E2E)
@@ -306,4 +306,63 @@ Both hooks follow the standard TanStack Query pattern used by all other hooks in
 ## useCandles.js rules
 
 - Only `useSymbols()` hook is exported — `useAvailableImports()` and `useImportCandles()` are removed
-- `useSymbols()` calls `GET /api/v1/candles/symbols` a
+- `useSymbols()` calls `GET /api/v1/candles/symbols` and returns `{ futures, spot }`
+- No other candle hooks exist in this file
+
+---
+
+## Styling rules
+
+> **Single source of truth:** `workspace/docs/core/UI_STYLE_GUIDE.md` — the canonical
+> midnight-blue trading-terminal palette, typography, component patterns, and the full
+> **What to Avoid** list. Read it before writing or changing any `className`. To restyle an
+> existing component/page to the guide, run the **`/restyle-ui`** skill. The rules below are the
+> condensed working set; if they ever disagree with the guide, the guide wins.
+
+- Dark theme by default — the app is a trading dashboard, always dark
+- Color palette (use these Tailwind classes consistently — midnight blue, not warm gray):
+  - Page / deepest layer: `bg-[#060a0f]` (also terminal/log boxes)
+  - Panel rows: `bg-[#080b10]` (row 1) / `bg-[#0a0d13]` (row 2, inputs/selects)
+  - Card / panel base: `bg-[#0d1117]`
+  - Borders: cards/dividers `border-slate-700/50`; inner tiles `border-slate-700/40`; table rows `border-slate-700/30`
+  - Text primary / values: `text-gray-100`
+  - Text secondary labels / body copy: `text-slate-400` (`text-slate-500` on `#060a0f` is ~3.0:1, below WCAG AA 4.5:1 — do not use it for labels, descriptions, or any copy under 18px). `text-slate-500` is reserved for purely decorative/muted captions at ≥18px only. Section titles: `text-gray-300`.
+  - Profit/positive P&L: `text-emerald-400`, `bg-emerald-400/10` — **never `text-green-400`**
+  - Loss/negative P&L: `text-red-400`, `bg-red-400/10`
+  - Primary action: `bg-emerald-600 hover:bg-emerald-700`; destructive: `bg-red-600 hover:bg-red-700`
+  - Warning / caution: `text-amber-400`, `bg-amber-400/10`
+  - Monospaced data (prices, qty, timestamps): `font-mono tabular-nums`
+- **Avoid** `bg-gray-900`/`bg-gray-800` panel backgrounds (too warm), `text-gray-500` labels
+  (use `text-slate-400`), glass buttons for primary/destructive actions, `opacity-50` to dim rows,
+  and inline styles. See the guide's "What to Avoid".
+- **Favorites & Highlights:** Stars and interactive favorites elements follow standard highlighting (yellow when selected; e.g., `text-yellow-400`). P&L coloring rules (`text-emerald-400` / `text-red-400`) apply to green/red ticker price feeds only.
+
+---
+
+## Number & date/time formatting policy
+
+- **Always use `src/utils/formatters.js`** — never inline `toFixed`, `toLocaleString`, `toLocaleDateString`, or `toLocaleTimeString`. Local one-off `fmtPrice`/`fmtQty`/`fmtNum` helpers are drift and must be removed in favor of the canonical functions.
+- **Precision:** prices `formatPrice` (2 dp, `$` prefix, thousands separator); quantities `formatQty` (max 6 dp, trimmed); percentages `formatPct`/`formatSignedPct`/`formatPercent`; large aggregates (notional, volume) `formatCompact` (e.g. `$1.2M`).
+- **Dates/times:** `formatDateTime`/`formatDate` render in **UTC by default** and append a `UTC` suffix so traders in different timezones read the same absolute time. Pass `{ local: true }` only where the local viewing timezone is explicitly relevant (rare). The Trade page header shows a small "UTC" indicator next to timestamps for this reason.
+
+## Chart rules (Recharts)
+
+- Equity curve: `LineChart` with `CartesianGrid`, `Tooltip`, `ResponsiveContainer`
+- Drawdown: `AreaChart` with negative fill
+- Trade distribution: `BarChart`
+- All charts use dark theme colors matching the palette above:
+  - Axis ticks `fill: '#94a3b8'` (slate-400), axis/grid stroke `#1e293b` (slate-800)
+  - Baseline reference line `stroke="#4B5563" strokeDasharray="3 3"`
+  - Equity line `#34d399` (emerald-400) when positive, `#f87171` (red-400) when negative
+- Chart wrappers live in `src/components/charts/`
+- Never use chart libraries other than Recharts
+
+---
+
+## What Claude Code must NOT do in client/
+
+- Add a state management library other than Zustand + TanStack Query
+- Use CSS modules, styled-components, or inline styles
+- Call the Python engine directly (all calls go through `server/`)
+- Store sensitive data (API keys, tokens beyond JWT) in localStorage or state
+- Use class components or legacy React patterns

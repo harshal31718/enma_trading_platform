@@ -350,12 +350,12 @@ export default function ChaosWizard({ onCancel, onSuccess }) {
                     ? 'bg-purple-600 text-white'
                     : i + 1 === step
                     ? 'bg-purple-600/30 text-purple-400 border border-purple-500'
-                    : 'bg-slate-800 text-slate-500'
+                    : 'bg-slate-800 text-slate-400'
                 }`}
               >
                 {i + 1}
               </div>
-              <span className={`text-xs ${i + 1 === step ? 'text-gray-200 font-medium' : 'text-slate-500'}`}>
+              <span className={`text-xs ${i + 1 === step ? 'text-gray-200 font-medium' : 'text-slate-400'}`}>
                 {label}
               </span>
               {i < stepLabels.length - 1 && <ChevronRight size={14} className="text-slate-700" />}
@@ -554,7 +554,7 @@ export default function ChaosWizard({ onCancel, onSuccess }) {
                 onChange={(e) => setLeverage(parseInt(e.target.value, 10) || 1)}
                 className="w-full h-10 rounded-lg border border-slate-700/50 bg-[#0a0d13] px-3 text-sm text-gray-100 focus:outline-none focus:border-purple-500 transition-colors"
               />
-              <p className="text-[10px] text-slate-500 mt-1">
+              <p className="text-[10px] text-slate-400 mt-1">
                 * Note: Server clamps leverage per-symbol based on Binance exchange caps.
               </p>
             </div>
@@ -629,7 +629,7 @@ export default function ChaosWizard({ onCancel, onSuccess }) {
               <AlertTriangle size={18} className="text-amber-400 shrink-0 mt-0.5" />
               <div>
                 <p className="text-amber-350 text-xs font-semibold">Stress Test Invariant</p>
-                <p className="text-slate-500 text-[11px] mt-1 leading-relaxed">
+                <p className="text-slate-400 text-[11px] mt-1 leading-relaxed">
                   Chaos Mode launches multiple concurrent trading loops. Selected symbols will be locked in Redis, blocking manual entry on those markets until stopped. Ensure your Binance Testnet balance has sufficient funds to afford the initial margin.
                 </p>
               </div>

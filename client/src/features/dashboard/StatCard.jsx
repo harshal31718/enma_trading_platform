@@ -13,7 +13,7 @@ export default function StatCard({ title, value, subtext, icon: Icon }) {
       </div>
       <div className="mt-3">
         <div className="text-xl font-bold tabular-nums text-gray-100">{value}</div>
-        {subtext && <div className="text-xs text-slate-500 mt-0.5">{subtext}</div>}
+        {subtext && <div className="text-xs text-slate-400 mt-0.5">{subtext}</div>}
       </div>
     </Card>
   )

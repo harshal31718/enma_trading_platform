@@ -12,7 +12,7 @@ import { ResponsiveContainer, AreaChart, Area } from 'recharts'
 export default function DrawdownSparkline({ data = [] }) {
   if (!data || data.length === 0) {
     return (
-      <div className="h-[90px] flex items-center justify-center border border-slate-700/50 bg-title-bg text-slate-500 text-xs">
+      <div className="h-[90px] flex items-center justify-center border border-slate-700/50 bg-title-bg text-slate-400 text-xs">
         No drawdown data
       </div>
     )

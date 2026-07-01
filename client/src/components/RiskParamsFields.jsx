@@ -61,7 +61,7 @@ export default function RiskParamsFields({ values = RISK_DEFAULTS, onChange, inp
             onChange={set(f.key)}
             className={inputCls}
           />
-          <p className="text-slate-500 text-[10px]">{f.hint}</p>
+          <p className="text-slate-400 text-[10px]">{f.hint}</p>
         </div>
       ))}
     </div>

@@ -34,7 +34,7 @@ export default function RecentActivityTable({ data }) {
       <CardContent>
         {!data || data.length === 0 ? (
           <div className="border border-dashed border-slate-700/30 p-8 flex flex-col items-center justify-center text-center gap-3">
-            <p className="text-slate-500 text-xs">No simulation history found.</p>
+            <p className="text-slate-400 text-xs">No simulation history found.</p>
             <Button
               variant="outline"
               size="sm"
@@ -75,7 +75,7 @@ export default function RecentActivityTable({ data }) {
                           {pnl.value} ({formatSignedPct(run.metrics.netProfitPct)})
                         </span>
                       ) : (
-                        <span className="text-slate-500">—</span>
+                        <span className="text-slate-400">—</span>
                       )}
                     </TableCell>
                     <TableCell className="text-right">
@@ -85,7 +85,7 @@ export default function RecentActivityTable({ data }) {
                         onClick={() => navigate(`/backtest?jobId=${run.jobId}`)}
                         className="h-8 w-8 p-0"
                       >
-                        <ChevronRight className="size-4 text-slate-500 hover:text-emerald-400" />
+                        <ChevronRight className="size-4 text-slate-400 hover:text-emerald-400" />
                       </Button>
                     </TableCell>
                   </TableRow>

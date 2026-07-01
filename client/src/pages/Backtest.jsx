@@ -726,4 +726,31 @@ export default function Backtest() {
                     <Card className="h-full flex justify-center items-center py-32">
                       <Loader2 className="size-8 animate-spin text-emerald-400" />
                     </Card>
-       
+                  ) : (
+                    <ComparisonTable results={comparisonResults} />
+                  )}
+                </TabsContent>
+              </div>
+            </Tabs>
+            ) : (
+              <Card className="h-full flex flex-col items-center justify-center gap-3 py-32">
+                <div className="size-12 rounded-full bg-gray-800 flex items-center justify-center">
+                  <Activity className="size-5 text-gray-600" />
+                </div>
+                <p className="text-gray-400 text-sm">Select a backtest from history, or run a new one.</p>
+              </Card>
+            )}
+          </div>
+        </div>
+
+        <Dialog open={showWizard} onOpenChange={setShowWizard}>
+          <DialogContent className="max-w-2xl bg-title-bg border-slate-700/50">
+            <NewBacktestWizard
+              onCancel={() => setShowWizard(false)}
+              onRun={(config) => { setShowWizard(false); handleRun(config) }}
+            />
+          </DialogContent>
+        </Dialog>
+    </PageWrapper>
+  )
+}

@@ -48,7 +48,7 @@ export default function CorrelationHeatmap({ matrix = {} }) {
         <h3 className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-2 z-10">
           Rolling 30d Asset Correlation
         </h3>
-        <p className="text-xs text-slate-500 z-10">No active positions to correlate</p>
+        <p className="text-xs text-slate-400 z-10">No active positions to correlate</p>
       </div>
     )
   }
@@ -63,7 +63,7 @@ export default function CorrelationHeatmap({ matrix = {} }) {
         style={{ gridTemplateColumns: `repeat(${symbols.length + 1}, minmax(0, 1fr))` }}
       >
         {/* Top-left empty corner cell */}
-        <div className="text-[10px] font-semibold text-slate-500 p-1 border border-slate-800/20"></div>
+        <div className="text-[10px] font-semibold text-slate-400 p-1 border border-slate-800/20"></div>
         {/* Column Headers */}
         {symbols.map((s) => (
           <div

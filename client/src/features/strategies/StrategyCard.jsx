@@ -30,7 +30,7 @@ export default function StrategyCard({ strategy, onClone }) {
           <p className="text-slate-300 text-sm leading-relaxed">{strategy.description}</p>
           
           {/* Subtle placeholder metrics */}
-          <div className="text-[10px] font-mono text-slate-500 flex items-center gap-2 mt-1 select-none">
+          <div className="text-[10px] font-mono text-slate-400 flex items-center gap-2 mt-1 select-none">
             <span>Win Rate: <span className="text-slate-400">--%</span></span>
             <span className="text-slate-700">|</span>
             <span>PnL: <span className="text-slate-400">--</span></span>
@@ -38,7 +38,7 @@ export default function StrategyCard({ strategy, onClone }) {
         </div>
 
         <div className="flex items-center justify-between mt-1 gap-2 pt-3 border-t border-slate-800/60">
-          <span className="text-slate-500 text-[10px] font-mono">
+          <span className="text-slate-400 text-[10px] font-mono">
             {new Date(strategy.createdAt).toLocaleDateString('en-US', {
               year: 'numeric', month: 'short', day: 'numeric'
             })}
@@ -54,7 +54,7 @@ export default function StrategyCard({ strategy, onClone }) {
             </Button>
             <button
               onClick={() => onClone?.()}
-              className="text-xs text-slate-500 hover:text-slate-300 transition-colors font-semibold px-1"
+              className="text-xs text-slate-400 hover:text-slate-300 transition-colors font-semibold px-1"
             >
               Clone
             </button>

@@ -242,13 +242,13 @@ export default function Login() {
             className="mt-10 flex flex-wrap items-center gap-2 animate-fade-in"
             style={{ animationDelay: '1000ms' }}
           >
-            <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mr-2">
+            <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mr-2">
               Built with
             </span>
             {TECH_STACK.map((tech) => (
               <span
                 key={tech}
-                className="text-[10px] font-mono text-slate-500 bg-slate-800/40 border border-slate-700/30 px-2 py-0.5"
+                className="text-[10px] font-mono text-slate-400 bg-slate-800/40 border border-slate-700/30 px-2 py-0.5"
               >
                 {tech}
               </span>
@@ -291,7 +291,7 @@ export default function Login() {
                 <Lock size={13} className="text-slate-400" />
                 <span className="text-xs font-semibold text-slate-300">Invite Only</span>
               </div>
-              <p className="text-[11px] text-slate-500 pl-[21px]">
+              <p className="text-[11px] text-slate-400 pl-[21px]">
                 Access is restricted to invited members
               </p>
             </div>

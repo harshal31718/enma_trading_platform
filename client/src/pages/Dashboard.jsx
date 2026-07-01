@@ -60,7 +60,7 @@ function RecentRunsPanel({ runs }) {
   return (
     <div className="divide-y divide-slate-700/30">
       {runs.length === 0 ? (
-        <div className="m-4 border border-dashed border-slate-700/30 py-6 px-4 text-center text-slate-500 text-xs">
+        <div className="m-4 border border-dashed border-slate-700/30 py-6 px-4 text-center text-slate-400 text-xs">
           No simulation history found.
         </div>
       ) : (
@@ -78,7 +78,7 @@ function RecentRunsPanel({ runs }) {
                   </span>
                   <Badge variant={statusVariant(run.status)}>{run.status}</Badge>
                 </div>
-                <div className="text-[10px] text-slate-500 font-mono mt-0.5 truncate">
+                <div className="text-[10px] text-slate-400 font-mono mt-0.5 truncate">
                   {run.symbol} · {run.timeframe}
                 </div>
               </div>
@@ -88,7 +88,7 @@ function RecentRunsPanel({ runs }) {
                     {pnl.value}
                   </div>
                 ) : (
-                  <div className="text-slate-500 text-xs">—</div>
+                  <div className="text-slate-400 text-xs">—</div>
                 )}
               </div>
               <Button
@@ -97,7 +97,7 @@ function RecentRunsPanel({ runs }) {
                 onClick={() => navigate(`/backtest?jobId=${run.jobId}`)}
                 className="h-7 w-7 p-0 ml-2"
               >
-                <ChevronRight className="size-4 text-slate-500 group-hover:text-emerald-400" />
+                <ChevronRight className="size-4 text-slate-400 group-hover:text-emerald-400" />
               </Button>
             </div>
           )
@@ -112,7 +112,7 @@ function RecentLiveRunsPanel({ sessions }) {
   return (
     <div className="divide-y divide-slate-700/30">
       {sessions.length === 0 ? (
-        <div className="m-4 border border-dashed border-slate-700/30 py-6 px-4 text-center text-slate-500 text-xs">
+        <div className="m-4 border border-dashed border-slate-700/30 py-6 px-4 text-center text-slate-400 text-xs">
           No live session history found.
         </div>
       ) : (
@@ -131,7 +131,7 @@ function RecentLiveRunsPanel({ sessions }) {
                   </span>
                   <Badge variant={statusVariant(session.status)}>{session.status}</Badge>
                 </div>
-                <div className="text-[10px] text-slate-500 font-mono mt-0.5 truncate">
+                <div className="text-[10px] text-slate-400 font-mono mt-0.5 truncate">
                   {session.symbols.join(', ')} · {session.timeframe}
                 </div>
               </div>
@@ -146,7 +146,7 @@ function RecentLiveRunsPanel({ sessions }) {
                 onClick={() => navigate('/algo')}
                 className="h-7 w-7 p-0 ml-2"
               >
-                <ChevronRight className="size-4 text-slate-500 group-hover:text-emerald-400" />
+                <ChevronRight className="size-4 text-slate-400 group-hover:text-emerald-400" />
               </Button>
             </div>
           )

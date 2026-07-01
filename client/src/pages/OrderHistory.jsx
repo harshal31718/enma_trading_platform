@@ -207,4 +207,35 @@ export default function OrderHistory() {
                   </TableCell>
                   <TableCell>{formatPrice(r.exitPrice)}</TableCell>
                   <TableCell className="text-gray-300">
-                    <NullablePrice value={r.ma
+                    <NullablePrice value={r.margin} />
+                  </TableCell>
+                  <TableCell className="text-yellow-400/80">
+                    <NullablePrice value={r.liquidationPrice} />
+                  </TableCell>
+                  <TableCell>
+                    <PnlCell value={r.netPnl} />
+                  </TableCell>
+                  <TableCell className="text-right text-slate-400 text-xs font-mono tabular-nums">
+                    {formatDateTime(r.exitTime)}
+                  </TableCell>
+                </TableRow>
+              ))}
+          </TableBody>
+        </Table>
+
+        {!isLoading && pagination.totalPages > 1 && (
+          <div className="flex items-center justify-between px-4 py-3 border-t border-slate-700/50">
+            <span className="text-sm text-slate-400">
+              {pagination.total} trades &middot; page {pagination.page} of {pagination.totalPages}
+            </span>
+            <Pagination
+              page={pagination.page}
+              totalPages={pagination.totalPages}
+              onPageChange={(p) => updateParams({ page: p })}
+            />
+          </div>
+        )}
+      </div>
+    </PageWrapper>
+  )
+}

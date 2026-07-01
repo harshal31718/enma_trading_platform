@@ -28,7 +28,7 @@ export default function SimulationResults() {
             <h3 className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider mb-1">
               Backtest & Historical Risk Profiler
             </h3>
-            <p className="text-xs text-slate-500">Analyze leverage sensitivity and Monte Carlo bootstrap resamples</p>
+            <p className="text-xs text-slate-400">Analyze leverage sensitivity and Monte Carlo bootstrap resamples</p>
           </div>
           
           <select
@@ -46,10 +46,10 @@ export default function SimulationResults() {
           </select>
         </div>
 
-        {listLoading && <p className="text-xs text-slate-500 italic text-center py-4">Loading backtests...</p>}
+        {listLoading && <p className="text-xs text-slate-400 italic text-center py-4">Loading backtests...</p>}
 
         {!selectedJobId && !listLoading && (
-          <div className="border border-dashed border-slate-800 p-8 text-center text-xs text-slate-500 font-mono italic">
+          <div className="border border-dashed border-slate-800 p-8 text-center text-xs text-slate-400 font-mono italic">
             Please select a completed backtest from the dropdown to run leverage sensitivity and Monte Carlo resampling simulations.
           </div>
         )}
@@ -76,7 +76,7 @@ export default function SimulationResults() {
               <div className="overflow-x-auto">
                 <table className="w-full text-xs font-mono text-left">
                   <thead>
-                    <tr className="border-b border-slate-800 text-[10px] text-slate-500 uppercase tracking-wider">
+                    <tr className="border-b border-slate-800 text-[10px] text-slate-400 uppercase tracking-wider">
                       <th className="pb-2">Leverage</th>
                       <th className="pb-2 text-right">Net Profit %</th>
                       <th className="pb-2 text-right">Max Drawdown %</th>
@@ -116,7 +116,7 @@ export default function SimulationResults() {
                   </span>
                 </div>
                 
-                <h5 className="text-[9px] uppercase tracking-wider text-slate-500 font-bold mb-2">
+                <h5 className="text-[9px] uppercase tracking-wider text-slate-400 font-bold mb-2">
                   Drawdown Excursion Probability
                 </h5>
                 <div className="flex flex-col gap-1.5 font-mono text-xs">

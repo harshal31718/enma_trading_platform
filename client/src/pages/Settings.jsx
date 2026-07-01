@@ -233,14 +233,14 @@ export default function Settings() {
                   Soon
                 </span>
                 <div className="flex items-center gap-2">
-                  <Zap size={15} className="text-slate-500 group-hover:text-slate-400 transition-colors" />
-                  <span className="text-sm font-medium text-slate-500 group-hover:text-slate-400 transition-colors">
+                  <Zap size={15} className="text-slate-400 group-hover:text-slate-400 transition-colors" />
+                  <span className="text-sm font-medium text-slate-400 group-hover:text-slate-400 transition-colors">
                     Live / Mainnet
                   </span>
                 </div>
                 <p className="text-xs text-slate-600 leading-relaxed">
                   Real trades on Binance Futures Mainnet. Requires{' '}
-                  <code className="text-slate-500">BINANCE_MAINNET_API_KEY</code>.
+                  <code className="text-slate-400">BINANCE_MAINNET_API_KEY</code>.
                 </p>
               </button>
             </div>
@@ -250,7 +250,7 @@ export default function Settings() {
               <div className="flex items-center gap-2 mb-3">
                 <KeyRound size={13} className="text-slate-400" />
                 <p className="text-gray-300 text-xs font-semibold">Binance API Keys (Testnet)</p>
-                <span className="ml-auto text-[10px] text-slate-500">
+                <span className="ml-auto text-[10px] text-slate-400">
                   {keysStatus?.hasApiKey && keysStatus?.hasApiSecret
                     ? '● Keys saved'
                     : '○ Not configured'}
@@ -347,7 +347,7 @@ export default function Settings() {
                     ? <div className={skeletonCls} />
                     : <input type="number" min="1" max="20" value={chaosMaxStrategies}
                         onChange={(e) => setChaosMaxStrategies(e.target.value)} className={inputCls} required />}
-                  <p className="text-slate-500 text-[10px] mt-1">Hard cap; 0 selected → auto-pick up to this many</p>
+                  <p className="text-slate-400 text-[10px] mt-1">Hard cap; 0 selected → auto-pick up to this many</p>
                 </div>
                 <div>
                   <label className={labelCls}>Max Manual Symbols per Strategy (0–20)</label>
@@ -355,7 +355,7 @@ export default function Settings() {
                     ? <div className={skeletonCls} />
                     : <input type="number" min="0" max="20" value={chaosMaxManualSymbols}
                         onChange={(e) => setChaosMaxManualSymbols(e.target.value)} className={inputCls} required />}
-                  <p className="text-slate-500 text-[10px] mt-1">0 = all auto; the rest are distributed from the pool</p>
+                  <p className="text-slate-400 text-[10px] mt-1">0 = all auto; the rest are distributed from the pool</p>
                 </div>
               </div>
 
@@ -437,7 +437,7 @@ export default function Settings() {
                   ? <div className={skeletonCls} />
                   : <input type="number" step="0.001" min="0" max="1" value={takerFee}
                       onChange={(e) => setTakerFee(e.target.value)} className={inputCls} required />}
-                <p className="text-slate-500 text-[10px] mt-1">e.g. 0.05 = 0.05%</p>
+                <p className="text-slate-400 text-[10px] mt-1">e.g. 0.05 = 0.05%</p>
               </div>
               <div>
                 <label className={labelCls}>Maker Fee %</label>
@@ -445,7 +445,7 @@ export default function Settings() {
                   ? <div className={skeletonCls} />
                   : <input type="number" step="0.001" min="0" max="1" value={makerFee}
                       onChange={(e) => setMakerFee(e.target.value)} className={inputCls} required />}
-                <p className="text-slate-500 text-[10px] mt-1">e.g. 0.02 = 0.02%</p>
+                <p className="text-slate-400 text-[10px] mt-1">e.g. 0.02 = 0.02%</p>
               </div>
             </div>
 
@@ -497,7 +497,7 @@ export default function Settings() {
               {settingsLoading
                 ? <div className="grid grid-cols-2 gap-3">{[0, 1, 2, 3].map((i) => <div key={i} className={skeletonCls} />)}</div>
                 : <RiskParamsFields values={risk} onChange={setRisk} inputClassName={inputCls} labelClassName={labelCls} />}
-              <p className="text-slate-500 text-[10px] mt-2">
+              <p className="text-slate-400 text-[10px] mt-2">
                 Pre-fills the backtest form and bot wizard. Each run can override these.
               </p>
             </div>
@@ -512,7 +512,7 @@ export default function Settings() {
                     ? <div className={skeletonCls} />
                     : <input type="number" step="0.001" min="0" max="5" value={slippagePct}
                         onChange={(e) => setSlippagePct(e.target.value)} className={inputCls} required />}
-                  <p className="text-slate-500 text-[10px] mt-1">Adverse slippage applied to every market fill</p>
+                  <p className="text-slate-400 text-[10px] mt-1">Adverse slippage applied to every market fill</p>
                 </div>
 
                 <div className="flex items-center gap-3">
@@ -532,7 +532,7 @@ export default function Settings() {
                     />
                   </button>
                   <span className={labelCls}>Funding Enabled</span>
-                  <span className="text-slate-500 text-[10px]">Charge funding every 8h during simulation</span>
+                  <span className="text-slate-400 text-[10px]">Charge funding every 8h during simulation</span>
                 </div>
 
                 {fundingEnabled && (
@@ -542,7 +542,7 @@ export default function Settings() {
                       ? <div className={skeletonCls} />
                       : <input type="number" step="0.001" min="0" max="1" value={fundingRate}
                           onChange={(e) => setFundingRate(e.target.value)} className={inputCls} required />}
-                    <p className="text-slate-500 text-[10px] mt-1">Per-8h rate, e.g. 0.01 = 0.01%</p>
+                    <p className="text-slate-400 text-[10px] mt-1">Per-8h rate, e.g. 0.01 = 0.01%</p>
                   </div>
                 )}
               </div>

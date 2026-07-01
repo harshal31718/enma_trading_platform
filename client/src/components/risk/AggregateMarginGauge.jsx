@@ -26,7 +26,7 @@ export default function AggregateMarginGauge({
         <h3 className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider mb-2">
           Margin Ratio & Leverage
         </h3>
-        <p className="text-xs text-slate-500 mb-4">Locked Margin vs Free Wallet Balance</p>
+        <p className="text-xs text-slate-400 mb-4">Locked Margin vs Free Wallet Balance</p>
       </div>
 
       <div className="flex items-center justify-around gap-4 my-2">
@@ -57,22 +57,22 @@ export default function AggregateMarginGauge({
             <span className={`text-base font-mono font-bold ${textColor}`}>
               {ratio.toFixed(1)}%
             </span>
-            <span className="text-[9px] uppercase tracking-wider text-slate-500">Margin</span>
+            <span className="text-[9px] uppercase tracking-wider text-slate-400">Margin</span>
           </div>
         </div>
 
         {/* Detailed Stats */}
         <div className="flex flex-col gap-2 font-mono">
           <div>
-            <span className="text-[9px] block uppercase text-slate-500 tracking-wider">Locked Margin</span>
+            <span className="text-[9px] block uppercase text-slate-400 tracking-wider">Locked Margin</span>
             <span className="text-sm font-semibold text-slate-200">${used.toFixed(2)}</span>
           </div>
           <div>
-            <span className="text-[9px] block uppercase text-slate-500 tracking-wider">Wallet Balance</span>
+            <span className="text-[9px] block uppercase text-slate-400 tracking-wider">Wallet Balance</span>
             <span className="text-sm font-semibold text-slate-200">${total.toFixed(2)}</span>
           </div>
           <div>
-            <span className="text-[9px] block uppercase text-slate-500 tracking-wider">Net Leverage</span>
+            <span className="text-[9px] block uppercase text-slate-400 tracking-wider">Net Leverage</span>
             <span className={`text-sm font-semibold ${textColor}`}>{lev.toFixed(2)}x</span>
           </div>
         </div>

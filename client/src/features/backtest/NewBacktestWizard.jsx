@@ -438,4 +438,10 @@ export default function NewBacktestWizard({ onCancel, onRun }) {
         {error && (
           <div className="flex items-start gap-2 bg-red-950/20 border border-red-800/40 rounded-lg p-3 text-sm text-red-400">
             <AlertTriangle size={16} className="mt-0.5 shrink-0" />
-            <span>{err
+            <span>{error}</span>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}

@@ -29,13 +29,13 @@ export default function NetExposureBar({ exposures = {} }) {
           Portfolio Exposure & Directionality
         </h3>
         {total > 0 && (
-          <p className="text-xs text-slate-500 mb-4">Total Aggregate Exposure: ${(total).toFixed(2)}</p>
+          <p className="text-xs text-slate-400 mb-4">Total Aggregate Exposure: ${(total).toFixed(2)}</p>
         )}
       </div>
 
       {total === 0 ? (
         <div className="flex-1 flex flex-col items-center justify-center py-8">
-          <p className="text-xs text-slate-500 italic">No active portfolio exposure</p>
+          <p className="text-xs text-slate-400 italic">No active portfolio exposure</p>
         </div>
       ) : (
         <>
@@ -61,7 +61,7 @@ export default function NetExposureBar({ exposures = {} }) {
                 </div>
               )}
             </div>
-            <div className="flex justify-between text-[9px] font-mono text-slate-500 mt-1">
+            <div className="flex justify-between text-[9px] font-mono text-slate-400 mt-1">
               <span>Long: ${longNotional.toFixed(2)}</span>
               <span>Short: ${shortNotional.toFixed(2)}</span>
             </div>

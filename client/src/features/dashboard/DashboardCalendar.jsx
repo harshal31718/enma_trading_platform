@@ -63,7 +63,7 @@ export default function DashboardCalendar({ days = [], timeframe = 'all' }) {
                     <CalendarIcon className="size-4 text-emerald-400" />
                     <span>Performance Calendar</span>
                 </div>
-                <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">
+                <span className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">
                     {filtered.length} day{filtered.length === 1 ? '' : 's'}
                 </span>
             </div>

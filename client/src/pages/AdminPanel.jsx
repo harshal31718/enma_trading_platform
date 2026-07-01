@@ -84,6 +84,15 @@ export default function AdminPanel() {
             </button>
           </form>
 
+          <ConfirmDialog
+            open={!!confirmRemoveEmail}
+            onOpenChange={(v) => { if (!v) setConfirmRemoveEmail(null) }}
+            title="Remove from whitelist?"
+            description={`${confirmRemoveEmail} will lose access immediately.`}
+            confirmLabel="Remove"
+            onConfirm={() => { const e = confirmRemoveEmail; setConfirmRemoveEmail(null); removeMutation.mutate(e) }}
+          />
+
           {isLoading ? (
             <div className="space-y-2">
               {[0, 1, 2].map((i) => (
@@ -93,18 +102,26 @@ export default function AdminPanel() {
           ) : emails.length === 0 ? (
             <p className="text-slate-400 text-sm text-center py-4">No emails on the whitelist yet.</p>
           ) : (
-            <ConfirmDialog
-              open={!!confirmRemoveEmail}
-              onOpenChange={(v) => { if (!v) setConfirmRemoveEmail(null) }}
-              title="Remove from whitelist?"
-              description={`${confirmRemoveEmail} will lose access immediately.`}
-              confirmLabel="Remove"
-              onConfirm={() => { const e = confirmRemoveEmail; setConfirmRemoveEmail(null); removeMutation.mutate(e) }}
-            />
             <ul className="space-y-2">
               {emails.map((item) => (
                 <li
                   key={item.email}
                   className="flex items-center justify-between px-3 py-2.5 rounded-lg border border-slate-700/30 bg-slate-800/20"
                 >
-                  <span clas
+                  <span className="text-sm text-gray-200">{item.email}</span>
+                  <button
+                    onClick={() => setConfirmRemoveEmail(item.email)}
+                    className="p-1.5 rounded text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                    aria-label={`Remove ${item.email}`}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    </PageWrapper>
+  )
+}
