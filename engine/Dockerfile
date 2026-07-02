@@ -10,9 +10,13 @@ RUN sed -i 's|http://deb.debian.org/debian|https://deb.debian.org/debian|g; s|ht
     && rm -rf /var/lib/apt/lists/*
 
 # Build TA-Lib C library from source (3-5 min on first build — expected)
+# ta-lib-0.4.0's bundled config.guess/config.sub predate aarch64 and fail
+# `./configure` with "cannot guess build type" on ARM64 — refresh them first.
 RUN wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz && \
     tar -xzf ta-lib-0.4.0-src.tar.gz && \
     cd ta-lib/ && \
+    wget -O config.guess 'https://git.savannah.gnu.org/cgit/config.git/plain/config.guess' && \
+    wget -O config.sub 'https://git.savannah.gnu.org/cgit/config.git/plain/config.sub' && \
     ./configure --prefix=/usr && \
     make && \
     make install && \
