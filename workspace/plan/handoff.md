@@ -1,4 +1,43 @@
 ---
+## 2026-07-02 — Deployment Docs Updated (post-deploy corrections + branch/merge model) — COMPLETE ✅
+
+**Goal:** User asked to update `dev`'s docs to reflect the new `dev`/`main` merge plan (see the
+"`main` Stripped..." entry below) and, while in there, apply the 4 plan-doc corrections flagged
+during the actual deployment session (also below) — all in `workspace/plan/deployment_plan.md`,
+which only exists on `dev` now.
+
+**Corrections applied (were wrong or missing, confirmed against the real deploy):**
+1. **iptables warning (Step 1):** no longer claims `-I INPUT 6` reliably lands before the REJECT
+   rule — now instructs verifying rule order via `iptables -L INPUT -n --line-numbers` and adjusting
+   the insert position if the ACCEPT rules land after any REJECT/DROP line.
+2. **Clone step (Step 3.4):** added a full private-repo path (SSH deploy key generation,
+   `gh repo deploy-key add`, `~/.ssh/config` pinning, cloning as `ubuntu` not root) alongside the
+   original public-repo one-liner.
+3. **ARM64 Compatibility (Troubleshooting §3):** corrected the false "TA-Lib builds natively on
+   aarch64 — no changes needed" claim. Now explains TA-Lib's bundled `config.guess`/`config.sub`
+   don't recognize aarch64, and that `engine/Dockerfile` already carries the fix — no action needed
+   *because of that fix*, not because TA-Lib is naturally ARM64-clean.
+4. **Nginx/TLS (Step 6):** added a new hard-verify sub-step (`curl` the public IP/domain for a `200`
+   from *outside* the VPS) before running certbot, with a note that the OCI Security List console
+   has been observed silently saving only one of two ingress rules in a single session.
+
+**New section — branch/merge model documented (the actual ask):**
+- Added §0 "Doc/Tooling Divergence Between `dev` and `main` (intentional)" under "Cross-Branch
+  Environment & URL Management," explaining `main` permanently lacks `.claude/`, `AGENTS.md`,
+  `CLAUDE.md` files, and `workspace/` by design, and how the `.gitattributes` `merge=ours` +
+  local `git config merge.ours.driver true` mechanism keeps future `dev`→`main` merges from
+  conflicting or resurrecting those paths.
+- Reworded the top-of-section claim: the "byte-identical branches" invariant now applies only to
+  what ships to production (code + config), not the full file tree.
+- Added the `git config merge.ours.driver true` prerequisite call-out to "Release / Update
+  Workflow" and a cross-reference to it from "Branch Promotion Workflow."
+
+**Files changed:** `workspace/plan/deployment_plan.md`, `workspace/plan/handoff.md` (this entry +
+marking the corrections list above as applied). Both `dev`-only, as designed.
+
+**Open questions:** None.
+
+---
 ## 2026-07-02 — `main` Stripped of Agent-Tooling & Planning Docs — COMPLETE ✅
 
 **Goal:** User wants `.claude/`, `AGENTS.md`, all `CLAUDE.md` files, and `workspace/` gone from
@@ -85,16 +124,14 @@ this session (nothing requested it explicitly).
 `dev`, already pushed). VPS-side state (not in git): iptables rules, `/opt/enma/.env`,
 `/etc/nginx/sites-available/enma`, Let's Encrypt cert, `~/.ssh/enma_deploy_key`.
 
-**Plan doc corrections needed (not yet applied — flagging for `/sync-spec` or manual edit):**
-1. `deployment_plan.md` Step 3.4 assumes a public repo — needs a deploy-key section for private repos.
-2. `deployment_plan.md` Step 1's iptables insert position (`-I INPUT 6`) is not reliably "before
-   the REJECT rule" — should say "verify the ACCEPT rules land before any REJECT/DROP rule via
-   `iptables -L INPUT -n --line-numbers`, adjust the insert position accordingly."
-3. `deployment_plan.md` §3 "ARM64 Compatibility" claim that TA-Lib "builds natively on aarch64 —
-   no changes needed" is false as of TA-Lib 0.4.0 — note the config.guess/config.sub fix now baked
-   into `engine/Dockerfile`.
-4. Security List setup should be called out as a hard-verify step (`curl` the public IP for both
-   80 and 443 before proceeding to certbot), not assumed done from a prior session's claim.
+**Plan doc corrections — all applied 2026-07-02, see the "Deployment Docs Updated" entry above:**
+1. ~~`deployment_plan.md` Step 3.4 assumes a public repo~~ — done: added a deploy-key section for private repos.
+2. ~~iptables insert position (`-I INPUT 6`) claimed reliable~~ — done: now says verify via
+   `iptables -L INPUT -n --line-numbers` and adjust position instead of trusting a fixed insert.
+3. ~~"TA-Lib builds natively on aarch64 — no changes needed"~~ — done: corrected to explain the
+   config.guess/config.sub fix baked into `engine/Dockerfile` is *why* no action is needed.
+4. ~~Security List assumed done from a prior claim~~ — done: added a hard-verify `curl` step
+   before certbot, plus a note that OCI's console has silently saved only one of two rules before.
 
 **Next session / open items (from `leftof.md` §5, still open):**
 - ~~Ask user when `dev` → `main` promotion + tagging should happen~~ — **done same session**: merged

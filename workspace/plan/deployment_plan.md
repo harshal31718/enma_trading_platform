@@ -74,6 +74,14 @@ Exposure policy:
 > sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 443 -j ACCEPT
 > sudo netfilter-persistent save
 > ```
+> **`-I INPUT 6` is not reliably "before the REJECT rule"** — the exact chain layout varies (confirmed
+> on a real deploy: after an OS upgrade the catch-all REJECT had shifted to position 5, so inserting
+> at 6 landed *after* it and the ACCEPT rules were silently dead). Always verify afterward:
+> ```bash
+> sudo iptables -L INPUT -n --line-numbers
+> ```
+> The 80/443 ACCEPT lines must appear *above* any REJECT/DROP line. If not, delete and re-insert at
+> the correct position (one before the REJECT line), then re-run `netfilter-persistent save`.
 > Symptom if skipped: Security List looks correct but curl to the public IP times out.
 
 ---
@@ -116,7 +124,32 @@ Exposure policy:
    ```
    > Use the `docker compose` (v2 plugin) syntax throughout — not the legacy `docker-compose` v1 binary.
 
-4. **Clone the repository:**
+4. **Clone the repository.** This assumes a public HTTPS-cloneable repo. **If the repo is private**
+   (confirmed the case on a real deploy — a bare `git clone https://...` fails with
+   `fatal: could not read Username for 'https://github.com': No such device or address`), set up a
+   read-only SSH deploy key instead:
+   ```bash
+   # On the VPS, as ubuntu (not root):
+   ssh-keygen -t ed25519 -f ~/.ssh/enma_deploy_key -N '' -C 'enma-vps-deploy'
+   cat ~/.ssh/enma_deploy_key.pub   # copy this
+   printf 'Host github.com\n  IdentityFile ~/.ssh/enma_deploy_key\n  IdentitiesOnly yes\n' >> ~/.ssh/config
+   chmod 600 ~/.ssh/config
+   ssh -o StrictHostKeyChecking=accept-new -T git@github.com   # accept host key, confirm auth
+   ```
+   Register the public key as a **read-only** Deploy Key on the repo — either via the GitHub web UI
+   (repo → Settings → Deploy keys → Add deploy key, leave "Allow write access" unchecked), or from
+   your local machine with the `gh` CLI already authenticated:
+   ```bash
+   gh repo deploy-key add - --repo <owner>/<repo> --title "enma-vps-deploy" <<< "<paste pubkey>"
+   ```
+   Then clone as `ubuntu` (not `sudo`/root — root doesn't have the `ubuntu` user's SSH config):
+   ```bash
+   sudo mkdir -p /opt/enma && sudo chown ubuntu:ubuntu /opt/enma
+   git clone git@github.com:<owner>/<repo>.git /opt/enma
+   cd /opt/enma && git checkout main
+   git config core.sshCommand 'ssh -i ~/.ssh/enma_deploy_key -o IdentitiesOnly=yes'
+   ```
+   **If the repo is public**, the simpler original form still works:
    ```bash
    sudo git clone <YOUR_REPOSITORY_URL> /opt/enma
    sudo chown -R ubuntu:ubuntu /opt/enma
@@ -267,12 +300,28 @@ This produces `/opt/enma/client/dist`. Re-run this command on every release that
    sudo nginx -t && sudo systemctl reload nginx
    ```
 
-3. **Obtain the certificate with the nginx plugin** (edits the config in place, adds the 443 server block + HTTP→HTTPS redirect, and installs auto-renewal that works while nginx is running — do not use `--standalone`, its renewals conflict with nginx on port 80):
+3. **Hard-verify port 80 is reachable from the public internet before running certbot — don't
+   assume the Step 1 Security List rule "took" just because it was added once.** Confirmed on a
+   real deploy: the Security List page can silently save only one of the two rules (80 saved, 443
+   didn't, in a single "Add Ingress Rules" session with both filled in) — host iptables being
+   correct is not enough if the cloud-level Security List rule is missing. From any machine
+   *outside* the VPS:
+   ```bash
+   curl -s -o /dev/null -w "%{http_code}\n" http://<VPS_PUBLIC_IP_OR_DOMAIN>/ --max-time 15
+   ```
+   Must return `200` (or a redirect code), not a timeout. If it times out, go back to the OCI
+   console → instance → Networking → subnet → Security rules → confirm a TCP/80 ingress rule from
+   `0.0.0.0/0` actually exists (not just that you clicked Save once) — re-add it if missing, and
+   also add the TCP/443 rule now (certbot's redirect will need it moments later; add both in this
+   pass instead of writing it and testing 443 for you now — it's the same class of bug and cheaper
+   to fix once).
+
+4. **Obtain the certificate with the nginx plugin** (edits the config in place, adds the 443 server block + HTTP→HTTPS redirect, and installs auto-renewal that works while nginx is running — do not use `--standalone`, its renewals conflict with nginx on port 80):
    ```bash
    sudo certbot --nginx -d enmaquant.duckdns.org
    ```
 
-4. **Verify auto-renewal:**
+5. **Verify auto-renewal:**
    ```bash
    sudo certbot renew --dry-run
    ```
@@ -415,6 +464,18 @@ volumes:
 
 ## Release / Update Workflow
 
+> **One-time prerequisite on any machine that will run `git merge dev` into `main`:**
+> ```bash
+> git config merge.ours.driver true
+> ```
+> `main` intentionally lacks `.claude/`, `AGENTS.md`, all `CLAUDE.md` files, and `workspace/` (see
+> [Cross-Branch Environment & URL Management](#cross-branch-environment--url-management-best-practices)
+> below) — `.gitattributes` marks those paths `merge=ours` so a `dev` → `main` merge keeps main's
+> deletion instead of resurrecting them or hitting a modify/delete conflict. That attribute is
+> useless without this local config registering the `ours` driver — **without it, the merge below
+> will conflict** the moment `dev` has touched any of those paths since the branches last synced
+> (which is often, since `workspace/plan/handoff.md` gets edited most sessions).
+
 ```bash
 # On your machine: promote a release
 git checkout main && git merge dev && git push origin main
@@ -458,7 +519,7 @@ ARM shapes in popular regions (e.g. Mumbai) frequently show `Out of host capacit
 
 ### 3. 🛡️ ARM64 (aarch64) Compatibility
 
-All images used here publish ARM64 variants: `node:20-alpine`, `python:3.11-slim`, `redis:7-alpine`, `timescale/timescaledb:latest-pg16`. TA-Lib compiles from source inside the engine image and builds natively on aarch64 — no changes needed.
+All images used here publish ARM64 variants: `node:20-alpine`, `python:3.11-slim`, `redis:7-alpine`, `timescale/timescaledb:latest-pg16`. **TA-Lib does *not* build out of the box on aarch64** — `ta-lib-0.4.0-src.tar.gz`'s bundled `config.guess`/`config.sub` predate aarch64 and `./configure` fails with `cannot guess build type` (confirmed on a real ARM64 deploy). `engine/Dockerfile` already downloads fresh `config.guess`/`config.sub` from the GNU config project before `./configure` to fix this — no action needed *because that fix is already baked in*, not because TA-Lib is naturally ARM64-clean.
 
 ### 4. 🔐 Layered Firewall Summary
 
@@ -474,7 +535,31 @@ Remember: Docker-published ports bypass host INPUT rules — the compose file's 
 
 ## Cross-Branch Environment & URL Management (Best Practices)
 
-Keeps `dev` and `main` byte-identical so releases are pure merges — no environment-specific find-and-replace, ever.
+Keeps `dev` and `main`'s **application code and config** identical so releases are pure merges —
+no environment-specific find-and-replace, ever. **This is no longer true of the full file tree**:
+as of 2026-07-02, `main` intentionally lacks `.claude/`, `AGENTS.md`, every `CLAUDE.md`, and
+`workspace/` — see §0 below. The invariant now applies specifically to everything that ships to
+production (`server/`, `client/`, `engine/`, root config files), not to AI-agent tooling or
+planning docs, which only ever need to exist on `dev`.
+
+### 0. Doc/Tooling Divergence Between `dev` and `main` (intentional)
+
+`.claude/`, `AGENTS.md`, all `CLAUDE.md` files, and `workspace/` (docs, plans, archive) are used
+only by AI coding agents during development — nothing in `server/`, `client/`, or `engine/` reads
+them at runtime, and the VPS has no use for them. They exist on `dev` (agents need them every
+session) and are permanently absent from `main`.
+
+Mechanism: `.gitattributes` on `main` marks these exact paths `merge=ours`. Combined with the local
+`git config merge.ours.driver true` (see [Release / Update Workflow](#release--update-workflow)
+above), a `dev` → `main` merge keeps main's deletion automatically — no conflict, no resurrection —
+even though `dev` keeps editing `workspace/plan/handoff.md`. **This local config does not travel
+with the repo** — if release merges are ever done from a different machine, that config must be set
+there too, or the merge will hit modify/delete conflicts on these paths instead of silently doing
+the right thing.
+
+If `main` is ever the clone target for onboarding a new contributor, they will be missing all
+architecture/API/strategy docs by design (currently moot — single-user project, per `CLAUDE.md`'s
+`Single-user platform` rule, which itself only exists on `dev`).
 
 ### 1. The Single-Codebase Invariant (12-Factor)
 
@@ -508,5 +593,7 @@ gitGraph
 ```
 
 1. Features branch from `dev`, merge back into `dev`.
-2. Release = merge `dev` → `main`, tag it.
+2. Release = merge `dev` → `main`, tag it. Requires `git config merge.ours.driver true` set locally
+   first (see [Release / Update Workflow](#release--update-workflow)) so the doc/tooling paths
+   (§0 above) don't conflict or resurrect during the merge.
 3. VPS pulls `main`, rebuilds containers, rebuilds the client bundle (Step 5 command) if `client/` changed.
