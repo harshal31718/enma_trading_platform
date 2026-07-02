@@ -57,11 +57,27 @@
    80 and 443 before proceeding to certbot), not assumed done from a prior session's claim.
 
 **Next session / open items (from `leftof.md` §5, still open):**
-- Ask user when `dev` → `main` promotion + tagging should happen (VPS currently tracks `dev`).
+- ~~Ask user when `dev` → `main` promotion + tagging should happen~~ — **done same session**: merged
+  `dev` → `main` (fast-forward, `79ed49f`), tagged `v1.0`, VPS switched to track `main`.
 - Consider Oracle idle-reclamation insurance (keep-alive cron, or PAYG upgrade) — not done.
 - Public IP is **Ephemeral**, not Reserved (seen in OCI console this session) — plan recommended a
   reserved IP so it survives instance stop/start without a DNS update. Not yet switched.
 - `leftof.md` deleted this session per its own §5 instruction (superseded by this entry).
+
+**⚠️ New — OCI Free Trial expiry, checked 2026-07-02:** Tenancy `enmaquant` is on a **Universal
+Credits trial subscription, SGD 400 credit, expiring 2026-07-30** (confirmed via Cost Management →
+Overview → Active Subscriptions gauge) — not a plain indefinite Always-Free signup. Cost Analysis
+confirms **SGD 0.00 spent to date** (the `VM.Standard.A1.Flex` 4 OCPU/24GB shape is fully within
+Always Free eligibility). **User decision (2026-07-02): accept the risk, stay on the trial, deal
+with it if/when it breaks** — explicitly informed that Oracle's behavior at trial expiry without
+upgrading to Pay As You Go is unconfirmed (`[Guessing]`, not verified against current OCI docs):
+could be a harmless pause/restart, or could reclaim the compute resource entirely. **If reclaimed,
+this is not just downtime** — TimescaleDB candle data lives only on that instance's Docker volume
+(unlike MongoDB, which is external on Atlas and safe) and would need to be refetched from Binance
+from scratch; nothing else on the VM is backed up externally. Action-forcing date: **2026-07-30**.
+The safe fix (not yet done, user's call): ☰ → Governance & Administration → Account Management →
+"Upgrade and Pay As You Go" — adding a payment method does not itself trigger billing as long as
+usage stays within Always Free limits.
 
 **Open questions:** None blocking — the two items above (main promotion timing, reserved IP) are
 user-scheduling decisions, not technical blockers.
