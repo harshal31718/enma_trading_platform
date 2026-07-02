@@ -1,4 +1,72 @@
 ---
+## 2026-07-02 — Production Deployment to Oracle Cloud — COMPLETE ✅
+
+**Goal:** Finish deploying Enma to the OCI VPS (`enma-production`, ap-mumbai-1), resuming from
+`workspace/plan/leftof.md` (OS upgrade paused mid-deploy in the prior session).
+
+**Done this session (all of `leftof.md` §2–3):**
+- **OS upgrade finished:** `do-release-upgrade` to Ubuntu 22.04 completed, rebooted, confirmed
+  `22.04.5 LTS`, ran `apt --fix-broken install` + `autoremove` cleanup.
+- **Host firewall:** opened 80/443 in iptables — **found and fixed a rule-ordering bug**: the
+  `-I INPUT 6` insert (from `deployment_plan.md`) landed *after* the chain's catch-all REJECT rule
+  (position 5), so the ACCEPT rules were dead. Reordered to insert before REJECT, removed dead
+  duplicates, `netfilter-persistent save`.
+- **Stack installed:** docker.io, docker-compose-v2, nginx, certbot, python3-certbot-nginx, git.
+- **Repo access — plan was wrong:** `deployment_plan.md`'s bare `git clone https://github.com/...`
+  assumes a public repo; **the repo is private**. Fixed by generating an ed25519 deploy key on the
+  VPS (`~/.ssh/enma_deploy_key`) and registering it read-only via `gh repo deploy-key add` (repo
+  settings → Deploy keys, id `156130614`). VPS `~/.ssh/config` pins `github.com` to that key.
+  Cloned to `/opt/enma`, checked out `dev` (not `main` — per standing instruction, VPS tracks `dev`
+  for now).
+- **`.env` uploaded** from `C:\Users\harsh\.enma\prod.env` to `/opt/enma/.env` (chmod 600).
+- **Client built** via throwaway `node:20-alpine` container → `/opt/enma/client/dist`.
+- **Nginx + TLS:** HTTP-only vhost first, then `certbot --nginx -d enmaquant.duckdns.org`
+  (succeeded, expires 2026-09-30, auto-renewal confirmed via `certbot renew --dry-run`).
+- **OCI Security List was never actually configured** despite `leftof.md` §1 claiming "added in
+  the cloud console" — the subnet's Default Security List only had ingress for port 22 + ICMP.
+  User added TCP 80 and TCP 443 (`0.0.0.0/0`) ingress rules via the console (two separate
+  `Add Ingress Rules` actions — the first pass only saved the 80 rule, needed a second pass for
+  443). No NSG was attached, so that wasn't a factor.
+- **TA-Lib ARM64 build failure — real Dockerfile bug, not session config:** `engine/Dockerfile`'s
+  `ta-lib-0.4.0-src.tar.gz` ships a `config.guess` from 2006 that doesn't recognize aarch64 →
+  `./configure` fails with "cannot guess build type". `deployment_plan.md`'s claim that "TA-Lib
+  builds natively on aarch64 — no changes needed" is **wrong** for this TA-Lib version. Fixed by
+  downloading fresh `config.guess`/`config.sub` from the GNU config project before `./configure`.
+  Committed `8296e6b` on `dev`, pushed, pulled on VPS, rebuild succeeded.
+- **`docker compose -f docker-compose.prod.yml up -d --build`** — all 4 services
+  (`redis`, `timescaledb`, `engine`, `server`) came up healthy.
+- **Verified:** `/api/v1/health` returns `{"status":"ok","mongo":"connected","redis":"connected"}`
+  both on `127.0.0.1:5000` and via `https://enmaquant.duckdns.org`. Frontend HTML/JS/CSS serves
+  correctly over HTTPS with a valid cert. User confirmed manually: login page loads, Google OAuth
+  sign-in with `admin.enmaquant@gmail.com` works, dashboard + Socket.IO connected, `/admin`
+  reachable, backtest runs end-to-end.
+
+**Files changed:** `engine/Dockerfile` (TA-Lib config.guess/config.sub fix, commit `8296e6b` on
+`dev`, already pushed). VPS-side state (not in git): iptables rules, `/opt/enma/.env`,
+`/etc/nginx/sites-available/enma`, Let's Encrypt cert, `~/.ssh/enma_deploy_key`.
+
+**Plan doc corrections needed (not yet applied — flagging for `/sync-spec` or manual edit):**
+1. `deployment_plan.md` Step 3.4 assumes a public repo — needs a deploy-key section for private repos.
+2. `deployment_plan.md` Step 1's iptables insert position (`-I INPUT 6`) is not reliably "before
+   the REJECT rule" — should say "verify the ACCEPT rules land before any REJECT/DROP rule via
+   `iptables -L INPUT -n --line-numbers`, adjust the insert position accordingly."
+3. `deployment_plan.md` §3 "ARM64 Compatibility" claim that TA-Lib "builds natively on aarch64 —
+   no changes needed" is false as of TA-Lib 0.4.0 — note the config.guess/config.sub fix now baked
+   into `engine/Dockerfile`.
+4. Security List setup should be called out as a hard-verify step (`curl` the public IP for both
+   80 and 443 before proceeding to certbot), not assumed done from a prior session's claim.
+
+**Next session / open items (from `leftof.md` §5, still open):**
+- Ask user when `dev` → `main` promotion + tagging should happen (VPS currently tracks `dev`).
+- Consider Oracle idle-reclamation insurance (keep-alive cron, or PAYG upgrade) — not done.
+- Public IP is **Ephemeral**, not Reserved (seen in OCI console this session) — plan recommended a
+  reserved IP so it survives instance stop/start without a DNS update. Not yet switched.
+- `leftof.md` deleted this session per its own §5 instruction (superseded by this entry).
+
+**Open questions:** None blocking — the two items above (main promotion timing, reserved IP) are
+user-scheduling decisions, not technical blockers.
+
+---
 ## 2026-07-02 — Deployment Kickoff: Domain Decision + Config Finalized — CODE-SIDE COMPLETE ✅
 
 **Goal:** Proceed with `deployment_plan.md`. Verified repo deploy-readiness, resolved the domain decision, finalized all domain-dependent config.
