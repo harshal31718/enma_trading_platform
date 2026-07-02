@@ -1,0 +1,13 @@
+# These paths are intentionally absent from `main` (agent-tooling and planning
+# docs, not needed in production/on the VPS). The `merge=ours` driver makes a
+# `dev` -> `main` merge keep main's deletion automatically instead of
+# resurrecting these files or hitting a modify/delete conflict every release.
+# One-time local setup required per machine that performs the merge:
+#   git config merge.ours.driver true
+.claude/** merge=ours
+AGENTS.md merge=ours
+CLAUDE.md merge=ours
+client/CLAUDE.md merge=ours
+engine/CLAUDE.md merge=ours
+server/CLAUDE.md merge=ours
+workspace/** merge=ours
