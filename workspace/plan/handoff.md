@@ -1,4 +1,44 @@
 ---
+## 2026-07-02 — `main` Stripped of Agent-Tooling & Planning Docs — COMPLETE ✅
+
+**Goal:** User wants `.claude/`, `AGENTS.md`, all `CLAUDE.md` files, and `workspace/` gone from
+`main` (production branch) — they're used only by AI coding agents during development, never read
+at runtime by `server/`, `client/`, or `engine/`, and the VPS has no use for them.
+
+**Important — this is a real, intentional divergence between `dev` and `main`, not a bug.**
+`dev` keeps all of these files (agents need them every session). `main` now permanently lacks them.
+This breaks the "byte-identical branches" invariant `deployment_plan.md` used to describe — that
+doc itself no longer exists on `main` as of this change, so the invariant is moot there, but it's
+worth remembering next time `dev`'s docs are edited: **`main` will never see those doc edits, by
+design.**
+
+**Mechanism (so future merges don't fight this):**
+- Removed on `main` only (commit `2eb65ef`): `.claude/` (9 files), `AGENTS.md`, root `CLAUDE.md`,
+  `client/CLAUDE.md`, `engine/CLAUDE.md`, `server/CLAUDE.md`, `workspace/` (71 files — archive,
+  docs, next_phase, plan).
+- Added `.gitattributes` on `main` mapping those exact paths to `merge=ours`. Combined with a
+  **local repo config** (`git config merge.ours.driver true` — already set on this machine), a
+  future `git checkout main && git merge dev` will keep main's deletion for these paths
+  automatically — no conflict, no resurrection — even though `dev` edits `workspace/plan/handoff.md`
+  constantly. **If this is ever run from a different machine, `git config merge.ours.driver true`
+  must be set there too**, or the merge will conflict (modify/delete) on these paths instead of
+  silently doing the right thing.
+- VPS (`/opt/enma`, tracks `main`) pulled to `2eb65ef` — confirmed all target paths gone from disk.
+  No container rebuild needed; none of this touches runtime code.
+
+**No root `README.md` exists yet** — user said one could be added later if wanted; not created
+this session (nothing requested it explicitly).
+
+**Open items:**
+- If `main` is ever the fresh-clone target for onboarding a new contributor (currently N/A —
+  single-user project), they'll be missing all architecture/API docs by design. Not a concern now.
+- Housekeeping done same session: deleted local `stable-single-user` branch ref (already fully
+  merged into `main`, byte-identical to `origin/stable-single-user` — nothing lost). Fixed local
+  `main`'s missing upstream tracking (`git branch --set-upstream-to=origin/main main`) — it had
+  none because `push.autoSetupRemote` is `false` in this git config, so `git push origin main`
+  alone never wires up tracking.
+
+---
 ## 2026-07-02 — Production Deployment to Oracle Cloud — COMPLETE ✅
 
 **Goal:** Finish deploying Enma to the OCI VPS (`enma-production`, ap-mumbai-1), resuming from
