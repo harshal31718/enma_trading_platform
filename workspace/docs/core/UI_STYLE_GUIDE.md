@@ -227,44 +227,64 @@ Log row structure:
 
 ## Buttons
 
+> **Note:** `rounded-*` classes are omitted from all samples below per Rule 1 — the theme's
+> border-radius scale is zeroed globally, so `rounded-lg`/`rounded-full` render as sharp rectangles
+> regardless. Earlier versions of this doc included `rounded-lg` in these samples, which contradicted
+> Rule 1; ~130 call sites in `client/src` still carry it as dead-but-harmless noise (see "What to
+> Avoid"). Don't copy `rounded-*` into new code even though it currently has no visual effect.
+
 ### Primary action (e.g., New Bot)
 ```
-bg-emerald-600 hover:bg-emerald-700 text-white text-sm rounded-lg px-4 py-2
+bg-emerald-600 hover:bg-emerald-700 text-white text-sm px-4 py-2
 ```
 
 ### Destructive / Stop action
 ```
-bg-red-600 hover:bg-red-700 text-white text-xs font-medium rounded-lg px-3 py-1.5
+bg-red-600 hover:bg-red-700 text-white text-xs font-medium px-3 py-1.5
 ```
 
 ### Ghost / secondary (e.g., Clear stopped)
 ```
 bg-transparent hover:bg-red-500/10 text-gray-500 hover:text-red-400
-text-sm rounded-lg border border-gray-700 hover:border-red-500/30
+text-sm border border-gray-700 hover:border-red-500/30
 ```
 
 ### Icon-only danger (e.g., Delete session)
 ```
 p-1.5 hover:bg-red-500/10 text-gray-600 hover:text-red-400
-rounded-lg border border-transparent hover:border-red-500/20
+border border-transparent hover:border-red-500/20
 ```
 
 ### Expand/collapse toggle
 ```
-p-1.5 bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white rounded-lg
+p-1.5 bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white
 ```
 
 **Rule**: Filled buttons (`bg-*-600`) for primary/destructive actions. Ghost buttons for secondary actions. Never use glass/translucent for a primary or destructive action.
 
 ---
 
-## Status Badges (pill shaped)
+## Status Badges (sharp rectangle, not a pill)
 
 ```
-text-[10px] px-2 py-0.5 rounded-full font-medium
+text-[10px] px-2 py-0.5 font-medium
 ```
 
 Apply color from the status table above. Always include matching bg + text + border classes together.
+Do not add `rounded-full` — the global radius override renders it as a sharp rectangle, not a pill;
+adding it is dead-but-harmless noise, same as the button samples above.
+
+### Exception: genuinely circular elements (spinners, status-pulse dots)
+`rounded-full` is a global no-op, so any element that structurally needs to be a circle (loading
+spinners, live-status pulse dots) must use the arbitrary-value escape hatch instead:
+```
+[border-radius:50%]
+```
+This bypasses the theme's zeroed radius scale. See `client/CLAUDE.md`'s Navbar section for the
+existing example (avatar button). Current spinners/dots still built with the broken `rounded-full`
+(render as squares, not circles) and due for this fix: `client/src/App.jsx`,
+`client/src/pages/Trade.jsx`, `client/src/pages/AlgoTrading.jsx`,
+`client/src/components/algo/ChaosWizard.jsx`, `client/src/pages/Settings.jsx`.
 
 ---
 
@@ -287,6 +307,9 @@ stroke="#1e293b"                           // slate-800 — grid/axis line
 Reference line (baseline): `stroke="#4B5563" strokeDasharray="3 3"`
 
 Equity line color: `#34d399` (emerald-400) when positive, `#f87171` (red-400) when negative.
+`EquityCurve.jsx` and `EquitySparkline.jsx` both follow this now (fixed 2026-07-02 — `EquityCurve.jsx`
+was on `#10b981`/emerald-500). `EquityCurve.jsx`'s grid/axis strokes (`#1f2937`/`#4b5563`, gray-scale)
+still don't match the `#1e293b` (slate-800) specified above — known minor drift, not yet reconciled.
 
 ---
 

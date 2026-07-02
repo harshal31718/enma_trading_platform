@@ -1,7 +1,7 @@
 # Feature: Candle Management
 
-**Status:** Implemented  
-**Last updated:** 2026-06-05
+**Status:** Implemented
+**Last updated:** 2026-07-02 — documented the Phase 7 unified symbol list + per-symbol rules response fields; previous version dated 2026-06-05.
 
 ---
 
@@ -106,7 +106,7 @@ Returns: [{ symbol, timeframe, exchange, type, startDate, endDate, totalCandles 
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/candles/symbols` | Available symbol lists (futures + spot) |
+| GET | `/api/v1/candles/symbols` | `{ futures, spot, all, rules }` — `all` is the Phase 7 unified/tiered symbol list; `rules` gives per-symbol precision/tick/leverage data consumed by the Trade page order form |
 | GET | `/api/v1/candles/cached` | Inventory of cached candles in TimescaleDB |
 
 ---
@@ -131,6 +131,7 @@ Returns: [{ symbol, timeframe, exchange, type, startDate, endDate, totalCandles 
 | `server/src/controllers/candle.controller.js` | Proxy to engine endpoints |
 | `engine/routers/candles.py` | GET /symbols, GET /cached |
 | `engine/services/candle_manager.py` | `ensure_candles_available()` — single entry point |
-| `engine/services/candle_importer.py` | Binance fetch + TimescaleDB insert logic |
-| `engine/services/candle_importer.py` | asyncpg writes inline; no separate store module |
+| `engine/services/candle_importer.py` | Binance fetch + TimescaleDB insert logic; asyncpg writes inline, no separate store module |
+| `engine/services/pairlist.py` | Phase 7 dynamic pairlist pipeline (VolumePairList + filters) backing the unified symbol list |
 | `engine/utils/timeframes.py` | Consolidated timeframe conversion utility |
+| `engine/utils/symbols.py` | `load_symbol_volume_tiers()`, `get_all_rules()` — backs the `all`/`rules` fields on `/candles/symbols` |

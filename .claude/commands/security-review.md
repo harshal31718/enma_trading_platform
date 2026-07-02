@@ -10,7 +10,7 @@ Arguments: $ARGUMENTS (optional path / scope)
    - Tokens/keys: search for `ghp_`, `sk-`, `AKIA`, `-----BEGIN`, `password`, `secret`, `apiKey`, and Binance key patterns.
    - Confirm `.env` files are git-ignored and never staged.
    - Confirm no literal token sits in `.mcp.json`, `.claude/`, or any committed config — use `${ENV_VAR}` references, never literals.
-2. **Single-user invariant:** search for `user_id` / `userId` across schemas, routes, and queries — there must be none.
+2. **Multi-user scoping invariant:** every mutable Mongoose model (BacktestResult, BacktestTrade, LiveSession, Settings, TradeOrder, TradeExecution, TradeTransaction, TradeRecord) must carry `userId`, and every query on them must filter by the authenticated user's id — flag any unscoped query (cross-user leakage). `Strategy` is intentionally global (no `userId`). Confirm no `/api/v1/*` route bypasses `verifyJWT` except the auth routes.
 3. **Layer-boundary leaks:**
    - Binance calls outside `engine/` (`fapi.binance.com`, signed REST, ccxt) inside `server/` or `client/`.
    - `server/` connecting to TimescaleDB.

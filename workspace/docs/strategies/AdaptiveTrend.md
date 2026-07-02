@@ -52,5 +52,5 @@ Optional breakeven move: stop moves to entry price once price extends `breakeven
 ## Notes
 
 - `MIN_WARMUP_CANDLES = 210` (trend_period + slope_lookback + buffer).
-- All indicators computed exactly once in `before()` — D-01/D-03 fix.
-- Per-trade state stored in `self.vars` (trend_ema, atr, atr_baseline, etc.) — all indicators computed exactly once in `before()`.
+- All indicators computed exactly once in `prepare()` — D-01/D-03 fix; `before()` is index-only.
+- Per-trade state stored in `self.vars` (trend_ema, atr, atr_baseline, etc.).

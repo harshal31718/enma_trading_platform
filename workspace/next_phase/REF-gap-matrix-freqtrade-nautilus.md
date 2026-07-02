@@ -10,7 +10,7 @@
 > Implementing agents build from `next_phase/`, not from this matrix. This doc stays as the
 > full landscape (incl. deferred multi-venue/ML items).
 
-> **Read this with:** `workspace/docs/state/CURRENT_STATE.md`, `workspace/plan/INDEX.md`, `workspace/plan/future_paths.md`
+> **Read this with:** `workspace/docs/state/CURRENT_STATE.md`, `workspace/next_phase/README.md`, `workspace/next_phase/REF-future-paths.md`
 
 ---
 
@@ -67,7 +67,7 @@ Each row evaluates whether Enma has the feature. Three states:
 | Lookahead analysis | ✅ | ❌ | ❌ | No automated lookahead detection |
 | Recursive analysis | ✅ | ❌ | ❌ | No automated recursion bias detection |
 | Walk-forward analysis | ✅ Custom | ✅ | ❌ | Not implemented |
-| MCPT (Monte Carlo Permutation Test) | ❌ | ❌ | 🟡 Research | `mcpt-repo-analysis.md` exists but not implemented |
+| MCPT (Monte Carlo Permutation Test) | ❌ | ❌ | 🟡 Research | `REF-mcpt-research.md` exists but not implemented |
 
 ### 1.4 Order Types & Execution
 
@@ -286,14 +286,15 @@ The sequence respects Enma's existing architecture (single-user, crypto, Binance
 | **Betfair / sports betting** | Out of scope for crypto trading |
 | **Spot trading** | Futures-only architecture; spot would require separate account model |
 | **ccxt library** | Rejected per `AGENTS.md` constraints; Enma uses native httpx HMAC |
-| **Multi-user / auth** | Single-user per `AGENTS.md` |
+| ~~**Multi-user / auth**~~ | **Shipped, not deferred** — stale as of 2026-06-22 (Auth Branch). Google OAuth + JWT, `userId`-scoped models. See `CURRENT_STATE.md` → "Auth & Access Control." Row kept struck through for history; do not treat as an open gap. |
 
 ---
 
 ## 5. References
 
-- `workspace/plan/INDEX.md` — current execution sequence (dashboard restructure, risk dashboard)
-- `workspace/plan/future_paths.md` — exploratory ideas (Monte Carlo, volatility forecasting, regime detection)
-- `workspace/plan/RISK_DASHBOARD_PLAN.MD` — planned Risk Dashboard (VaR, correlation, Monte Carlo)
-- `workspace/plan/mcpt-repo-analysis.md` — Monte Carlo Permutation Tests (research phase)
+- `workspace/next_phase/README.md` — current execution sequence (S1–S8)
+- `workspace/next_phase/REF-future-paths.md` — exploratory ideas (Monte Carlo, volatility forecasting, regime detection)
+- `workspace/next_phase/REF-mcpt-research.md` — Monte Carlo Permutation Tests (research phase)
 - `workspace/docs/state/CURRENT_STATE.md` — authoritative Enma feature inventory
+
+> The old `workspace/plan/` docs this section once pointed at (INDEX, RISK_DASHBOARD_PLAN) were deleted — git history.

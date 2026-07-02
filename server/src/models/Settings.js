@@ -3,8 +3,15 @@ const mongoose = require('mongoose')
 const settingsSchema = new mongoose.Schema(
   {
     userId: { type: String, required: true, unique: true, index: true },
+    // Testnet pair — used for all trading (manual + bots).
     encryptedApiKey:    { type: String, default: '' },
     encryptedApiSecret: { type: String, default: '' },
+    // Mainnet pair — READ-ONLY, used only to display the mainnet balance on the
+    // Dashboard. Never used for order placement (see requireBinanceCredentials,
+    // which pins X-Binance-Mode to testnet). Keys are verified before storage.
+    encryptedMainnetApiKey:    { type: String, default: '' },
+    encryptedMainnetApiSecret: { type: String, default: '' },
+    // Vestigial: trading is pinned to testnet. Retained to avoid a migration.
     mode: {
       type: String,
       enum: ['testnet', 'mainnet'],

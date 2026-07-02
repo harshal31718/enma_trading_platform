@@ -12,7 +12,12 @@ liquidation, session start/stop, error) so Enma can push to Discord/Slack/IFTTT.
 - The server already owns the live-session event stream: `server/src/controllers/algo.controller.js`
   has `handleEngineStats` which processes engine events (`position:open`, `position:close`, etc.) and
   persists to `LiveSession`. **This is the natural emit point** — webhooks fire from the same handler.
-- Single-user platform: one global webhook config in `Settings`, no per-user routing.
+- **Revised 2026-07-02 — premise was stale.** Originally scoped as "one global webhook config, no
+  per-user routing" under the single-user assumption. That assumption no longer holds: multi-user
+  Google OAuth + JWT auth has shipped, and `Settings` (`server/src/models/Settings.js:5`) is now a
+  required, unique `userId`-keyed document, not a global singleton. Webhook config must be scoped per
+  user (a field on the per-user `Settings` doc), and `handleEngineStats`/the emit point must resolve
+  the webhook URL for the `LiveSession`'s owning `userId`, not a single global value.
 
 ## Upstream reference (freqtrade webhooks)
 

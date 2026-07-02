@@ -1,6 +1,6 @@
 # Optimization Ideas — Solutions & Architecture Designs
 
-**Source:** `workspace/archive/research/` (deep review 2026-06-17, archived into `plan/` 2026-06-24). Updated on 2026-06-24 with concrete technical solutions and architecture designs for the highest-impact ideas.
+**Source:** a deep review from 2026-06-17 (original research docs deleted — git history). Updated on 2026-06-24 with concrete technical solutions and architecture designs for the highest-impact ideas.
 
 ---
 
@@ -13,7 +13,7 @@ These ideas were surfaced during a codebase-wide review. None are currently sche
 | Idea | Impact | Effort | What it touches |
 |------|--------|--------|-----------------|
 | Parallel candle fetching — `asyncio.gather()` with semaphore for multi-symbol batch download | High | M | `candle_importer.py` |
-| Pre-compute indicators on full series — `warmup_compute()` / `prepare()` method on BaseStrategy | High | M | `backtest_runner.py`, `BaseStrategy` |
+| ~~Pre-compute indicators on full series — `warmup_compute()` / `prepare()` method on BaseStrategy~~ | High | M | **Shipped** — `BaseStrategy.prepare()` (`engine/core/strategy.py`), used by all 5 seeded strategies. See `S2-informative-multi-timeframe.md` ("workstream #1 (done)"). Row kept for history only. |
 | Backtest metrics vectorization — pure NumPy for streaks/holding periods | Medium | S | `backtest_runner.py` |
 | TimescaleDB connection pool tuning — configurable min/max pool size | Medium | S | `config/timescale.py` |
 | Combined WS stream for live bots — Binance `/stream?streams=...` single connection | Medium | M | `live_bot_manager.py` |
@@ -24,7 +24,7 @@ These ideas were surfaced during a codebase-wide review. None are currently sche
 
 | Idea | Impact | Effort | What it touches |
 |------|--------|--------|-----------------|
-| Shared `ExecutionEngine` base class — unify backtest/live entry/exit logic | High | L | `backtest_runner.py`, `live_bot_manager.py` |
+| ~~Shared `ExecutionEngine` base class — unify backtest/live entry/exit logic~~ | High | L | **Shipped** — `engine/core/kernel.py` (`ExecutionKernel`/`ExecutionAdapter`, tagged F-024). Also listed as done in `REF-gap-matrix-freqtrade-nautilus.md` ("Event-driven engine ... Enma (ExecutionKernel)"). Row kept for history only. |
 | Strategy parameter validation middleware — centralized inject/validate in BaseStrategy | Medium | S | `BaseStrategy`, both runners |
 | Event sourcing for backtest results — append-only event log with snapshot to Mongo | Medium | L | Engine + Server |
 | Exchange interface abstraction — `ExchangeProvider` ABC for multi-exchange | Medium | L | Engine |

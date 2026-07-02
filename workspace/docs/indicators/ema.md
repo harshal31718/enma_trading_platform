@@ -21,7 +21,7 @@ so recent prices have more influence than older ones. Common use: trend directio
 
 | Strategy | Usage |
 |----------|-------|
-| `MicroScalper` | Fast(3)/Slow(9) crossover, flip_position SAR |
+| `MicroScalper` | Fast(9)/Slow(21) crossover, flip_position SAR |
 | `AdaptiveTrend` | Trend EMA(200) regime + Fast(21)/Slow(55) trigger |
 | `MicroMacroRSIDivergence` | Smoothed-RSI confirmation via synthetic candle trick |
 

@@ -31,7 +31,7 @@ before running the calculation, and uses `tsl[-2]` (previous completed bar) to a
 | Param | Default | Location |
 |-------|---------|----------|
 | `factor` | 3.0 | `BestSupertrend.PARAMS["factor"]` |
-| `pd` (ATR period) | 3 | `BestSupertrend.PARAMS["pd"]` |
+| `pd` (ATR period) | 10 | `BestSupertrend.PARAMS["pd"]` |
 | `tf` (timeframe) | `"daily"` | `BestSupertrend.PARAMS["tf"]` |
 
 ## Promotion Path

@@ -67,5 +67,7 @@ A signal fires only on the exact candle the macro pivot becomes confirmed (`righ
   bulls).
 - Smoothed RSI is computed on a synthetic candle array with RSI in the CLOSE column, routing through
   the pluggable backend.
-- Pivot scan is windowed to `max_pivot_bars + 4*macro_pivot + 10` bars for performance.
+- Pivots are precomputed once over the full candle array in `prepare()`; no-lookahead is enforced
+  at read time via an `i - right` visibility horizon in `_last_two_visible` (a pivot at absolute
+  index `p` is only confirmed visible once the strategy has scanned past `p + right`).
 - Hidden divergences from the Pine source are intentionally **not traded** — only regular divergences.

@@ -6,7 +6,7 @@ and (2) the AI infrastructure inventory (commands, agents, MCP, hooks, permissio
 > Onboarding / read-order / architecture / constraints live in **`AGENTS.md`** (repo root) — the
 > universal entry point every agent reads first. This file is the rules + tooling reference.
 
-Last updated: 2026-06-20
+Last updated: 2026-07-02 (workspace restructure: archive/ deleted, inventory reconciled to disk)
 
 ---
 
@@ -130,7 +130,9 @@ Spawn the `drift-reviewer` agent after large features or refactors. It audits:
 | Agent rules | `CLAUDE.md`, `*/CLAUDE.md` | Rarely |
 | Skills and commands | `.claude/commands/` | As skills evolve |
 | Subagents | `.claude/agents/` | As agents evolve |
-| Historical reports (superseded) | `workspace/archive/` | Reference only; never cited as current |
+| Ops runbooks (deployment) | `workspace/docs/ops/` | Per deploy learning |
+| Session resume log | `workspace/plan/handoff.md` | Every multi-phase session (≤3 entries) |
+| Historical / superseded docs | Git history only | Shipped plans are deleted, not archived — no archive folder exists |
 
 ---
 
@@ -178,13 +180,10 @@ Invocable as `/command-name` in Claude Code or via the Skill tool — same Markd
 | `/sync-spec` | Workflow gate | Post-implementation doc-sync checklist + completion gate (required before declaring done) |
 | `/add-strategy` | Scaffolding | Scaffold a new strategy in the engine + register in the seeder |
 | `/add-indicator` | Scaffolding | Add a new TA indicator to **both** adapters (talib + pandas-ta) |
-| `/create-api-endpoint` | Scaffolding | Add a REST endpoint across engine → server → client |
-| `/security-review` | Operational | Scan for secrets, `user_id` leakage, layer-boundary violations, key handling |
+| `/security-review` | Operational | Scan for secrets, missing `userId` scoping / cross-user leakage, layer-boundary violations, key handling |
 | `/verify` | Operational | Bring the Docker stack up + confirm a change works (health checks + observed behavior) |
-| `/ui-restyle` | UI Restyling | Restyle UI components to match the official UI_STYLE_GUIDE.md |
 | `/check-boundaries` | Boundary Check | Verify architectural boundaries are respected (no financial logic in wrong layer) |
 | `/golden-check` | Golden Check | Run golden master tests to verify refactors don't change behavior |
-| `/depth-review` | Depth Review | Perform comprehensive review across 6 drift vectors (stack, structure, API, boundary, convention, doc) |
 
 **Dependencies:** all scaffolding commands call `/sync-spec` on completion; `/sync-spec`'s gate spawns the `drift-reviewer` agent. All commands assume the caller has read `AGENTS.md` + `CURRENT_STATE.md`.
 
@@ -204,9 +203,8 @@ Defined in **`.mcp.json`** at the repo root (the standard Claude Code project-MC
 
 | MCP | Scope | Purpose | Status |
 |-----|-------|---------|--------|
-| Filesystem | `enma_trading_platform/` only | Read/write project files | Loads on session start |
-| GitHub | Repository | PR / issue management, CI status | Activates only when `GITHUB_PERSONAL_ACCESS_TOKEN` is set in the environment |
-| Codex CLI | Workspace | Run custom commands, coding tasks, or code reviews via Codex | Loads on session start |
+| Filesystem | `enma_trading_platform/` only | Read/write project files | **Disabled** in `settings.local.json` (`disabledMcpjsonServers`) — Claude Code's native tools cover this |
+| GitHub | Repository | PR / issue management, CI status | **Disabled** in `settings.local.json`; requires `GITHUB_PERSONAL_ACCESS_TOKEN` if re-enabled |
 
 **Rules:**
 - Database MCPs (MongoDB, TimescaleDB, Redis) are **not configured** — query data through the running app.
@@ -217,12 +215,11 @@ Defined in **`.mcp.json`** at the repo root (the standard Claude Code project-MC
 
 **None configured.** Neither `settings.json` nor `settings.local.json` has a `hooks` key. All automation is manual — invoked via slash commands or the Skill tool.
 
-## Permissions (`settings.json` / `settings.local.json`)
+## Permissions (`settings.local.json`)
 
-- `.claude/settings.json` (committed): specific `npx shadcn@latest init` variants.
-- `.claude/settings.local.json` (local only): generic dev allowlist (`npm`, `npx`, `docker-compose`, `docker exec`, `git`, `curl`, `python`) + Binance/TradingView WebFetch domains + enabled MCPs.
+- `.claude/settings.local.json` (local only, the sole settings file): a Bash/PowerShell command allowlist (git, curl/nslookup deploy checks) + `disabledMcpjsonServers` (filesystem, github — both off).
 
-Neither settings file references any command or agent filename — renames/deletions here don't break them.
+The settings file references no command or agent filename — renames/deletions there don't break it.
 
 ## Future AI Infrastructure (not implemented — do not cite as current)
 

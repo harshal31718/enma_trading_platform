@@ -15,7 +15,7 @@ All agents follow the same onboarding path. Read in order, then the files your t
 3. `CLAUDE.md` (root) + the relevant service `CLAUDE.md` (`client/`, `server/`, `engine/`)
 4. `.claude/GOVERNANCE.md` — source-of-truth hierarchy, documentation rules, AI infrastructure inventory
 
-> **Note on visibility:** `.claude/` and `.mcp.json` are git-ignored (local-only). **`CLAUDE.md`, the service `CLAUDE.md` files, `AGENTS.md`, and `workspace/` (docs, specs, archive) are tracked in git** as shared project memory. This `AGENTS.md` is intentionally **self-contained for the non-negotiable rules** so any agent stays safe even before reading the deeper docs.
+> **Note on visibility:** `.claude/` and `.mcp.json` are git-ignored (local-only). **`CLAUDE.md`, the service `CLAUDE.md` files, `AGENTS.md`, and `workspace/` (docs, specs, plans) are tracked in git** as shared project memory — `workspace/README.md` is the map of that directory and its lifecycle rules. This `AGENTS.md` is intentionally **self-contained for the non-negotiable rules** so any agent stays safe even before reading the deeper docs.
 
 ---
 
@@ -86,7 +86,7 @@ Skills live in `.claude/commands/` and are invocable as `/command-name` in Claud
 via the Skill tool. All files are plain Markdown — every tool can read them directly.
 
 **Canonical list:** `.claude/GOVERNANCE.md` → Part 2 (AI Infrastructure Inventory) is the single
-source of truth for the full skill set (10 commands) and their status — don't duplicate it here.
+source of truth for the full skill set and their status — don't duplicate it here.
 `workspace/skills/README.md` is a thin discovery pointer.
 
 **Auto-deployment rule:** For tasks matching a skill's trigger, invoke it automatically without
@@ -117,7 +117,8 @@ For multi-phase work: **list all phases up front**, then write a resume prompt t
 ```
 Next session: [what's done, what's next, which files changed, open questions]
 ```
-This lets any AI session resume exactly where the previous one stopped.
+This lets any AI session resume exactly where the previous one stopped. The file keeps at most
+the **3 most recent entries** — adding a new one deletes the oldest (git history is the archive).
 
 ---
 

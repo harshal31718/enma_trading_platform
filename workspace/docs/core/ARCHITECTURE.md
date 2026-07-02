@@ -37,9 +37,9 @@ Enma is a full-stack algorithmic trading platform for writing Python strategies,
 
 ## Database Responsibilities
 
-- **MongoDB (Node/Engine)**: `strategies`, `backtestResults`, `backtestTrades` (split from results to avoid BSON limits), `liveSessions`, `tradeOrders`, `tradeExecutions`, `Settings`.
+- **MongoDB (Node/Engine)**: `strategies` (global, no `userId`), `users`, `platformConfig`, `backtestResults`, `backtestTrades` (split from results to avoid BSON limits), `backtestLeverageScenarios`, `liveSessions`, `tradeOrders`, `tradeExecutions`, `tradeRecords`, `tradeTransactions`, `Settings`.
 - **TimescaleDB (Engine only)**: `candles` hypertable. Only Python engine reads/writes candles via asyncpg.
-- **Redis (Node/Engine)**: BullMQ (`bull:backtest`), live cache (`live:{botId}`), progress streams (`progress:{jobId}`).
+- **Redis (Node/Engine)**: BullMQ (`bull:backtest`), symbol locks (`server/src/services/symbolLock.js`), backtest cancel flags (`backtest:cancel:{jobId}`), progress streams (`progress:{jobId}`), live-metrics cache (`risk:live-metrics:{userId}`, 10s TTL).
 
 ## Binance Environment Model
 
@@ -60,14 +60,30 @@ Rules:
 
 ## Key Architectural Rules
 
-1. **Single User**: No `user_id` scopes anywhere. Data is global.
+1. **Multi-user, invite-only**: Google OAuth + JWT cookie. `userId` scopes every mutable Mongoose model (`BacktestResult`, `BacktestTrade`, `BacktestLeverageScenario`, `LiveSession`, `Settings`, `TradeOrder`, `TradeExecution`, `TradeTransaction`, `TradeRecord`). `Strategy` stays global by design — no `userId`.
 2. **Engine is the Writer**: Engine writes `backtestResults` and `backtestTrades` directly. Server does NOT double-write these.
 3. **Keep-Alive**: Node uses `http.Agent` `keepAlive: true`, and Engine uses `httpx.AsyncClient` connection pooling.
 4. **Local Dev**: Fully containerized with `docker-compose`. `node_modules` are in named volumes, TA-Lib is built inside the `engine` Dockerfile.
-5. **Binance Testnet rate limits**: Trade page polls account (15 s), positions (10 s), open-orders (10 s). Do not lower these — Binance Testnet has strict per-IP rate limits and will temporarily ban the IP on excess.
+5. **Binance Testnet rate limits are weight-based and shared across ALL users, not per-user —
+   mitigated via WebSocket push, not REST polling.** Binance's `REQUEST_WEIGHT` limit (2400/min,
+   confirmed via
+   [official docs](https://developers.binance.com/docs/derivatives/usds-margined-futures/general-info))
+   is enforced **per source IP** — since the engine proxies every signed call from the VPS's single
+   outbound IP, this budget is shared across every concurrently active user, not allocated per user.
+   The Trade page previously REST-polled account/positions/open-orders at 30s/3s/10s — `open-orders`
+   alone cost ~480 weight/min per user (`GET /fapi/v1/openOrders`/`openAlgoOrders` cost weight 40
+   each without a `symbol` param, vs. 1 with one, and neither call passed one), which at the shared
+   2400/min budget meant roughly 4 concurrently active users exhausted it. **Fixed 2026-07-02**: the
+   Trade page now uses a per-user Binance User Data Stream (`engine/services/manual_trade_stream.py`,
+   reusing the `UserDataStreamManager` already built for live bots — F-020) for real-time
+   order/account push over WebSocket, matching Binance's own recommended architecture. REST polling
+   is now a long-interval (90s/30s/60s) safety net, not the primary source — see
+   `workspace/docs/features/live-trading/SPEC.md`. Positions/account still need one real REST call on
+   change (debounced ~2s) since `ACCOUNT_UPDATE` lacks `markPrice`/`liquidationPrice`; open-orders
+   patches the query cache directly with zero REST cost.
 
 ## Deployment Targets
 
-- **Frontend**: Vercel
+- **Frontend**: Static build served by host Nginx on the same Oracle Cloud VPS (`/opt/enma/client/dist`) — not Vercel. See `workspace/docs/ops/DEPLOYMENT.md`.
 - **Backend/Engine**: Oracle Cloud Free VM (Docker)
-- **Databases**: MongoDB Atlas Free, Upstash Redis Free, local TimescaleDB instance.
+- **Databases**: MongoDB Atlas Free, self-hosted Redis via Docker Compose (Docker network only, not Upstash), local TimescaleDB instance.

@@ -5,6 +5,9 @@ const {
   getSettingsKeys,
   saveSettingsKeys,
   verifySettings,
+  getBalances,
+  startTradeStream,
+  stopTradeStream,
   getAccountDetails,
   getPositionRisk,
   getOpenOrders,
@@ -27,10 +30,14 @@ const {
 router.get('/settings/keys', getSettingsKeys)
 router.post('/settings/keys', saveSettingsKeys)
 router.post('/settings/verify', verifySettings)
+router.get('/balances', getBalances)
 router.get('/klines', getKlines)
 
 // All routes below require valid Binance credentials
 router.use(requireBinanceCredentials)
+
+router.post('/stream/start', startTradeStream)
+router.post('/stream/stop', stopTradeStream)
 
 router.get('/account', getAccountDetails)
 router.get('/positions', getPositionRisk)

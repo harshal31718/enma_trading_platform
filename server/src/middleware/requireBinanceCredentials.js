@@ -15,7 +15,9 @@ async function requireBinanceCredentials(req, res, next) {
     req.binanceHeaders = {
       'X-Binance-API-Key': apiKey,
       'X-Binance-API-Secret': apiSecret,
-      'X-Binance-Mode': settings?.mode || 'testnet',
+      // Pinned: mainnet keys are read-only (balance display). All trading
+      // routes go to testnet regardless of Settings.mode (DECISIONS.md).
+      'X-Binance-Mode': 'testnet',
     }
 
     next()

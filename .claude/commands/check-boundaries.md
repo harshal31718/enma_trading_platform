@@ -1,7 +1,7 @@
 # Check Boundaries
 
 Enforce the Narang Black-Box separation of concerns (see `workspace/docs/core/ARCHITECTURE.md` and
-`workspace/plan/modular_merger_plan.md`) on the engine. The **Alpha Model (a strategy) must only
+`workspace/docs/core/DECISIONS.md` — five-model pipeline decision) on the engine. The **Alpha Model (a strategy) must only
 predict** — it may read candles and its own `PARAMS`, but must never read account/position state or
 write execution orders. This skill is the enforcement arm of the modular architecture and a guard for
 every strategy added via `/add-strategy`.
@@ -48,7 +48,7 @@ references above. Green = boundaries intact.
 ## 3. Deep audit (when the grep/test is ambiguous, or after a large refactor)
 
 Spawn the `drift-reviewer` subagent to audit the current code against the five model boundaries defined
-in `workspace/plan/modular_merger_plan.md` and `workspace/docs/core/ARCHITECTURE.md`.
+in `workspace/docs/core/DECISIONS.md` and `workspace/docs/core/ARCHITECTURE.md`.
 Report violations `file:line`. Read-only; reports only.
 
 ## Report

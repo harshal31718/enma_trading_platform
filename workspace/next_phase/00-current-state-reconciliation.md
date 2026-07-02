@@ -1,6 +1,6 @@
 # 00 — Current-State Reconciliation (audit, 2026-06-25)
 
-**Why this exists:** `workspace/plan/INDEX.md` claimed #3/#4/#5 were "remaining." A direct code
+**Why this exists:** the old `workspace/plan/INDEX.md` (since deleted — git history) claimed #3/#4/#5 were "remaining." A direct code
 audit found them **already implemented**. This file is the corrected record. Every claim below is
 backed by a real file path that exists in the repo today.
 

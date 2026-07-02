@@ -39,8 +39,13 @@ _MAX_LEVERAGE_OFFLINE_MAP: dict[str, int] = {
     "SUIUSDT":    50,
 }
 
+# Testnet host matches engine/services/binance_testnet.py's _BASE_URLS["testnet"] —
+# https://demo-fapi.binance.com is the officially documented USDS-M Futures Testnet REST
+# base (https://developers.binance.com/docs/derivatives/usds-margined-futures/general-info).
+# testnet.binancefuture.com is a legacy/community domain, not the current documented one —
+# was previously used here by mistake, causing two different testnet hosts in the codebase.
 _LEVERAGE_BRACKET_URLS = {
-    "testnet":  "https://testnet.binancefuture.com/fapi/v1/leverageBracket",
+    "testnet":  "https://demo-fapi.binance.com/fapi/v1/leverageBracket",
     "mainnet":  "https://fapi.binance.com/fapi/v1/leverageBracket",
 }
 
@@ -120,19 +125,19 @@ async def clamp_leverage(
     return min(requested, max_lev)
 
 _EXCHANGE_INFO_URLS = {
-    "Binance Futures": "https://testnet.binancefuture.com/fapi/v1/exchangeInfo",
+    "Binance Futures": "https://demo-fapi.binance.com/fapi/v1/exchangeInfo",
     "Binance Spot": "https://api.binance.com/api/v3/exchangeInfo",
 }
 
 _TICKER_URLS = {
-    "Binance Futures": "https://testnet.binancefuture.com/fapi/v1/ticker/24hr",
+    "Binance Futures": "https://demo-fapi.binance.com/fapi/v1/ticker/24hr",
     "Binance Spot": "https://api.binance.com/api/v3/ticker/24hr",
 }
 
 # Book ticker (best bid/ask). The 24hr ticker endpoint does NOT return bid/ask
 # for USDⓈ-M futures, so the SpreadFilter needs this separate source.
 _BOOK_TICKER_URLS = {
-    "Binance Futures": "https://testnet.binancefuture.com/fapi/v1/ticker/bookTicker",
+    "Binance Futures": "https://demo-fapi.binance.com/fapi/v1/ticker/bookTicker",
     "Binance Spot": "https://api.binance.com/api/v3/ticker/bookTicker",
 }
 

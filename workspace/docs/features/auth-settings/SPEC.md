@@ -1,35 +1,58 @@
 # Feature: Authentication & Settings
 
-**Status:** Settings implemented; no authentication layer  
-**Last updated:** 2026-06-20
+**Status:** Settings implemented; Google OAuth + JWT authentication implemented (Auth Branch, shipped 2026-06-22)
+**Last updated:** 2026-07-02 — full rewrite; this doc previously described the pre-Auth-Branch
+single-user state (no login, `.env` credentials) which had become the exact inverse of what's
+actually shipped. See `workspace/docs/state/CURRENT_STATE.md` → "Auth & Access Control" as the
+higher-authority source if this doc drifts again.
 
 ---
 
 ## What It Does
 
-Manages platform configuration: trading mode (Testnet/Mainnet), Binance API credential verification, and exchange trading settings. The Exchange Settings section centralizes all trading parameters (fees, slippage, funding) and form defaults — all values are stored as variables, not hardcoded. **There is no authentication layer** — no register/login routes, no auth middleware, no `User` model. The former auth scaffolding was **fully removed 2026-06-22**: `bcryptjs`/`jsonwebtoken` deleted from `server/package.json`, `client/src/store/useAuthStore.js` deleted, and the JWT/401 interceptors stripped from `client/src/lib/axios.js` (see `../../state/DEPRECATED.md` → "Client Auth Scaffolding"). This is a single-user, self-hosted platform; a login gate is unnecessary unless multi-user support is added.
+Manages platform configuration: trading mode (Testnet/Mainnet), Binance API credential storage,
+exchange trading settings, and invite-only multi-user access. The Exchange Settings section
+centralizes all trading parameters (fees, slippage, funding, risk defaults, Chaos Mode defaults) —
+all values are stored as variables, not hardcoded, and are scoped per user. **Authentication is
+Google OAuth 2.0 + JWT**: `server/src/config/passport.js` (Passport, sessionless), issuing a 7-day
+JWT in an `httpOnly` cookie (`enma_jwt`), verified by `verifyJWT` middleware
+(`server/src/middleware/auth.middleware.js`) mounted on all `/api/v1/*` routes except `/auth/*` and
+`/health`. Access is invite-only: a `PlatformConfig` whitelist of allowed emails gates the OAuth
+callback; an admin panel (`requireAdmin`-gated) manages that whitelist.
 
 ---
 
 ## Data Flow
 
-### Settings page — trading mode
+### Settings page — API keys (two environments)
 
 ```
 Client navigates to Settings page
         ↓
 GET /api/v1/trade/settings/keys
         ↓
-Server reads Mode from MongoDB Settings collection
+Server reads Settings collection
         ↓
-Returns: { mode: 'testnet' | 'mainnet' }
+Returns: { mode: 'testnet', hasApiKey, hasApiSecret,
+           hasMainnetApiKey, hasMainnetApiSecret }   (booleans; mode always 'testnet')
 
-User changes mode and saves
+User saves TESTNET keys (trading pair)
         ↓
-POST /api/v1/trade/settings/keys  { mode: 'testnet' | 'mainnet' }
+POST /api/v1/trade/settings/keys  { env: 'testnet', apiKey?, apiSecret? }
         ↓
-Server validates and writes to Settings collection
+Server encrypts + writes encryptedApiKey/Secret (partial update allowed)
+
+User saves MAINNET keys (read-only, balance display)
+        ↓
+POST /api/v1/trade/settings/keys  { env: 'mainnet', apiKey, apiSecret }   (both required)
+        ↓
+Server calls engine POST /trade/verify (X-Binance-Mode: mainnet) BEFORE storing
+        ↓ (invalid) 400 VERIFICATION_FAILED, nothing saved
+        ↓ (valid)   encrypts + writes encryptedMainnetApiKey/Secret
 ```
+
+> Sending a `mode` field to `POST /settings/keys` is **rejected** (400). Mainnet is read-only —
+> trading cannot be switched to mainnet; `X-Binance-Mode` is pinned to `testnet` on all trade routes.
 
 ### Settings page — credential verification
 
@@ -75,12 +98,41 @@ When forms load (BacktestConfigForm, NewSessionWizard):
   → Capital and leverage pre-fill from defaults (one-time, non-overriding)
 ```
 
-### Authentication — not implemented
+### Authentication — Google OAuth + JWT
 
-There are **no** `/api/v1/auth/*` routes, no auth middleware, and no `User` model. This is a
-single-user, self-hosted platform, so no login gate is needed. The old client/server auth scaffolding
-(`useAuthStore.js`, axios JWT interceptors, `bcryptjs`/`jsonwebtoken`) was deleted 2026-06-22 — add
-real auth (register/login + middleware) from scratch only if multi-user support is ever introduced.
+```
+Client hits "Sign in with Google" → GET /api/v1/auth/google
+        ↓
+Redirects to Google OAuth consent (Passport, scopes: profile email, sessionless)
+        ↓
+Google redirects → GET /api/v1/auth/google/callback
+        ↓
+Server checks the requesting email against the PlatformConfig allowed-email whitelist
+        ↓ (not whitelisted)                          ↓ (whitelisted)
+Redirect to CLIENT_URL/login?error=not_invited    Upsert User doc (googleId, email, role)
+                                                       ↓
+                                                   Sign 7-day JWT ({ userId, role })
+                                                       ↓
+                                                   Set httpOnly enma_jwt cookie (sameSite: lax,
+                                                   secure in prod) → redirect to CLIENT_URL/
+
+Every subsequent /api/v1/* request (except /auth/*, /health):
+        ↓
+verifyJWT middleware reads enma_jwt cookie, verifies, attaches req.user (lean User doc)
+        ↓ (invalid/missing)              ↓ (valid)
+401 UNAUTHORIZED                     Controller runs, scoped to req.user.id
+
+Socket.IO: io.use() middleware parses the same cookie, verifies JWT, attaches socket.user;
+on connection the socket joins room user:<userId>. All server emits use
+io.to('user:<userId>').emit(...) — never a global io.emit().
+
+Logout: POST /api/v1/auth/logout clears the enma_jwt cookie.
+```
+
+`requireAdmin` (checks `req.user.role === 'admin'`) gates `GET/POST/DELETE
+/api/v1/admin/allowed-emails`. The `ADMIN_EMAIL` env value cannot be removed via the API. The
+`PlatformConfig` singleton (`_id: 'platform'`) holds the whitelist and is created on server startup
+if absent.
 
 ---
 
@@ -96,22 +148,39 @@ real auth (register/login + middleware) from scratch only if multi-user support 
 
 ## Key Invariants
 
-- **Credentials live in `.env`.** Binance API key/secret are read from server environment variables (`BINANCE_TESTNET_KEY`, `BINANCE_TESTNET_SECRET`, `BINANCE_LIVE_KEY`, `BINANCE_LIVE_SECRET`) — they are not stored in MongoDB. The AES-256 encryption util (`server/src/utils/encryption.js`) exists for future use but is not currently wired.
-- **Single-user model.** No `user_id` on any schema. No authentication layer exists; the former `bcryptjs`/`jsonwebtoken` deps and `useAuthStore` scaffolding were deleted 2026-06-22 — nothing auth-related remains.
-- **Do not modify `.env` files.** Settings changes (mode) go to MongoDB Settings collection only.
-- **Mainnet not implemented.** Switching mode to `mainnet` in Settings has no effect on the current trade route behavior — all orders still target Testnet. Full mainnet support requires swapping the base URL in the engine.
+- **Credentials live in MongoDB, per user, AES-256 encrypted.** The testnet trading pair is
+  `encryptedApiKey`/`encryptedApiSecret`; the mainnet read-only pair is
+  `encryptedMainnetApiKey`/`encryptedMainnetApiSecret`. All four are encrypted/decrypted via
+  `server/src/utils/encryption.js`. `requireBinanceCredentials.js` decrypts the **testnet** pair
+  per-request for trade routes (mainnet keys are used only by `getBalances`). Not read from `.env`.
+- **Mainnet is read-only.** Mainnet keys must be created on Binance with **Read Only** permission and
+  are used solely to display the mainnet balance on the Dashboard (`GET /api/v1/trade/balances`). They
+  are verified against Binance before storage. `X-Binance-Mode` is pinned to `testnet` on every trade
+  route (`requireBinanceCredentials.js`), so a mainnet key can never reach an order endpoint even if it
+  were (incorrectly) granted trade permission. See `DECISIONS.md`.
+- **Multi-user, invite-only.** `userId` scopes every mutable Mongoose model (`BacktestResult`,
+  `BacktestTrade`, `BacktestLeverageScenario`, `LiveSession`, `Settings`, `TradeOrder`,
+  `TradeExecution`, `TradeTransaction`, `TradeRecord`). `Strategy` stays global by design — no
+  `userId`. Access is gated by the `PlatformConfig` email whitelist, not open registration.
+- **Do not modify `.env` files.** Settings changes (mode, credentials, risk defaults, etc.) go to each
+  user's MongoDB `Settings` doc only.
+- **Mainnet trading not implemented (by design).** Only mainnet *balance display* is supported
+  (read-only). All orders target Testnet. The `mode` field is vestigial (retained to avoid a
+  migration); it no longer switches trade routing.
 
 ---
 
 ## MongoDB Settings Model
 
-**Collection:** `settings`  
-**Document:** Singleton (`_id: 'global'`)
+**Collection:** `settings`
+**Document:** One per user — `userId` field, required + unique (not a singleton)
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `_id` | String | Fixed value `'global'` |
-| `mode` | Enum | `'testnet'` or `'mainnet'` |
+| `userId` | ObjectId | Required, unique — owning user |
+| `encryptedApiKey` / `encryptedApiSecret` | String | AES-256 encrypted **testnet** Binance credentials (trading pair) |
+| `encryptedMainnetApiKey` / `encryptedMainnetApiSecret` | String | AES-256 encrypted **mainnet** credentials — READ-ONLY, balance display only (verified before storage) |
+| `mode` | Enum | `'testnet'` or `'mainnet'` — **vestigial**; trading is pinned to testnet regardless |
 | **Trading Fees** | | |
 | `takerFee` | Number | Taker fee rate (decimal: 0.0005 = 0.05%), default 0.0005 |
 | `makerFee` | Number | Maker fee rate (decimal: 0.0002 = 0.02%), default 0.0002 |
@@ -137,6 +206,9 @@ real auth (register/login + middleware) from scratch only if multi-user support 
 | `chaosDefaultCapital` | Number | Per-strategy capital pre-fill, default 500 |
 | `chaosDefaultLeverage` | Number | Leverage pre-fill, default 50 |
 | `chaosDefaultTimeframe` | String | Default chaos timeframe, default `'1m'` |
+| `globalHardLimits` | Object | Risk Dashboard: `{ maxLeverageAllowed, maxSessionDrawdown, maxRiskPctPerTrade, cooldownPeriodHours }` |
+| `strategyOverrides` | Object | Risk Dashboard: `{ [strategyName]: { riskPct?, riskRewardRatio?, maxSessionDrawdown?, liqBufferPct?, minEdgeMult?, customAtrMult? } }` |
+| `symbolOverrides` | Object | Risk Dashboard: `{ [symbol]: { maxLeverage?, volatilityMultiplier?, maxExposureNotional? } }` |
 
 ---
 
@@ -144,11 +216,12 @@ real auth (register/login + middleware) from scratch only if multi-user support 
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| `POST /api/v1/auth/register` | Does not exist | No route file or controller |
-| `POST /api/v1/auth/login` | Does not exist | No route file or controller |
-| JWT middleware | Does not exist | `server/src/middleware/auth.js` never existed |
-| Login gate in UI | Does not exist | Single-user model — no gate needed |
-| `useAuthStore` (Zustand) | Deleted 2026-06-22 | Removed with the rest of the auth scaffolding |
+| `GET /api/v1/auth/google` / `/google/callback` | **Implemented** | `server/src/routes/auth.routes.js`, `auth.controller.js`, Passport Google OAuth 2.0 |
+| `POST /api/v1/auth/logout`, `GET /api/v1/auth/me` | **Implemented** | Same files as above |
+| JWT middleware (`verifyJWT`, `requireAdmin`) | **Implemented** | `server/src/middleware/auth.middleware.js`, mounted on all `/api/v1/*` routes |
+| Login gate in UI | **Implemented** | `client/src/pages/Login.jsx`; unauthenticated requests 401 via `verifyJWT` |
+| `User` model | **Implemented** | `server/src/models/User.js` (`googleId`, `email`, `role`) |
+| `PlatformConfig` (invite whitelist) | **Implemented** | `server/src/models/PlatformConfig.js`; admin CRUD via `admin.routes.js` |
 
 ---
 
@@ -156,11 +229,17 @@ real auth (register/login + middleware) from scratch only if multi-user support 
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/trade/settings/keys` | Get current trading mode |
-| POST | `/api/v1/trade/settings/keys` | Save trading mode |
-| POST | `/api/v1/trade/settings/verify` | Verify Binance API credentials |
-| GET | `/api/v1/settings/exchange` | Get all exchange settings (fees, defaults, simulation params) |
-| PUT | `/api/v1/settings/exchange` | Update exchange settings |
+| GET | `/api/v1/trade/settings/keys` | Key-status booleans for both envs (testnet + mainnet) |
+| POST | `/api/v1/trade/settings/keys` | Save keys for `env: 'testnet'\|'mainnet'` (mainnet verified before save; `mode` rejected) |
+| POST | `/api/v1/trade/settings/verify` | Verify Binance API credentials for the selected `env` |
+| GET | `/api/v1/trade/balances` | Combined testnet + mainnet balance snapshot (backs Dashboard `AccountOverview`) |
+| GET | `/api/v1/settings/exchange` | Get all exchange settings (fees, defaults, simulation, risk, chaos params) — per-user |
+| PUT | `/api/v1/settings/exchange` | Update exchange settings — per-user |
+| GET | `/api/v1/auth/google` | Begin Google OAuth flow |
+| GET | `/api/v1/auth/google/callback` | Google OAuth callback — issues JWT cookie |
+| POST | `/api/v1/auth/logout` | Clear JWT cookie |
+| GET | `/api/v1/auth/me` | Current user identity |
+| GET/POST/DELETE | `/api/v1/admin/allowed-emails` | Admin-only whitelist CRUD (`requireAdmin`) |
 
 ---
 
@@ -170,16 +249,26 @@ real auth (register/login + middleware) from scratch only if multi-user support 
 |------|------|
 | `client/src/pages/Settings.jsx` | Environment Configuration + Exchange Settings form (4 sections) |
 | `client/src/hooks/useExchangeSettings.js` | TanStack Query hooks: `useExchangeSettings()` (GET), `useUpdateExchangeSettings()` (PUT) |
-| `client/src/features/backtest/BacktestConfigForm.jsx` | Pre-fills capital/leverage from `defaultCapital`/`defaultLeverage` |
+| `client/src/hooks/useAuth.js` | TanStack Query: `useAuth()` (`GET /auth/me`, 5-min stale, 401→null), `useLogout()` |
+| `client/src/pages/Login.jsx` | Google OAuth entry point (public route) |
+| `client/src/pages/AdminPanel.jsx` | Admin-only allowed-emails CRUD UI |
 | `client/src/components/algo/NewSessionWizard.jsx` | Pre-fills capital/leverage from `defaultBotCapital`/`defaultBotLeverage` |
 | `server/src/routes/settings.routes.js` | Exchange settings GET + PUT routes |
 | `server/src/routes/trade.routes.js` | Settings keys routes (GET + POST + verify) |
+| `server/src/routes/auth.routes.js` | Google OAuth routes (unprotected) |
+| `server/src/routes/admin.routes.js` | Allowed-emails CRUD (`requireAdmin`) |
 | `server/src/controllers/settings.controller.js` | `getExchangeSettings`, `updateExchangeSettings` |
-| `server/src/controllers/trade.controller.js` | `getSettingsKeys`, `saveSettingsKeys`, `verifySettings` |
+| `server/src/controllers/trade.controller.js` | `getSettingsKeys`, `saveSettingsKeys`, `verifySettings`, `getBalances` |
+| `server/src/controllers/auth.controller.js` | OAuth callback, JWT issuance, `/me`, logout |
+| `server/src/controllers/admin.controller.js` | Allowed-email whitelist CRUD |
 | `server/src/controllers/algo.controller.js` | Reads `takerFee` from Settings on session start, injects into engine call |
 | `server/src/controllers/backtest.controller.js` | Reads trading fees, slippage, funding from Settings on backtest start |
-| `server/src/models/Settings.js` | Singleton Settings document with all exchange configuration |
-| `server/src/middleware/requireBinanceCredentials.js` | Ensures .env credentials exist before trade routes |
+| `server/src/config/passport.js` | Google OAuth 2.0 strategy (sessionless) |
+| `server/src/middleware/auth.middleware.js` | `verifyJWT`, `requireAdmin` |
+| `server/src/models/User.js` | `googleId`, `email`, `role` |
+| `server/src/models/PlatformConfig.js` | Allowed-email whitelist singleton |
+| `server/src/models/Settings.js` | Per-user Settings document with all exchange configuration + encrypted credentials |
+| `server/src/middleware/requireBinanceCredentials.js` | Decrypts per-user MongoDB credentials before trade routes |
 | `server/src/utils/encryption.js` | AES-256 encrypt/decrypt for API keys |
 | `engine/routers/backtest.py` | Accepts `slippagePct`, `fundingEnabled`, `fundingRate` in backtest request |
 | `engine/routers/trade.py` | `POST /verify` — Binance credential test |

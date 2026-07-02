@@ -32,10 +32,16 @@ client/
 ├── public/
 ├── src/
 │   ├── components/      ← shared reusable components
-│   │   ├── ui/          ← generic UI (Button, Input, Modal, Card, Badge, PageHeader, skeleton)
-│   │   │                   Note: DataTable.jsx, EmptyState.jsx, StatusBadge.jsx, and the
-│   │   │                   original StatCard.jsx have been deleted — they were never imported.
-│   │   ├── charts/      ← Recharts wrappers (EquityCurve.jsx only — DrawdownChart/CandleChart do not exist)
+│   │   ├── ui/          ← generic UI (Button, Input, Dialog, Card, Badge, PageHeader, skeleton,
+│   │   │                   table, tabs, select, pagination, confirm-dialog, empty-state)
+│   │   │                   Note: DataTable.jsx, StatusBadge.jsx, and the original StatCard.jsx
+│   │   │                   have been deleted — they were never imported. There is no Modal.jsx;
+│   │   │                   dialog.jsx (Radix-based Dialog/DialogTrigger/etc.) is the real name.
+│   │   │                   empty-state.jsx was deleted then reintroduced 2026-07-01 — it's live,
+│   │   │                   used by AdminPanel/BacktestHistory/OrderHistory/Strategies/Trade.
+│   │   ├── ErrorBoundary.jsx ← top-level React error boundary
+│   │   ├── charts/      ← Recharts wrappers: EquityCurve.jsx, EquitySparkline.jsx,
+│   │   │                   DrawdownSparkline.jsx (DrawdownChart/CandleChart do not exist)
 │   │   ├── layout/      ← Navbar.jsx, PageWrapper.jsx (no Sidebar)
 │   │   ├── risk/        ← Risk Intelligence Dashboard visualizations
 │   │   │   ├── AggregateMarginGauge.jsx ← locked margin / free balance / leverage gauge (Zone 1)
@@ -72,10 +78,11 @@ client/
 │   │   ├── useDashboard.js        ← TanStack Query hooks: useDashboardStats(), useCachedCandles()
 │   │   ├── useBacktest.js         ← TanStack Query hooks: useRunBacktest(), useBacktestsList(), useBacktestResult(id), useBacktestTrades(id, page, limit), useAllBacktestTrades(id), useBacktestBenchmark(id), useCancelBacktest()
 │   │   ├── useStrategies.js       ← TanStack Query hooks: useStrategies(), useStrategyCode(id)
-│   │   ├── useTrade.js            ← TanStack Query hooks: useTradeAccount(), useTradePositions(), useTradeOpenOrders(), useTradeSymbolConfig(symbol), useChangeLeverage(), useChangeMarginType(), usePlaceOrder(), usePlaceOrderWithTpSl(), useCancelOrder(), useClosePosition(), useCancelAllOrders()
+│   │   ├── useTrade.js            ← TanStack Query hooks: useTradeAccount(), useAccountBalances() (testnet+mainnet, GET /trade/balances), useTradePositions(), useTradeOpenOrders(), useTradeStream(), useTradeSymbolConfig(symbol), useChangeLeverage(), useChangeMarginType(), usePlaceOrder(), usePlaceOrderWithTpSl(), useCancelOrder(), useClosePosition(), useCancelAllOrders()
 │   │   ├── useAlgoSessions.js     ← TanStack Query hooks for /api/v1/algo/* endpoints (includes useStartChaos)
 │   │   ├── useExchangeSettings.js ← TanStack Query hooks for /api/v1/settings/exchange
 │   │   ├── useOcoMonitor.js       ← monitors OCO order fill/cancel state via polling
+│   │   ├── useTableSort.js        ← generic column-sort state hook for table components
 │   │   ├── useOrderHistory.js     ← useOrderHistory({ page, limit, filters }) → GET /api/v1/order-history
 │   │   ├── useAuth.js             ← TanStack Query: useAuth() (GET /api/v1/auth/me, 5-min stale, 401→null), useLogout()
 │   │   ├── useRiskSettings.js     ← TanStack Query hooks for /api/v1/risk/* (settings, live metrics, simulation, overrides)
@@ -101,8 +108,8 @@ client/
 │   │   ├── AdminPanel.jsx     ← route: /admin (admin-only, allowed-emails CRUD)
 │   │   ├── RiskDashboard.jsx  ← route: /risk-dashboard (Zone 1/2/3 risk intelligence, see CURRENT_STATE.md)
 │   │   └── NotFound.jsx       ← route: * (catch-all 404, "Go to Dashboard" CTA)
-│   ├── store/
-│   │       Note: useUIStore.js has been deleted — it tracked sidebar state that no longer exists.
+│   │       Note: `client/src/store/` no longer exists — `useUIStore.js` (sidebar state) was its
+│   │       only file and was deleted with the sidebar; no Zustand store directory remains.
 │   ├── utils/
 │   │   ├── formatters.js         ← formatQty, formatPrice, formatPct, formatPnl, formatSignedPct
 │   │   ├── backtest-analytics.js ← Performance Calendar bucketing (Day/Week/Month/Quarter) over backtestTrades
@@ -234,16 +241,31 @@ WebSocket stream (`@kline_<interval>`) — only the initial REST fetch is affect
 
 ## Dashboard page spec
 
-The Dashboard (`/`) is a simulation metrics hub. It has no live trading data — it shows backtest history and cached candle state only.
+The Dashboard (`/`) leads with **live account data** (balances + prices), then backtest metrics.
+Section order: `TickerStrip` → `AccountOverview` → `BacktestKpiStrip` → Recent Live Runs + Recent
+Backtests (2-col) → `StrategyLeaderboard` → `CollapsibleSection`(TimescaleDB Cache, default closed).
+Each section loads independently — a live-data failure must not blank the backtest sections. Full spec:
+`workspace/docs/features/dashboard/SPEC.md`.
 
 ### Components (all under `client/src/features/dashboard/`)
 
-**StatCard** — generic display card for a single numeric metric.
-- Props: `title` (string), `value` (string | number), `subtitle` (string, optional)
-- Grid layout: 4 cards in one row (`grid grid-cols-4 gap-0`)
-- Cards: **Total Runs** (totalRuns), **Best Strategy** (bestStrategy name), **Avg Win Rate** (averageWinRate as %, 1 decimal), **Cached Symbols** (count of distinct rows in CachedCandlesTable)
-- Style: `bg-[#0d1117] border border-slate-700/50 p-4` (uses the shared `Card` component — no rounded corners)
-- Value text: `text-2xl font-semibold tabular-nums text-gray-100`; title: `text-[11px] uppercase tracking-wider text-slate-400`
+**TickerStrip** — live price strip. Symbols = `['BTCUSDT','ETHUSDT'] ∪ openPositionSymbols`, deduped,
+capped at 8, memoized. Inner `TickerItem` isolates per-symbol state and subscribes via
+`useBinanceWS(`${sym}@ticker`, cb)` (browser-direct Binance public WS — no server load). Never uses
+`!ticker@arr`. Price `formatPrice`, 24h % `formatSignedPct` (emerald/red).
+
+**AccountOverview** — 4 tiles (`grid grid-cols-2 lg:grid-cols-4 gap-0`): Testnet Balance, Mainnet
+Balance (read-only), Unrealized P&L (testnet), Margin Balance + open-position count. Data from
+`useAccountBalances()` (`GET /api/v1/trade/balances`) + `useTradePositions()`. Handles per-env
+not-configured / fetch-error states.
+
+**BacktestKpiStrip** — condensed 8-metric strip (`grid-cols-2 sm:grid-cols-4 xl:grid-cols-8`),
+replacing the old 8 large `StatCard`s: Total Runs, Best Strategy, Avg Win Rate, Profit Factor, Sharpe,
+Sortino, Max Drawdown (red when >0), Expectancy (signed emerald/red).
+
+**CollapsibleSection** — toggle wrapper (default closed) demoting the candle inventory.
+
+**StatCard** — legacy single-metric card; **no longer used by Dashboard** (orphaned, file retained).
 
 **CachedCandlesTable** — table of OHLCV ranges currently stored in TimescaleDB.
 - Data source: `GET /api/v1/candles/cached` via `useCachedCandles()` hook

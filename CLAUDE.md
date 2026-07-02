@@ -24,7 +24,7 @@ Start every new session by reading in order:
 
 ## Core Rules & Constraints
 
-1. **Single-user platform**: No `user_id` fields anywhere in schemas, routes, or queries.
+1. **Multi-user, invite-only**: Google OAuth + JWT cookie; all `/api/v1/*` routes require `verifyJWT`. Every mutable Mongoose model is scoped by `userId`. Strategies stay global/shared — no `userId` on `Strategy`. (See `AGENTS.md` → Non-Negotiable Constraints.)
 2. **Data Ownership**: Python engine writes `backtestResults` and `backtestTrades`. Node server only proxies to engine. TimescaleDB exclusively stores OHLCV candles.
 3. **Aesthetics Invariant**: All positive P&L metrics must use `emerald-400` styling (not generic `green`).
 4. **Timeframes**: Use the consolidated timeframe utility module at `engine/utils/timeframes.py` for all conversions.
@@ -46,8 +46,8 @@ This project is worked on by multiple AI agents — Claude Code plus Google Anti
 
 ### A — Model/API Version Verification
 Before referencing any Claude model ID, SDK method, Anthropic API parameter, or third-party
-library version by name, verify it against current documentation (use `/claude-api` skill or
-fetch official docs). Never assume model IDs, parameter names, or API shapes from training
+library version by name, verify it against current documentation (fetch official docs).
+Never assume model IDs, parameter names, or API shapes from training
 memory — they change. This applies to Anthropic SDK, Binance API endpoints, and any library
 with a versioned interface.
 
@@ -88,7 +88,6 @@ matches an existing skill's trigger condition, **automatically**:
 Trigger examples:
 - Task adds an indicator → invoke `/add-indicator` first
 - Task adds a strategy → invoke `/add-strategy` first
-- Task adds REST endpoint → invoke `/add-endpoint` first
 - Implementation complete → invoke `/sync-spec` before declaring done
 - Large refactor done → spawn the `drift-reviewer` subagent
 - Binance code being written → read `workspace/docs/core/binance-api.md` first
@@ -101,6 +100,8 @@ For multi-phase work:
   Next session: [what's done], [what's next], [files changed], [open questions]
   ```
 This ensures any future AI session can resume exactly where this one stopped.
+`handoff.md` keeps at most the **3 most recent entries** — adding a new one deletes the oldest
+(git history is the archive). It is a resume prompt, not a project log.
 
 ### H — Git Safety (No Silent Reverts)
 **Never** run any git command that discards or reverts uncommitted changes unless the user explicitly instructs it in the same message. This includes but is not limited to:

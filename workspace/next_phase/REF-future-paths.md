@@ -58,7 +58,7 @@ double-count:
 
 | Idea (futurePlans) | Official roadmap entry |
 |---|---|
-| Monte Carlo Simulation | "Monte Carlo optimization" (Planned) — `/optimize` engine endpoint |
+| ~~Monte Carlo Simulation~~ | **Shipped** — `engine/services/monte_carlo.py`, wired into the Risk Dashboard. Stale as of the 2026-06-25 reconciliation (`00-current-state-reconciliation.md`); row kept for history only. |
 | (multi-symbol / multi-exchange ambitions) | "Multi-exchange support" (Planned) |
 | (live mainnet, implied by several) | "Mainnet trading" (Planned) |
 
@@ -69,7 +69,7 @@ double-count:
 | Item | Fit | Effort | Type | Notes / Enma mapping |
 |---|---|---|---|---|
 | **PyPortfolioOpt** | 🟡 | M | Adopt | Mean-Variance / Black-Litterman / risk-parity weight allocation across symbols. Needs a portfolio abstraction first (fork #3). Natural complement to Chaos Mode's multi-symbol fan-out — could decide capital weights instead of round-robin. |
-| **Monte Carlo Simulation** | 🟢 | M | Build | Already roadmap'd. Resample/shuffle trade sequences from a completed backtest → distribution of outcomes, probability of ruin, robustness. Lands cleanly in `engine/` reading existing `backtestTrades`; new result tab in the report UI. **Highest-fit, lowest-friction "next" candidate.** |
+| ~~**Monte Carlo Simulation**~~ | 🟢 | M | **Shipped, not "Build"** | Stale — `engine/services/monte_carlo.py` is live and wired into the Risk Dashboard per `00-current-state-reconciliation.md` (2026-06-25). This doc predates that reconciliation and was never updated after. Do not schedule this as new work. |
 | **Smart Portfolio Optimizer** | 🟡 | L | Build | Dynamic rebalancing on live signals + risk constraints (beyond static PyPortfolioOpt weights). Depends on portfolio abstraction (#3) and a live risk layer. Pairs with the Risk Management Dashboard (Track D). |
 
 ## Track B — ML / RL & Forecasting
@@ -94,7 +94,7 @@ double-count:
 
 | Item | Fit | Effort | Type | Notes / Enma mapping |
 |---|---|---|---|---|
-| **Risk Management Dashboard** | 🟢 | M | Build | Centralized portfolio risk view: Sharpe, drawdown, VaR, leverage exposure, correlation, win rate — post-backtest *and* live. Enma already computes Sharpe/Sortino/Calmar/drawdown in `engine/`; this is largely an aggregation + new page (`client/`) over existing data + a couple new metrics (VaR, correlation). **Strong fit, high value, mostly assembly.** |
+| ~~**Risk Management Dashboard**~~ | 🟢 | M | **Shipped, not "Build"** | Stale — `engine/routers/risk.py` + `client/src/pages/RiskDashboard.jsx` (Zones 1–3: margin/exposure/correlation, live metrics, Monte Carlo & leverage-scenario simulation) are live per `00-current-state-reconciliation.md` (2026-06-25). Do not schedule this as new work. |
 | **Personal Quant Research Framework** | 🟢 | L | Build | Structured loop: hypothesis → data → backtest → documented result → iterate. This is arguably the *meta-spine* tying everything together — and Enma's `workspace/docs` + strategy/backtest stack is already a partial implementation. Could formalize as a research-notebook/journal surface. |
 | **Hedge Fund in a Spreadsheet** | 🟢 | S | Research | Replicate allocation/risk/P&L/Monte Carlo in spreadsheet formulas to *understand the math* before coding it. Not a product feature — a learning exercise that de-risks Track A/D builds. Cheap, useful precursor to Monte Carlo + Risk Dashboard. |
 
@@ -118,8 +118,8 @@ double-count:
 
 If we wanted near-term wins that ride existing architecture (no fork required):
 
-1. **Monte Carlo Simulation** (Track A) — already roadmap'd, reads existing `backtestTrades`, new report tab.
-2. **Risk Management Dashboard** (Track D) — mostly aggregation of metrics the engine already computes + a page.
+1. ~~**Monte Carlo Simulation** (Track A)~~ — **shipped**, see note above; no longer a candidate.
+2. ~~**Risk Management Dashboard** (Track D)~~ — **shipped**, see note above; no longer a candidate.
 3. **Volatility Forecasting** (Track B) — self-contained engine addition feeding the existing risk model.
 4. **Market Regime Detection** (Track B) — fits the Alpha/Risk boundary; AdaptiveTrend already leans this way.
 5. **Hedge Fund in a Spreadsheet** (Track D) — zero-code precursor that de-risks #1 and #2.

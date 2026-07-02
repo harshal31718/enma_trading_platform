@@ -1,17 +1,43 @@
 const { lockSymbol, releaseSymbolLock, getSymbolLock, getAllLockedSymbols } = require('./symbolLock')
 const engineClient = require('./engineClient')
 const LiveSession = require('../models/LiveSession')
+const Settings = require('../models/Settings')
+const { decrypt } = require('../utils/encryption')
 const { getIO } = require('../config/socket')
+
+// Resolve a user's testnet Binance headers from their Settings doc — the same
+// per-user, AES-encrypted credential store the Settings UI writes to. Never
+// reads `.env` (see DECISIONS.md §9: credentials live in MongoDB per user, not
+// `.env`). Results are cached for the duration of one reconciliation pass.
+// Mode is pinned to testnet (trading is testnet-only; mainnet keys are read-only).
+async function _testnetHeadersFor(userId, cache) {
+  if (!userId) return null
+  if (cache.has(userId)) return cache.get(userId)
+
+  let headers = null
+  try {
+    const settings = await Settings.findOne({ userId }).lean()
+    const apiKey = settings?.encryptedApiKey ? decrypt(settings.encryptedApiKey) : ''
+    const apiSecret = settings?.encryptedApiSecret ? decrypt(settings.encryptedApiSecret) : ''
+    if (apiKey && apiSecret) {
+      headers = {
+        'X-Binance-API-Key': apiKey,
+        'X-Binance-API-Secret': apiSecret,
+        'X-Binance-Mode': 'testnet',
+      }
+    }
+  } catch {
+    headers = null
+  }
+
+  cache.set(userId, headers)
+  return headers
+}
 
 async function reconcileSymbolLocks() {
   try {
-    const apiKey = process.env.BINANCE_TESTNET_API_KEY
-    const apiSecret = process.env.BINANCE_TESTNET_SECRET
-    const headers = (apiKey && apiSecret) ? {
-      'X-Binance-API-Key': apiKey,
-      'X-Binance-API-Secret': apiSecret,
-      'X-Binance-Mode': 'testnet',
-    } : null
+    // Per-pass cache of userId → decrypted testnet headers (from Settings).
+    const headerCache = new Map()
 
     // 1. Stop orphaned active sessions (server/engine restarted mid-run)
     const orphanedSessions = await LiveSession.find({
@@ -25,6 +51,8 @@ async function reconcileSymbolLocks() {
         openPositions: [],
         positionDetails: {},
       }).catch(() => {})
+      // Close positions with the session owner's own credentials (from Settings).
+      const headers = await _testnetHeadersFor(session.userId, headerCache)
       for (const symbol of session.symbols) {
         await releaseSymbolLock(symbol).catch(() => {})
         if (headers) {
@@ -68,20 +96,29 @@ async function reconcileSymbolLocks() {
       }
     }
 
-    // 3. Re-lock open manual positions
-    try {
-      const posRes = await engineClient.get('/trade/positions')
-      const positions = posRes.data?.data?.positions || []
-      for (const pos of positions) {
-        if (parseFloat(pos.positionAmt) !== 0) {
-          const existing = await getSymbolLock(pos.symbol)
-          if (!existing) {
-            await lockSymbol(pos.symbol, 'manual').catch(() => {})
+    // 3. Re-lock open manual positions, per user, using each user's own
+    //    Settings-stored credentials (never `.env`).
+    const keyedUsers = await Settings.find(
+      { encryptedApiKey: { $ne: '' }, encryptedApiSecret: { $ne: '' } },
+      { userId: 1 }
+    ).lean()
+    for (const { userId } of keyedUsers) {
+      const headers = await _testnetHeadersFor(userId, headerCache)
+      if (!headers) continue
+      try {
+        const posRes = await engineClient.get('/trade/positions', { headers })
+        const positions = posRes.data?.data || []
+        for (const pos of positions) {
+          if (parseFloat(pos.positionAmt) !== 0) {
+            const existing = await getSymbolLock(pos.symbol)
+            if (!existing) {
+              await lockSymbol(pos.symbol, 'manual').catch(() => {})
+            }
           }
         }
+      } catch {
+        // Per-user position fetch may fail (revoked keys, etc.) — skip that user.
       }
-    } catch {
-      // Position fetch may fail if no Binance keys configured — that's OK
     }
 
     console.log('[Startup] Symbol lock reconciliation complete')

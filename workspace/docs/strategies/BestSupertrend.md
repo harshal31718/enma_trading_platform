@@ -34,7 +34,7 @@ then running the inline Supertrend algorithm. Uses `tsl[-2]` (previous completed
 | `slow_length` | 20 | 2–200 | Slow SMA period |
 | `factor` | 3.0 | 1.0–100 | Supertrend multiplier |
 | `pd` | 10 | 1–100 | Supertrend ATR period |
-| `sl_atr_mult` | 2.0 | 0.1–10 | Hard ATR stop distance (AtrBracketRiskModel) |
+| `sl_atr_mult` | 2.0 | 0.5–10 | Hard ATR stop distance (AtrBracketRiskModel) |
 | `atr_period` | 14 | 5–50 | ATR period for the hard stop |
 | `tf` | `"daily"` | `1h`, `4h`, `daily`, `weekly`, `monthly` | HTF for Supertrend |
 | `position_size_pct` | 1.0 | 0.01–1.0 | Fixed fraction of equity (not risk-based) |
@@ -50,5 +50,7 @@ then running the inline Supertrend algorithm. Uses `tsl[-2]` (previous completed
 
 - This is the only strategy sizing via a fixed equity fraction (`NotionalPortfolio`) rather than `size_by_risk`.
 - Supertrend logic is a Python loop over the candle array; performance on long backtests may be slower.
-- The `cross_buy`/`cross_sell` scan iterates backwards through SMA history to find the most recent cross.
+- `cross_buy`/`cross_sell` are precomputed once in `prepare()` into a per-index `_recent[i]` array
+  (1 = recent bullish cross, -1 = recent bearish cross); `before()` just reads `_recent[i]` — no
+  per-candle scan.
 - No `MIN_WARMUP_CANDLES` declared — warmup is implicitly `max(fast_length, slow_length) + 1`.

@@ -37,5 +37,6 @@ when it is strictly less than the `left` bars before it AND the `right` bars aft
 
 - Mirror of `pivot_high` — see that doc for the shared `_compute_pivots` primitive and the
   note on detecting pivots on oscillator series.
-- Both `pivot_high` and `pivot_low` are computed in `MicroMacroRSIDivergence.before()` on a
-  windowed subset of candles for performance (`candles[off:]` where `off = n - span`).
+- Both `pivot_high` and `pivot_low` are computed once over the full candle array in
+  `MicroMacroRSIDivergence.prepare()`; no-lookahead is enforced at read time via an
+  `i - right` visibility horizon rather than a windowed subset.

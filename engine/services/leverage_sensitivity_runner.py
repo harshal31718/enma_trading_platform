@@ -58,8 +58,11 @@ async def run_leverage_sensitivity(source_job_id: str) -> dict:
             )
             
             metrics = sim_res.get("metrics", {})
-            net_profit_pct = f"{metrics.get('netProfitPct', 0.0):.2f}"
-            max_dd_pct = f"{metrics.get('maxDrawdownPct', 0.0):.2f}"
+            # backtest_runner returns these metrics as pre-formatted strings
+            # (e.g. "12.34"); cast to float before re-formatting.
+            net_profit_pct = f"{float(metrics.get('netProfitPct', 0.0)):.2f}"
+            # metric key is "maxDrawdown" (a signed pct string), not "maxDrawdownPct"
+            max_dd_pct = f"{float(metrics.get('maxDrawdown', 0.0)):.2f}"
             
             # Persist in backtestLeverageScenarios
             scenario_doc = {

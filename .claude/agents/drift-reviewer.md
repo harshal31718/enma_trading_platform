@@ -17,7 +17,7 @@ You are the Enma drift reviewer. You audit the codebase against its specificatio
 1. **Stack drift** — packages in use that are not authorized in the service `CLAUDE.md` stack section.
 2. **Structure drift** — folder layout doesn't match the service `CLAUDE.md`.
 3. **API drift** — routes / responses don't match `workspace/docs/core/API_CONTRACTS.md`.
-4. **Boundary drift** — financial logic in `server/`/`client/`; Binance calls outside `engine/`; server touching TimescaleDB; server writing engine-owned result data; any `user_id`.
+4. **Boundary drift** — financial logic in `server/`/`client/`; Binance calls outside `engine/`; server touching TimescaleDB; server writing engine-owned result data; mutable-model queries missing `userId` scoping (multi-user; `Strategy` is intentionally global).
 5. **Convention drift** — naming, route patterns, **symbol formats** (hyphen `BTC-USDT` on client/server, raw stripped `BTCUSDT` in the engine), P&L colors (`emerald-400`/`red-400`), component structure.
 6. **Doc drift** — a doc references a file listed in `workspace/docs/state/DEPRECATED.md`, or a referenced file doesn't exist.
 

@@ -1,7 +1,7 @@
 # Enma — Next Phase (Forward Implementation Plan)
 
 **Created:** 2026-06-25
-**Supersedes the "remaining sequence" in `workspace/plan/INDEX.md`.**
+**Supersedes the "remaining sequence" in the old `workspace/plan/INDEX.md` (deleted 2026-07-02 — git history).**
 
 This directory is the **single source of truth for net-new work**. It was produced by:
 1. Reading every active doc in `workspace/plan/`.
@@ -15,7 +15,7 @@ This directory is the **single source of truth for net-new work**. It was produc
 
 ## The correction that reshaped this plan
 
-`workspace/plan/INDEX.md` listed three "remaining" items (#3 Dashboard restructure, #4 Risk
+The old plan index listed three "remaining" items (#3 Dashboard restructure, #4 Risk
 Dashboard, #5 Monte Carlo). **A code audit on 2026-06-25 found all three already implemented
 and wired** — the plan docs predate the work and were never reconciled. Details + evidence in
 [`00-current-state-reconciliation.md`](00-current-state-reconciliation.md).
@@ -78,6 +78,6 @@ build queue. The build queue is V0 + S1–S8 above.
 - Audit evidence + what's already done: `00-current-state-reconciliation.md`
 - Original (now reconciled) dashboard/risk plans: **deleted** — recoverable from git history; their
   built implementations are the source of truth (see the reconciliation doc for file paths).
-- Completed/historical plans: `workspace/archive/`
+- Completed/historical plans: git history (`workspace/archive/` was deleted 2026-07-02)
 - Authoritative feature inventory: `workspace/docs/state/CURRENT_STATE.md`
 - Session resume log: `workspace/plan/handoff.md` (kept there per root `CLAUDE.md` Rule G)

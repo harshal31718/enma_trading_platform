@@ -26,27 +26,61 @@
 **Decision:** Manual signed REST calls via Express-to-Engine proxy, plus a shared Binance WebSocket connection in the client.
 - **REST:** Node passes credentials via headers; Python signs and executes trades.
 - **WebSocket:** Client connects to Binance directly for public tick data to bypass server bottleneck.
-- **Sync:** Client polls the backend (account: 15 s, positions: 10 s, open-orders: 10 s) to reconcile account state, margin, and positions. Intervals are intentionally conservative to stay inside Binance Testnet rate limits.
+- **Sync:** Client polls the backend (account: 30 s, positions: 3 s, open-orders: 10 s — `client/src/hooks/useTrade.js`) to reconcile account state, margin, and positions. Intervals are intentionally conservative to stay inside Binance Testnet rate limits.
 **Rationale:** Decouples high-frequency market data from sensitive signed account mutations.
 
 ## 9. Binance Environment Model — Testnet vs Mainnet (no internal paper-trading simulation)
 **Decision:** The platform has exactly two Binance environments:
 - **Testnet** (`demo-fapi.binance.com`): Fake money. Used for all development, testing, and demo trading. ALL algo bot orders, Trade page orders, and account queries go here today.
-- **Mainnet** (`fapi.binance.com` / signed): Real money. Not yet implemented. Will be a future setting switch.
+- **Mainnet** (`fapi.binance.com` / signed): Real money. **Read-only balance display only** (2026-07-02) — mainnet *trading* is deliberately NOT implemented.
 
 There is no Enma-internal paper trading simulation. The concept of "paper trading" in Enma means using Binance Testnet, not simulating orders locally.
 
+**Mainnet read-only balance (2026-07-02):** The Dashboard displays the user's *mainnet* wallet balance
+alongside the testnet balance. To support this without opening a real-money trading path:
+- A second, separate key pair is stored per user (`Settings.encryptedMainnetApiKey`/`encryptedMainnetApiSecret`),
+  created on Binance with **Read Only** permission and verified against `fapi.binance.com` before storage.
+- `GET /api/v1/trade/balances` (`getBalances`, `server/src/controllers/trade.controller.js`) fans out one
+  `GET /fapi/v2/account` per environment (testnet keys + `X-Binance-Mode: testnet`; mainnet keys +
+  `X-Binance-Mode: mainnet`) and returns a trimmed per-env snapshot, tolerating a missing/failing side.
+- **Trading is pinned to testnet.** `requireBinanceCredentials.js` now hard-codes
+  `X-Binance-Mode: 'testnet'` (previously `settings.mode || 'testnet'`), and `saveSettingsKeys` rejects a
+  `mode` field. So even a mis-permissioned mainnet key can never reach an order endpoint. The `Settings.mode`
+  field is retained (vestigial) to avoid a migration.
+- **Rationale:** users want to monitor real-account equity from the same dashboard, but enabling real-money
+  order routing is a much larger, riskier surface. Read-only balance is the safe subset that delivers most of
+  the value with none of the order-execution risk.
+
 **Concretely:**
-- The signed base URLs live only in the `_BASE_URLS` dict in `engine/services/binance_testnet.py` — `testnet → https://demo-fapi.binance.com`, `mainnet → https://fapi.binance.com`. No other file defines the signed base.
+- The signed base URLs for order/account calls live in the `_BASE_URLS` dict in
+  `engine/services/binance_testnet.py` — `testnet → https://demo-fapi.binance.com`,
+  `mainnet → https://fapi.binance.com`. `engine/utils/symbols.py` previously defined a second,
+  independent set of testnet URLs (`_LEVERAGE_BRACKET_URLS`, `_EXCHANGE_INFO_URLS`, `_TICKER_URLS`,
+  `_BOOK_TICKER_URLS`) pointing at `https://testnet.binancefuture.com` instead — **fixed 2026-07-02**:
+  all four now point at `https://demo-fapi.binance.com`, confirmed via
+  [Binance Open Platform's General Info page](https://developers.binance.com/docs/derivatives/usds-margined-futures/general-info)
+  as the current officially-documented USDS-M Futures Testnet REST base.
+  `testnet.binancefuture.com` is a legacy/community domain, not the currently documented one.
 - `LiveSession.mode` is `"paper" | "live"` (default `"paper"`). All current sessions are paper (Testnet).
-- `Settings` stores exchange configuration: mode, trading fees, simulation defaults, risk defaults, bot defaults, and chaos mode defaults. Binance API credentials live in server `.env` (not MongoDB) — the AES-256 encryption util (`server/src/utils/encryption.js`) exists but is not currently wired. No `paperTrading` flag.
+- `Settings` stores exchange configuration: mode, trading fees, simulation defaults, risk defaults, bot
+  defaults, and chaos mode defaults. Binance API credentials are stored per-user in MongoDB
+  (`Settings.encryptedApiKey`/`encryptedApiSecret`, AES-256 via `server/src/utils/encryption.js`) and
+  decrypted per-request by `server/src/middleware/requireBinanceCredentials.js` — not `.env`.
 - `BaseStrategy.is_papertrading` is always `False` in the live bot; `is_livetrading` is always `True`. These flags exist for strategy code self-inspection and remain part of the BaseStrategy contract.
 
 **Rationale:** Removes a confusing intermediate layer (simulated positions that look real but aren't), eliminates a source of bugs (positions showing in Enma UI but not on Binance), and creates a clear upgrade path to Mainnet.
 
 ## 6. Authentication and Multi-Tenancy
-**Decision:** Single-user model. No `user_id` scopes anywhere in the schema. No authentication layer is implemented (no routes, no middleware) — none is needed for a local single-user tool.
-**Rationale:** Drastically simplifies schemas and development speed for a local desktop trading tool.
+**Decision (superseded 2026-06-22 — Auth Branch):** Originally single-user with no auth layer, to
+maximize development speed for a local desktop tool. This was superseded once invite-only multi-user
+access became a requirement: Google OAuth + JWT httpOnly cookie (`server/src/config/passport.js`,
+`server/src/middleware/auth.middleware.js`'s `verifyJWT`/`requireAdmin`, mounted on all `/api/v1/*`
+routes). `userId` now scopes every mutable Mongoose model (`BacktestResult`, `BacktestTrade`,
+`BacktestLeverageScenario`, `LiveSession`, `Settings`, `TradeOrder`, `TradeExecution`,
+`TradeTransaction`, `TradeRecord`); `Strategy` stays global by design.
+**Rationale:** The original single-user simplification was correct for the desktop-tool phase; the
+switch to multi-user was driven by needing invite-only shared access without giving every user the
+same Binance credentials or trade history.
 
 ## 7. Frontend Architecture
 **Decision:** React + Vite + Zustand + TanStack Query + shadcn/ui.
@@ -55,6 +89,42 @@ There is no Enma-internal paper trading simulation. The concept of "paper tradin
 ## 8. Strategy Definitions
 **Decision:** Strategies are raw Python files stored on disk. MongoDB only holds the metadata.
 **Rationale:** Enables native Python imports, debugging, and IDE integration without executing code from string blocks.
+
+---
+
+## Verification Appendix (moved from CURRENT_STATE.md 2026-07-02 — condensed there to a pointer)
+
+Golden-master and regression verification runs for major refactors. Historical record, not current state.
+
+### Narang Black-Box Refactor
+- Verified in Docker on 2026-06-21.
+- Golden snapshots refreshed for the current strict five-model pipeline (`baseline` and `modular_merger`).
+- Verification commands:
+  ```
+  docker compose exec engine python -m scripts.golden_master run --label baseline
+  docker compose exec engine python -m scripts.golden_master run --label modular_merger
+  docker compose exec engine python -m scripts.golden_master compare --a baseline --b modular_merger
+  docker compose exec engine python -m pytest tests/test_boundaries.py -q
+  ```
+- Results: golden comparison passed for all 5 seeded strategies; boundary regression suite passed 20/20.
+
+### Strategy Performance Refactor (two-phase `prepare()`/`before()`)
+- Verified in Docker on 2026-06-24. Branch `refactor/precompute-strategies` (merged to `dev`).
+- Each of phases 1–6 gated on golden-master byte-equivalence vs `baseline` (tol 1e-6, all 5 strategies). Phase results recorded in `scripts/golden/phase1.json`…`phase6.json`.
+- BestSupertrend (Phase 5) additionally verified for per-candle signal parity (0 diffs over the full golden range) — caught and fixed a latent pandas-2.x `datetime64[ms]` epoch-conversion bug in the HTF bucket mapping.
+- Baseline metrics unchanged throughout: MicroScalper 9/-131.61 · AdaptiveTrend 7/+1543.91 · BestSupertrend 61/-117.56 · MicroMacroRSIDivergence 17/-273.30 · MultiDivergence 55/-1688.49. Boundary suite 20/20.
+
+### Standardise Implementation Audit (2026-06-25)
+- A verification pass cross-checked the 40 standardise items (`workspace/standardise/`, since removed) against the code and the freqtrade/nautilus reference logic. It found 13 issues where items were marked done but were broken, partial, or unfaithful — all fixed and verified:
+  - **I-01** exec algos (TWAP/VWAP/Iceberg) dropped slices 2..N → now fill the full parent via the add-path.
+  - **I-02/03/04/12** pairlist filters were inert/wrong (alphabetical rank, bid/ask absent on futures 24hr ticker, `tick/100` no-op, AgeFilter placeholder) → volume rank, book-ticker bid/ask, `tick/price`, onboardDate age.
+  - **I-05** `price_missing` flag was permanently false → real optional parse + fallback chain.
+  - **I-06** multi-symbol backtest was N isolated split-capital runs → shared-wallet portfolio.
+  - **I-07** orphan-position restore lost leverage/margin/brackets → exchange-truth restore.
+  - **I-08/09/13** Calmar/Sortino/ProfitFactor metric-definition errors → corrected.
+  - **I-10** dead `bounded_entry_price` + misleading docstring → cleaned.
+  - **I-11** take-profit rounded toward entry → rounds away, both paths.
+- Verification: engine unit suite **81/81** (4 new test files: `test_exec_algo_slicing`, `test_metrics_fixes`, `test_pairlist_fixes`, `test_reconcile_fixes`); golden master confirms **single-symbol backtests byte-identical** while metric changes are confined to the intended fields; a 2-symbol integration check (`scripts/_portfolio_check.py`) verifies the shared-wallet path end-to-end. Changes take effect on engine restart/rebuild (no bind mount).
 
 ## 10. Futures Margin Model & Risk-Based Sizing (Backtest)
 **Decision:** The backtest engine simulates a real Binance USDⓈ-M **isolated-margin** futures account, and risk/stop sizing is centralized in `BaseStrategy` (additive, backward-compatible interface change). All simulation parameters (fees, slippage, funding) are **configurable via database**, not hardcoded.
@@ -157,3 +227,51 @@ Expose the volume-tiered list of curated symbols via `GET /api/v1/algo/chaos/sym
 ## 17. Deferring Multi-Symbol Backtesting (F-017) to Phase 3 (F-024)
 **Decision:** Defer step 2.9 (F-017: Multi-symbol backtest mode) to Phase 3 (F-024: execution loop unification), where it will be solved naturally through the unified driver loop instead of implementing a standalone multi-symbol engine in `backtest_runner.py` now.
 **Rationale:** To avoid duplicating multi-symbol logic (candles loading, alignment, and execution loop orchestration) between backtest and live modes. Since the live loop already handles multi-symbol trading, unifying the loops under one driver automatically gives backtesting multi-symbol capability. Attempting to build a separate multi-symbol backtest runner now would run counter to the core objective of reducing the backtest↔live gap (RC-1).
+
+## 18. AtrBracketRiskModel Additive Risk Features (Workstream #2) — moved from CURRENT_STATE.md 2026-07-02
+**Decision:** Add three opt-in features to `AtrBracketRiskModel` (`core/models/risk.py`), all default-off so existing behavior and golden masters are unaffected:
+- **Trailing stop** (`trail_atr_mult`, default 0): in the maintain path, ratchets the stop toward price using `price ± trail_mult × ATR`; only ever tightens. Per-trade state (`_current_stop`, `_initialized`) resets on new entry/flip.
+- **Breakeven move** (`breakeven_r`, default 0): once price moves `breakeven_r × initial_risk` in favor, floors the stop at entry price. Initialises `_entry_price` from `_signal_price` captured at signal time (mirrors `ChandelierRiskModel`).
+- **ATR percentile filter** (`atr_percentile_min`, default 0): vetoes new entries when the current ATR is in the bottom N% of the session's ATR history (accumulated via `s.vars["atr"]` every candle, O(1)); requires ≥20 samples before activating.
+
+Alongside this: the cost-gate injection default changed from `0.0` → `0.05` in `backtest_runner.py`/`live_bot_manager.py` (the `edge ≥ min_edge_mult × cost` gate is now active by default, still overridable per-run), and a **portfolio exposure cap** (`max_portfolio_risk`, default 0.06) was added to `DefaultPortfolioModel.construct()` — vetoes a trade post-sizing if `risk_per_unit × qty / equity > max_portfolio_risk`.
+
+**Rationale:** Opt-in, default-off design lets these ship without touching existing strategy behavior — with default `risk_pct = 0.01`, the 6% portfolio cap is never triggered, so it's a pure safety net, not a behavior change. Verified: all 5 golden master snapshots unchanged after this workstream (`ws2_final` == `baseline`, tol 1e-6); boundary suite 20/20.
+
+## 19. Two-Phase Strategy Contract — `prepare()` + index-only `before()` — moved from CURRENT_STATE.md 2026-07-02
+**Decision:** Split strategy execution into `BaseStrategy.prepare(candles)` (one-time vectorized indicator pre-computation, default no-op for backward compatibility — migrated strategies move all TA-Lib/pandas calls here, storing results as `self._*` full-length arrays/scalars) and `before()` (a pure index lookup at `self.index`, zero TA-Lib calls in the hot loop).
+**Backtest** (`services/backtest_runner.py`) calls `strategy.prepare(candles_np)` once after param injection, before the sim loop; `strategy.index = t` aligns directly with the precomputed arrays.
+**Live** (`core/live_bot_manager.py`) re-runs `prepare()` on the rolling ≤500-candle window each closed candle (`index = len-1`), then `before()` indexes — identical math to backtest, O(≤500)/candle (~once/hr), no float drift, no per-strategy incremental code.
+All 5 seeded strategies migrated (MicroMacroRSIDivergence, MultiDivergence, MicroScalper, BestSupertrend, AdaptiveTrend). No-lookahead preserved: divergence/pivot strategies bound the last-pivot search to the confirmation horizon `i - right`.
+**Rationale:** Replaces the former O(N²) pattern (full indicator recompute on a growing `candles[:t+1]` slice every candle) with O(N) precomputation + O(1) lookup — the performance motivation behind `REF-optimization-ideas.md`'s now-shipped "pre-compute indicators on full series" idea. Verification: each of the 6 migration phases gated on golden-master byte-equivalence vs `baseline` (tol 1e-6, all 5 strategies); see `DECISIONS.md`'s own Verification Appendix above for the full phase-by-phase record.
+
+## 20. Manual Trading via WebSocket User Data Stream, Not REST Polling (2026-07-02)
+**Decision:** The Trade page's account/positions/open-orders data now comes primarily from a
+per-user Binance User Data Stream (`engine/services/manual_trade_stream.py`), not REST polling.
+`engine/services/user_data_stream.py`'s `UserDataStreamManager` (originally built for live bots,
+F-020) gained a second, unfiltered dispatch path — `register_stream_callback()` — that fires on
+every `ORDER_TRADE_UPDATE` status and every `ACCOUNT_UPDATE`, separate from the existing
+per-symbol FILLED-only `register_fill_callback()` path the live bot still uses (left untouched to
+avoid any risk to live-trading fill detection). A new per-user registry starts/stops/idle-reaps
+(5 min) one stream per active Trade-page session, publishing events to Redis
+`trade-stream:{userId}`; `server/src/services/socketEmitter.js` relays them to the user's
+Socket.IO room as `trade:stream-update`; `client/src/hooks/useTrade.js`'s `useTradeStream()`
+patches the `open-orders` query cache directly by `orderId` (zero REST cost) and debounces a real
+REST refetch for positions/account (`ACCOUNT_UPDATE` lacks `markPrice`/`liquidationPrice`, so
+those two can't be fully reconstructed from the WS payload alone). REST polling intervals were
+lengthened from 30s/3s/10s to 90s/30s/60s — now a safety net for WS drops, not the primary source.
+**Rationale:** Binance's own documentation recommends this exact pattern over polling
+("the full information... should be obtained via the related RESTful endpoints, and the locally
+cached data can be updated via the event ACCOUNT_UPDATE") — driven by a real constraint, not just
+best practice: `REQUEST_WEIGHT` (2400/min) is enforced **per source IP**, and since this server
+proxies every user's signed calls through one outbound IP, that budget is shared across all
+concurrently active users. The old polling config (dominated by `open-orders`' 480 weight/min from
+an un-symbol-filtered call) meant ~4 concurrent Trade-page users exhausted the entire budget — see
+`ARCHITECTURE.md` rule 5. Reusing `UserDataStreamManager` rather than building a second WS client
+kept the change additive; the live bot's existing fill-detection path was not modified.
+**Known gap:** whether Binance emits `ORDER_TRADE_UPDATE` for algo/conditional orders (placed via
+`/fapi/v1/algoOrder`, used by this platform's OCO/TP-SL feature) before they trigger is unconfirmed
+against a live account — Docker wasn't running during implementation to verify end-to-end. The cache
+patch is written defensively (only touches entries matching a received `orderId`, never guesses), so
+if algo orders don't emit the event, they simply stay on the 60s REST safety net instead of showing
+incorrect data — but this should be verified with the stack running before relying on it further.

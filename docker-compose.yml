@@ -108,6 +108,9 @@ services:
         - action: sync
           path: ./client/public
           target: /app/public
+        - action: sync
+          path: ./client/index.html
+          target: /app/index.html
         - action: rebuild
           path: ./client/package.json
 

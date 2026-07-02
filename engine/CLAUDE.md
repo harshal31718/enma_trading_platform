@@ -31,10 +31,14 @@ engine/
 ├── core/
 │   ├── constants.py          ← FUTURES_SYMBOLS (top 50, raw Binance e.g. BTCUSDT), SPOT_SYMBOLS placeholder, SUPPORTED_TIMEFRAMES, SUPPORTED_EXCHANGES
 │   ├── strategy.py           ← BaseStrategy class — full interface (required + optional methods)
+│   ├── params.py             ← typed strategy-parameter classes (IntParameter/FloatParameter/etc.) for the PARAMS declaration pattern
 │   ├── position.py           ← Position class (futures: leverage, isolated margin, liquidation price)
 │   ├── margin.py             ← Binance isolated-margin math (MMR tiers, liquidation_price, initial_margin)
-│   ├── pipeline.py           ← unified decision pipeline (evaluate(s) runs Alpha -> Risk -> Portfolio -> Cost -> Execution)
-│   ├── models/               ← pluggable quant models (base interfaces + risk/cost/portfolio/execution defaults)
+│   ├── pipeline.py           ← unified decision pipeline (evaluate(s) runs Alpha -> Risk -> Cost -> Portfolio -> Execution — see workspace/docs/core/MODELS.md)
+│   ├── kernel.py             ← ExecutionKernel/ExecutionAdapter — unifies backtest/live execution (F-024)
+│   ├── models/               ← pluggable quant models: base.py (interfaces), risk.py, cost.py, portfolio.py,
+│   │                            execution.py (defaults + variants), exec_algo.py (TWAP/VWAP/Iceberg, A-016),
+│   │                            protections.py (CooldownPeriod/StoplossGuard/ProtectionManager)
 │   └── live_bot_manager.py   ← manages in-memory live bot sessions; called by routers/algo.py
 ├── strategies/            ← strategy files live here (Docker volume — persists on host)
 ├── indicators/            ← pluggable indicator layer (DECISIONS.md #12)
@@ -47,10 +51,13 @@ engine/
 ├── routers/
 │   ├── backtest.py        ← POST /backtest/run, POST /backtest/cancel
 │   ├── candles.py         ← GET /candles/symbols, GET /candles/cached
-│   ├── dashboard.py       ← GET /dashboard/stats
-│   ├── strategies.py      ← GET /strategies, GET /strategies/:name/code
-│   ├── trade.py           ← POST /trade/verify, GET /trade/account, GET /trade/positions, GET /trade/open-orders, POST /trade/leverage, POST /trade/margin-type, POST /trade/order, POST /trade/close-position, DELETE /trade/order, GET /trade/klines
-│   └── algo.py            ← POST /algo/sessions, POST /algo/sessions/:id/stop, GET /algo/sessions/:id/status
+│   ├── dashboard.py       ← GET /dashboard/stats, GET /dashboard/performance-calendar
+│   ├── strategies.py      ← GET /strategies, GET /strategies/:name/code, PUT /strategies/:name/code
+│   ├── trade.py           ← POST /trade/verify, GET /trade/account, GET /trade/positions, GET /trade/open-orders, POST /trade/leverage, POST /trade/margin-type, POST /trade/order, POST /trade/close-position, DELETE /trade/order, GET /trade/order, GET /trade/klines, /order/oco_futures
+│   ├── algo.py            ← POST /algo/sessions, POST /algo/sessions/:id/stop, GET /algo/sessions/:id/status, POST /algo/sessions/:id/trading-state, POST /algo/pairlist/preview
+│   ├── optimize.py        ← GET /optimize/objectives, POST /optimize/run, GET /optimize/:id/status, GET /optimize/:id/results (grid search — see services/optimizer.py)
+│   ├── risk.py             ← Risk Intelligence Dashboard endpoints (settings, live metrics, overrides)
+│   └── leverage_sensitivity.py ← leverage-scenario simulation endpoints (Risk Dashboard Zone 3)
 ├── config/
 │   ├── mongo.py           ← motor AsyncIOMotorClient (results, live sessions)
 │   └── timescale.py       ← asyncpg connection pool (candle hypertable)
@@ -62,10 +69,23 @@ engine/
 │   ├── binance_testnet.py  ← HMAC-signed Binance REST requests; _BASE_URLS dict for testnet/mainnet
 │   ├── pairlist.py         ← pairlist pipeline: VolumePairList → SpreadFilter / VolatilityFilter / PrecisionFilter / AgeFilter; config-based factory
 │   ├── trade_recorder.py   ← record_trade() + build_trade_record(); writes completed round-trip trades to MongoDB tradeRecords (best-effort, never blocks close path)
-│   └── strategy_seeder.py  ← seeds default strategies on startup (idempotent)
+│   ├── strategy_seeder.py  ← seeds default strategies on startup (idempotent)
+│   ├── optimizer.py        ← grid-search parameter optimization (itertools.product over PARAMS grid) — no Bayesian/optuna support yet, see next_phase/S8
+│   ├── monte_carlo.py      ← Monte Carlo trade-sequence resampling for the Risk Dashboard
+│   ├── leverage_sensitivity_runner.py ← runs leverage-scenario sweeps, writes BacktestLeverageScenario docs
+│   ├── curves.py           ← equity/drawdown/rolling-metric curve computation for backtest results
+│   ├── fill_model.py       ← adverse-slippage fill simulation shared by backtest/live execution
+│   ├── metrics.py          ← backtest performance metric calculations
+│   └── user_data_stream.py ← Binance User Data Stream (listenKey create/keepalive/close, WS connection)
 ├── utils/
 │   ├── timeframes.py      ← timeframe string conversions
-│   └── symbols.py         ← identity converters (to_ccxt_symbol etc.), load_exchange_rules(), round_price(), round_qty()
+│   ├── symbols.py         ← identity converters (to_ccxt_symbol etc.), load_exchange_rules(), round_price(), round_qty(), leverage-bracket lookup
+│   ├── rate_limiter.py    ← Binance per-IP rate-limit guard
+│   └── risk_math.py       ← shared risk/notional/liquidation-buffer math helpers
+├── scripts/
+│   └── golden_master.py   ← byte-equivalence check for pipeline refactors (root CLAUDE.md Rule C)
+├── tests/
+│   └── test_boundaries.py ← service-boundary contract tests
 ├── main.py                ← FastAPI app entry point
 ├── requirements.txt
 └── .env

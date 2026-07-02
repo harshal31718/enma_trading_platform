@@ -12,6 +12,9 @@
 - Socket.IO 4 (server)
 - BullMQ 5 + ioredis
 - Mongoose 7
+- passport + passport-google-oauth20 (Google OAuth 2.0, sessionless)
+- jsonwebtoken (JWT signing/verification)
+- cookie-parser (reads the `enma_jwt` httpOnly cookie)
 - express-validator (installed but not used as standalone middleware — validation inline in controllers)
 - express-rate-limit (inline in `app.js`)
 - Helmet.js
@@ -29,40 +32,51 @@ server/
 └── src/
     ├── config/
     │   ├── redis.js        ← ioredis client singleton (shared by BullMQ + pub/sub)
-    │   └── socket.js       ← Socket.IO server setup
+    │   ├── socket.js       ← Socket.IO server setup
+    │   └── passport.js     ← Google OAuth 2.0 strategy (sessionless)
     ├── constants/
     │   └── top_symbols.js  ← ~80 tiered symbols (high/mid/low) — Chaos Mode pool
     ├── middleware/
     │   ├── errorHandler.js          ← global error handler
+    │   ├── auth.middleware.js       ← verifyJWT / requireAdmin (gates all /api/v1/* routes)
     │   └── requireBinanceCredentials.js ← validates X-Binance headers on trade routes
     ├── models/             ← Mongoose models
-    │   ├── Strategy.js        ← metadata: name, description, filePath
+    │   ├── Strategy.js        ← metadata: name, description, filePath (global, no userId)
+    │   ├── User.js             ← googleId, email, role
+    │   ├── PlatformConfig.js   ← singleton (_id: 'platform'), allowed-email whitelist
     │   ├── BacktestResult.js  ← server fields: jobId, status, error, tradeCount
     │   │                         engine fields (Mixed, never written by server): metrics, equityCurve
     │   ├── BacktestTrade.js   ← split collection backtestTrades (jobId, tradeIndex, …)
+    │   ├── BacktestLeverageScenario.js ← Risk Dashboard Zone 3 leverage-sensitivity runs (engine-owned)
     │   ├── LiveSession.js
     │   ├── TradeOrder.js
     │   ├── TradeExecution.js
     │   ├── TradeTransaction.js
     │   ├── TradeRecord.js     ← completed round-trip trades (engine writes, server reads; collection: tradeRecords)
-    │   └── Settings.js        ← AES-encrypted Binance keys + exchange settings
+    │   └── Settings.js        ← AES-encrypted Binance keys + exchange settings (userId-keyed)
     ├── routes/             ← Express routers (thin — logic in controllers)
+    │   ├── auth.routes.js       ← /auth/google, /auth/google/callback, /auth/logout, /auth/me (unprotected)
+    │   ├── admin.routes.js      ← /admin/allowed-emails (requireAdmin)
     │   ├── strategy.routes.js   ← /strategies, /strategies/:id/code
     │   ├── candle.routes.js     ← /candles/symbols, /candles/cached
     │   ├── backtest.routes.js
-    │   ├── dashboard.routes.js  ← /dashboard/stats
-    │   ├── trade.routes.js      ← /trade/* (settings/keys, account, positions, orders, klines)
-    │   ├── algo.routes.js         ← /algo/sessions, /algo/symbols/locked, /algo/chaos, /algo/pairlist/preview
+    │   ├── dashboard.routes.js  ← /dashboard/stats, /dashboard/performance-calendar
+    │   ├── trade.routes.js      ← /trade/* (settings/keys [testnet+mainnet env], balances [testnet+mainnet, read-only mainnet], account, positions, orders, klines, order status)
+    │   ├── risk.routes.js         ← /risk/* (settings, live metrics, simulation, overrides)
+    │   ├── algo.routes.js         ← /algo/sessions, /algo/symbols/locked, /algo/chaos, /algo/pairlist/preview, /algo/sessions/:id/trading-state
     │   ├── settings.routes.js     ← /settings/exchange
     │   ├── orderHistory.routes.js ← /order-history (GET, paginated, filterable)
-    │   └── internal.routes.js     ← /internal/algo/sessions/:id/* (engine callbacks)
+    │   └── internal.routes.js     ← /internal/algo/sessions/:id/* (engine callbacks, unprotected — uses LiveSession-derived context)
     ├── controllers/
+    │   ├── auth.controller.js       ← Google OAuth callback, issues JWT cookie, /auth/me, logout
+    │   ├── admin.controller.js      ← allowed-email whitelist CRUD
     │   ├── strategy.controller.js   ← MongoDB queries + code proxy to engine
     │   ├── candle.controller.js     ← getSymbols, getCachedCandles
     │   ├── backtest.controller.js
-    │   ├── dashboard.controller.js  ← proxies engine /dashboard/stats
+    │   ├── dashboard.controller.js  ← proxies engine /dashboard/stats, /dashboard/performance-calendar
     │   ├── trade.controller.js
-    │   ├── algo.controller.js         ← session CRUD + startChaos + engine callbacks (handleEngineStats, handleAlgoPlaceOrder, …)
+    │   ├── risk.controller.js         ← proxies engine /risk/* (settings, live metrics cache, simulation, overrides)
+    │   ├── algo.controller.js         ← session CRUD + startChaos + trading-state kill-switch + engine callbacks (handleEngineStats, handleAlgoPlaceOrder, …)
     │   ├── settings.controller.js     ← getExchangeSettings, updateExchangeSettings
     │   └── orderHistory.controller.js ← getOrderHistory (reads tradeRecords; engine is sole writer)
     ├── services/
@@ -70,7 +84,8 @@ server/
     │   ├── backtestQueue.js ← BullMQ queue definition for bull:backtest
     │   ├── socketEmitter.js ← Redis pub/sub → Socket.IO relay
     │   ├── symbolService.js ← fetches tiered symbol list from engine (5-min TTL cache)
-    │   └── symbolLock.js    ← Redis-backed symbol lock (bot vs manual)
+    │   ├── symbolLock.js    ← Redis-backed symbol lock (bot vs manual)
+    │   └── reconciliation.js ← startup reconciliation (server.js), aligns local state with exchange/engine truth
     ├── workers/
     │   └── backtest.worker.js
     ├── utils/
@@ -186,6 +201,9 @@ The server owns the routing, auth, and job queue layers. Database ownership is s
 | MongoDB — `backtestTrades` | engine | Read-only; engine bulk-writes all trades |
 | MongoDB — `liveSessions` | engine | Read-only (same pattern) |
 | MongoDB — `tradeRecords` | engine | Read-only via `TradeRecord.js` model — engine is sole writer |
+| MongoDB — `backtestLeverageScenarios` | engine | Read-only via `BacktestLeverageScenario.js` model — engine is sole writer (Risk Dashboard Zone 3) |
+| MongoDB — `users` | server | Read + write via `User.js` (Passport creates/updates on login) |
+| MongoDB — `platformConfig` | server | Read + write via `PlatformConfig.js` (admin-managed whitelist) |
 | TimescaleDB — `candles` | engine | **Never** — server never queries TimescaleDB |
 | Redis — BullMQ queues | server | Write (enqueue jobs) |
 | Redis — progress pub/sub | engine writes, server reads | Subscribe and relay to Socket.IO |

@@ -7,6 +7,7 @@ const engineClient = require('../services/engineClient')
 const ApiResponse = require('../utils/ApiResponse')
 const ApiError = require('../utils/ApiError')
 const { isSymbolFree, getSymbolLock } = require('../services/symbolLock')
+const { subscribeToTradeStream, unsubscribeFromTradeStream } = require('../services/socketEmitter')
 
 function handleEngineError(err, defaultMessage) {
   if (err instanceof ApiError) return err
@@ -48,9 +49,13 @@ async function getSettingsKeys(req, res, next) {
   try {
     const settings = await Settings.findOne({ userId: req.user.id })
     res.json(ApiResponse.success({
-      mode: settings?.mode ?? 'testnet',
+      // `mode` is vestigial — trading is pinned to testnet (see
+      // requireBinanceCredentials). Mainnet keys are read-only balance display.
+      mode: 'testnet',
       hasApiKey: !!(settings?.encryptedApiKey),
       hasApiSecret: !!(settings?.encryptedApiSecret),
+      hasMainnetApiKey: !!(settings?.encryptedMainnetApiKey),
+      hasMainnetApiSecret: !!(settings?.encryptedMainnetApiSecret),
     }))
   } catch (err) {
     next(err)
@@ -59,15 +64,42 @@ async function getSettingsKeys(req, res, next) {
 
 async function saveSettingsKeys(req, res, next) {
   try {
-    const { apiKey, apiSecret, mode } = req.body
-    if (mode && !['testnet', 'mainnet'].includes(mode)) {
-      throw new ApiError(400, 'VALIDATION_ERROR', 'mode must be "testnet" or "mainnet"')
+    const { apiKey, apiSecret, env = 'testnet' } = req.body
+
+    if (!['testnet', 'mainnet'].includes(env)) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'env must be "testnet" or "mainnet"')
+    }
+    // `mode` is no longer accepted — mainnet is read-only, trading is pinned to
+    // testnet. Reject explicitly so the contract is unambiguous.
+    if (req.body.mode !== undefined) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'mode is not supported; mainnet keys are read-only (balance display only)')
     }
 
     const updates = {}
-    if (apiKey) updates.encryptedApiKey = encrypt(apiKey)
-    if (apiSecret) updates.encryptedApiSecret = encrypt(apiSecret)
-    if (mode) updates.mode = mode
+
+    if (env === 'mainnet') {
+      // Mainnet keys must arrive as a complete pair and be verified before we
+      // store them — a half-pair or bad key is useless for balance display.
+      if (!apiKey || !apiSecret) {
+        throw new ApiError(400, 'VALIDATION_ERROR', 'Both mainnet apiKey and apiSecret are required')
+      }
+      try {
+        await engineClient.post(
+          '/trade/verify',
+          { binanceApiKey: apiKey, binanceApiSecret: apiSecret },
+          { headers: { 'X-Binance-Mode': 'mainnet' } }
+        )
+      } catch (engineErr) {
+        const detail = engineErr.response?.data?.detail
+        const message = typeof detail === 'string' ? detail : detail?.message || 'Binance mainnet verification failed'
+        throw new ApiError(400, 'VERIFICATION_FAILED', message)
+      }
+      updates.encryptedMainnetApiKey = encrypt(apiKey)
+      updates.encryptedMainnetApiSecret = encrypt(apiSecret)
+    } else {
+      if (apiKey) updates.encryptedApiKey = encrypt(apiKey)
+      if (apiSecret) updates.encryptedApiSecret = encrypt(apiSecret)
+    }
 
     if (Object.keys(updates).length === 0) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'Nothing to save')
@@ -79,7 +111,7 @@ async function saveSettingsKeys(req, res, next) {
       { upsert: true, new: true }
     )
 
-    res.json(ApiResponse.success({ saved: true }))
+    res.json(ApiResponse.success({ saved: true, env }))
   } catch (err) {
     next(err)
   }
@@ -87,30 +119,111 @@ async function saveSettingsKeys(req, res, next) {
 
 async function verifySettings(req, res, next) {
   try {
+    const env = req.body?.env === 'mainnet' ? 'mainnet' : 'testnet'
     const settings = await Settings.findOne({ userId: req.user.id })
-    const mode = settings?.mode ?? 'testnet'
-    const apiKey = settings?.encryptedApiKey ? decrypt(settings.encryptedApiKey) : ''
-    const apiSecret = settings?.encryptedApiSecret ? decrypt(settings.encryptedApiSecret) : ''
+
+    const keyField = env === 'mainnet' ? 'encryptedMainnetApiKey' : 'encryptedApiKey'
+    const secretField = env === 'mainnet' ? 'encryptedMainnetApiSecret' : 'encryptedApiSecret'
+    const apiKey = settings?.[keyField] ? decrypt(settings[keyField]) : ''
+    const apiSecret = settings?.[secretField] ? decrypt(settings[secretField]) : ''
 
     if (!apiKey || !apiSecret) {
-      throw new ApiError(400, 'NO_CREDENTIALS', 'Binance API keys not configured. Add them in Settings.')
+      throw new ApiError(400, 'NO_CREDENTIALS', `Binance ${env} API keys not configured. Add them in Settings.`)
     }
 
     try {
       await engineClient.post(
         '/trade/verify',
         { binanceApiKey: apiKey, binanceApiSecret: apiSecret },
-        { headers: { 'X-Binance-Mode': mode } }
+        { headers: { 'X-Binance-Mode': env } }
       )
     } catch (engineErr) {
       const detail = engineErr.response?.data?.detail
-      const message = typeof detail === 'string' ? detail : detail?.message || `Binance ${mode} verification failed`
+      const message = typeof detail === 'string' ? detail : detail?.message || `Binance ${env} verification failed`
       throw new ApiError(400, 'VERIFICATION_FAILED', message)
     }
 
-    res.json(ApiResponse.success({ verified: true, mode }))
+    res.json(ApiResponse.success({ verified: true, env }))
   } catch (err) {
     next(err)
+  }
+}
+
+// Combined balance snapshot for both environments. Deliberately NOT behind
+// requireBinanceCredentials: that middleware 400s when testnet keys are absent
+// and only carries one key pair. Still gated by global verifyJWT.
+async function getBalances(req, res, next) {
+  const pluck = (accountData) => ({
+    totalWalletBalance: accountData?.totalWalletBalance ?? '0',
+    totalMarginBalance: accountData?.totalMarginBalance ?? '0',
+    totalUnrealizedProfit: accountData?.totalUnrealizedProfit ?? '0',
+    availableBalance: accountData?.availableBalance ?? '0',
+  })
+
+  const fetchEnv = async (env, apiKey, apiSecret) => {
+    if (!apiKey || !apiSecret) return { configured: false }
+    try {
+      const { data } = await engineClient.get('/trade/account', {
+        headers: {
+          'X-Binance-API-Key': apiKey,
+          'X-Binance-API-Secret': apiSecret,
+          'X-Binance-Mode': env,
+        },
+      })
+      return { configured: true, ok: true, ...pluck(data.data) }
+    } catch (engineErr) {
+      const detail = engineErr.response?.data?.detail
+      const message = typeof detail === 'string' ? detail : detail?.message || 'Failed to fetch balance'
+      return { configured: true, ok: false, error: message }
+    }
+  }
+
+  try {
+    const settings = await Settings.findOne({ userId: req.user.id })
+    const testnetKey = settings?.encryptedApiKey ? decrypt(settings.encryptedApiKey) : ''
+    const testnetSecret = settings?.encryptedApiSecret ? decrypt(settings.encryptedApiSecret) : ''
+    const mainnetKey = settings?.encryptedMainnetApiKey ? decrypt(settings.encryptedMainnetApiKey) : ''
+    const mainnetSecret = settings?.encryptedMainnetApiSecret ? decrypt(settings.encryptedMainnetApiSecret) : ''
+
+    const [testnet, mainnet] = await Promise.all([
+      fetchEnv('testnet', testnetKey, testnetSecret),
+      fetchEnv('mainnet', mainnetKey, mainnetSecret),
+    ])
+
+    res.json(ApiResponse.success({
+      testnet,
+      mainnet,
+      fetchedAt: new Date().toISOString(),
+    }))
+  } catch (err) {
+    next(err)
+  }
+}
+
+async function startTradeStream(req, res, next) {
+  try {
+    const userId = String(req.user._id)
+    await engineClient.post('/trade/stream/start', null, {
+      headers: req.binanceHeaders,
+      params: { userId },
+    })
+    subscribeToTradeStream(userId)
+    res.json(ApiResponse.success({ started: true }))
+  } catch (err) {
+    next(handleEngineError(err, 'Failed to start trade stream'))
+  }
+}
+
+async function stopTradeStream(req, res, next) {
+  try {
+    const userId = String(req.user._id)
+    unsubscribeFromTradeStream(userId)
+    await engineClient.post('/trade/stream/stop', null, {
+      params: { userId },
+    })
+    res.json(ApiResponse.success({ stopped: true }))
+  } catch (err) {
+    next(handleEngineError(err, 'Failed to stop trade stream'))
   }
 }
 
@@ -595,6 +708,9 @@ module.exports = {
   getSettingsKeys,
   saveSettingsKeys,
   verifySettings,
+  getBalances,
+  startTradeStream,
+  stopTradeStream,
   getAccountDetails,
   getPositionRisk,
   getOpenOrders,
