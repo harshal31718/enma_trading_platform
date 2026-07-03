@@ -16,6 +16,20 @@ _rules_cache: dict[tuple[str, str], dict] = {}
 
 _MAX_LEVERAGE_CACHE: dict[tuple[str, str], int] = {}  # (exchange, symbol) -> max_lev
 
+# Symbols that exist in /fapi/v1/exchangeInfo (status=TRADING, contractType=PERPETUAL) but are
+# rejected outright by demo-fapi.binance.com's other endpoints — a known testnet quirk where the
+# testnet exchangeInfo mirrors more of mainnet's symbol list than the testnet matching engine
+# actually supports. Confirmed via a definitive HTTP 400 on the signed leverageBracket call (not
+# a network/timeout/rate-limit error, which are left untouched as transient). Once a symbol lands
+# here it's excluded from get_all_symbols() so future pairlist/Chaos runs never re-select it, and
+# live_bot_manager aborts that symbol's loop immediately instead of proceeding to a doomed order.
+_invalid_symbols: set[tuple[str, str]] = set()
+
+
+def is_symbol_invalid(exchange: str, symbol: str) -> bool:
+    """True if (exchange, symbol) was previously confirmed rejected by Binance (see _invalid_symbols)."""
+    return (exchange, symbol) in _invalid_symbols
+
 # Hardcoded offline fallback: symbols relevant to the platform's chaos runner
 # and golden-master backtest suite.  Unknown symbols default to 20.
 _MAX_LEVERAGE_OFFLINE_MAP: dict[str, int] = {
@@ -102,6 +116,19 @@ async def get_max_leverage(
                 max_lev = int(brackets[0]["initialLeverage"])
                 _MAX_LEVERAGE_CACHE[cache_key] = max_lev
                 return max_lev
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 400:
+                # Binance's definitive "bad request" class — for this specific,
+                # symbol-scoped, signed call, this means the symbol itself isn't
+                # tradable here (not a rate limit, not a server error, not a
+                # transient network blip). Blacklist it.
+                _invalid_symbols.add(cache_key)
+                logger.warning(
+                    f"get_max_leverage({symbol}): 400 from leverageBracket — "
+                    f"marking symbol invalid for {exchange}, excluding from future pairlists"
+                )
+            else:
+                logger.warning(f"get_max_leverage({symbol}): signed fetch failed — {e}; using offline map")
         except Exception as e:
             logger.warning(f"get_max_leverage({symbol}): signed fetch failed — {e}; using offline map")
 
@@ -262,6 +289,13 @@ async def load_exchange_rules(exchange: str) -> None:
             "quoteAsset": quote_asset,
             # ms epoch listing date (USDⓈ-M futures provides it; spot does not) — AgeFilter
             "onboardDate": sym_info.get("onboardDate"),
+            # Futures-only field (absent on spot). One of PERPETUAL /
+            # CURRENT_QUARTER / NEXT_QUARTER / ... — see get_all_symbols(),
+            # which filters to PERPETUAL only. Quarterly/delivery contracts
+            # (e.g. ETHUSDT_260925) aren't supported by the /fapi/v1/algoOrder
+            # endpoint our TP/SL placement relies on, so they must never reach
+            # a pairlist or Chaos Mode's symbol pool.
+            "contractType": sym_info.get("contractType"),
         }
 
         tick_size: Optional[Decimal] = None
@@ -330,6 +364,12 @@ def round_price(symbol: str, exchange: str, price: float, rounding: str = ROUND_
     """Round price to the exchange tick size for (exchange, symbol)."""
     rules = _rules_cache.get((exchange, symbol))
     if not rules:
+        # Sending an unrounded price to Binance's algoOrder/order endpoints
+        # gets rejected with -1111 "Precision is over the maximum defined for
+        # this asset" — this log line is what makes that failure visible
+        # instead of a silent pass-through. See load_exchange_rules() for the
+        # periodic refresh that keeps this cache miss rare.
+        logger.warning(f"round_price: no cached rules for ({exchange}, {symbol}) — price sent unrounded")
         return price
     tick = rules["tickSize"]
     quantize_to = _get_precision(tick)
@@ -543,11 +583,29 @@ def get_all_symbols(exchange: str) -> list[dict]:
     """
     Return ALL symbols from the metadata cache for the exchange.
     Each entry: {symbol, status, baseAsset, quoteAsset, tier, rules}.
+
+    Excludes non-PERPETUAL futures contracts (quarterly/delivery, e.g.
+    ETHUSDT_260925): Binance's /fapi/v1/algoOrder endpoint — which our TP/SL
+    placement depends on — only supports perpetual contracts, so a quarterly
+    symbol reaching any pairlist or Chaos Mode's symbol pool 400s on entry.
+    `contractType` is a futures-only field (None/absent for spot), so this is
+    a no-op for the spot exchange.
+
+    Also excludes symbols confirmed invalid via `is_symbol_invalid()` — listed
+    in exchangeInfo but rejected by demo-fapi.binance.com's leverageBracket
+    endpoint with a definitive 400 (testnet symbol-list quirk, see
+    `_invalid_symbols`). Self-healing: a symbol is only excluded after a live
+    session actually probes it once.
     """
     symbols = []
     seen = set()
     for (exch, sym), meta in _symbol_meta_cache.items():
         if exch != exchange or sym in seen:
+            continue
+        contract_type = meta.get("contractType")
+        if contract_type and contract_type != "PERPETUAL":
+            continue
+        if is_symbol_invalid(exchange, sym):
             continue
         seen.add(sym)
         tier = get_symbol_tier(exchange, sym)

@@ -108,16 +108,14 @@ function RecentLiveRunsPanel({ sessions }) {
               key={session._id}
               className="flex items-center justify-between px-4 py-2 hover:bg-slate-800/20 group"
             >
-              <div className="min-w-0 flex-1 pr-3">
-                <div className="flex items-center gap-2">
-                  <span className="text-gray-200 font-semibold text-xs truncate">
-                    {session.strategyName}
-                  </span>
-                  <Badge variant={statusVariant(session.status)}>{session.status}</Badge>
-                </div>
-                <div className="text-[10px] text-slate-400 font-mono mt-0.5 truncate">
+              <div className="min-w-0 flex-1 flex items-center gap-2 pr-3">
+                <span className="text-gray-200 font-semibold text-xs shrink-0">
+                  {session.strategyName}
+                </span>
+                <Badge variant={statusVariant(session.status)} className="shrink-0">{session.status}</Badge>
+                <span className="text-[10px] text-slate-400 font-mono truncate flex-1 min-w-0">
                   {session.symbols.join(', ')} · {session.timeframe}
-                </div>
+                </span>
               </div>
               <div className="text-right">
                 <div className={`text-xs font-mono font-semibold ${pnl.isPositive ? 'text-emerald-400' : 'text-red-400'}`}>
@@ -173,7 +171,13 @@ export default function Dashboard() {
   const leaderboard = statsData?.leaderboard ?? []
   const cachedCandles = candlesData?.cached ?? []
   const recentRuns = listData?.backtests ?? []
-  const recentLiveRuns = algoSessions.slice(0, 5)
+
+  // "Live Runs" = currently active sessions (auto-hides when none are running).
+  // "Recent Live Runs" = finished sessions (stopped/error), mirroring "Recent Backtests".
+  const liveRuns = algoSessions.filter((s) => ['starting', 'running', 'stopping'].includes(s.status))
+  const recentLiveRuns = algoSessions
+    .filter((s) => !['starting', 'running', 'stopping'].includes(s.status))
+    .slice(0, 5)
 
   const openPositions = Array.isArray(positions) ? positions : []
   const positionSymbols = openPositions
@@ -201,8 +205,15 @@ export default function Dashboard() {
         <BacktestKpiStrip stats={stats} />
       )}
 
-      {/* ── Recent Live Runs & Recent Backtests (2-col) ──────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-0 border-t border-slate-700/50">
+      {/* ── Live Runs, Recent Live Runs & Recent Backtests ──────────────── */}
+      <div className={`grid grid-cols-1 ${ (loadingSessions || liveRuns.length > 0) ? 'lg:grid-cols-3' : 'lg:grid-cols-2' } gap-0 border-t border-slate-700/50`}>
+        {(loadingSessions || liveRuns.length > 0) && (
+          <div className="bg-title-bg border-b lg:border-b-0 lg:border-r border-slate-700/50">
+            <PanelSection title="Live Runs" loading={loadingSessions}>
+              <RecentLiveRunsPanel sessions={liveRuns} />
+            </PanelSection>
+          </div>
+        )}
         <div className="bg-title-bg border-b lg:border-b-0 lg:border-r border-slate-700/50">
           <PanelSection title="Recent Live Runs" loading={loadingSessions}>
             <RecentLiveRunsPanel sessions={recentLiveRuns} />
@@ -216,12 +227,10 @@ export default function Dashboard() {
       </div>
 
       {/* ── Strategy Leaderboard ─────────────────────────────────────── */}
-      <div className="border-t border-slate-700/50">
-        {loadingStats ? (
-          <Skeleton className="h-48 bg-slate-800/50" />
-        ) : (
+      <div className="bg-title-bg border-t border-slate-700/50">
+        <PanelSection title="Strategy Leaderboard" loading={loadingStats}>
           <StrategyLeaderboard data={leaderboard} />
-        )}
+        </PanelSection>
       </div>
 
       {/* ── TimescaleDB Cache (demoted, collapsible) ─────────────────── */}

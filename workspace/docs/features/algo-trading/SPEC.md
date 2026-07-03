@@ -160,17 +160,49 @@ Socket.IO emits algo:session:stopped → client sets status to 'stopped'
 `POST /api/v1/algo/chaos` accepts custom strategies, manual/auto symbol allocation, and risk
 overrides. `GET /api/v1/algo/chaos/symbols` exposes the curated tier-tagged pool (80 symbols,
 `high`/`mid`/`low` by volume). The client's 4-step Chaos Wizard supports multi-strategy selection,
-manual/auto symbol mapping per strategy with cap enforcement (`chaosMaxStrategies`,
-`chaosMaxManualSymbols`) and live allocation previews (manual picks guaranteed, remaining symbols
-round-robin partitioned per tier), timeframe/capital/leverage defaults (Chaos Settings section on the
-Settings page), and a review screen before launch. `engine/scripts/chaos_runner.py` is a thin console
-client with a live status table and `--stop` teardown.
+manual/auto symbol mapping per strategy with cap enforcement (`chaosMaxManualSymbols` for manual picks;
+`Settings.limits.testnet.maxSymbolsPerBot` per strategy and `Settings.chaosMaxTotalSymbols` run-wide,
+2026-07-03 — see DECISIONS.md #21) and live allocation previews (manual picks guaranteed, remaining
+symbols round-robin partitioned per tier, bounded by both caps — `ChaosWizard.jsx`'s preview mirrors
+`server/src/utils/chaosAllocator.js`'s algorithm exactly so the UI never shows an uncapped/stale
+allocation), timeframe/capital/leverage defaults (Chaos Settings section on the Settings page), and a
+review screen before launch. Auto-select (no `strategies` in the request) now runs **all** known
+strategies rather than a `chaosMaxStrategies`-capped subset (that field was removed 2026-07-03); the
+run is instead truncated to however many `limits.testnet.maxConcurrentBots` slots the user has left,
+with truncated strategies reported in the response's `errors` array rather than a hard rejection.
+`engine/scripts/chaos_runner.py` is a thin console client with a live status table and `--stop` teardown.
 
 ## Resilience & Stats
 
 - **Resilient order placement**: failed testnet orders in `live_bot_manager._execute_entry()` log the
   error, emit a Socket.IO notification, clear pending `buy`/`sell` signals, and return gracefully —
   no longer propagates as an unhandled exception that could crash the symbol loop.
+- **Testnet-invalid symbol blacklist** (2026-07-03, see DECISIONS.md #22): some symbols in
+  `demo-fapi.binance.com`'s `exchangeInfo` (status=TRADING, contractType=PERPETUAL) are rejected outright
+  by the testnet matching engine — confirmed via a definitive HTTP 400 on the signed leverageBracket
+  probe `_run_symbol_loop()` already makes at startup. `utils/symbols.py`'s `is_symbol_invalid()`
+  blacklists such symbols in-memory; `get_all_symbols()` excludes them from future pairlist/Chaos pools,
+  and the symbol loop aborts immediately (before opening a WS connection) instead of repeatedly
+  hammering a doomed entry order every candle close. Self-healing (discovered on first probe), in-memory
+  only (reset on engine restart).
+- **WS reconnect backoff + jitter** (2026-07-03): `_run_symbol_loop()`'s kline WebSocket reconnect was a
+  flat 5s retry — with ~80-150 symbols per Chaos run each running this same loop, a shared gateway blip
+  reconnected all of them in lockstep every 5s (thundering herd). Now capped exponential backoff (1s→60s)
+  with full jitter, reset on successful connect — mirrors the pattern already used by
+  `UserDataStreamManager._run_ws()` in `services/user_data_stream.py`.
+- **Exchange-rules cache refresh** (2026-07-03): the tick-size/step-size cache `round_price()`/
+  `clamp_and_round_qty()` read from was populated once at engine startup and never refreshed, so a
+  symbol relisted (or briefly missing a filter) after startup silently sent unrounded prices to Binance
+  — surfacing as TP/SL algoOrder 400s. `main.py` now refreshes it every 30 minutes; `round_price()` also
+  logs a warning on a cache miss instead of silently passing the price through unrounded.
+- **Session stop no longer orphans positions on timeout** (2026-07-03): `stop_session()`'s position-close
+  loop was fully serial (2 signed Binance calls per symbol) inside a 120s timeout — for a 100+ symbol
+  Chaos session the loop couldn't finish in time, and on timeout the code unconditionally reported
+  `openPositions: []` regardless of what actually got closed, silently orphaning real Binance positions.
+  Now runs with bounded concurrency (8 in flight) and only reports a symbol as closed once confirmed;
+  `reconciliation.js`'s startup sweep was similarly reordered to close-then-write instead of
+  wipe-then-close, and a new periodic (10 min) `reconcileFullAccountPositions()` sweep compares real
+  Binance positions against everything tracked and alerts (does not auto-close) on any orphan found.
 - **Per-symbol live session stats** (`LiveSession.symbolStats`): on each position close and on session
   stop, the server re-aggregates `tradeRecords` by symbol (`computeSymbolStats` in
   `algo.controller.js`) and pushes it via a partial `algo:session:update` emit. Engine remains sole

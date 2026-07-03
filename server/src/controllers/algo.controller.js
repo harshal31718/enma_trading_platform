@@ -30,6 +30,23 @@ async function startSession(req, res, next) {
     const apiKey = savedSettings.encryptedApiKey ? decrypt(savedSettings.encryptedApiKey) : ''
     const apiSecret = savedSettings.encryptedApiSecret ? decrypt(savedSettings.encryptedApiSecret) : ''
     if (!apiKey || !apiSecret) throw new ApiError(400, 'NO_CREDENTIALS', 'Binance API keys not configured. Add them in Settings.')
+
+    const maxSymbolsPerBot = savedSettings.limits?.testnet?.maxSymbolsPerBot ?? 15
+    if (symbols.length > maxSymbolsPerBot) {
+      throw new ApiError(400, 'SYMBOL_CAP_EXCEEDED',
+        `This bot would trade ${symbols.length} symbols, exceeding the per-bot cap of ${maxSymbolsPerBot}. Reduce the symbol list or raise the cap in Settings.`)
+    }
+
+    const maxConcurrentBots = savedSettings.limits?.testnet?.maxConcurrentBots ?? 10
+    const runningCount = await LiveSession.countDocuments({
+      userId: req.user.id,
+      status: { $in: ['starting', 'running', 'stopping'] },
+    })
+    if (runningCount >= maxConcurrentBots) {
+      throw new ApiError(409, 'BOT_LIMIT_REACHED',
+        `Concurrent bot limit reached (${runningCount}/${maxConcurrentBots} running). Stop a bot before starting a new one.`)
+    }
+
     const riskParams = {}
     for (const symbol of symbols) {
       riskParams[symbol] = resolveStrategyRiskParams(strategy.name, symbol, savedSettings, {
@@ -640,7 +657,9 @@ async function startChaos(req, res, next) {
     const feeRate = savedSettings.takerFee ?? 0.0005
     const riskParams = resolveModelParams(savedSettings, null)
 
-    const maxStrategies    = savedSettings.chaosMaxStrategies    ?? 10
+    const maxConcurrentBots    = savedSettings.limits?.testnet?.maxConcurrentBots ?? 10
+    const maxSymbolsPerBot     = savedSettings.limits?.testnet?.maxSymbolsPerBot  ?? 15
+    const chaosMaxTotalSymbols = savedSettings.chaosMaxTotalSymbols               ?? 120
     const maxManualSymbols = savedSettings.chaosMaxManualSymbols ?? 5
     const defaultCapital   = savedSettings.chaosDefaultCapital   ?? 500
     const defaultLeverage  = savedSettings.chaosDefaultLeverage  ?? 50
@@ -680,8 +699,8 @@ async function startChaos(req, res, next) {
     // ── 3. Resolve active strategies (D2) ───────────────────────────────────
     let activeNames
     if (strategiesBody.length === 0) {
-      // Auto-select: most-recent up to cap
-      activeNames = allStrategies.slice(0, maxStrategies).map(s => s.name)
+      // Auto-select: all known strategies — the concurrent-bot cap below does the limiting.
+      activeNames = allStrategies.map(s => s.name)
     } else {
       // Validate names
       const knownNames = new Set(allStrategies.map(s => s.name))
@@ -690,16 +709,28 @@ async function startChaos(req, res, next) {
           throw new ApiError(400, 'VALIDATION_ERROR', `Strategy "${entry.name}" not found in the database.`)
         }
       }
-      if (strategiesBody.length > maxStrategies) {
-        throw new ApiError(400, 'VALIDATION_ERROR',
-          `Too many strategies selected (${strategiesBody.length}). Max is ${maxStrategies}.`)
-      }
       activeNames = strategiesBody.map(e => e.name)
     }
 
     if (activeNames.length === 0) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'No strategies available to run.')
     }
+
+    // Truncate to however many concurrent-bot slots this user has left. This must happen
+    // BEFORE manualPicks is built and allocateChaosSymbols() is called, so symbols reserved
+    // for a to-be-skipped strategy are never removed from the pool the surviving strategies
+    // round-robin over.
+    const runningCount = await LiveSession.countDocuments({
+      userId: req.user.id,
+      status: { $in: ['starting', 'running', 'stopping'] },
+    })
+    const availableSlots = maxConcurrentBots - runningCount
+    if (availableSlots <= 0) {
+      throw new ApiError(409, 'BOT_LIMIT_REACHED',
+        `Concurrent bot limit reached (${runningCount}/${maxConcurrentBots} running). Stop a bot before starting Chaos Mode.`)
+    }
+    const skippedForCap = activeNames.length > availableSlots ? activeNames.slice(availableSlots) : []
+    activeNames = activeNames.slice(0, availableSlots)
 
     // Build manualPicks map { strategyName: [symbols] }
     const manualPicks = {}
@@ -727,6 +758,8 @@ async function startChaos(req, res, next) {
         curatedSymbols: TOP_SYMBOLS,
         tierMap: TIERED_SYMBOLS,
         maxManualSymbols,
+        maxSymbolsPerBot,
+        chaosMaxTotalSymbols,
       })
       assignments = result.assignments
       dropped = result.dropped
@@ -845,10 +878,15 @@ async function startChaos(req, res, next) {
     }
 
     // ── 7. Respond ──────────────────────────────────────────────────────────
-    const statusCode = errors.length && created.length === 0 ? 502 : 207
+    const capErrors = skippedForCap.map(name => ({
+      strategy: name,
+      error: `Skipped — concurrent bot limit reached (${maxConcurrentBots} max, ${runningCount} already running)`,
+    }))
+    const allErrors = [...capErrors, ...errors]
+    const statusCode = allErrors.length && created.length === 0 ? 502 : 207
     res.status(statusCode).json(ApiResponse.success({
       launched: created,
-      errors,
+      errors: allErrors,
       dropped,
       note: '⚡ Chaos Mode — testnet-only. All sessions run on Binance Testnet (mode:paper). Stop with DELETE /api/v1/algo/sessions.',
     }))
@@ -920,7 +958,9 @@ async function _getBinanceHeaders(sessionId) {
   return {
     'X-Binance-API-Key': apiKey,
     'X-Binance-API-Secret': apiSecret,
-    'X-Binance-Mode': settings?.mode || 'testnet',
+    // Pinned: mainnet keys are read-only. All trading routes go to testnet regardless of
+    // Settings.mode — see requireBinanceCredentials.js, reconciliation.js for the same pinning.
+    'X-Binance-Mode': 'testnet',
   }
 }
 

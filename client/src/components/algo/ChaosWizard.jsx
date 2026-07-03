@@ -97,8 +97,13 @@ export default function ChaosWizard({ onCancel, onSuccess }) {
   const { data: exchangeSettings, isLoading: loadingSettings } = useExchangeSettings()
   const settingsApplied = useRef(false)
 
-  // Chaos limits from settings
-  const maxStrategies = exchangeSettings?.chaosMaxStrategies ?? 10
+  // Chaos limits from settings. chaosMaxStrategies was removed server-side (2026-07-03) —
+  // limits.testnet.maxConcurrentBots is now the one cap governing both manual bots and Chaos
+  // Mode strategy count. maxSymbolsPerBot/chaosMaxTotalSymbols bound the allocation preview
+  // below, mirroring server/src/utils/chaosAllocator.js exactly.
+  const maxStrategies = exchangeSettings?.limits?.testnet?.maxConcurrentBots ?? 10
+  const maxSymbolsPerBot = exchangeSettings?.limits?.testnet?.maxSymbolsPerBot ?? 15
+  const chaosMaxTotalSymbols = exchangeSettings?.chaosMaxTotalSymbols ?? 120
   const maxManualSymbols = exchangeSettings?.chaosMaxManualSymbols ?? 5
 
   useEffect(() => {
@@ -154,11 +159,15 @@ export default function ChaosWizard({ onCancel, onSuccess }) {
     const mid = pool.filter(s => s.tier === 'mid').map(s => s.symbol)
     const low = pool.filter(s => s.tier === 'low').map(s => s.symbol)
 
-    // 4. Distribute equally
+    // 4. Distribute, bounded by maxSymbolsPerBot (per strategy) and chaosMaxTotalSymbols
+    //    (run-wide) — mirrors server/src/utils/chaosAllocator.js's Step 4 exactly so this
+    //    preview matches what the server will actually allocate.
     const assignments = {}
     const stats = {}
+    let runningTotal = 0
     for (const strat of activeStrategies) {
       assignments[strat] = [...reservedMap[strat]]
+      runningTotal += reservedMap[strat].size
       stats[strat] = {
         high: curatedSymbols.filter(s => s.tier === 'high' && reservedMap[strat].has(s.symbol)).length,
         mid: curatedSymbols.filter(s => s.tier === 'mid' && reservedMap[strat].has(s.symbol)).length,
@@ -168,37 +177,38 @@ export default function ChaosWizard({ onCancel, onSuccess }) {
     }
 
     const n = activeStrategies.length
-    let i = 0
+    let dropped = 0
 
-    // High distribution
-    for (const sym of high) {
-      const strat = activeStrategies[i % n]
-      assignments[strat].push(sym)
-      stats[strat].high++
-      stats[strat].total++
-      i++
+    for (const [tierBucket, tierKey] of [[high, 'high'], [mid, 'mid'], [low, 'low']]) {
+      let i = 0
+      for (const sym of tierBucket) {
+        if (runningTotal >= chaosMaxTotalSymbols) {
+          dropped++
+          continue
+        }
+
+        let placed = false
+        for (let tries = 0; tries < n; tries++) {
+          const strat = activeStrategies[(i + tries) % n]
+          if (assignments[strat].length < maxSymbolsPerBot) {
+            assignments[strat].push(sym)
+            stats[strat][tierKey]++
+            stats[strat].total++
+            runningTotal++
+            placed = true
+            i = i + tries + 1
+            break
+          }
+        }
+        if (!placed) {
+          dropped++
+          i++
+        }
+      }
     }
 
-    // Mid distribution
-    for (const sym of mid) {
-      const strat = activeStrategies[i % n]
-      assignments[strat].push(sym)
-      stats[strat].mid++
-      stats[strat].total++
-      i++
-    }
-
-    // Low distribution
-    for (const sym of low) {
-      const strat = activeStrategies[i % n]
-      assignments[strat].push(sym)
-      stats[strat].low++
-      stats[strat].total++
-      i++
-    }
-
-    return { assignments, stats }
-  }, [activeStrategies, strategyToggles, manualPicks, curatedSymbols, lockedSymbols])
+    return { assignments, stats, dropped }
+  }, [activeStrategies, strategyToggles, manualPicks, curatedSymbols, lockedSymbols, maxSymbolsPerBot, chaosMaxTotalSymbols])
 
   // Flat set of all manual picks claimed by other strategies
   const getGlobalClaimedByOthers = (currentStrat) => {

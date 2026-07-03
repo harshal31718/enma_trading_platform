@@ -79,7 +79,7 @@ engine/
 │   └── user_data_stream.py ← Binance User Data Stream (listenKey create/keepalive/close, WS connection)
 ├── utils/
 │   ├── timeframes.py      ← timeframe string conversions
-│   ├── symbols.py         ← identity converters (to_ccxt_symbol etc.), load_exchange_rules(), round_price(), round_qty(), leverage-bracket lookup
+│   ├── symbols.py         ← identity converters (to_ccxt_symbol etc.), load_exchange_rules(), round_price(), clamp_and_round_qty(), leverage-bracket lookup, is_symbol_invalid() (testnet-invalid symbol blacklist, 2026-07-03 — DECISIONS.md #22)
 │   ├── rate_limiter.py    ← Binance per-IP rate-limit guard
 │   └── risk_math.py       ← shared risk/notional/liquidation-buffer math helpers
 ├── scripts/

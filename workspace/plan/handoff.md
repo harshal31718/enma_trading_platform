@@ -7,6 +7,91 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
+## 2026-07-03 — UI Fixes: Bot Stopping State, Session List Ranking, Dashboard Section Alignments — COMPLETE ✅
+
+**Goal:** Resolve three user-reported UI issues on the Dashboard and AlgoTrading pages. (1) Stop button disappears during `'stopping'` state, and needs to remain visible displaying "Stopping" until completely stopped. (2) Bot sessions list needs customized ranking/sorting rules: running first (last started first), then stopped (last stopped first). (3) Strategy Leaderboard title is oversized and has inconsistent margin/padding compared to other Dashboard sections. (4) Align "Live Runs", "Recent Live Runs", and "Recent Backtests" into the same row (3 columns if active live runs exist, else 2 columns).
+
+**Done:**
+1. **Stop button visibility fix:** Updated `SessionCard.jsx` to render the Stop button when `session.status === 'running' || session.status === 'stopping'`. When `stopping` is true or status is `'stopping'`, the button is disabled and its label changes to "Stopping".
+2. **Bot session ranking/sorting:** Wrapped the bot session list map in `AlgoTrading.jsx` with a custom `useMemo` comparator sorting running/starting/stopping sessions first (newest `createdAt` first), followed by stopped/errored sessions (newest `stoppedAt || createdAt` first).
+3. **Strategy Leaderboard style alignment:** Stripped the `<Card>`, `<CardHeader>`, `<CardTitle>`, and `<CardContent>` wraps from `StrategyLeaderboard.jsx` to remove the excessive padding/margin and double borders. Wrapped `StrategyLeaderboard` in a `<PanelSection>` component inside `Dashboard.jsx` to match the layout and title text size of other panels.
+4. **Three-column layout for active runs:** Refactored the Dashboard layout to group "Live Runs" (active sessions), "Recent Live Runs" (finished sessions), and "Recent Backtests" into a single flex/grid row that dynamically adapts: 3 columns if active live runs exist, 2 columns otherwise.
+
+**Verification done:** Build compilation verified via `npm run build`.
+
+**Files changed:** `client/src/components/algo/SessionCard.jsx`, `client/src/pages/AlgoTrading.jsx`, `client/src/features/dashboard/StrategyLeaderboard.jsx`, `client/src/pages/Dashboard.jsx`.
+
+---
+## 2026-07-03 — Chaos Mode Diagnosis + Bot Session Caps + Testnet-Invalid Symbol Blacklist — COMPLETE ✅
+
+**Goal:** User reported chaos-mode WS disconnect storms + TP-order 400s, then a 53-real-vs-4-tracked
+open-position gap. Diagnosed root causes, fixed them, added configurable per-environment session caps
+per the user's exact spec, then fixed a Chaos Wizard UI bug and a distinct testnet-symbol-validity bug
+found while verifying against the live stack.
+
+**Done:**
+1. **Diagnosis + fixes (DECISIONS.md #21/#22 context, no dedicated decision entry for these — see git
+   history for the 6-finding writeup):** WS reconnect thundering herd (no backoff/jitter) → capped
+   exponential backoff + full jitter. Stale exchange-rules cache causing TP algoOrder 400s → periodic
+   30-min refresh + loud warning on cache-miss. Quarterly/delivery contracts (e.g. `ETHUSDT_260925`)
+   reaching TP placement → `contractType` filtering in `get_all_symbols()`. `stop_session()`'s serial
+   close loop timing out and silently reporting `openPositions: []` regardless of what actually closed
+   → bounded-concurrency (semaphore=8) close loop, only reports confirmed-closed symbols.
+   `reconciliation.js` wiping `openPositions` in Mongo before confirming closes → reordered to
+   close-then-write. No full-account safety net → new periodic (10 min) `reconcileFullAccountPositions`
+   sweep, alert-only (does not auto-close).
+2. **Configurable bot session caps (DECISIONS.md #21):** new `Settings.limits.{testnet,mainnet}.
+   {maxSymbolsPerBot,maxConcurrentBots}` + `Settings.chaosMaxTotalSymbols`, replacing the removed
+   `chaosMaxStrategies` (one unified concurrent-bot cap now governs both manual bots and Chaos Mode).
+   Enforced in `algo.controller.js`'s `startSession()`/`startChaos()` (chaos truncates to available
+   slots and reports skips via `errors`, not a hard reject); `chaosAllocator.js`'s round-robin bounded
+   by both the per-strategy and run-wide caps as running counters (not pool pre-truncation, to preserve
+   tier-priority mix); `Settings.jsx` UI added (testnet card live, mainnet card marked "Future" — no
+   enforcement path exists for mainnet, added as pure future-proofing per user instruction); engine
+   `StartSessionRequest.symbols` got a defensive `max_length=250`. Also hardcoded `_getBinanceHeaders()`
+   to `'testnet'` (was reading `Settings.mode`, a latent landmine — harmless today, fixed for
+   consistency with every other Binance-header call site).
+3. **`ChaosWizard.jsx` fix:** its client-side allocation-preview algorithm was a stale duplicate of the
+   OLD unbounded round-robin (from before item 2) and still read the removed `chaosMaxStrategies` field
+   — dialog showed 120+ symbols/strategy even though the server now correctly capped and truncated on
+   launch ("bots started correctly, dialog box showing wrong" — user-reported). Rewrote the preview to
+   mirror `chaosAllocator.js`'s bounded algorithm exactly.
+4. **Testnet-invalid-symbol blacklist (DECISIONS.md #22):** ~60 symbols in demo-fapi's `exchangeInfo`
+   (status=TRADING, contractType=PERPETUAL) are rejected outright by the testnet matching engine —
+   confirmed via a definitive HTTP 400 on both `leverageBracket` and real order placement for the same
+   symbols. New `is_symbol_invalid()` in `utils/symbols.py` blacklists on a definitive 400 specifically
+   (not 429/5xx/timeout, which stay transient/retryable); `get_all_symbols()` excludes blacklisted
+   symbols from future pairlists/Chaos pools; `live_bot_manager.py` aborts a symbol's loop immediately
+   (right after the leverage probe, before opening a WS connection) instead of retrying a doomed order
+   every candle close forever.
+
+**Verification done:** All Python/Node files import/load-check clean in-container after every change.
+Full `docker compose down && up --build -d` cycle run twice. **Environment gotcha worth remembering:**
+`engine` and `client` both have `volumes: []` in `docker-compose.yml` — they rely entirely on
+`docker compose watch` for live source sync, no bind mount fallback. Running `docker compose down`/`up`
+kills any active watch process; a plain `up -d` (no `--build`) after that will silently run STALE code
+with no error. Always `up --build -d` after `down` unless you know watch is actively running. Also hit
+(twice, unrelated to any change here) a transient MongoDB Atlas (cloud, external — `MONGO_URI` is an
+`mongodb+srv://` Atlas connection string, not local Mongo) `ETIMEDOUT` on server startup; resolved both
+times with a plain `docker restart` on the server container.
+
+**Files changed:** `engine/core/live_bot_manager.py`, `engine/utils/symbols.py`, `engine/main.py`,
+`engine/routers/algo.py`; `server/src/services/{reconciliation,server}.js`,
+`server/src/models/Settings.js`, `server/src/controllers/{settings,algo}.controller.js`,
+`server/src/utils/chaosAllocator.js`; `client/src/pages/Settings.jsx`,
+`client/src/components/algo/ChaosWizard.jsx`; docs: `workspace/docs/core/{API_CONTRACTS,DECISIONS}.md`
+(#21, #22), `workspace/docs/state/DEPRECATED.md`, `workspace/docs/features/{auth-settings,
+algo-trading}/SPEC.md`, `engine/CLAUDE.md`.
+
+**Open questions:** (1) `_invalid_symbols` blacklist is in-memory only, resets on engine restart —
+cheap to rediscover (~60 API calls, one each) but not persisted; revisit if restart frequency makes
+that wasteful. (2) `startChaos()`'s concurrent-bot-slot check is a single non-atomic query — accepted
+race for now, would need a distributed lock if concurrent chaos launches become common. (3) The Chaos
+Wizard preview is still a client-side algorithm duplicate of the server's, not a real preview API call
+— will drift again if the server algorithm changes without a matching client update; a dedicated
+`POST /api/v1/algo/chaos/preview` endpoint would remove this whole class of bug.
+
+---
 ## 2026-07-02 — Dashboard: Testnet+Mainnet Balances, Live Prices, Redesign — COMPLETE (unverified against live stack) ⚠️
 
 **Goal:** Fetch Binance account balance for BOTH testnet and mainnet and show on the Dashboard;
@@ -70,101 +155,4 @@ IP, or is it geo-blocked (451/-2015)? The per-env `{ok:false,error}` shape absor
 real check. (2) End-to-end: open a non-major testnet position → confirm it appears in TickerStrip
 within 30s and the uPnL tile is nonzero. (3) Mobile 375px pass.
 
----
-## 2026-07-02 — Manual Trading WebSocket User Data Stream (Tier 3 fix) — COMPLETE ✅
-
-**Goal:** User picked "Tier 3" from a 3-tier options list for fixing the `open-orders` rate-limit
-weight problem found in the prior session (see entry below) — replace the Trade page's
-high-frequency REST polling with the same WebSocket User Data Stream mechanism already built for
-live bots (`UserDataStreamManager`, F-020), per Binance's own recommended architecture, rather than
-a smaller mechanical fix. Explicitly scoped as a real cross-service feature build (6 phases,
-outlined upfront per Rule F) — not a quick doc/API-url correction like the prior two fixes.
-
-**Done — all 6 phases:**
-1. **`engine/services/user_data_stream.py`**: added `register_stream_callback()`/
-   `unregister_stream_callback()` — an unfiltered dispatch path firing on every
-   `ORDER_TRADE_UPDATE` status and every `ACCOUNT_UPDATE`, kept fully separate from the existing
-   per-symbol FILLED-only `register_fill_callback()` path the live bot uses, so live-trading fill
-   detection was not touched.
-2. **New `engine/services/manual_trade_stream.py`**: per-user registry — `start_for_user`/
-   `stop_for_user`, a 5-minute idle reaper (heartbeat-based), publishes events to Redis
-   `trade-stream:{userId}`.
-3. **`engine/routers/trade.py`**: `POST /trade/stream/start` / `/stop`, `userId` as a query param
-   (matching the existing dashboard-stats convention for user-scoped engine endpoints).
-4. **Server**: `POST /api/v1/trade/stream/start` / `/stop` (`trade.controller.js`,
-   `trade.routes.js`); `socketEmitter.js` gained `subscribeToTradeStream`/`unsubscribeFromTradeStream`
-   relaying `trade-stream:{userId}` → `io.to('user:{userId}').emit('trade:stream-update', ...)`.
-5. **Client**: `useTradeStream()` in `useTrade.js` — starts on mount, 120s heartbeat re-POST, stops
-   on unmount; patches the `open-orders` query cache directly by `orderId` (zero REST cost) on
-   `ORDER_TRADE_UPDATE`; debounces (2s) a real REST refetch of positions/account on `ACCOUNT_UPDATE`
-   since that event lacks `markPrice`/`liquidationPrice`. Wired into `TradeInner()` in `Trade.jsx`.
-   REST safety-net intervals lengthened: account 30s→90s, positions 3s→30s, open-orders 10s→60s.
-6. **Docs**: `API_CONTRACTS.md` (new endpoints + `trade:stream-update` event),
-   `live-trading/SPEC.md` (full Data Flow rewrite, also fixed a leftover dangling sentence from an
-   earlier edit), `ARCHITECTURE.md` rule 5, `DECISIONS.md` #20, `CURRENT_STATE.md` (Known Technical
-   Debt entry updated to resolved, Current Constraints row, new Live Trading bullet).
-
-**Verification note — real, not glossed over:** Docker wasn't running locally for any of this
-session, so nothing here has been exercised against a live Binance account. Checked instead: Python
-syntax (`ast.parse`) on all 3 new/changed engine files, Node syntax (`node --check`) on all changed
-server files, and an `esbuild` transpile-only pass on `Trade.jsx` (validates JSX/JS syntax without
-resolving imports). **Explicitly unconfirmed**: whether Binance actually emits `ORDER_TRADE_UPDATE`
-for algo/conditional orders (`/fapi/v1/algoOrder`, this platform's TP/SL mechanism) before they
-trigger. The cache-patch code is written defensively either way (only touches entries matching a
-received `orderId`, never fabricates data), so an unconfirmed-negative here means algo orders fall
-back to the 60s REST poll, not that they'd show wrong data — but this needs a real check next time
-the stack is up.
-
-**Files changed:** `engine/services/{user_data_stream,manual_trade_stream}.py`,
-`engine/routers/trade.py`; `server/src/{controllers/trade.controller.js,routes/trade.routes.js,
-services/socketEmitter.js}`; `client/src/hooks/useTrade.js`, `client/src/pages/Trade.jsx`;
-`workspace/docs/core/{API_CONTRACTS,ARCHITECTURE,DECISIONS}.md`,
-`workspace/docs/features/live-trading/SPEC.md`, `workspace/docs/state/CURRENT_STATE.md`.
-
-**Open questions:** Verify against a real running stack: (1) does `ORDER_TRADE_UPDATE` actually
-fire for algo/conditional orders pre-trigger, (2) does the 5-minute idle reaper correctly stop
-abandoned streams without also killing active ones on a slow connection, (3) end-to-end smoke test
-of the full chain (place an order manually → confirm the Open Orders table updates without a
-network request in devtools).
-
----
-## 2026-07-02 — Two Deferred Code Fixes Resolved via Web Research — COMPLETE ✅
-
-**Goal:** Resolve the two code-level items deferred at the end of the CURRENT_STATE.md relocation
-work (see entry below) — a testnet-host mismatch and a "polling interval undercuts the documented
-floor" discrepancy — by researching Binance's actual current API docs rather than guessing.
-
-**Done:**
-1. **Testnet-host mismatch — fixed.** Binance's official Open Platform docs
-   (developers.binance.com/docs/derivatives/usds-margined-futures/general-info) confirm the current
-   documented USDS-M Futures Testnet REST base is `https://demo-fapi.binance.com`, matching
-   `engine/services/binance_testnet.py`. `engine/utils/symbols.py` had 4 hardcoded URLs
-   (`_LEVERAGE_BRACKET_URLS`, `_EXCHANGE_INFO_URLS`, `_TICKER_URLS`, `_BOOK_TICKER_URLS`) pointing at
-   `https://testnet.binancefuture.com` instead — a legacy/community domain, not the currently
-   documented one. Changed all 4 to `https://demo-fapi.binance.com`. Verified Python syntax parses;
-   **Docker wasn't running locally so no container smoke test was done** — worth a real
-   `GET /api/v1/candles/symbols` check next time the stack is up.
-2. **Polling-interval "discrepancy" — resolved by correcting the framing, not the code.** Researched
-   Binance's actual rate-limit model: `REQUEST_WEIGHT` 2400/min **per source IP**, not a flat
-   per-endpoint interval floor. At its real weight (5), `positions` polling every 3s (100 weight/min)
-   was never the risk — the stated "never lower than 10s" floor was measuring the wrong thing.
-   **Found instead, not previously documented anywhere**: `GET /fapi/v1/openOrders` and
-   `/fapi/v1/openAlgoOrders` cost weight **40 each without a `symbol` param** (vs. 1 with one), and
-   `engine/routers/trade.py`'s `get_open_orders` never passes one — 480 weight/min from that single
-   10s-interval call. Since this server proxies every user's signed Binance calls through one
-   outbound IP, that 2400/min budget is **shared across all concurrently active users**, not
-   per-user — ~590 weight/min/active-user means roughly 4 concurrent Trade-page users exhausts it,
-   before bot sessions or backtest workers add their own calls on the same IP. Documented this
-   accurately everywhere the old wrong framing lived; **did not** silently scope `open-orders` to
-   the active symbol to fix it, since that changes UI behavior (hides other-symbol orders) — flagged
-   as new Known Technical Debt in `CURRENT_STATE.md` for a product decision instead.
-
-**Files changed:** `engine/utils/symbols.py` (code fix); `workspace/docs/core/{ARCHITECTURE,
-DECISIONS,binance-api}.md`, `workspace/docs/features/live-trading/SPEC.md`,
-`workspace/docs/state/CURRENT_STATE.md` (new Known Technical Debt entry), `workspace/plan/
-current_state_relocation.md` (marked both items resolved).
-
-**Open questions:** Whether/how to fix the `open-orders` weight-40 issue — scope to active symbol
-(cuts weight 40x, loses cross-symbol visibility in that view) vs. reduce poll frequency vs. accept
-the current concurrent-user ceiling. Needs a product call, not a drift fix.
 

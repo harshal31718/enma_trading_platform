@@ -11,8 +11,10 @@ const PORT = process.env.PORT || 5000
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://mongodb:27017/enma_trading'
 const MONGO_DB = process.env.MONGO_DB || 'enma_trading'
 
-const { reconcileSymbolLocks } = require('./services/reconciliation')
+const { reconcileSymbolLocks, reconcileFullAccountPositions } = require('./services/reconciliation')
 const PlatformConfig = require('./models/PlatformConfig')
+
+const FULL_RECONCILE_INTERVAL_MS = 10 * 60 * 1000 // 10 min — safety-net sweep, see reconciliation.js
 
 async function seedPlatformConfig() {
   const adminEmail = process.env.ADMIN_EMAIL?.toLowerCase()
@@ -41,8 +43,15 @@ async function startServer() {
     console.log(`Server running on port ${PORT}`)
   })
 
+  const reconcileTimer = setInterval(() => {
+    reconcileFullAccountPositions().catch((e) =>
+      console.error('[Reconciliation] Full-account sweep error:', e.message)
+    )
+  }, FULL_RECONCILE_INTERVAL_MS)
+
   async function shutdown(signal) {
     console.log(`${signal} received — shutting down gracefully`)
+    clearInterval(reconcileTimer)
     httpServer.close(async () => {
       await mongoose.connection.close()
       console.log('MongoDB connection closed')

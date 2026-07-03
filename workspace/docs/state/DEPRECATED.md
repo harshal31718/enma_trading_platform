@@ -47,6 +47,7 @@ If something appears here, it does not exist in the codebase and must not be ref
 | `useAvailableImports()` hook | With candle import job removal | N/A | N/A |
 | `useImportCandles()` hook | With candle import job removal | N/A | N/A |
 | `client/src/features/backtest/BacktestConfigForm.jsx` | Removed 2026-06-22 (`26d3ded`) | Inline config form superseded by the current backtest config flow | See current `workspace/docs/features/backtest-pipeline/SPEC.md` |
+| `Settings.chaosMaxStrategies` (Mongoose field + `EXCHANGE_FIELDS`/`FIELD_RULES` entries) | 2026-07-03 | Overlapped with the new unified concurrent-bot cap; two knobs governing the same "how many bots" concern was confusing | `Settings.limits.testnet.maxConcurrentBots` — one cap for both manual bots and Chaos Mode, see DECISIONS.md #21 |
 
 > **Update (2026-07-02): `EmptyState.jsx` reinstated.** It was reintroduced as
 > `client/src/components/ui/empty-state.jsx` (commit `461de16`, "UI Refinement Phase 2") and is now

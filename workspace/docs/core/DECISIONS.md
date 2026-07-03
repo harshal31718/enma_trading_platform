@@ -275,3 +275,72 @@ against a live account — Docker wasn't running during implementation to verify
 patch is written defensively (only touches entries matching a received `orderId`, never guesses), so
 if algo orders don't emit the event, they simply stay on the 60s REST safety net instead of showing
 incorrect data — but this should be verified with the stack running before relying on it further.
+
+## 21. Configurable Bot Session Caps — `Settings.limits`, `chaosMaxStrategies` removed (2026-07-03)
+**Decision:** Live session sizing is now governed by user-configurable `Settings` fields instead of
+hardcoded/unbounded behavior. `Settings.limits.{testnet,mainnet}.{maxSymbolsPerBot,maxConcurrentBots}`
+(defaults 15/10, max 30/20) and a testnet-only `Settings.chaosMaxTotalSymbols` (default 120, max 250)
+are enforced in `server/src/controllers/algo.controller.js`'s `startSession()` and `startChaos()`.
+`chaosMaxStrategies` (default 10, max 20) is **removed** — `limits.testnet.maxConcurrentBots` now does
+that job for both manual bots and Chaos Mode as one unified cap, checked against
+`LiveSession.countDocuments({ userId, status: { $in: ['starting','running','stopping'] } })`. A Chaos
+run that requests more strategies than available slots now partially launches (truncated strategies
+reported in `errors`, not a hard 400 rejection) — see API_CONTRACTS.md `POST /api/v1/algo/chaos`.
+`server/src/utils/chaosAllocator.js`'s round-robin distribution enforces both `maxSymbolsPerBot`
+(per-strategy) and `chaosMaxTotalSymbols` (run-wide) as running counters during the existing tier
+loop, rather than pre-truncating the curated symbol pool (which would skew the high/mid/low tier mix
+purely from array ordering — `top_symbols.js` lists high-volume symbols first). Manual symbol picks
+exceeding either cap are a hard validation error (`CHAOS_SYMBOL_PER_BOT_CAP_EXCEEDED`/
+`CHAOS_TOTAL_CAP_EXCEEDED`), never silently trimmed — they're a user-explicit guarantee. `limits.mainnet`
+exists in the schema and Settings UI now as pure future-proofing; no enforcement logic reads it, since
+no code path can start a mainnet session today (see Decision #9 — mainnet is read-only).
+`engine/routers/algo.py`'s `StartSessionRequest.symbols` also got a defensive `max_length=250`
+(Pydantic) — real enforcement is Node-side; this only protects the engine if Node is ever bypassed.
+Alongside this change, `algo.controller.js`'s `_getBinanceHeaders()` (used by the internal live
+order-placement callbacks) was hardcoded to `'testnet'`, matching every other Binance-header call site
+— it previously read `settings?.mode || 'testnet'`, a latent inconsistency that was harmless only
+because no route can currently set `Settings.mode` to `'mainnet'`.
+**Rationale:** Diagnosed during a Chaos Mode incident where sessions routinely held 130-145 symbols
+each across up to 10 concurrent strategies with no ceiling anywhere — this is what turned ordinary bugs
+(WS reconnect storm, stale exchange-rules-cache TP rejections, a `stop_session()` close-loop timing out
+on large sessions) into Binance showing 53 real open positions while the dashboard tracked 4. That
+incident's root-cause bugs were fixed separately (serial→bounded-concurrency close loop, confirm-before-
+clear reconciliation ordering, a periodic full-account reconciliation sweep, WS reconnect backoff+jitter,
+periodic exchange-rules-cache refresh, `contractType` filtering for quarterly/delivery contracts — none
+of those required a size cap to fix). This decision addresses sizing on top of those fixes: operators can
+now tune blast radius from Settings without a redeploy, and a single unified concurrent-bot cap
+(replacing the narrower `chaosMaxStrategies`) prevents unbounded growth in both launch paths at once.
+**Known limitation (accepted, not fixed):** the concurrent-bot-slot count in `startChaos()` is computed
+once via a single query, not re-checked per-iteration or atomically across simultaneous requests — two
+concurrent chaos/bot-start calls could each pass a stale check and jointly exceed the cap briefly. No
+distributed lock was added for this category (mirrors the existing best-effort tolerance elsewhere in
+this controller); treat the cap as best-effort, not a hard real-time guarantee.
+
+## 22. Self-Healing Blacklist for Testnet-Invalid Symbols (2026-07-03)
+**Decision:** `demo-fapi.binance.com`'s `/fapi/v1/exchangeInfo` lists symbols (confirmed: 60 distinct
+symbols observed over a 3-hour window, e.g. `RADUSDT`, `B3USDT`, `AI16ZUSDT`, `NEIROETHUSDT`, `OLUSDT`)
+that pass `status=TRADING` and `contractType=PERPETUAL` but are rejected outright by the testnet
+matching engine — a known testnet quirk where exchangeInfo mirrors more of mainnet's symbol list than
+testnet actually supports. This was surfacing as entry `MARKET` orders failing with a generic 400 that
+gave no actionable signal, and — because nothing tracked the failure — the same doomed order got
+retried every candle close, forever. `engine/utils/symbols.py` now distinguishes this case precisely:
+`get_max_leverage()`'s signed `/fapi/v1/leverageBracket` probe (already called once per symbol at
+`_run_symbol_loop()` startup, before any WS connection or order attempt) catches `httpx.HTTPStatusError`
+specifically, and only a **definitive HTTP 400** (Binance's "bad request" class — not a 429 rate limit,
+not a 5xx, not a network timeout, all of which remain transient/retryable) adds `(exchange, symbol)` to
+a new in-memory `_invalid_symbols` set via `is_symbol_invalid()`. `get_all_symbols()` (feeding both
+`pairlist.py` and Chaos Mode's symbol pool via `GET /candles/symbols`) now excludes blacklisted symbols,
+and `live_bot_manager.py`'s `_run_symbol_loop()` checks the blacklist immediately after the leverage
+probe and aborts that symbol's entire loop before opening a WS connection or ever attempting an order.
+**Rationale:** Self-healing without any external symbol-status database: a symbol is blacklisted the
+first time a live session actually probes it (not pre-emptively), and every future pairlist/Chaos run on
+the same engine process then skips it automatically. Distinguishing by HTTP status code (400 specifically)
+rather than blacklisting on any failure avoids permanently excluding a symbol due to a transient network
+blip or rate limit — those already degrade gracefully to the existing offline leverage fallback map
+without being blacklisted. Scoped to `(exchange, symbol)` so a symbol invalid on testnet doesn't affect
+a hypothetical future mainnet path.
+**Known limitation (accepted, not fixed):** `_invalid_symbols` is in-memory only, reset on every engine
+restart — each restart re-probes and re-discovers the same ~60 symbols once each (one wasted, harmless,
+already-logged 400 per symbol, not a repeating storm). Not persisted to MongoDB/Redis; if this needs to
+survive restarts a follow-up could write it to a small collection, but the current per-restart rediscovery
+cost is one API call per previously-known-bad symbol, which is cheap enough not to warrant it yet.

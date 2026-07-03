@@ -201,11 +201,15 @@ if absent.
 | `liqBufferPct` | Number | Min gap between stop-loss and liquidation price, default 0.005 |
 | `minEdgeMult` | Number | Cost Model minimum edge multiplier, default 0.0 |
 | **Chaos Mode Defaults** | | |
-| `chaosMaxStrategies` | Number | Hard cap on strategies per chaos run, default 10 |
 | `chaosMaxManualSymbols` | Number | Max hand-picked symbols per strategy, default 5 |
 | `chaosDefaultCapital` | Number | Per-strategy capital pre-fill, default 500 |
 | `chaosDefaultLeverage` | Number | Leverage pre-fill, default 50 |
 | `chaosDefaultTimeframe` | String | Default chaos timeframe, default `'1m'` |
+| `chaosMaxTotalSymbols` | Number | Ceiling on symbols across one whole chaos run (all strategies combined), default 120, max 250 (2026-07-03) |
+| **Bot Session Limits** (`limits.*`, 2026-07-03) | | |
+| `limits.testnet.maxSymbolsPerBot` | Number | Per-bot symbol cap, default 15, max 30. Applies to manual bots and each Chaos strategy |
+| `limits.testnet.maxConcurrentBots` | Number | Max simultaneously running sessions (manual + Chaos combined), default 10, max 20. Supersedes the removed `chaosMaxStrategies` |
+| `limits.mainnet.maxSymbolsPerBot` / `limits.mainnet.maxConcurrentBots` | Number | Same shape as testnet. Future-proofing only — no code path can start a mainnet session today |
 | `globalHardLimits` | Object | Risk Dashboard: `{ maxLeverageAllowed, maxSessionDrawdown, maxRiskPctPerTrade, cooldownPeriodHours }` |
 | `strategyOverrides` | Object | Risk Dashboard: `{ [strategyName]: { riskPct?, riskRewardRatio?, maxSessionDrawdown?, liqBufferPct?, minEdgeMult?, customAtrMult? } }` |
 | `symbolOverrides` | Object | Risk Dashboard: `{ [symbol]: { maxLeverage?, volatilityMultiplier?, maxExposureNotional? } }` |

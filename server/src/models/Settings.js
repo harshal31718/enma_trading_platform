@@ -48,8 +48,8 @@ const settingsSchema = new mongoose.Schema(
     minEdgeMult:        { type: Number, default: 0.0,   min: 0,      max: 10  }, // Cost Model minimum edge multiplier
 
     // ── Chaos Mode settings (testnet stress-test) ────────────────────────────
-    // Caps and launch defaults for the Chaos Mode Wizard (chaos_mode_upgrade.md D5).
-    chaosMaxStrategies:    { type: Number, default: 10,    min: 1,   max: 20    }, // hard cap on strategies per chaos run
+    // Caps and launch defaults for the Chaos Mode Wizard (see DECISIONS.md #16 D5).
+    // chaosMaxStrategies REMOVED — superseded by limits.testnet.maxConcurrentBots below.
     chaosMaxManualSymbols: { type: Number, default: 5,     min: 0,   max: 20    }, // max hand-picked symbols per strategy
     chaosDefaultCapital:   { type: Number, default: 500,   min: 1                }, // per-strategy capital pre-fill
     chaosDefaultLeverage:  { type: Number, default: 50,    min: 1,   max: 125   }, // leverage pre-fill
@@ -57,6 +57,28 @@ const settingsSchema = new mongoose.Schema(
       type: String,
       default: '1m',
       enum: ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d'],
+    },
+    // Sum-of-symbols ceiling for one Chaos run (all strategies combined). Testnet-only —
+    // no mainnet chaos mode exists or is planned. Top-level (not under `limits` below) —
+    // every other layer (settings.controller.js, algo.controller.js, Settings.jsx,
+    // ChaosWizard.jsx) reads/writes this as a flat field; keep it that way.
+    chaosMaxTotalSymbols: { type: Number, default: 120, min: 1, max: 250 },
+
+    // ── Bot Session Limits (Safety Caps) ──────────────────────────────────────
+    // Configurable ceilings on live-session size, enforced by algo.controller.js before
+    // a bot/chaos strategy launches. `mainnet` is pure future-proofing — no code path can
+    // start a mainnet session today (trading is hard-pinned to testnet everywhere; see
+    // live_bot_manager.py, LiveSession.mode always 'paper'). Do not add mainnet enforcement
+    // logic against these fields until mainnet live trading actually exists.
+    limits: {
+      testnet: {
+        maxSymbolsPerBot:  { type: Number, default: 15, min: 1, max: 30 },
+        maxConcurrentBots: { type: Number, default: 10, min: 1, max: 20 },
+      },
+      mainnet: {
+        maxSymbolsPerBot:  { type: Number, default: 15, min: 1, max: 30 },
+        maxConcurrentBots: { type: Number, default: 10, min: 1, max: 20 },
+      },
     },
 
     // ── Global Hard Constraints (Safety Circuit Breakers) ───────────────────
