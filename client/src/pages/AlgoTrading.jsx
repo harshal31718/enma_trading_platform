@@ -1,4 +1,4 @@
-import { useState, useCallback, Suspense, lazy } from 'react'
+import { useState, useCallback, useMemo, Suspense, lazy } from 'react'
 import { Plus, Trash2, Bot, Zap } from 'lucide-react'
 import { useAlgoSessions, useStopSession, useDeleteAllStopped } from '../hooks/useAlgoSessions'
 import { useSocket } from '../hooks/useSocket'
@@ -23,6 +23,28 @@ export default function AlgoTrading() {
   const qc = useQueryClient()
 
   const hasStopped = sessions.some(s => s.status === 'stopped' || s.status === 'error')
+
+  const sortedSessions = useMemo(() => {
+    return [...sessions].sort((a, b) => {
+      const aRunning = a.status === 'starting' || a.status === 'running' || a.status === 'stopping'
+      const bRunning = b.status === 'starting' || b.status === 'running' || b.status === 'stopping'
+
+      if (aRunning && !bRunning) return -1
+      if (!aRunning && bRunning) return 1
+
+      if (aRunning) {
+        // Both running: last started first (newest createdAt first)
+        const timeA = new Date(a.createdAt).getTime()
+        const timeB = new Date(b.createdAt).getTime()
+        return timeB - timeA
+      } else {
+        // Both stopped: last stopped first (newest stoppedAt / createdAt first)
+        const timeA = new Date(a.stoppedAt || a.createdAt).getTime()
+        const timeB = new Date(b.stoppedAt || b.createdAt).getTime()
+        return timeB - timeA
+      }
+    })
+  }, [sessions])
 
   // Real-time updates via Socket.IO
   const handleSessionUpdate = useCallback((data) => {
@@ -127,7 +149,7 @@ export default function AlgoTrading() {
         </div>
       ) : (
         <div className="bg-title-bg border border-slate-700/50 rounded-xl overflow-hidden divide-y divide-slate-700/40 shadow-2xl">
-          {sessions.map((session) => (
+          {sortedSessions.map((session) => (
             <SessionCard
               key={String(session._id)}
               session={session}

@@ -1,7 +1,7 @@
 import json
 import logging
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 
 from core.live_bot_manager import live_bot_manager
@@ -41,7 +41,11 @@ async def preview_pairlist(req: PairlistPreviewRequest):
 class StartSessionRequest(BaseModel):
     session_id: str
     strategy_name: str
-    symbols: list[str]
+    # Defensive ceiling only — real enforcement is Node-side (Settings.limits.*.maxSymbolsPerBot,
+    # Mongoose max 30, and chaosMaxTotalSymbols, Mongoose max 250). Sized against the larger of
+    # those two Mongoose maxes so it never fires under normal Node-enforced operation; it exists
+    # purely to protect the engine if the Node layer is ever misconfigured or bypassed.
+    symbols: list[str] = Field(..., max_length=250)
     timeframe: str
     params: dict = {}
     capital: str

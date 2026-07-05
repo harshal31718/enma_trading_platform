@@ -55,6 +55,7 @@ class UserDataStreamManager:
         self._api_key = api_key
         self._api_secret = api_secret
         self._fill_callbacks: dict[str, list[callable]] = {}
+        self._stream_callbacks: list[callable] = []
         self._listen_key: str | None = None
         self._ws_task: asyncio.Task | None = None
         self._keepalive_task: asyncio.Task | None = None
@@ -62,6 +63,28 @@ class UserDataStreamManager:
         self._stop_event = asyncio.Event()
 
     # ── Public API ──────────────────────────────────────────────────────────
+
+    def register_stream_callback(self, callback: callable) -> None:
+        """Register an async callback for EVERY order/account event, unfiltered.
+
+        Unlike ``register_fill_callback`` (per-symbol, FILLED/PARTIALLY_FILLED
+        only — used by the live bot's fill-detection path), this fires for
+        every ``ORDER_TRADE_UPDATE`` status (NEW, CANCELED, EXPIRED, etc.) and
+        every ``ACCOUNT_UPDATE``, across all symbols. Intended for consumers
+        that mirror full account state (e.g. the manual-trading stream relay)
+        rather than reacting only to fills.
+
+        The callback is called as::
+
+            await callback(event_type: str, payload: dict)
+
+        where ``event_type`` is ``"ORDER_TRADE_UPDATE"`` or ``"ACCOUNT_UPDATE"``
+        and ``payload`` is the raw ``o``/``a`` sub-object from the event.
+        """
+        self._stream_callbacks.append(callback)
+
+    def unregister_stream_callback(self, callback: callable) -> None:
+        self._stream_callbacks = [cb for cb in self._stream_callbacks if cb is not callback]
 
     def register_fill_callback(self, symbol: str, callback: callable) -> None:
         """Register an async callback for fill events on *symbol*.
@@ -120,6 +143,7 @@ class UserDataStreamManager:
         await self._delete_listen_key()
         self._listen_key = None
         self._fill_callbacks.clear()
+        self._stream_callbacks.clear()
         logger.info("[UserDataStream] Stopped.")
 
     # ── Internal helpers ────────────────────────────────────────────────────
@@ -192,8 +216,10 @@ class UserDataStreamManager:
                         etype = _Event.parse(msg)
                         if etype == _Event.ORDER_TRADE_UPDATE:
                             await self._handle_order_trade_update(msg.get("o", {}))
+                            await self._dispatch_stream_callbacks(etype, msg.get("o", {}))
                         elif etype == _Event.ACCOUNT_UPDATE:
                             await self._handle_account_update(msg.get("a", {}))
+                            await self._dispatch_stream_callbacks(etype, msg.get("a", {}))
                         elif etype == _Event.MARGIN_CALL:
                             logger.warning(f"[UserDataStream] MARGIN_CALL: {raw}")
                         elif etype == _Event.LISTEN_KEY_EXPIRED:
@@ -260,6 +286,14 @@ class UserDataStreamManager:
                     logger.error(
                         f"[UserDataStream] {symbol}: callback error: {e}"
                     )
+
+    async def _dispatch_stream_callbacks(self, event_type: str, payload: dict) -> None:
+        """Fan out *every* order/account event to unfiltered stream callbacks."""
+        for cb in self._stream_callbacks:
+            try:
+                await cb(event_type, payload)
+            except Exception as e:
+                logger.error(f"[UserDataStream] stream callback error: {e}")
 
     async def _handle_account_update(self, account_data: dict) -> None:
         """Process ACCOUNT_UPDATE events (position/balance changes)."""

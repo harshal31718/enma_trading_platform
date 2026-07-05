@@ -1,5 +1,7 @@
+import { useEffect, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import api from '@/lib/axios'
+import socket from '@/lib/socket'
 
 export function useTradeSettings() {
   return useQuery({
@@ -31,6 +33,12 @@ function invalidateOrderState(queryClient) {
   queryClient.invalidateQueries({ queryKey: ['trade', 'symbol-config'] })
 }
 
+// Safety-net poll intervals only — real-time updates come from the manual
+// trading WebSocket stream (see useTradeStream() below). These are
+// deliberately long: they exist to reconcile against WS drops/reconnects,
+// not to be the primary data source. See workspace/docs/features/live-trading/SPEC.md
+// and workspace/docs/core/ARCHITECTURE.md rule 5 for why the old 3s/10s
+// REST-polling intervals were a rate-limit risk shared across all users.
 export function useTradeAccount(options = {}) {
   return useQuery({
     queryKey: ['trade', 'account'],
@@ -38,8 +46,27 @@ export function useTradeAccount(options = {}) {
       const { data } = await api.get('/api/v1/trade/account')
       return data.data
     },
-    refetchInterval: 30000,
-    staleTime: 25000,
+    refetchInterval: 90000,
+    staleTime: 60000,
+    retry: false,
+    ...options,
+  })
+}
+
+// Combined testnet + mainnet balance snapshot for the Dashboard. Mainnet is
+// read-only; both sides are polled server-side via GET /api/v1/trade/balances.
+// Modest interval — this is a display, not the trading data source. When the
+// manual-trade WebSocket is active (Trade page), useTradeStream() also
+// invalidates this key on ACCOUNT_UPDATE so the testnet side stays push-fresh.
+export function useAccountBalances(options = {}) {
+  return useQuery({
+    queryKey: ['trade', 'balances'],
+    queryFn: async () => {
+      const { data } = await api.get('/api/v1/trade/balances')
+      return data.data
+    },
+    refetchInterval: 60000,
+    staleTime: 45000,
     retry: false,
     ...options,
   })
@@ -52,8 +79,8 @@ export function useTradePositions(options = {}) {
       const { data } = await api.get('/api/v1/trade/positions')
       return data.data
     },
-    refetchInterval: 3000,
-    staleTime: 2000,
+    refetchInterval: 30000,
+    staleTime: 20000,
     retry: false,
     ...options,
   })
@@ -66,11 +93,114 @@ export function useTradeOpenOrders(options = {}) {
       const { data } = await api.get('/api/v1/trade/open-orders')
       return data.data
     },
-    refetchInterval: 10000,
-    staleTime: 8000,
+    refetchInterval: 60000,
+    staleTime: 45000,
     retry: false,
     ...options,
   })
+}
+
+// Statuses that mean an order is no longer "open" — removed from the
+// open-orders cache rather than updated in place.
+const _CLOSED_ORDER_STATUSES = new Set(['FILLED', 'CANCELED', 'EXPIRED', 'REJECTED'])
+
+function _patchOpenOrdersCache(queryClient, orderEvent) {
+  const orderId = orderEvent.i
+  if (orderId == null) return
+
+  queryClient.setQueryData(['trade', 'open-orders'], (prev) => {
+    const list = Array.isArray(prev) ? prev : []
+    const idx = list.findIndex((o) => o.orderId === orderId)
+
+    if (_CLOSED_ORDER_STATUSES.has(orderEvent.X)) {
+      if (idx === -1) return list
+      return [...list.slice(0, idx), ...list.slice(idx + 1)]
+    }
+
+    const patched = {
+      orderId,
+      clientOrderId: orderEvent.c,
+      symbol: orderEvent.s,
+      status: orderEvent.X,
+      side: orderEvent.S,
+      type: orderEvent.o,
+      timeInForce: orderEvent.f,
+      price: orderEvent.p,
+      origQty: orderEvent.q,
+      executedQty: orderEvent.z,
+      avgPrice: orderEvent.ap,
+      stopPrice: orderEvent.sp,
+      time: orderEvent.T,
+      updateTime: orderEvent.T,
+    }
+
+    if (idx === -1) return [...list, patched]
+    return [...list.slice(0, idx), { ...list[idx], ...patched }, ...list.slice(idx + 1)]
+  })
+}
+
+/**
+ * Starts this user's manual-trading Binance User Data Stream (real-time
+ * order/account push over WebSocket) for the lifetime of the mounting
+ * component — intended to be called once from the Trade page. Patches the
+ * open-orders query cache directly on ORDER_TRADE_UPDATE (no REST round
+ * trip); ACCOUNT_UPDATE (positions/balance) triggers a debounced
+ * invalidation instead, since the event payload lacks markPrice/
+ * liquidationPrice needed to render the Positions table, so those two
+ * queries still need a real REST fetch — just event-driven instead of a
+ * fixed short timer. The REST hooks above keep their own (now much longer)
+ * refetchInterval as a safety net if the WebSocket drops.
+ *
+ * See workspace/docs/features/live-trading/SPEC.md and
+ * engine/services/manual_trade_stream.py.
+ */
+const _HEARTBEAT_MS = 120000
+const _ACCOUNT_UPDATE_DEBOUNCE_MS = 2000
+
+export function useTradeStream() {
+  const queryClient = useQueryClient()
+  const debounceRef = useRef(null)
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function start() {
+      try {
+        await api.post('/api/v1/trade/stream/start')
+      } catch {
+        // Best-effort — REST safety-net polling still covers this user if
+        // the stream can't start (e.g. no Binance credentials configured).
+      }
+    }
+
+    start()
+    const heartbeat = setInterval(start, _HEARTBEAT_MS)
+
+    function handleStreamUpdate({ type, data }) {
+      if (cancelled) return
+      if (type === 'ORDER_TRADE_UPDATE') {
+        _patchOpenOrdersCache(queryClient, data)
+      } else if (type === 'ACCOUNT_UPDATE') {
+        clearTimeout(debounceRef.current)
+        debounceRef.current = setTimeout(() => {
+          queryClient.invalidateQueries({ queryKey: ['trade', 'positions'] })
+          queryClient.invalidateQueries({ queryKey: ['trade', 'account'] })
+          queryClient.invalidateQueries({ queryKey: ['trade', 'balances'] })
+        }, _ACCOUNT_UPDATE_DEBOUNCE_MS)
+      }
+    }
+
+    socket.connect()
+    socket.on('trade:stream-update', handleStreamUpdate)
+
+    return () => {
+      cancelled = true
+      clearInterval(heartbeat)
+      clearTimeout(debounceRef.current)
+      socket.off('trade:stream-update', handleStreamUpdate)
+      api.post('/api/v1/trade/stream/stop').catch(() => {})
+    }
+  }, [queryClient])
 }
 
 export function useTradeSymbolConfig(symbol) {

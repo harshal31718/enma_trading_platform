@@ -7,6 +7,7 @@ except Exception:
     pass
 sys.path.insert(0, '/')
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -37,6 +38,7 @@ logger = logging.getLogger(__name__)
 ENGINE_API_KEY = os.getenv("ENGINE_API_KEY", "")
 CLIENT_ORIGIN = os.getenv("CLIENT_URL", "http://localhost:5173")
 SERVER_ORIGIN = os.getenv("SERVER_URL", "http://localhost:5000")
+EXCHANGE_RULES_REFRESH_INTERVAL_S = 30 * 60  # utils/symbols.py _rules_cache — see round_price()
 
 
 @asynccontextmanager
@@ -87,6 +89,24 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Exchange rules caching FAILED: {e}")
 
+    # _rules_cache (utils/symbols.py) was previously populated only once, here,
+    # at process start. Any symbol relisted afterward, or whose PRICE_FILTER/
+    # LOT_SIZE filters were momentarily incomplete on that one fetch, stayed
+    # unrounded forever — round_price() silently passed the raw price through,
+    # and Binance rejected TP/SL algoOrder placement with a 400. Refresh on an
+    # interval so a stale/missing cache entry is self-healing.
+    async def _refresh_exchange_rules_periodically():
+        while True:
+            await asyncio.sleep(EXCHANGE_RULES_REFRESH_INTERVAL_S)
+            try:
+                await load_exchange_rules("Binance Futures")
+                await load_exchange_rules("Binance Spot")
+                logger.info("Exchange rules cache refreshed")
+            except Exception as e:
+                logger.error(f"Exchange rules cache refresh FAILED: {e}")
+
+    rules_refresh_task = asyncio.create_task(_refresh_exchange_rules_periodically())
+
     try:
         import httpx
         async with httpx.AsyncClient() as client:
@@ -101,6 +121,7 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
+    rules_refresh_task.cancel()
     close_mongo()
     await close_pool()
     await close_client()

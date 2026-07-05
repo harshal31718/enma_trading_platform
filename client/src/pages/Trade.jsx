@@ -11,6 +11,7 @@ import {
   useTradeAccount,
   useTradePositions,
   useTradeOpenOrders,
+  useTradeStream,
   useTradeSymbolConfig,
   useChangeLeverage,
   useChangeMarginType,
@@ -1669,6 +1670,12 @@ function TradeInner() {
 
   // Monitor open orders for TP/SL fills and auto-cancel the sibling leg
   useOcoMonitor({ symbol, onEvent: handleTpSlEvent })
+
+  // Real-time account/order push over WebSocket — starts on mount, stops on
+  // unmount. Lets the REST polling hooks above use long safety-net intervals
+  // instead of hammering Binance's shared per-IP rate limit. See
+  // workspace/docs/features/live-trading/SPEC.md.
+  useTradeStream()
 
   return (
     <div className="bg-[#060a0f] text-gray-100 flex flex-col h-[calc(100vh-56px)] overflow-hidden mt-14">

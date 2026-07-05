@@ -371,16 +371,16 @@ export default function SessionCard({ session, onStop, stopping }) {
           </div>
 
           <div className="w-24 flex justify-end">
-            {session.status === 'running' && (
+            {(session.status === 'running' || session.status === 'stopping') && (
               <button
                 onClick={(e) => { e.stopPropagation(); onStop() }}
-                disabled={stopping}
+                disabled={stopping || session.status === 'stopping'}
                 aria-label="Stop session"
-                aria-busy={stopping}
+                aria-busy={stopping || session.status === 'stopping'}
                 className="flex items-center justify-center gap-1.5 w-full py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-medium rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all"
               >
-                <Square size={12} className={stopping ? 'animate-pulse' : ''} />
-                {stopping ? 'Stopping' : 'Stop'}
+                <Square size={12} className={(stopping || session.status === 'stopping') ? 'animate-pulse' : ''} />
+                {(stopping || session.status === 'stopping') ? 'Stopping' : 'Stop'}
               </button>
             )}
             {isStopped && (

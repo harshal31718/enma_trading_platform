@@ -3,10 +3,11 @@ from typing import Literal
 from uuid import uuid4
 
 import httpx
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel
 
 from services.binance_testnet import send_signed_request
+from services import manual_trade_stream
 from utils.symbols import clamp_leverage
 
 logger = logging.getLogger(__name__)
@@ -840,3 +841,23 @@ async def set_margin_type(
         raise HTTPException(status_code=400, detail=msg)
     except httpx.RequestError as exc:
         raise HTTPException(status_code=500, detail=f"Engine could not reach Binance: {exc}")
+
+
+@router.post("/stream/start")
+async def start_trade_stream(
+    userId: str = Query(...),
+    x_binance_api_key: str = Header(..., alias="X-Binance-API-Key"),
+    x_binance_api_secret: str = Header(..., alias="X-Binance-API-Secret"),
+):
+    """Start (or heartbeat-refresh) this user's manual-trading User Data
+    Stream — real-time order/account push over WebSocket, so the client can
+    stop REST-polling account/positions/open-orders at high frequency. See
+    workspace/docs/features/live-trading/SPEC.md."""
+    await manual_trade_stream.start_for_user(userId, x_binance_api_key, x_binance_api_secret)
+    return {"success": True}
+
+
+@router.post("/stream/stop")
+async def stop_trade_stream(userId: str = Query(...)):
+    await manual_trade_stream.stop_for_user(userId)
+    return {"success": True}

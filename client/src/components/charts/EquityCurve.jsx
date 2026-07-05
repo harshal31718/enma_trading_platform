@@ -79,7 +79,7 @@ export default function EquityCurve({ data = [], startingCapital, buyHoldReturnP
 
   // Dynamic equity color: emerald for profit, red-400 for loss
   const finalBalance = chartData.length > 0 ? chartData[chartData.length - 1].balance : startCap
-  const equityColor = finalBalance >= startCap ? '#10b981' : '#f87171'
+  const equityColor = finalBalance >= startCap ? '#34d399' : '#f87171'
 
   return (
     <div className="space-y-6">

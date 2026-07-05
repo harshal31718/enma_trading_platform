@@ -10,8 +10,8 @@ const EXCHANGE_FIELDS = [
   'defaultBotCapital', 'defaultBotLeverage',
   'riskPct', 'riskRewardRatio', 'maxSessionDrawdown', 'liqBufferPct', 'minEdgeMult',
   // Chaos Mode settings (D5)
-  'chaosMaxStrategies', 'chaosMaxManualSymbols', 'chaosDefaultCapital', 'chaosDefaultLeverage',
-  'chaosDefaultTimeframe',
+  'chaosMaxManualSymbols', 'chaosDefaultCapital', 'chaosDefaultLeverage',
+  'chaosDefaultTimeframe', 'chaosMaxTotalSymbols',
 ]
 
 // Validation ranges matching the Mongoose schema
@@ -30,13 +30,20 @@ const FIELD_RULES = {
   liqBufferPct:          { min: 0,      max: 0.5   },
   minEdgeMult:           { min: 0,      max: 10    },
   // Chaos Mode fields (numeric; chaosDefaultTimeframe handled separately)
-  chaosMaxStrategies:    { min: 1,      max: 20    },
   chaosMaxManualSymbols: { min: 0,      max: 20    },
   chaosDefaultCapital:   { min: 1                  },
   chaosDefaultLeverage:  { min: 1,      max: 125   },
+  chaosMaxTotalSymbols:  { min: 1,      max: 250   },
 }
 
 const CHAOS_TIMEFRAME_ALLOWLIST = ['1m','3m','5m','15m','30m','1h','2h','4h','6h','8h','12h','1d']
+
+// Bot Session Limits (limits.testnet.*, limits.mainnet.*) — validated separately below
+// since `limits` is a nested object, not a flat scalar EXCHANGE_FIELDS entry.
+const LIMITS_FIELD_RULES = {
+  maxSymbolsPerBot:  { min: 1, max: 30 },
+  maxConcurrentBots: { min: 1, max: 20 },
+}
 
 async function _getOrCreate(userId) {
   return Settings.findOneAndUpdate(
@@ -53,6 +60,7 @@ async function getExchangeSettings(req, res, next) {
     for (const field of EXCHANGE_FIELDS) {
       data[field] = settings[field]
     }
+    data.limits = settings.limits || {}
     res.json(ApiResponse.success(data))
   } catch (err) {
     next(err)
@@ -99,10 +107,37 @@ async function updateExchangeSettings(req, res, next) {
       if (rules.max !== undefined && num > rules.max) {
         throw new ApiError(400, 'VALIDATION_ERROR', `${field} must be <= ${rules.max}`)
       }
-      if (['defaultLeverage', 'defaultBotLeverage', 'chaosMaxStrategies', 'chaosMaxManualSymbols', 'chaosDefaultLeverage'].includes(field) && !Number.isInteger(num)) {
+      if (['defaultLeverage', 'defaultBotLeverage', 'chaosMaxManualSymbols', 'chaosDefaultLeverage', 'chaosMaxTotalSymbols'].includes(field) && !Number.isInteger(num)) {
         throw new ApiError(400, 'VALIDATION_ERROR', `${field} must be an integer`)
       }
       updates[field] = num
+    }
+
+    // ── limits.{testnet,mainnet}.{maxSymbolsPerBot,maxConcurrentBots} ─────────
+    // Nested object, not a flat scalar — validated separately and written via
+    // dot-path keys so a partial payload (e.g. only limits.testnet.maxSymbolsPerBot)
+    // updates just that leaf without needing to pre-fetch and merge the document.
+    if ('limits' in req.body) {
+      const limitsBody = req.body.limits
+      if (typeof limitsBody !== 'object' || limitsBody === null || Array.isArray(limitsBody)) {
+        throw new ApiError(400, 'VALIDATION_ERROR', 'limits must be an object')
+      }
+      for (const env of ['testnet', 'mainnet']) {
+        const envBody = limitsBody[env]
+        if (!envBody) continue
+        for (const key of ['maxSymbolsPerBot', 'maxConcurrentBots']) {
+          if (!(key in envBody)) continue
+          const num = Number(envBody[key])
+          if (!isFinite(num) || !Number.isInteger(num)) {
+            throw new ApiError(400, 'VALIDATION_ERROR', `limits.${env}.${key} must be an integer`)
+          }
+          const { min, max } = LIMITS_FIELD_RULES[key]
+          if (num < min || num > max) {
+            throw new ApiError(400, 'VALIDATION_ERROR', `limits.${env}.${key} must be between ${min} and ${max}`)
+          }
+          updates[`limits.${env}.${key}`] = num
+        }
+      }
     }
 
     if (Object.keys(updates).length === 0) {
@@ -119,6 +154,7 @@ async function updateExchangeSettings(req, res, next) {
     for (const field of EXCHANGE_FIELDS) {
       data[field] = settings[field]
     }
+    data.limits = settings.limits || {}
     res.json(ApiResponse.success(data))
   } catch (err) {
     next(err)

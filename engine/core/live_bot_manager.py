@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 from datetime import datetime, timezone
 from decimal import ROUND_DOWN, ROUND_UP
 from enum import Enum
@@ -23,7 +24,7 @@ from core.pipeline import evaluate
 from services.trade_recorder import record_trade, build_trade_record
 from services.user_data_stream import UserDataStreamManager
 from services.pairlist import pairlist_from_config
-from utils.symbols import round_price, clamp_and_round_qty, clamp_leverage, get_ticker_data
+from utils.symbols import round_price, clamp_and_round_qty, clamp_leverage, get_ticker_data, is_symbol_invalid
 from core.kernel import ExecutionAdapter, ExecutionKernel
 
 logger = logging.getLogger(__name__)
@@ -866,32 +867,58 @@ class LiveBotManager:
         # but the engine's in-memory open_positions is stale (e.g. after a restart
         # or a missed SL/TP fill). Close requests for symbols with no open
         # position are safe — Node's close-position handler returns a no-op.
-        # Wrapped in a 120-second timeout so the stop can never hang.
+        # Closes run with bounded concurrency (8 in flight) so a large Chaos
+        # session (100+ symbols) can actually finish inside the timeout — a
+        # fully serial loop (2 signed Binance calls per symbol) cannot. Wrapped
+        # in a 120-second timeout so the stop can never hang indefinitely.
         all_symbols = session.get("symbols", [])
+        unconfirmed_on_stop = []
         if all_symbols:
-            async def _close_all():
-                for symbol in all_symbols:
+            close_semaphore = asyncio.Semaphore(8)
+
+            async def _close_one(symbol):
+                async with close_semaphore:
                     pos_info = session.get("open_positions", {}).get(symbol)
                     try:
-                        await self._close_position_on_stop(session_id, symbol, pos_info, session)
+                        confirmed = await self._close_position_on_stop(session_id, symbol, pos_info, session)
+                        if not confirmed:
+                            unconfirmed_on_stop.append(symbol)
                     except Exception as e:
                         logger.error(f"[AlgoBot] Error closing position {symbol}: {e}")
+                        unconfirmed_on_stop.append(symbol)
 
             try:
-                await asyncio.wait_for(_close_all(), timeout=120.0)
-            except asyncio.TimeoutError:
-                logger.error(
-                    f"[AlgoBot] Position close loop timed out for session {session_id} — forcing stop"
+                await asyncio.wait_for(
+                    asyncio.gather(*(_close_one(s) for s in all_symbols)),
+                    timeout=120.0,
                 )
-                session["open_positions"].clear()
+            except asyncio.TimeoutError:
+                # Do NOT clear open_positions here — any symbol still present
+                # may genuinely still be open on Binance. Reporting it as
+                # closed when it isn't is what orphans real positions; the
+                # periodic full-account reconciliation sweep is the backstop
+                # for whatever this timeout leaves unconfirmed.
+                logger.error(
+                    f"[AlgoBot] Position close loop timed out for session {session_id} — "
+                    f"{len(session.get('open_positions', {}))} symbol(s) still tracked as open"
+                )
 
-        # Mark session as stopped — always reached even after timeout
+        if unconfirmed_on_stop:
+            logger.error(
+                f"[AlgoBot] Session {session_id}: {len(unconfirmed_on_stop)} symbol(s) "
+                f"failed to confirm-close on stop, may still be open on Binance: {unconfirmed_on_stop}"
+            )
+
+        # Mark session as stopped — always reached even after timeout. Report
+        # whatever open_positions actually still holds, never a blanket [] —
+        # a wrong-but-confident empty list is worse than an honest non-empty one.
         session["status"] = "stopped"
         remaining_pnl = str(round(session["pnl"], 2))
+        remaining_open = list(session.get("open_positions", {}).keys())
 
         await self._notify_node(session_id, {
             "pnl": remaining_pnl,
-            "openPositions": [],
+            "openPositions": remaining_open,
             "status": "stopped",
             "event": "stopped",
         })
@@ -1027,6 +1054,20 @@ class LiveBotManager:
             leverage, "Binance Futures", symbol,
             api_key=api_key, api_secret=api_secret, mode="testnet",
         )
+
+        # The leverageBracket probe above may have just confirmed this symbol is
+        # rejected outright by demo-fapi (testnet exchangeInfo lists more symbols
+        # than the testnet matching engine actually supports — see utils/symbols.py
+        # _invalid_symbols). Abort now rather than opening a WS connection and
+        # repeatedly hammering a doomed order every candle close.
+        if is_symbol_invalid("Binance Futures", symbol):
+            logger.warning(f"[AlgoBot] {symbol}: confirmed not tradable on this environment, skipping")
+            await self._notify_node(session_id, {
+                "event": "log",
+                "eventData": {"type": "error", "message": f"{symbol}: not tradable on this environment — skipping"}
+            })
+            return
+
         if effective_leverage != leverage:
             logger.info(
                 f"[AlgoBot] {symbol}: leverage clamped {leverage}→{effective_leverage} "
@@ -1151,6 +1192,12 @@ class LiveBotManager:
         # btcusdt@kline_1h  — Binance stream name format
         ws_symbol = symbol.lower()
         ws_url = f"wss://fstream.binancefuture.com/ws/{ws_symbol}@kline_{timeframe}"
+        # Capped exponential backoff + full jitter (mirrors UserDataStreamManager
+        # ._run_ws in services/user_data_stream.py). A Chaos session can hold ~80
+        # symbols, each running this same loop — a flat retry delay would have
+        # every symbol reconnect in lockstep on any shared gateway blip. Jitter
+        # spreads reconnect attempts out so they don't all hit Binance at once.
+        reconnect_backoff = 1
 
         try:
             while not (stop_event and stop_event.is_set()):
@@ -1162,6 +1209,7 @@ class LiveBotManager:
                         close_timeout=5,
                     ) as ws:
                         logger.info(f"[AlgoBot] {symbol}: WS connected → {ws_url}")
+                        reconnect_backoff = 1  # Reset on successful connect
                         await self._notify_node(session_id, {
                             "event": "log",
                             "eventData": {"type": "info", "message": f"{symbol}: WS connected · waiting for {timeframe} candle closes"}
@@ -1312,14 +1360,17 @@ class LiveBotManager:
                 except Exception as e:
                     if stop_event and stop_event.is_set():
                         return
+                    delay = random.uniform(0, reconnect_backoff)
                     logger.warning(
-                        f"[AlgoBot] {symbol}: WS disconnected ({e}), reconnecting in 5s"
+                        f"[AlgoBot] {symbol}: WS disconnected ({e}), reconnecting in {delay:.1f}s "
+                        f"(backoff={reconnect_backoff}s)"
                     )
                     await self._notify_node(session_id, {
                         "event": "log",
-                        "eventData": {"type": "error", "message": f"{symbol}: WS disconnected — reconnecting in 5s"}
+                        "eventData": {"type": "error", "message": f"{symbol}: WS disconnected — reconnecting in {delay:.1f}s"}
                     })
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(delay)
+                    reconnect_backoff = min(reconnect_backoff * 2, 60)
 
         except asyncio.CancelledError:
             pass
@@ -1335,12 +1386,17 @@ class LiveBotManager:
 
     async def _close_position_on_stop(
         self, session_id: str, symbol: str, _pos_info: dict | None, session: dict
-    ) -> None:
+    ) -> bool:
         """Force-close a position on Binance during session stop (F-003: direct).
 
         Called for every session symbol, not just those in open_positions, so
         that real Binance positions that the engine lost track of are still
         closed. Uses the engine's own Binance credentials — no Node hop.
+
+        Returns True only if the symbol is confirmed flat on Binance after
+        this call (no position existed, or the close order was accepted).
+        Returns False on any failure — callers must NOT drop the symbol from
+        open_positions tracking in that case, since it may still be open.
         """
         strategy = session.get("strategy_instances", {}).get(symbol)
 
@@ -1384,6 +1440,7 @@ class LiveBotManager:
                 logger.info(f"[AlgoBot] {symbol}: no position to close on stop")
         except Exception as e:
             logger.error(f"[AlgoBot] Close-position failed for {symbol} on stop: {e}")
+            return False
 
         # Update local PnL tracking if the engine knew about this position
         if strategy and strategy.position:
@@ -1433,6 +1490,7 @@ class LiveBotManager:
             await record_trade(trade_record)
 
         session["open_positions"].pop(symbol, None)
+        return True
 
     async def _reconcile_exchange_state(
         self, session_id: str, strategy, symbol: str,

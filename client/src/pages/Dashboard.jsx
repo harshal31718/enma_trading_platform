@@ -1,29 +1,23 @@
-import {
-  Play,
-  TrendingUp,
-  Percent,
-  Activity,
-  Layers,
-  GitBranch,
-  TrendingDown,
-  Target,
-  ChevronRight,
-} from 'lucide-react'
+import { ChevronRight } from 'lucide-react'
 
 import PageWrapper from '../components/layout/PageWrapper'
 import PageHeader from '../components/ui/PageHeader'
 import { Skeleton } from '../components/ui/skeleton'
 import { Button } from '../components/ui/button'
 import { Badge } from '../components/ui/badge'
-import StatCard from '../features/dashboard/StatCard'
 import CachedCandlesTable from '../features/dashboard/CachedCandlesTable'
 import StrategyLeaderboard from '../features/dashboard/StrategyLeaderboard'
+import TickerStrip from '../features/dashboard/TickerStrip'
+import AccountOverview from '../features/dashboard/AccountOverview'
+import BacktestKpiStrip from '../features/dashboard/BacktestKpiStrip'
+import CollapsibleSection from '../features/dashboard/CollapsibleSection'
 import { useNavigate } from 'react-router-dom'
 import { formatPnl } from '../utils/formatters'
 
 import { useDashboardStats, useCachedCandles } from '../hooks/useDashboard'
 import { useBacktestsList } from '../hooks/useBacktest'
 import { useAlgoSessions } from '../hooks/useAlgoSessions'
+import { useAccountBalances, useTradePositions } from '../hooks/useTrade'
 
 const DEFAULT_STATS = {
   totalRuns: 0,
@@ -35,16 +29,6 @@ const DEFAULT_STATS = {
   worstDrawdown: '0.00',
   avgExpectancy: '0.00',
   latestRunId: null,
-}
-
-function pct(value) {
-  return `${(parseFloat(value) * 100).toFixed(0)}%`
-}
-
-function signed(value, decimals = 2) {
-  const v = parseFloat(value)
-  if (Number.isNaN(v)) return '0.00'
-  return `${v >= 0 ? '+' : ''}${v.toFixed(decimals)}`
 }
 
 function statusVariant(status) {
@@ -124,16 +108,14 @@ function RecentLiveRunsPanel({ sessions }) {
               key={session._id}
               className="flex items-center justify-between px-4 py-2 hover:bg-slate-800/20 group"
             >
-              <div className="min-w-0 flex-1 pr-3">
-                <div className="flex items-center gap-2">
-                  <span className="text-gray-200 font-semibold text-xs truncate">
-                    {session.strategyName}
-                  </span>
-                  <Badge variant={statusVariant(session.status)}>{session.status}</Badge>
-                </div>
-                <div className="text-[10px] text-slate-400 font-mono mt-0.5 truncate">
+              <div className="min-w-0 flex-1 flex items-center gap-2 pr-3">
+                <span className="text-gray-200 font-semibold text-xs shrink-0">
+                  {session.strategyName}
+                </span>
+                <Badge variant={statusVariant(session.status)} className="shrink-0">{session.status}</Badge>
+                <span className="text-[10px] text-slate-400 font-mono truncate flex-1 min-w-0">
                   {session.symbols.join(', ')} · {session.timeframe}
-                </div>
+                </span>
               </div>
               <div className="text-right">
                 <div className={`text-xs font-mono font-semibold ${pnl.isPositive ? 'text-emerald-400' : 'text-red-400'}`}>
@@ -156,128 +138,108 @@ function RecentLiveRunsPanel({ sessions }) {
   )
 }
 
+function PanelSection({ title, loading, children }) {
+  return (
+    <>
+      <div className="h-11 title-fade flex items-center px-4 border-b border-slate-700/30">
+        <h3 className="text-gray-200 font-semibold text-sm">{title}</h3>
+      </div>
+      {loading ? (
+        <div className="p-4 space-y-2">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <Skeleton key={i} className="h-10 bg-slate-800/50" />
+          ))}
+        </div>
+      ) : (
+        children
+      )}
+    </>
+  )
+}
+
 export default function Dashboard() {
-  const { data: statsData, isLoading: loadingStats, isError: errorStats } = useDashboardStats()
-  const { data: candlesData, isLoading: loadingCandles, isError: errorCandles } = useCachedCandles()
+  const { data: statsData, isLoading: loadingStats } = useDashboardStats()
+  const { data: candlesData, isLoading: loadingCandles } = useCachedCandles()
   const { data: listData, isLoading: loadingBacktests } = useBacktestsList(1, 5)
-  const { data: algoSessions = [], isLoading: loadingSessions, isError: errorSessions } = useAlgoSessions()
+  const { data: algoSessions = [], isLoading: loadingSessions } = useAlgoSessions()
+
+  // Live account data — failures here must not blank the backtest sections.
+  const { data: balances } = useAccountBalances()
+  const { data: positions } = useTradePositions()
 
   const stats = statsData?.stats ?? DEFAULT_STATS
   const leaderboard = statsData?.leaderboard ?? []
   const cachedCandles = candlesData?.cached ?? []
   const recentRuns = listData?.backtests ?? []
-  const recentLiveRuns = algoSessions.slice(0, 5)
 
-  const isLoading = loadingStats || loadingCandles || loadingBacktests || loadingSessions
-  const isError = errorStats || errorCandles || errorSessions
+  // "Live Runs" = currently active sessions (auto-hides when none are running).
+  // "Recent Live Runs" = finished sessions (stopped/error), mirroring "Recent Backtests".
+  const liveRuns = algoSessions.filter((s) => ['starting', 'running', 'stopping'].includes(s.status))
+  const recentLiveRuns = algoSessions
+    .filter((s) => !['starting', 'running', 'stopping'].includes(s.status))
+    .slice(0, 5)
+
+  const openPositions = Array.isArray(positions) ? positions : []
+  const positionSymbols = openPositions
+    .filter((p) => parseFloat(p.positionAmt) !== 0)
+    .map((p) => p.symbol)
 
   return (
     <PageWrapper>
-      <PageHeader title="Dashboard" />
+      <PageHeader title="Dashboard">
+        {/* ── Live price strip ─────────────────────────────────────────── */}
+        <TickerStrip positionSymbols={positionSymbols} />
+      </PageHeader>
 
-      {isLoading ? (
-        <div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-0">
-            {Array.from({ length: 8 }).map((_, i) => (
-              <Skeleton key={i} className="h-28 bg-slate-800/50" />
-            ))}
-          </div>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-0">
-            <Skeleton className="h-48 bg-slate-800/50" />
-            <Skeleton className="h-48 bg-slate-800/50" />
-          </div>
-          <Skeleton className="h-64 bg-slate-800/50" />
+      {/* ── Account overview (testnet + mainnet balances) ────────────── */}
+      <AccountOverview balances={balances} positions={openPositions} />
+
+      {/* ── Condensed backtest KPIs ──────────────────────────────────── */}
+      {loadingStats ? (
+        <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-8 gap-0 border-t border-slate-700/50">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <Skeleton key={i} className="h-[58px] bg-slate-800/50" />
+          ))}
         </div>
-      ) : isError ? (
-        <p className="text-red-400 text-sm p-6">
-          Failed to load dashboard data. Ensure the backend is running.
-        </p>
       ) : (
-        <div>
-          {/* ── 8 KPI cards (4-col grid, 2 rows) ─────────────────────────── */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-0">
-            <StatCard
-              title="Total Runs"
-              value={stats.totalRuns}
-              subtext="Completed backtests"
-              icon={Play}
-            />
-            <StatCard
-              title="Best Strategy"
-              value={stats.bestStrategy}
-              subtext="Highest avg net profit"
-              icon={TrendingUp}
-            />
-            <StatCard
-              title="Avg Win Rate"
-              value={pct(stats.averageWinRate)}
-              subtext="Across completed runs"
-              icon={Percent}
-            />
-            <StatCard
-              title="Profit Factor"
-              value={parseFloat(stats.avgProfitFactor).toFixed(2)}
-              subtext="Gross profit / loss"
-              icon={Activity}
-            />
-            <StatCard
-              title="Avg Sharpe"
-              value={parseFloat(stats.avgSharpe).toFixed(2)}
-              subtext="Risk-adjusted return"
-              icon={Layers}
-            />
-            <StatCard
-              title="Avg Sortino"
-              value={parseFloat(stats.avgSortino).toFixed(2)}
-              subtext="Downside-only return"
-              icon={GitBranch}
-            />
-            <StatCard
-              title="Max Drawdown"
-              value={`${parseFloat(stats.worstDrawdown).toFixed(2)}%`}
-              subtext="Worst peak-to-trough"
-              icon={TrendingDown}
-            />
-            <StatCard
-              title="Expectancy"
-              value={signed(stats.avgExpectancy)}
-              subtext="Avg P&L per trade"
-              icon={Target}
-            />
-          </div>
-
-          {/* ── Split Row: Recent Backtests & Recent Live Runs (2-col) ──────────────── */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-0 border-t border-slate-700/50">
-            <div className="bg-title-bg border-r border-slate-700/50">
-              <div className="h-11 title-fade flex items-center px-4 border-b border-slate-700/30">
-                <h3 className="text-gray-200 font-semibold text-sm">Recent Backtests</h3>
-              </div>
-              <div className="max-h-[220px] overflow-y-auto [&::-webkit-scrollbar]:hidden [scrollbar-width:none]">
-                <RecentRunsPanel runs={recentRuns} />
-              </div>
-            </div>
-
-            <div className="bg-title-bg">
-              <div className="h-11 title-fade flex items-center px-4 border-b border-slate-700/30">
-                <h3 className="text-gray-200 font-semibold text-sm">Recent Live Runs</h3>
-              </div>
-              <div className="max-h-[220px] overflow-y-auto [&::-webkit-scrollbar]:hidden [scrollbar-width:none]">
-                <RecentLiveRunsPanel sessions={recentLiveRuns} />
-              </div>
-            </div>
-          </div>
-
-          {/* ── Strategy Leaderboard (full width) ──────────────────────── */}
-          <div className="border-t border-slate-700/50">
-            <StrategyLeaderboard data={leaderboard} />
-          </div>
-
-          {/* ── Cached Candles (full width) ───────────────────────────── */}
-          <div className="border-t border-slate-700/50">
-            <CachedCandlesTable data={cachedCandles} />
-          </div>
-        </div>
+        <BacktestKpiStrip stats={stats} />
       )}
+
+      {/* ── Live Runs, Recent Live Runs & Recent Backtests ──────────────── */}
+      <div className={`grid grid-cols-1 ${ (loadingSessions || liveRuns.length > 0) ? 'lg:grid-cols-3' : 'lg:grid-cols-2' } gap-0 border-t border-slate-700/50`}>
+        {(loadingSessions || liveRuns.length > 0) && (
+          <div className="bg-title-bg border-b lg:border-b-0 lg:border-r border-slate-700/50">
+            <PanelSection title="Live Runs" loading={loadingSessions}>
+              <RecentLiveRunsPanel sessions={liveRuns} />
+            </PanelSection>
+          </div>
+        )}
+        <div className="bg-title-bg border-b lg:border-b-0 lg:border-r border-slate-700/50">
+          <PanelSection title="Recent Live Runs" loading={loadingSessions}>
+            <RecentLiveRunsPanel sessions={recentLiveRuns} />
+          </PanelSection>
+        </div>
+        <div className="bg-title-bg">
+          <PanelSection title="Recent Backtests" loading={loadingBacktests}>
+            <RecentRunsPanel runs={recentRuns} />
+          </PanelSection>
+        </div>
+      </div>
+
+      {/* ── Strategy Leaderboard ─────────────────────────────────────── */}
+      <div className="bg-title-bg border-t border-slate-700/50">
+        <PanelSection title="Strategy Leaderboard" loading={loadingStats}>
+          <StrategyLeaderboard data={leaderboard} />
+        </PanelSection>
+      </div>
+
+      {/* ── TimescaleDB Cache (demoted, collapsible) ─────────────────── */}
+      <CollapsibleSection
+        title="TimescaleDB Cache"
+        meta={loadingCandles ? null : `${cachedCandles.length} dataset${cachedCandles.length === 1 ? '' : 's'}`}
+      >
+        <CachedCandlesTable data={cachedCandles} />
+      </CollapsibleSection>
     </PageWrapper>
   )
 }
