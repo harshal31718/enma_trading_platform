@@ -470,16 +470,31 @@ volumes:
 > ```
 > `main` intentionally lacks `.claude/`, `AGENTS.md`, all `CLAUDE.md` files, and `workspace/` (see
 > [Cross-Branch Environment & URL Management](#cross-branch-environment--url-management-best-practices)
-> below) — `.gitattributes` marks those paths `merge=ours` so a `dev` → `main` merge keeps main's
-> deletion instead of resurrecting them or hitting a modify/delete conflict. That attribute is
-> useless without this local config registering the `ours` driver — **without it, the merge below
-> will conflict** the moment `dev` has touched any of those paths since the branches last synced
-> (which is often, since `workspace/plan/handoff.md` gets edited most sessions).
+> below) — `.gitattributes` marks those paths `merge=ours`, and this local config registers the
+> `ours` driver so it's not a no-op.
+>
+> **This does NOT make the merge silent.** Git only invokes a custom merge driver when both sides
+> *modified* a path (a true three-way content conflict). It is never consulted for:
+> - **modify/delete conflicts** — the common case here, since `dev` edits these files (e.g.
+>   `workspace/plan/handoff.md` most sessions) while `main` has them deleted. Git reports a
+>   conflict and leaves dev's version in the tree regardless of the attribute.
+> - **new files added on `dev` under a frozen path** — there's no conflict to arbitrate, so git
+>   just adds the file to `main`. This has actually happened (e.g. `workspace/README.md`,
+>   `workspace/skills/README.md`, a new file under `workspace/docs/features/`).
+>
+> So every `dev` → `main` merge needs a manual cleanup pass, not just the one-time config:
+> ```bash
+> git checkout main && git merge dev
+> # 1. Resolve any modify/delete conflicts by keeping the deletion:
+> git status --porcelain | grep -E '^(UD|DU|AU|UA)' | awk '{print $2}' | xargs -r git rm -f --
+> # 2. Check for new files that slipped in under the frozen paths and remove them too:
+> git status --porcelain | grep -E '^A  (\.claude/|AGENTS\.md|CLAUDE\.md|client/CLAUDE\.md|engine/CLAUDE\.md|server/CLAUDE\.md|workspace/)'
+> # (git rm -f any matches, then) verify the diff is application code only, then commit + push:
+> git diff --cached --stat   # should show only server/, client/, engine/, root config — no docs/tooling
+> git commit && git push origin main
+> ```
 
 ```bash
-# On your machine: promote a release
-git checkout main && git merge dev && git push origin main
-
 # On the VPS:
 cd /opt/enma
 git pull origin main
