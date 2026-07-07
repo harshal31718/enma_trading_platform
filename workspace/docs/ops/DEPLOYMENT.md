@@ -435,9 +435,9 @@ volumes:
    ```
    Then in the browser:
    - `https://enmaquant.duckdns.org` loads the login page.
-   - Sign in with the `ADMIN_EMAIL` Google account (the admin email is auto-provisioned by the server startup; other users must first be added under `/admin` → allowed emails).
+   - Sign in with the `ADMIN_EMAIL` Google account (auto-promoted to `role: admin` on first login). **Login is open** — any Google account can now sign in; Algo Trading start is gated per-user.
    - Dashboard loads; Socket.IO status badges show connected (emerald).
-   - `/admin` panel is reachable for the admin account.
+   - `/admin` panel is reachable for the admin account and lists all users; grant/revoke Algo Trading access from the user table. Non-admin users request access from Settings.
    - Run a small backtest end-to-end (exercises engine → TimescaleDB candle fetch → Redis progress → Socket.IO relay).
 
 ---
