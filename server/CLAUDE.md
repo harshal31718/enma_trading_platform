@@ -38,12 +38,11 @@ server/
     │   └── top_symbols.js  ← ~80 tiered symbols (high/mid/low) — Chaos Mode pool
     ├── middleware/
     │   ├── errorHandler.js          ← global error handler
-    │   ├── auth.middleware.js       ← verifyJWT / requireAdmin (gates all /api/v1/* routes)
+    │   ├── auth.middleware.js       ← verifyJWT / requireAdmin / requireAlgoAccess (gates all /api/v1/* routes)
     │   └── requireBinanceCredentials.js ← validates X-Binance headers on trade routes
     ├── models/             ← Mongoose models
     │   ├── Strategy.js        ← metadata: name, description, filePath (global, no userId)
-    │   ├── User.js             ← googleId, email, role
-    │   ├── PlatformConfig.js   ← singleton (_id: 'platform'), allowed-email whitelist
+    │   ├── User.js             ← googleId, email, name, avatar, role, isActive, algoAccess {status,requestedAt,decidedAt,decidedBy}
     │   ├── BacktestResult.js  ← server fields: jobId, status, error, tradeCount
     │   │                         engine fields (Mixed, never written by server): metrics, equityCurve
     │   ├── BacktestTrade.js   ← split collection backtestTrades (jobId, tradeIndex, …)
@@ -56,20 +55,20 @@ server/
     │   └── Settings.js        ← AES-encrypted Binance keys + exchange settings (userId-keyed)
     ├── routes/             ← Express routers (thin — logic in controllers)
     │   ├── auth.routes.js       ← /auth/google, /auth/google/callback, /auth/logout, /auth/me (unprotected)
-    │   ├── admin.routes.js      ← /admin/allowed-emails (requireAdmin)
+    │   ├── admin.routes.js      ← /admin/users, /admin/users/:id/algo-access (requireAdmin)
     │   ├── strategy.routes.js   ← /strategies, /strategies/:id/code
     │   ├── candle.routes.js     ← /candles/symbols, /candles/cached
     │   ├── backtest.routes.js
     │   ├── dashboard.routes.js  ← /dashboard/stats, /dashboard/performance-calendar
     │   ├── trade.routes.js      ← /trade/* (settings/keys [testnet+mainnet env], balances [testnet+mainnet, read-only mainnet], account, positions, orders, klines, order status)
     │   ├── risk.routes.js         ← /risk/* (settings, live metrics, simulation, overrides)
-    │   ├── algo.routes.js         ← /algo/sessions, /algo/symbols/locked, /algo/chaos, /algo/pairlist/preview, /algo/sessions/:id/trading-state
+    │   ├── algo.routes.js         ← /algo/sessions [requireAlgoAccess], /algo/chaos [requireAlgoAccess], /algo/access-request, /algo/symbols/locked, /algo/pairlist/preview, /algo/sessions/:id/trading-state
     │   ├── settings.routes.js     ← /settings/exchange
     │   ├── orderHistory.routes.js ← /order-history (GET, paginated, filterable)
     │   └── internal.routes.js     ← /internal/algo/sessions/:id/* (engine callbacks, unprotected — uses LiveSession-derived context)
     ├── controllers/
     │   ├── auth.controller.js       ← Google OAuth callback, issues JWT cookie, /auth/me, logout
-    │   ├── admin.controller.js      ← allowed-email whitelist CRUD
+    │   ├── admin.controller.js      ← user management: listUsers + setUserAlgoAccess (grant/revoke)
     │   ├── strategy.controller.js   ← MongoDB queries + code proxy to engine
     │   ├── candle.controller.js     ← getSymbols, getCachedCandles
     │   ├── backtest.controller.js
@@ -202,8 +201,7 @@ The server owns the routing, auth, and job queue layers. Database ownership is s
 | MongoDB — `liveSessions` | engine | Read-only (same pattern) |
 | MongoDB — `tradeRecords` | engine | Read-only via `TradeRecord.js` model — engine is sole writer |
 | MongoDB — `backtestLeverageScenarios` | engine | Read-only via `BacktestLeverageScenario.js` model — engine is sole writer (Risk Dashboard Zone 3) |
-| MongoDB — `users` | server | Read + write via `User.js` (Passport creates/updates on login) |
-| MongoDB — `platformConfig` | server | Read + write via `PlatformConfig.js` (admin-managed whitelist) |
+| MongoDB — `users` | server | Read + write via `User.js` (Passport creates/updates on login; admin reads all users + writes `algoAccess`). Admin reads are a deliberate no-`userId`-scope exception. |
 | TimescaleDB — `candles` | engine | **Never** — server never queries TimescaleDB |
 | Redis — BullMQ queues | server | Write (enqueue jobs) |
 | Redis — progress pub/sub | engine writes, server reads | Subscribe and relay to Socket.IO |
@@ -227,10 +225,12 @@ The server owns the routing, auth, and job queue layers. Database ownership is s
 - Route mounting order in `app.js`: `auth.routes` and `/internal` are unprotected; `app.use('/api/v1', verifyJWT)` gates all other routes.
 - `req.user` is a Mongoose `.lean()` User document — available in every protected controller.
 - `requireAdmin` middleware (checks `req.user.role === 'admin'`) is applied at the router level in `admin.routes.js`.
+- `requireAlgoAccess` middleware (passes if `role === 'admin'` OR `algoAccess.status === 'granted'`; else 403 `ALGO_ACCESS_REQUIRED`) gates only the Algo start actions: `POST /algo/sessions` and `POST /algo/chaos`. Absence of `algoAccess` reads as no access. Since `verifyJWT` reloads the user each request, grants/revokes apply immediately — no JWT re-issue needed.
 - **Socket.IO**: `io.use()` middleware parses the `enma_jwt` cookie, verifies JWT, and attaches `socket.user`. On connection, the socket joins `user:<userId>` room. All `io.emit()` calls must be `io.to('user:<userId>').emit()` — never broadcast globally.
 - **Internal routes** (`/internal/*`) have no `req.user` — they carry session context via `req.params.id` (LiveSession ID). Use `_getBinanceHeaders(sessionId)` which looks up `userId` via `LiveSession.findById`.
-- Admin panel: `GET/POST/DELETE /api/v1/admin/allowed-emails`. The `ADMIN_EMAIL` from env cannot be removed via API (enforced in `admin.controller.js`).
-- `PlatformConfig` singleton (`_id: 'platform'`) holds the allowed-email whitelist. Created on server startup if absent.
+- **Open login**: the OAuth strategy (`passport.js`) no longer gates on any whitelist — anyone with a valid Google account signs in. `ADMIN_EMAIL` is still auto-promoted to `role: 'admin'` on first login.
+- Admin panel: `GET /api/v1/admin/users` (all users + algo-access status) and `PATCH /api/v1/admin/users/:id/algo-access` (`{ status: 'granted'|'none' }`) — admin rows are not editable. Users self-request via `POST /api/v1/algo/access-request` (idempotent `none`→`requested`).
+- The former `PlatformConfig` email-whitelist model, `/admin/allowed-emails` routes, and `seedPlatformConfig()` were removed 2026-07-07 — do not reintroduce them.
 
 ### Dashboard proxy rules
 

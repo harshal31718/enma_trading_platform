@@ -2,7 +2,7 @@
 
 **This is the cross-tool entry point. Every AI agent that touches this repository — Claude Code, Google Antigravity, Gemini Code Assist / CLI, Cursor, Aider, or any other — MUST read this file first and follow the rules in it.**
 
-Enma is a **multi-user** (invite-only), full-stack algorithmic trading platform: write Python strategies, backtest against Binance futures data, run live algo bots, and manually trade futures — self-hosted, fully containerized via Docker.
+Enma is a **multi-user** (open login; Algo Trading gated per-user by admin approval), full-stack algorithmic trading platform: write Python strategies, backtest against Binance futures data, run live algo bots, and manually trade futures — self-hosted, fully containerized via Docker.
 
 ---
 
@@ -38,7 +38,7 @@ Flow: client ↔ server (REST + Socket.IO) ↔ engine (HTTP). Client connects di
 
 | Rule | Detail |
 |------|--------|
-| **Multi-user, invite-only** | Google OAuth + JWT cookie. All `/api/v1/*` routes require `verifyJWT`. Data is scoped per user via `userId` on all mutable Mongoose models (BacktestResult, BacktestTrade, LiveSession, Settings, TradeOrder, TradeExecution, TradeTransaction, TradeRecord). Strategies stay global/shared — no `userId` on `Strategy`. |
+| **Multi-user, open login + per-feature gating** | Google OAuth + JWT cookie; **login is open to anyone**. All `/api/v1/*` routes require `verifyJWT`. Data is scoped per user via `userId` on all mutable Mongoose models (BacktestResult, BacktestTrade, LiveSession, Settings, TradeOrder, TradeExecution, TradeTransaction, TradeRecord). Strategies stay global/shared — no `userId` on `Strategy`. **Algo Trading is gated per-user** via `requireAlgoAccess` on the start actions (`POST /algo/sessions`, `POST /algo/chaos`); admins bypass via role. Backtest, manual Trade, and Binance key entry are open to all authenticated users. Access is requested from Settings and granted/revoked by admins from the Admin panel user table (`User.algoAccess.status`: `none`\|`requested`\|`granted`). |
 | **Layer boundaries** | Financial / indicator / order logic lives in `engine/` only. `server/` is a gateway + job queue. `client/` is UI. |
 | **Binance isolation** | Only `engine/` calls Binance. Never from `server/` or `client/`. Read `workspace/docs/core/binance-api.md` before any Binance work. |
 | **Engine is sole writer** | `backtestResults` + `backtestTrades` are written only by the engine. Server updates `status`/`error` only. |

@@ -17,10 +17,13 @@ export function useAuth() {
     staleTime: 5 * 60 * 1000,
   })
 
+  const user = data ?? null
   return {
-    user: data ?? null,
+    user,
     isLoading,
     isAuthenticated: !!data,
+    // Admins always have algo access; other users need an explicit grant.
+    hasAlgoAccess: user?.role === 'admin' || user?.algoAccess === 'granted',
   }
 }
 

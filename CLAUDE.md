@@ -24,7 +24,7 @@ Start every new session by reading in order:
 
 ## Core Rules & Constraints
 
-1. **Multi-user, invite-only**: Google OAuth + JWT cookie; all `/api/v1/*` routes require `verifyJWT`. Every mutable Mongoose model is scoped by `userId`. Strategies stay global/shared — no `userId` on `Strategy`. (See `AGENTS.md` → Non-Negotiable Constraints.)
+1. **Multi-user, open login with per-feature gating**: Google OAuth + JWT cookie; login is open to anyone with a Google account. All `/api/v1/*` routes require `verifyJWT`. Every mutable Mongoose model is scoped by `userId`. Strategies stay global/shared — no `userId` on `Strategy`. **Algo Trading is gated per-user**: only the start actions (`POST /algo/sessions`, `POST /algo/chaos`) require granted access via `requireAlgoAccess` (admins bypass via role). Backtest, manual Trade, and Binance key entry are open to all authenticated users. Users request access from Settings; admins grant/revoke from the Admin panel user table. (See `AGENTS.md` → Non-Negotiable Constraints.)
 2. **Data Ownership**: Python engine writes `backtestResults` and `backtestTrades`. Node server only proxies to engine. TimescaleDB exclusively stores OHLCV candles.
 3. **Aesthetics Invariant**: All positive P&L metrics must use `emerald-400` styling (not generic `green`).
 4. **Timeframes**: Use the consolidated timeframe utility module at `engine/utils/timeframes.py` for all conversions.

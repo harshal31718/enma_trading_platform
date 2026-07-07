@@ -2,6 +2,7 @@ const LiveSession = require('../models/LiveSession')
 const TradeRecord = require('../models/TradeRecord')
 const Strategy = require('../models/Strategy')
 const Settings = require('../models/Settings')
+const User = require('../models/User')
 const { decrypt } = require('../utils/encryption')
 const engineClient = require('../services/engineClient')
 const { getTOP_SYMBOLS, getTIERED_SYMBOLS } = require('../constants/top_symbols')
@@ -917,8 +918,27 @@ async function previewPairlist(req, res, next) {
   }
 }
 
+// POST /api/v1/algo/access-request — user requests Algo Trading access.
+// Idempotent: only flips 'none' → 'requested'; already-requested/granted users are unchanged.
+async function requestAlgoAccess(req, res, next) {
+  try {
+    const current = req.user.algoAccess?.status || 'none'
+    if (current === 'none') {
+      await User.updateOne(
+        { _id: req.user.id },
+        { $set: { 'algoAccess.status': 'requested', 'algoAccess.requestedAt': new Date() } }
+      )
+      return res.json(ApiResponse.success({ algoAccess: 'requested' }))
+    }
+    res.json(ApiResponse.success({ algoAccess: current }))
+  } catch (err) {
+    next(err)
+  }
+}
+
 module.exports = {
   startSession,
+  requestAlgoAccess,
   stopSession,
   setTradingState,
   listSessions,

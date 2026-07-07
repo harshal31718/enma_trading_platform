@@ -14,9 +14,11 @@ Last updated: 2026-07-02 (content relocated into feature SPEC docs and DECISIONS
 ### Auth & Access Control (Auth Branch — active)
 - **Google OAuth 2.0** via Passport.js (`passport-google-oauth20`), sessionless. Flow: `/api/v1/auth/google` → Google → `/api/v1/auth/google/callback` → JWT cookie set → redirect to `/`.
 - **JWT in `httpOnly` cookie** (`enma_jwt`, `sameSite: lax`, 7-day expiry). Verified by `verifyJWT` middleware globally applied at `app.use('/api/v1', verifyJWT)` (auth routes excluded).
-- **Email whitelist** — `PlatformConfig` MongoDB singleton (`_id: 'platform'`) stores allowed emails. Users not on the list are redirected to `/login?error=not_invited`. Admin email (`admin.enmaquant@gmail.com`) is auto-promoted to `role: 'admin'` on first login.
-- **User model**: `User.js` with `googleId`, `email`, `name`, `avatar`, `role` (`user`|`admin`), `isActive`.
-- **Admin panel**: `GET/POST/DELETE /api/v1/admin/allowed-emails` — admin-only, guarded by `requireAdmin` middleware. Client: `/admin` route, visible only to admin users in the Navbar.
+- **Open login** — anyone with a Google account can sign in. There is **no email whitelist** (removed 2026-07-07; the former `PlatformConfig` singleton + `/admin/allowed-emails` CRUD are deleted). Admin email (`ADMIN_EMAIL`) is auto-promoted to `role: 'admin'` on first login.
+- **Per-user Algo Trading gate** — `User.algoAccess.status` (`none`|`requested`|`granted`, default `none`; absent field reads as `none`). The `requireAlgoAccess` middleware gates only the start actions (`POST /algo/sessions`, `POST /algo/chaos`); admins bypass via role. Everything else (Backtest, manual Trade, Binance key entry, viewing the Algo page + wizards, listing/stopping sessions) is open to any authenticated user. `verifyJWT` reloads the user each request, so grants/revokes take effect immediately without re-login.
+- **User model**: `User.js` with `googleId`, `email`, `name`, `avatar`, `role` (`user`|`admin`), `isActive`, `lastLoginAt`, and `algoAccess` (`status`, `requestedAt`, `decidedAt`, `decidedBy`).
+- **Request flow**: users request access from the **Settings → Algo Trading Access** card (`POST /api/v1/algo/access-request`, idempotent `none`→`requested`). The AlgoTrading page shows a status banner (request CTA when `none`, pending notice when `requested`) and disables the New Bot / Chaos Mode buttons until granted.
+- **Admin panel**: single sortable **user table** (`GET /api/v1/admin/users`, `PATCH /api/v1/admin/users/:id/algo-access` with `{ status: 'granted'|'none' }`) — admin-only via `requireAdmin`. Shows all users with name/email/role/status/joined, a category filter (All/Allowed/Requested/No access), and Grant/Revoke actions (admin rows are not editable). Client: `/admin` route, visible only to admin users in the Navbar.
 - **Per-user Settings**: `Settings` model scoped by `userId` (string). Each user's exchange settings, risk defaults, chaos settings, and encrypted Binance keys are stored per-user. `_getOrCreate(userId)` upserts on first access.
 - **Socket.IO rooms**: All `io.emit()` replaced with `io.to('user:' + userId).emit()`. Clients join their room on auth via `verifyJWT` in the Socket.IO auth handler.
 - **Client auth**: `useAuth()` hook (TanStack Query, `GET /api/v1/auth/me`, 5-min stale, 401 returns null silently). `ProtectedLayout` in `App.jsx` — spinner while loading, redirect to `/login` if not authenticated, then renders Navbar+Outlet. Navbar shows Google avatar, user name, Admin link (admin only), and logout button.
@@ -173,7 +175,7 @@ detail (commands, per-phase byte-equivalence, issue-by-issue fix list) moved to
 | Constraint | Detail |
 |-----------|--------|
 | Binance Testnet rate limits | Weight-based (2400/min), shared across ALL users via the server's single outbound IP. Trade page mitigates this via a WebSocket User Data Stream (F-020 pattern reused), not high-frequency REST polling — see `ARCHITECTURE.md` rule 5. |
-| Multi-user, invite-only | Google OAuth + JWT cookie; `userId` scopes all mutable models (see Auth section above). Strategies stay global — no `userId` on `Strategy`. |
+| Multi-user, open login + algo gate | Google OAuth + JWT cookie; login open to all. `userId` scopes all mutable models (see Auth section above). Strategies stay global — no `userId` on `Strategy`. Algo Trading start actions gated per-user via `requireAlgoAccess`. |
 | TA-Lib | Compiled inside Docker container — never install on host |
 | No paper trading simulation | "Paper trading" = Binance Testnet; no internal order simulation |
 | TimescaleDB isolation | Server never connects to TimescaleDB; all candle data comes via engine HTTP |

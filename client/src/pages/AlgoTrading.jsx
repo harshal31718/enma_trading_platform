@@ -1,6 +1,8 @@
 import { useState, useCallback, useMemo, Suspense, lazy } from 'react'
-import { Plus, Trash2, Bot, Zap } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { Plus, Trash2, Bot, Zap, Lock, Clock } from 'lucide-react'
 import { useAlgoSessions, useStopSession, useDeleteAllStopped } from '../hooks/useAlgoSessions'
+import { useAuth } from '../hooks/useAuth'
 import { useSocket } from '../hooks/useSocket'
 import { useQueryClient } from '@tanstack/react-query'
 import SessionCard from '../components/algo/SessionCard'
@@ -18,9 +20,12 @@ export default function AlgoTrading() {
   const [chaosError, setChaosError] = useState(null)
   const [confirmClearOpen, setConfirmClearOpen] = useState(false)
   const { data: sessions = [], isLoading, isFetching } = useAlgoSessions()
+  const { user, hasAlgoAccess } = useAuth()
   const stopSession = useStopSession()
   const deleteAllStopped = useDeleteAllStopped()
   const qc = useQueryClient()
+
+  const accessPending = user?.algoAccess === 'requested'
 
   const hasStopped = sessions.some(s => s.status === 'stopped' || s.status === 'error')
 
@@ -110,15 +115,20 @@ export default function AlgoTrading() {
             )}
             <button
               onClick={() => setShowChaosWizard(true)}
-              className="flex items-center gap-2 px-3 py-2 bg-gradient-to-r from-purple-600 via-red-500 to-blue-600 hover:from-purple-500 hover:via-red-400 hover:to-blue-500 text-white text-sm rounded-lg shadow-lg transition-all font-semibold"
-              title="Launch all strategies in stress-test mode (Binance Testnet only)"
+              disabled={!hasAlgoAccess}
+              aria-disabled={!hasAlgoAccess}
+              className="flex items-center gap-2 px-3 py-2 bg-gradient-to-r from-purple-600 via-red-500 to-blue-600 hover:from-purple-500 hover:via-red-400 hover:to-blue-500 text-white text-sm rounded-lg shadow-lg transition-all font-semibold disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:from-purple-600 disabled:hover:via-red-500 disabled:hover:to-blue-600"
+              title={hasAlgoAccess ? 'Launch all strategies in stress-test mode (Binance Testnet only)' : 'Requires algo trading access'}
             >
               <Zap size={14} />
               Chaos Mode
             </button>
             <button
               onClick={() => setShowWizard(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm rounded-lg transition-colors"
+              disabled={!hasAlgoAccess}
+              aria-disabled={!hasAlgoAccess}
+              className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-emerald-600"
+              title={hasAlgoAccess ? 'Start a new bot session' : 'Requires algo trading access'}
             >
               <Plus size={16} />
               New Bot
@@ -126,6 +136,28 @@ export default function AlgoTrading() {
           </div>
         }
       />
+
+      {/* Algo access banner — shown to users without granted access */}
+      {!hasAlgoAccess && (
+        accessPending ? (
+          <div className="m-6 mb-0 bg-slate-800/30 border border-slate-600/40 rounded-lg px-4 py-3 flex items-start gap-2.5">
+            <Clock size={16} className="text-slate-400 mt-0.5 shrink-0" />
+            <p className="text-slate-300 text-sm">
+              Your Algo Trading access request is <span className="text-slate-100 font-medium">pending admin approval</span>. You can explore the page, but starting bots is disabled until you're approved.
+            </p>
+          </div>
+        ) : (
+          <div className="m-6 mb-0 bg-amber-400/10 border border-amber-400/20 rounded-lg px-4 py-3 flex items-start gap-2.5">
+            <Lock size={16} className="text-amber-400 mt-0.5 shrink-0" />
+            <p className="text-amber-200 text-sm">
+              Algo Trading requires access. You can view sessions here, but starting bots is admin-approved.{' '}
+              <Link to="/settings" className="text-amber-400 font-medium underline underline-offset-2 hover:text-amber-300">
+                Request access in Settings →
+              </Link>
+            </p>
+          </div>
+        )
+      )}
 
       {/* Chaos error banner */}
       {chaosError && (

@@ -84,7 +84,8 @@ client/
 │   │   ├── useOcoMonitor.js       ← monitors OCO order fill/cancel state via polling
 │   │   ├── useTableSort.js        ← generic column-sort state hook for table components
 │   │   ├── useOrderHistory.js     ← useOrderHistory({ page, limit, filters }) → GET /api/v1/order-history
-│   │   ├── useAuth.js             ← TanStack Query: useAuth() (GET /api/v1/auth/me, 5-min stale, 401→null), useLogout()
+│   │   ├── useAuth.js             ← TanStack Query: useAuth() (GET /api/v1/auth/me, 5-min stale, 401→null; exposes hasAlgoAccess), useLogout()
+│   │   ├── useAlgoAccess.js       ← useRequestAlgoAccess() (POST /algo/access-request), useAdminUsers() (GET /admin/users), useSetUserAlgoAccess() (PATCH /admin/users/:id/algo-access)
 │   │   ├── useRiskSettings.js     ← TanStack Query hooks for /api/v1/risk/* (settings, live metrics, simulation, overrides)
 │   │   └── useBinanceWS.js        ← registers/unregisters callbacks on the binanceWS singleton
 
@@ -105,7 +106,7 @@ client/
 │   │   ├── AlgoTrading.jsx    ← route: /algo (algo bot session management)
 │   │   ├── OrderHistory.jsx   ← route: /order-history (paginated trade log; not in navbar)
 │   │   ├── Login.jsx          ← route: /login (Google OAuth entry point, public)
-│   │   ├── AdminPanel.jsx     ← route: /admin (admin-only, allowed-emails CRUD)
+│   │   ├── AdminPanel.jsx     ← route: /admin (admin-only, user table: grant/revoke algo access + category filter/sort)
 │   │   ├── RiskDashboard.jsx  ← route: /risk-dashboard (Zone 1/2/3 risk intelligence, see CURRENT_STATE.md)
 │   │   └── NotFound.jsx       ← route: * (catch-all 404, "Go to Dashboard" CTA)
 │   │       Note: `client/src/store/` no longer exists — `useUIStore.js` (sidebar state) was its

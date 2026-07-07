@@ -1,39 +1,51 @@
-const PlatformConfig = require('../models/PlatformConfig')
+const User = require('../models/User')
 const ApiResponse = require('../utils/ApiResponse')
 const ApiError = require('../utils/ApiError')
 
-async function getAllowedEmails(req, res) {
-  const config = await PlatformConfig.findById('platform')
-  res.json(ApiResponse.success(config?.allowedEmails || []))
+// GET /api/v1/admin/users — all users with their Algo Trading access status.
+// Global read (no userId scope): admin sees everyone. Normalises algoAccess to a
+// flat status string so older docs without the field read as 'none'.
+async function listUsers(req, res) {
+  const users = await User.find({}, 'email name avatar role algoAccess createdAt lastLoginAt')
+    .sort({ createdAt: -1 })
+    .lean()
+
+  const shaped = users.map((u) => ({
+    id: u._id,
+    email: u.email,
+    name: u.name,
+    avatar: u.avatar,
+    role: u.role,
+    algoAccess: u.algoAccess?.status || 'none',
+    requestedAt: u.algoAccess?.requestedAt || null,
+    createdAt: u.createdAt,
+    lastLoginAt: u.lastLoginAt || null,
+  }))
+
+  res.json(ApiResponse.success(shaped))
 }
 
-async function addAllowedEmail(req, res) {
-  const email = req.body.email?.toLowerCase()?.trim()
-  if (!email) throw new ApiError(400, 'BAD_REQUEST', 'Email is required')
-
-  const config = await PlatformConfig.findById('platform')
-  const exists = config?.allowedEmails?.some(e => e.email === email)
-  if (exists) throw new ApiError(409, 'CONFLICT', 'Email already in the whitelist')
-
-  await PlatformConfig.findByIdAndUpdate('platform', {
-    $push: { allowedEmails: { email, addedBy: req.user.email, addedAt: new Date() } },
-  })
-
-  res.json(ApiResponse.success({ email }))
-}
-
-async function removeAllowedEmail(req, res) {
-  const email = req.params.email.toLowerCase()
-
-  if (email === process.env.ADMIN_EMAIL?.toLowerCase()) {
-    throw new ApiError(403, 'FORBIDDEN', 'Cannot remove the admin email from the whitelist')
+// PATCH /api/v1/admin/users/:id/algo-access — grant or revoke a user's access.
+// Body: { status: 'granted' | 'none' }. Admin rows are not editable (they bypass
+// the gate via role anyway).
+async function setUserAlgoAccess(req, res) {
+  const { status } = req.body
+  if (!['granted', 'none'].includes(status)) {
+    throw new ApiError(400, 'VALIDATION_ERROR', "status must be 'granted' or 'none'")
   }
 
-  await PlatformConfig.findByIdAndUpdate('platform', {
-    $pull: { allowedEmails: { email } },
-  })
+  const target = await User.findById(req.params.id).lean()
+  if (!target) throw new ApiError(404, 'NOT_FOUND', 'User not found')
+  if (target.role === 'admin') {
+    throw new ApiError(403, 'FORBIDDEN', 'Admin access cannot be changed here')
+  }
 
-  res.json(ApiResponse.success(null))
+  await User.updateOne(
+    { _id: target._id },
+    { $set: { 'algoAccess.status': status, 'algoAccess.decidedAt': new Date(), 'algoAccess.decidedBy': req.user.id } }
+  )
+
+  res.json(ApiResponse.success({ id: target._id, algoAccess: status }))
 }
 
-module.exports = { getAllowedEmails, addAllowedEmail, removeAllowedEmail }
+module.exports = { listUsers, setUserAlgoAccess }

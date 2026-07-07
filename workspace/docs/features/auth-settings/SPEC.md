@@ -11,14 +11,16 @@ higher-authority source if this doc drifts again.
 ## What It Does
 
 Manages platform configuration: trading mode (Testnet/Mainnet), Binance API credential storage,
-exchange trading settings, and invite-only multi-user access. The Exchange Settings section
+exchange trading settings, and multi-user access (open login + per-user Algo Trading gate). The Exchange Settings section
 centralizes all trading parameters (fees, slippage, funding, risk defaults, Chaos Mode defaults) —
 all values are stored as variables, not hardcoded, and are scoped per user. **Authentication is
 Google OAuth 2.0 + JWT**: `server/src/config/passport.js` (Passport, sessionless), issuing a 7-day
 JWT in an `httpOnly` cookie (`enma_jwt`), verified by `verifyJWT` middleware
 (`server/src/middleware/auth.middleware.js`) mounted on all `/api/v1/*` routes except `/auth/*` and
-`/health`. Access is invite-only: a `PlatformConfig` whitelist of allowed emails gates the OAuth
-callback; an admin panel (`requireAdmin`-gated) manages that whitelist.
+`/health`. **Login is open** — any valid Google account signs in. Feature access is gated per-user:
+the `requireAlgoAccess` middleware gates only the Algo Trading start actions
+(`POST /algo/sessions`, `POST /algo/chaos`); admins bypass via role. Users request access from
+Settings; an admin panel (`requireAdmin`-gated) grants/revokes it per user.
 
 ---
 
@@ -106,15 +108,13 @@ Client hits "Sign in with Google" → GET /api/v1/auth/google
 Redirects to Google OAuth consent (Passport, scopes: profile email, sessionless)
         ↓
 Google redirects → GET /api/v1/auth/google/callback
+        ↓ (login is open — no whitelist check)
+Upsert User doc (googleId, email, name, avatar, lastLoginAt); ADMIN_EMAIL auto-promoted to role admin
         ↓
-Server checks the requesting email against the PlatformConfig allowed-email whitelist
-        ↓ (not whitelisted)                          ↓ (whitelisted)
-Redirect to CLIENT_URL/login?error=not_invited    Upsert User doc (googleId, email, role)
-                                                       ↓
-                                                   Sign 7-day JWT ({ userId, role })
-                                                       ↓
-                                                   Set httpOnly enma_jwt cookie (sameSite: lax,
-                                                   secure in prod) → redirect to CLIENT_URL/
+Sign 7-day JWT ({ userId, role })
+        ↓
+Set httpOnly enma_jwt cookie (sameSite: lax, secure in prod) → redirect to CLIENT_URL/
+(genuine OAuth error → CLIENT_URL/login?error=auth_failed)
 
 Every subsequent /api/v1/* request (except /auth/*, /health):
         ↓
@@ -129,10 +129,13 @@ io.to('user:<userId>').emit(...) — never a global io.emit().
 Logout: POST /api/v1/auth/logout clears the enma_jwt cookie.
 ```
 
-`requireAdmin` (checks `req.user.role === 'admin'`) gates `GET/POST/DELETE
-/api/v1/admin/allowed-emails`. The `ADMIN_EMAIL` env value cannot be removed via the API. The
-`PlatformConfig` singleton (`_id: 'platform'`) holds the whitelist and is created on server startup
-if absent.
+`requireAdmin` (checks `req.user.role === 'admin'`) gates `GET /api/v1/admin/users` and
+`PATCH /api/v1/admin/users/:id/algo-access`. `requireAlgoAccess` (passes if `role === 'admin'` OR
+`algoAccess.status === 'granted'`; else 403 `ALGO_ACCESS_REQUIRED`) gates the Algo start actions
+(`POST /algo/sessions`, `POST /algo/chaos`). Users self-request via `POST /api/v1/algo/access-request`
+(idempotent `none`→`requested`). Access state lives on the `User` doc (`algoAccess.status`); since
+`verifyJWT` reloads the user each request, grants/revokes take effect immediately without re-login.
+The former `PlatformConfig` email whitelist and `/admin/allowed-emails` CRUD were removed 2026-07-07.
 
 ---
 
@@ -158,10 +161,11 @@ if absent.
   are verified against Binance before storage. `X-Binance-Mode` is pinned to `testnet` on every trade
   route (`requireBinanceCredentials.js`), so a mainnet key can never reach an order endpoint even if it
   were (incorrectly) granted trade permission. See `DECISIONS.md`.
-- **Multi-user, invite-only.** `userId` scopes every mutable Mongoose model (`BacktestResult`,
+- **Multi-user, open login + per-feature gating.** `userId` scopes every mutable Mongoose model (`BacktestResult`,
   `BacktestTrade`, `BacktestLeverageScenario`, `LiveSession`, `Settings`, `TradeOrder`,
   `TradeExecution`, `TradeTransaction`, `TradeRecord`). `Strategy` stays global by design — no
-  `userId`. Access is gated by the `PlatformConfig` email whitelist, not open registration.
+  `userId`. Login is open to any Google account; Algo Trading start actions are gated per-user via
+  `requireAlgoAccess` (`User.algoAccess.status`), granted/revoked by admins.
 - **Do not modify `.env` files.** Settings changes (mode, credentials, risk defaults, etc.) go to each
   user's MongoDB `Settings` doc only.
 - **Mainnet trading not implemented (by design).** Only mainnet *balance display* is supported
@@ -224,8 +228,8 @@ if absent.
 | `POST /api/v1/auth/logout`, `GET /api/v1/auth/me` | **Implemented** | Same files as above |
 | JWT middleware (`verifyJWT`, `requireAdmin`) | **Implemented** | `server/src/middleware/auth.middleware.js`, mounted on all `/api/v1/*` routes |
 | Login gate in UI | **Implemented** | `client/src/pages/Login.jsx`; unauthenticated requests 401 via `verifyJWT` |
-| `User` model | **Implemented** | `server/src/models/User.js` (`googleId`, `email`, `role`) |
-| `PlatformConfig` (invite whitelist) | **Implemented** | `server/src/models/PlatformConfig.js`; admin CRUD via `admin.routes.js` |
+| `User` model | **Implemented** | `server/src/models/User.js` (`googleId`, `email`, `name`, `avatar`, `role`, `isActive`, `algoAccess`) |
+| Per-user algo-access gate | **Implemented** | `requireAlgoAccess` in `auth.middleware.js`; admin grant/revoke via `admin.routes.js` (`/admin/users*`); user request via `/algo/access-request` |
 
 ---
 
@@ -242,8 +246,10 @@ if absent.
 | GET | `/api/v1/auth/google` | Begin Google OAuth flow |
 | GET | `/api/v1/auth/google/callback` | Google OAuth callback — issues JWT cookie |
 | POST | `/api/v1/auth/logout` | Clear JWT cookie |
-| GET | `/api/v1/auth/me` | Current user identity |
-| GET/POST/DELETE | `/api/v1/admin/allowed-emails` | Admin-only whitelist CRUD (`requireAdmin`) |
+| GET | `/api/v1/auth/me` | Current user identity (incl. `algoAccess`) |
+| GET | `/api/v1/admin/users` | Admin-only user list (`requireAdmin`) |
+| PATCH | `/api/v1/admin/users/:id/algo-access` | Admin-only grant/revoke (`requireAdmin`) |
+| POST | `/api/v1/algo/access-request` | User requests Algo Trading access |
 
 ---
 
@@ -255,7 +261,7 @@ if absent.
 | `client/src/hooks/useExchangeSettings.js` | TanStack Query hooks: `useExchangeSettings()` (GET), `useUpdateExchangeSettings()` (PUT) |
 | `client/src/hooks/useAuth.js` | TanStack Query: `useAuth()` (`GET /auth/me`, 5-min stale, 401→null), `useLogout()` |
 | `client/src/pages/Login.jsx` | Google OAuth entry point (public route) |
-| `client/src/pages/AdminPanel.jsx` | Admin-only allowed-emails CRUD UI |
+| `client/src/pages/AdminPanel.jsx` | Admin-only user table: grant/revoke algo access, category filter + sort |
 | `client/src/components/algo/NewSessionWizard.jsx` | Pre-fills capital/leverage from `defaultBotCapital`/`defaultBotLeverage` |
 | `server/src/routes/settings.routes.js` | Exchange settings GET + PUT routes |
 | `server/src/routes/trade.routes.js` | Settings keys routes (GET + POST + verify) |
@@ -264,13 +270,12 @@ if absent.
 | `server/src/controllers/settings.controller.js` | `getExchangeSettings`, `updateExchangeSettings` |
 | `server/src/controllers/trade.controller.js` | `getSettingsKeys`, `saveSettingsKeys`, `verifySettings`, `getBalances` |
 | `server/src/controllers/auth.controller.js` | OAuth callback, JWT issuance, `/me`, logout |
-| `server/src/controllers/admin.controller.js` | Allowed-email whitelist CRUD |
+| `server/src/controllers/admin.controller.js` | User management: `listUsers` + `setUserAlgoAccess` |
 | `server/src/controllers/algo.controller.js` | Reads `takerFee` from Settings on session start, injects into engine call |
 | `server/src/controllers/backtest.controller.js` | Reads trading fees, slippage, funding from Settings on backtest start |
 | `server/src/config/passport.js` | Google OAuth 2.0 strategy (sessionless) |
 | `server/src/middleware/auth.middleware.js` | `verifyJWT`, `requireAdmin` |
-| `server/src/models/User.js` | `googleId`, `email`, `role` |
-| `server/src/models/PlatformConfig.js` | Allowed-email whitelist singleton |
+| `server/src/models/User.js` | `googleId`, `email`, `name`, `avatar`, `role`, `isActive`, `algoAccess` |
 | `server/src/models/Settings.js` | Per-user Settings document with all exchange configuration + encrypted credentials |
 | `server/src/middleware/requireBinanceCredentials.js` | Decrypts per-user MongoDB credentials before trade routes |
 | `server/src/utils/encryption.js` | AES-256 encrypt/decrypt for API keys |
