@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { useAlgoSessions } from '../../hooks/useAlgoSessions'
 import { useAuth, useLogout } from '../../hooks/useAuth'
+import Avatar from '../ui/Avatar'
 
 const navItems = [
   { label: 'Dashboard', icon: LayoutDashboard, to: '/' },
@@ -125,29 +126,18 @@ export default function Navbar() {
                 aria-label="User menu"
                 className="flex items-center justify-center [border-radius:50%] hover:ring-2 hover:ring-emerald-500/50 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
               >
-              {user.avatar ? (
-                <img
-                  src={user.avatar}
-                  alt={user.name}
-                  className="w-8 h-8 [border-radius:50%] ring-1 ring-slate-700 object-cover"
-                />
-              ) : (
-                <div
-                  className="w-8 h-8 [border-radius:50%] bg-emerald-600/20 ring-1 ring-emerald-600/40 flex items-center justify-center"
-                >
-                  <span className="text-emerald-400 text-sm font-medium">
-                    {user.name?.[0]?.toUpperCase() ?? '?'}
-                  </span>
-                </div>
-              )}
+              <Avatar src={user.avatar} name={user.name} className="w-8 h-8" />
             </button>
 
             {dropdownOpen && (
-              <div role="menu" className="absolute right-0 mt-2 w-48 bg-[#0d1117] border border-slate-700/50 shadow-2xl py-1 z-50 animate-in fade-in slide-in-from-top-1 duration-150 origin-top-right">
+              <div role="menu" className="absolute right-0 mt-2 w-56 bg-[#0d1117] border border-slate-700/50 shadow-2xl py-1 z-50 animate-in fade-in slide-in-from-top-1 duration-150 origin-top-right">
                 <div className="px-4 py-2 border-b border-slate-800">
                   <p className="text-xs text-slate-400">Logged in as</p>
                   <p className="text-sm font-medium text-slate-200 truncate" title={user.name}>
                     {user.name}
+                  </p>
+                  <p className="text-xs text-slate-500 truncate" title={user.email}>
+                    {user.email}
                   </p>
                 </div>
                 {user.role === 'admin' && (

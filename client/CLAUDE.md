@@ -33,7 +33,11 @@ client/
 ├── src/
 │   ├── components/      ← shared reusable components
 │   │   ├── ui/          ← generic UI (Button, Input, Dialog, Card, Badge, PageHeader, skeleton,
-│   │   │                   table, tabs, select, pagination, confirm-dialog, empty-state)
+│   │   │                   table, tabs, select, pagination, confirm-dialog, empty-state, Avatar)
+│   │   │                   Avatar.jsx — shared avatar w/ initials fallback; always sets
+│   │   │                   referrerPolicy="no-referrer" on the <img> (Google profile photos
+│   │   │                   403/429 without it) and falls back to initials on onError, not just
+│   │   │                   when src is empty. Used by Navbar and Settings' Profile card.
 │   │   │                   Note: DataTable.jsx, StatusBadge.jsx, and the original StatCard.jsx
 │   │   │                   have been deleted — they were never imported. There is no Modal.jsx;
 │   │   │                   dialog.jsx (Radix-based Dialog/DialogTrigger/etc.) is the real name.
