@@ -24,4 +24,11 @@ function requireAdmin(req, res, next) {
   next()
 }
 
-module.exports = { verifyJWT, requireAdmin }
+// Gates the Algo Trading start actions. Admins always pass; other users need an
+// explicit granted status. Absence of algoAccess is treated as no access.
+function requireAlgoAccess(req, res, next) {
+  if (req.user?.role === 'admin' || req.user?.algoAccess?.status === 'granted') return next()
+  return next(new ApiError(403, 'ALGO_ACCESS_REQUIRED', 'Algo trading access required'))
+}
+
+module.exports = { verifyJWT, requireAdmin, requireAlgoAccess }

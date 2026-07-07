@@ -11,7 +11,7 @@ const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173'
 
 router.get(
   '/google/callback',
-  passport.authenticate('google', { session: false, failureRedirect: `${clientUrl}/login?error=not_invited` }),
+  passport.authenticate('google', { session: false, failureRedirect: `${clientUrl}/login?error=auth_failed` }),
   googleCallback
 )
 

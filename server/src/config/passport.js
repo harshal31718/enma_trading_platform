@@ -1,7 +1,6 @@
 const passport = require('passport')
 const { Strategy: GoogleStrategy } = require('passport-google-oauth20')
 const User = require('../models/User')
-const PlatformConfig = require('../models/PlatformConfig')
 
 passport.use(
   new GoogleStrategy(
@@ -17,10 +16,8 @@ passport.use(
         const avatar = profile.photos?.[0]?.value || ''
         const googleId = profile.id
 
-        const config = await PlatformConfig.findById('platform')
-        const isAllowed = config?.allowedEmails?.some(e => e.email === email)
-        if (!isAllowed) return done(null, false, { message: 'not_invited' })
-
+        // Login is open to anyone with a valid Google account. Feature access
+        // (Algo Trading) is gated per-user downstream via requireAlgoAccess.
         let user = await User.findOneAndUpdate(
           { googleId },
           { $set: { email, name, avatar, lastLoginAt: new Date() } },

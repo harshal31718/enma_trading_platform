@@ -12,28 +12,13 @@ const MONGO_URI = process.env.MONGO_URI || 'mongodb://mongodb:27017/enma_trading
 const MONGO_DB = process.env.MONGO_DB || 'enma_trading'
 
 const { reconcileSymbolLocks, reconcileFullAccountPositions } = require('./services/reconciliation')
-const PlatformConfig = require('./models/PlatformConfig')
 
 const FULL_RECONCILE_INTERVAL_MS = 10 * 60 * 1000 // 10 min — safety-net sweep, see reconciliation.js
-
-async function seedPlatformConfig() {
-  const adminEmail = process.env.ADMIN_EMAIL?.toLowerCase()
-  if (!adminEmail) return
-  const exists = await PlatformConfig.findById('platform')
-  if (!exists) {
-    await PlatformConfig.create({
-      _id: 'platform',
-      allowedEmails: [{ email: adminEmail, addedBy: 'system', addedAt: new Date() }],
-    })
-    console.log('PlatformConfig seeded with admin email:', adminEmail)
-  }
-}
 
 async function startServer() {
   await mongoose.connect(MONGO_URI, { dbName: MONGO_DB })
   console.log('MongoDB connected')
 
-  await seedPlatformConfig()
   await reconcileSymbolLocks()
 
   const httpServer = http.createServer(app)

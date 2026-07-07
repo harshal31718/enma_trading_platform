@@ -11,7 +11,7 @@ const COOKIE_OPTIONS = {
 function googleCallback(req, res) {
   const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173'
   if (!req.user) {
-    return res.redirect(`${clientUrl}/login?error=not_invited`)
+    return res.redirect(`${clientUrl}/login?error=auth_failed`)
   }
 
   const token = jwt.sign(
@@ -31,7 +31,8 @@ function logout(req, res) {
 
 function getMe(req, res) {
   const { _id, email, name, avatar, role } = req.user
-  res.json(ApiResponse.success({ id: _id, email, name, avatar, role }))
+  const algoAccess = req.user.algoAccess?.status || 'none'
+  res.json(ApiResponse.success({ id: _id, email, name, avatar, role, algoAccess }))
 }
 
 module.exports = { googleCallback, logout, getMe }

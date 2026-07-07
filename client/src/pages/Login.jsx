@@ -6,7 +6,6 @@ import {
   Bot,
   Activity,
   Shield,
-  Lock,
   AlertTriangle,
 } from 'lucide-react'
 
@@ -285,19 +284,8 @@ export default function Login() {
               Continue with Google
             </button>
 
-            {/* Invite-Only Badge — below CTA */}
-            <div className="bg-slate-800/40 border border-slate-700/40 px-4 py-3 mt-5">
-              <div className="flex items-center gap-2 mb-1">
-                <Lock size={13} className="text-slate-400" />
-                <span className="text-xs font-semibold text-slate-300">Invite Only</span>
-              </div>
-              <p className="text-[11px] text-slate-400 pl-[21px]">
-                Access is restricted to invited members
-              </p>
-            </div>
-
             {/* Error State */}
-            {errorParam === 'not_invited' && (
+            {errorParam === 'auth_failed' && (
               <div className="mt-5 bg-red-950/20 border border-red-800/40 p-3 animate-shake">
                 <div className="flex items-start gap-2">
                   <AlertTriangle
@@ -306,10 +294,10 @@ export default function Login() {
                   />
                   <div>
                     <p className="text-sm font-medium text-red-400 mb-0.5">
-                      Not Invited
+                      Sign-in failed
                     </p>
                     <p className="text-xs text-red-400/80 leading-relaxed">
-                      Your Google account is not on the invite list.
+                      Something went wrong signing you in. Please try again.
                     </p>
                   </div>
                 </div>

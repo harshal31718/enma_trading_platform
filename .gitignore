@@ -9,8 +9,8 @@ env/
 # Environment files - NEVER commit these
 .env
 
-# SSH/deploy keys - NEVER commit these
-/keys/
+# SSH keypairs (Oracle instance access, etc.) — never commit
+/keys
 .env.local
 .env.production
 # Exception: client prod env holds only public build-time URLs (no secrets)

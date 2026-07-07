@@ -2,6 +2,7 @@ const express = require('express')
 const router = express.Router()
 const {
   startSession,
+  requestAlgoAccess,
   stopSession,
   setTradingState,
   listSessions,
@@ -14,9 +15,15 @@ const {
   getChaosSymbols,
   previewPairlist,
 } = require('../controllers/algo.controller')
+const { requireAlgoAccess } = require('../middleware/auth.middleware')
 
-router.post('/sessions', startSession)
-router.post('/chaos', startChaos)
+// User requests Algo Trading access (not gated — that's the point).
+router.post('/access-request', requestAlgoAccess)
+
+// Start actions require granted access; everything else (list/stop/delete/preview)
+// stays open so a user whose access is revoked can still stop running sessions.
+router.post('/sessions', requireAlgoAccess, startSession)
+router.post('/chaos', requireAlgoAccess, startChaos)
 router.get('/chaos/symbols', getChaosSymbols)
 router.get('/sessions', listSessions)
 router.delete('/sessions', deleteAllStopped)
