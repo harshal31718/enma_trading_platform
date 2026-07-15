@@ -107,7 +107,7 @@ export default function SimulationResults() {
             <div className="border border-slate-800 p-4 flex flex-col justify-between">
               <div>
                 <h4 className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-3">
-                  Monte Carlo Resampling (N=2000)
+                  Monte Carlo Resampling (N={monteCarlo.meta?.nRuns ?? 2000})
                 </h4>
                 <div className="flex items-center justify-between mb-4 bg-slate-900/50 p-2.5 border border-slate-850">
                   <span className="text-xs text-slate-400">Probability of Ruin (30% Drawdown)</span>
