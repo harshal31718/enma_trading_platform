@@ -696,8 +696,17 @@ async def run_backtest_simulation(
     alpha_params: dict | None = None,
     risk_params: dict | None = None,
     user_id: str = "",
+    entry_candle_exits: bool = False,
     _reprep_every_candle: bool = False,
 ) -> dict:
+    # entry_candle_exits (QNT-3, Plan 9 Step 9.4): opt-in, default off. When
+    # True, SL/TP/liquidation are evaluated against the same candle a
+    # position was entered on, matching live (exchange-side SL/TP orders are
+    # active immediately after the entry fill there) instead of the
+    # optimistic default that waits until the following candle. Default
+    # False is byte-identical to the pre-9.4 path. Flipping the platform
+    # default needs a deliberate golden-master re-baseline + sign-off — see
+    # workspace/plan/9_backtest-and-optimizer-correctness.md Step 9.4.
     # _reprep_every_candle (QNT-12, Plan 9 Step 9.5): test-only lookahead
     # sentinel hook. Default False is byte-identical to the pre-9.5 code path
     # (prepare() called once, upfront). When True (single-symbol runs only —
@@ -921,7 +930,7 @@ async def run_backtest_simulation(
                 elif algo_type == "iceberg":
                     exec_algo = IcebergAlgorithm(strategy, sym, algo_params)
 
-            kernel = ExecutionKernel(adapter, exec_algo)
+            kernel = ExecutionKernel(adapter, exec_algo, entry_candle_exits=entry_candle_exits)
 
             warmup_period = max(strategy.MIN_WARMUP_CANDLES, min(50, len(rows) - 2))
             warmup_periods[sym] = warmup_period

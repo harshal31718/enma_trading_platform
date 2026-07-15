@@ -70,9 +70,16 @@ class ExecutionAdapter(ABC):
 class ExecutionKernel:
     """Unified execution kernel orchestrating exit checks, indicators and evaluations."""
 
-    def __init__(self, adapter: ExecutionAdapter, exec_algo=None) -> None:
+    def __init__(self, adapter: ExecutionAdapter, exec_algo=None, entry_candle_exits: bool = False) -> None:
         self.adapter = adapter
         self.exec_algo = exec_algo
+        # QNT-3 (Plan 9 Step 9.4), opt-in, default off: backtest normally skips
+        # SL/TP/liquidation checks on the same candle a position was entered
+        # (the entered_this_candle guard below), an optimistic bias relative to
+        # live — exchange-side SL/TP orders are active immediately after the
+        # entry fill there. Default False keeps the existing golden-master
+        # behavior; flip only with a deliberate re-baseline + sign-off.
+        self.entry_candle_exits = entry_candle_exits
 
     async def execute_pending(self, strategy, symbol: str, candle: np.ndarray, index_t: int, time_t: datetime) -> None:
         """Simulates next-open fills for orders placed on the previous candle (backtest only)."""
@@ -201,7 +208,7 @@ class ExecutionKernel:
         self, strategy, symbol: str, candle: np.ndarray, is_live: bool, index_t: int, time_t: datetime
     ) -> None:
         """Verify position on exchange and check SL/TP/liquidation triggers."""
-        if not is_live and getattr(strategy, "_entered_this_candle", False):
+        if not is_live and not self.entry_candle_exits and getattr(strategy, "_entered_this_candle", False):
             return
 
         if strategy.position is None:

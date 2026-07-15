@@ -63,9 +63,26 @@ signals from the same data, verified mechanically, not by assertion.
   against this contract from the start, the fields were simply never persisted). No runner
   change needed.
 
-### 9.4 — Entry-candle exit evaluation (QNT-3)
+### 9.4 — Entry-candle exit evaluation (QNT-3) — **Shipped (opt-in) 2026-07-15**
 - Opt-in flag: evaluate SL/TP/liquidation against the entry candle (entry at open → exits
   checked on that candle's range). Golden-master re-baseline with sign-off when made default.
+- Done: `ExecutionKernel.__init__` gained `entry_candle_exits: bool = False`; `check_exits`'s
+  `_entered_this_candle` early-return now also requires `not self.entry_candle_exits`. Threaded
+  through `run_backtest_simulation`'s new `entry_candle_exits` parameter (default False, wired
+  into the kernel construction site). 4 new kernel-level tests
+  (`tests/test_entry_candle_exits.py`) cover: default-off preserves the existing skip, opt-in
+  evaluates and fires SL on the entry candle, no-op when the candle isn't actually the entry
+  candle, and live is never affected regardless of the flag. Full suite 88/88. Golden-master
+  default-path determinism re-confirmed (two same-container runs byte-identical) — **not** a
+  true before/after diff against the pre-9.4 code, because the pre-9.4 baseline file was lost to
+  the container-recreation issue noted under 9.5; the change is provably a default-off additive
+  parameter by inspection, and the dedicated kernel tests cover the actual logic.
+- **Still not done, and this is the real remaining work**: this ships the mechanism only, not
+  the feature. Nothing sets `entry_candle_exits=True` anywhere (no Settings field, no API
+  parameter, no UI toggle) — it's reachable only by calling `run_backtest_simulation` directly
+  with the kwarg, same as `_reprep_every_candle`. **Making it a real user-facing default requires
+  the golden-master re-baseline + sign-off this step was always going to need** — that hasn't
+  happened, and shouldn't happen casually; it changes every backtest's numbers.
 
 ### 9.5 — Lookahead sentinel in CI (QNT-12, detector for QNT-9) — **Shipped 2026-07-15**
 - Harness: full-array `prepare()` vs per-candle expanding-window recompute; assert identical
