@@ -128,8 +128,18 @@ signals from the same data, verified mechanically, not by assertion.
 
 ### 9.10 — Fill-model ladder (QNT-11) + small hardening (QNT-4/15/16)
 - Spread half-cost → volatility-scaled slippage → √-impact (cached 24h volume as ADV);
-  liquidation fee; incremental ATR-history sort; warmup-insufficiency fail-loud
+  liquidation fee; ~~incremental ATR-history sort~~; warmup-insufficiency fail-loud
   (with Plan 8 / ENG-8).
+- **Incremental ATR-history sort (QNT-15) — Shipped 2026-07-15, pulled forward out of this
+  step.** `AtrBracketRiskModel._atr_history` (`core/models/risk.py`) now stays sorted via
+  `bisect.insort` on every append instead of calling `sorted()` fresh on every percentile-filter
+  lookup — O(N) insert vs O(N log N) full re-sort per candle, which was O(N² log N) over a
+  multi-year 1m run. Pure data-structure refactor, mathematically equivalent (verified: a
+  `bisect.insort`-maintained list and a freshly-`sorted()` copy of the same multiset produce
+  identical `bisect_left` ranks — spot-checked directly, and by construction). `atr_percentile_min`
+  defaults to `0.0` (filter disabled) for every seeded strategy, so this path doesn't execute in
+  the default golden-master run at all — zero risk to the existing baseline; full suite 88/88.
+  Fill-model ladder + liquidation fee + warmup fail-loud remain undone.
 
 ## Acceptance criteria (phase)
 

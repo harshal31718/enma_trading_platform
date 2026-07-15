@@ -88,7 +88,11 @@ class AtrBracketRiskModel(DefaultRiskModel):
         self._initial_risk: float = 0.0
         self._signal_price: float = 0.0
         self._initialized: bool = False
-        self._atr_history: list = []   # session-level; never reset between trades
+        # session-level; never reset between trades. Kept sorted incrementally
+        # (bisect.insort on append) rather than re-sorted on every percentile
+        # lookup (QNT-15) — O(N) insert instead of O(N log N) full sort per
+        # candle, which was O(N² log N) over a multi-year 1m run.
+        self._atr_history: list = []
 
     def _reset(self) -> None:
         self._current_stop = None
@@ -105,7 +109,7 @@ class AtrBracketRiskModel(DefaultRiskModel):
         # Accumulate ATR for percentile filter (session-level; O(1) — reads s.vars set by before())
         _atr_now = s.vars.get("atr")
         if _atr_now and _atr_now > 0:
-            self._atr_history.append(float(_atr_now))
+            bisect.insort(self._atr_history, float(_atr_now))
         same_dir = (
             (sig.direction > 0 and current_holding > 0) or
             (sig.direction < 0 and current_holding < 0)
@@ -181,7 +185,7 @@ class AtrBracketRiskModel(DefaultRiskModel):
         # atr_percentile_min=0 (default) disables the filter → golden-master safe.
         atr_pct_min = float(getattr(s, "atr_percentile_min", 0.0))
         if atr_pct_min > 0 and len(self._atr_history) >= 20:
-            rank = bisect.bisect_left(sorted(self._atr_history), atr)
+            rank = bisect.bisect_left(self._atr_history, atr)
             if rank / len(self._atr_history) < atr_pct_min:
                 return RiskConstraints(vetoed=True, max_drawdown_hit=not can)
 
