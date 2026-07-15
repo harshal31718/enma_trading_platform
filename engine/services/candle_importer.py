@@ -36,7 +36,10 @@ async def import_candles(
     total_estimate = max(1, (end_ms - start_ms) // tf_ms)
 
     instrument_type = "futures" if exchange == "Binance Futures" else "spot"
-    fetch_delay = int(os.getenv("BINANCE_FETCH_DELAY_MS", "200")) / 1000
+    # Plan 4 Step 4.3: scoped-env compose blocks set unset vars to "" rather than
+    # omitting them, and os.getenv(key, default) only substitutes on a truly
+    # missing key — `or` catches the empty-string case too.
+    fetch_delay = int(os.getenv("BINANCE_FETCH_DELAY_MS") or "200") / 1000
 
     current_ms = start_ms
     total_inserted = 0

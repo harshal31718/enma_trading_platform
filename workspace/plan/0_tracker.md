@@ -11,7 +11,7 @@ Statuses: `Draft` · `Ready` · `Blocked` · `Verify` · `Shipped` · `Merged→
 | 1  | Public access + admin-gated algo/testnet-start | Shipped | — | — | — | — | 2026-07-14 |
 | 2  | Safety net & guardrails | Shipped | P0 | 1–2 | — | 3,4,5 | 2026-07-15 |
 | 3  | Service-to-service trust | Shipped | P0 | 1–2 | 2 | 4,8 | 2026-07-15 |
-| 4  | Credential & config topology | Ready | P1 | 1 | 2,3 | 8 | 2026-07-14 |
+| 4  | Credential & config topology | Mostly Shipped (4.5 partial) | P1 | 1 | 2,3 | 8 | 2026-07-15 |
 | 5  | Live-trading state integrity | Ready | P0 | 3 | 2,3 | 6 | 2026-07-14 |
 | 6  | Engine decomposition & exchange abstraction | Ready | P2 | 4, 6.1 | 5 | 7 | 2026-07-14 |
 | 7  | Server & client structure | Ready | P2 | 5 | 2,5 | 6 | 2026-07-14 |
@@ -57,8 +57,13 @@ a golden-master check per Rule C.
   both directions), tiered Redis-backed rate limits. Full detail in
   `3_service-to-service-trust.md`'s "Shipped summary" — includes a self-inflicted crash-loop
   incident during the step, root-caused and fixed before moving on.
-- **4** — Implements the ".env → per-user Settings" directive for personal credentials + scopes
-  container env + rotatable infra secrets.
+- **4** — Mostly shipped 2026-07-15. Headline finding: the ".env → per-user Settings" directive
+  was **already fully satisfied** before this plan — every `BINANCE_*` env var was dead code.
+  Scoped each container's env (client now gets zero secrets — was getting everything);
+  `ENCRYPTION_KEY` rotation window implemented + tested. **Not done: Redis `requirepass`**
+  (deferred, see plan file) and **`.env`'s 7 dead `BINANCE_*` lines** (permission system
+  blocked autonomous deletion — needs the user's explicit go-ahead in a future turn). Full
+  detail in `4_credential-and-config-topology.md`'s "Shipped summary".
 - **5** — Highest-value correctness work: exchange as source of truth for live trading state,
   replacing the current three-way-divergent (exchange / engine memory / Mongo) reconciliation
   heuristics. Do not promote to mainnet before this is `Shipped`.

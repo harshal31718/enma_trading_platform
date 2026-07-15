@@ -7,113 +7,71 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
-## 2026-07-15 — Plan 9.1–9.3 shipped (quant P0 bug fixes); autonomous multi-plan session started — IN PROGRESS 🔄
+## 2026-07-15 — Autonomous multi-plan session: 9.1–9.3, Plan 2, 3, 4 shipped — IN PROGRESS 🔄
 
-**Goal:** User asked to pick up the prior session and, per standing instruction, to then drive
-continuously through the **entire `workspace/plan` catalog** (all plans, all tracks) without
-stopping for check-ins — commit at each checkpoint, only surface genuine blockers (destructive
-git ops, product decisions like Plan 3.2, secrets/`.env`). This entry covers the first
-checkpoint; later checkpoints in this same session will be appended above this one on the next
-handoff write (subject to the 3-entry cap) if the session is still running when a new entry is
-due — check `git log` for anything shipped after this note.
+**Goal:** pick up the prior session, then drive continuously through the entire `workspace/plan`
+catalog without stopping for check-ins — commit at each plan checkpoint, only surface genuine
+blockers. Detail for each shipped plan lives in that plan's own file under a "Shipped summary"
+heading — **read those before touching a dependent plan**, this entry is a pointer index, not a
+duplicate log. Check `git log` for anything shipped after this note if resuming.
 
-**Done — Plan 9.1–9.3 (QNT-1, QNT-2, QNT-17), all P0, all Shipped:**
-1. **QNT-1** — `services/backtest_runner.py` `_run_shared_portfolio` now calls
-   `adapters[sym].record_equity(strategy, time_t)` after `evaluate_and_route` each candle (it
-   never called this before — the only place that cleared `_entered_this_candle`, which
-   `kernel.check_exits` early-returns on). New test `tests/test_multi_symbol_portfolio_exits.py`
-   drives `_run_shared_portfolio` directly with 2 synthetic symbols and asserts both exit via
-   `stop_loss` + exact cash conservation. Live-data proof: 2-symbol golden-master run now shows
-   real `stop_loss`/`take_profit` exits (previously structurally impossible). Checked
-   `backtestResults` for `symbol` containing "," (the migration the audit called for) — none
-   exist in this environment, so no stale-flag migration was needed.
-2. **QNT-2** — `core/kernel.py` `evaluate_and_route` snapshots `_close_at_open`/`_pending_flip`
-   before the exec-algo clear and restores them after. Two new tests in
-   `tests/test_exec_algo_slicing.py` confirm a close/flip survives an active TWAP algo and
-   actually fires on the next candle.
-3. **QNT-17** — `services/backtest_runner.py`'s `backtestResults` write now persists
-   `alphaParams`, `riskParams`, `slippagePct`, `fundingEnabled`, `fundingRate` (
-   `leverage_sensitivity_runner.py` already read these via `parent.get(...)` — it was written
-   against this contract from the start; the fields were simply never being saved).
-4. **Verification:** single-symbol golden master byte-identical before/after
-   (`pre_qnt1_2_3_baseline` vs `post_qnt1_2_3_fix`, tol=1e-6, 5 strategies) — confirms zero
-   regression on the existing shipped path. Full engine test suite: 84/84 green. New
-   multi-symbol golden-master baseline captured (`multi_symbol_baseline_post_fix`) for future
-   re-baseline diffing on steps 9.4+.
-5. Docs updated: `0_tracker.md` (row 9 + Notes section — also **fixed a pre-existing truncation
-   bug** from the 2026-07-14 session: the Notes section and plan-9 step descriptions were cut
-   off mid-sentence in commit `a5c0bf7`, notes for plans 6–10 were missing entirely; both
-   completed), `9_backtest-and-optimizer-correctness.md` (9.1–9.3 marked Shipped with detail).
+**Shipped this session (chronological):**
+- **Plan 9 steps 9.1–9.3** (QNT-1/QNT-2/QNT-17) — multi-symbol portfolio backtests now actually
+  fire SL/TP/liquidation (`_run_shared_portfolio` never called `record_equity`); exec-algo mode
+  no longer erases close/flip intents; leverage-sensitivity reruns use the parent run's real
+  params. Detail: `9_backtest-and-optimizer-correctness.md`. Browser-verified live (user logged
+  in) with a real BTCUSDT+ETHUSDT run; user then asked for a symbol column on List of Trades —
+  added end-to-end (engine → server schema → client table/CSV), also verified live.
+- **Plan 2 (Safety net & guardrails), all 6 steps.** Server (Jest, 39 tests) + client (Vitest, 11
+  page smoke tests) harnesses stood up from scratch/half-wired state; encryption fails closed
+  with a versioned envelope; correlation IDs (`AsyncLocalStorage` + pino) thread server↔engine;
+  engine `/health` now honest; CI added. **Surfaced a standing risk**: local dev shares
+  production's MongoDB Atlas cluster — unresolved, flagged for before/during Plan 4 (now
+  addressed in 4.1's inventory, still not structurally resolved). Detail:
+  `2_safety-net-and-guardrails.md`.
+- **Plan 3 (Service-to-service trust), all 5 steps.** `/internal/*` now authenticated
+  (`INTERNAL_API_KEY`, constant-time compare both directions); strategy-code-write RCE path
+  removed outright (confirmed dead client-side first — 3.2's decision made on the plan's own
+  stated default under "proceed on recommended paths" authorization, no sign-off round-trip);
+  tiered Redis-backed rate limits. Self-inflicted crash-loop mid-step (stale container + missing
+  dependency) surfaced as a repeating browser toast — root-caused and fixed same step. Detail:
+  `3_service-to-service-trust.md`.
+- **Plan 4 (Credential & config topology), 4.1–4.4 shipped, 4.5 partial.** Full secret inventory
+  — headline finding: **every `BINANCE_*` env var was already dead code**, the per-user-Settings
+  credential path the user originally asked for was already fully in place. Each container's env
+  scoped to only what it reads (client went from "the entire shared `.env`" to two public
+  `VITE_*` vars — caught and fixed a real regression this introduced, an empty-string-vs-unset
+  `os.getenv` landmine in `candle_importer.py`). `ENCRYPTION_KEY` rotation window implemented +
+  tested (6 new tests, v1↔v2 mixed records). TimescaleDB pinned to its exact running version.
+  **Not done:** Redis `requirepass` (deferred — real work, wide blast radius, not squeezed into
+  an already-long session); `.env`'s 7 dead `BINANCE_*` lines including one real unused testnet
+  key/secret (permission system correctly blocked autonomous deletion — needs the user's
+  explicit go-ahead). Detail: `4_credential-and-config-topology.md`.
 
-**Also done — browser-verified 9.1–9.3 live** (user logged in mid-session): ran a real
-BTCUSDT+ETHUSDT MicroScalper backtest through the actual UI, confirmed real interleaved
-`stop_loss`/`take_profit` exits across both symbols. User then flagged the List of Trades table
-had no symbol column — fixed end-to-end (engine tags each trade dict with its adapter's symbol
-at every creation site, persisted to `backtestTrades`, server schema + client table/CSV export
-pass it through), re-verified live in browser. Shipped as its own commit.
+**Operational lesson learned the hard way (twice) this session:** `docker compose up -d` on a
+container recreates it **from whatever's baked into the image**, silently discarding anything
+that only ever existed via `docker compose watch`'s live file sync. Any source or test file
+written since the last `docker compose build` for that service vanishes on recreation — this
+already cost two rounds of "why did my test count drop" debugging. **Rule going forward:
+`docker compose build <service>` before every `up -d` that could recreate a container**, not
+just when you know you changed a dependency.
 
-**Done — Plan 2 (Safety net & guardrails), all 6 steps, Shipped:** server test harness (Jest,
-39 tests: encryption/chaosAllocator/risk/auth.middleware), client test harness (Vitest smoke
-tests, 11 pages — the harness deps/config existed from an earlier session but `src/tests/
-setup.js` was missing so it never actually ran), encryption.js now fails closed with a versioned
-envelope (`v1:`), correlation IDs (`AsyncLocalStorage` + pino, engine-side `contextvars`) with
-`X-Request-Id` threaded server↔engine, engine `/health` now live-pings Mongo+Timescale instead
-of hardcoding `"ok"`, CI (`.github/workflows/ci.yml`). **Full deviation log (important — read
-before touching Plan 3/4) is in `2_safety-net-and-guardrails.md`'s "Shipped summary"**, headline
-items: (a) shipping fail-closed required an unplanned one-off credential migration
-(`server/scripts/migrate-encryption-key.js`) because `ENCRYPTION_KEY` was unset; (b) **discovered
-mid-fix that local dev shares production's MongoDB Atlas cluster** — the logged-in user's real
-Settings doc is encrypted under production's (unavailable) key, correctly left untouched by the
-migration, user will re-save Binance keys locally; this sharing arrangement is a flagged,
-unresolved risk worth a deliberate call before Plan 4 (credential/config topology); (c) CI's
-golden-master step is an execution smoke check only (`continue-on-error`), not yet a byte-level
-regression gate — no baseline is committed to the repo.
+**Session-wide plan (TaskCreate #1–13, tracked live):** 9.1–9.3 ✅ → browser checkpoint ✅ → Plan
+2 ✅ → 3 ✅ → 4 ✅ → **5 (next)** → 6 → 7 → 8 → quant remainder 9.4–9.10 → Plan 10 (Monte Carlo/
+Strategy Lab) → full UI polish + mobile/responsive pass (added mid-session per explicit user
+request). Committing at each plan checkpoint on `dev`, not pushing to remote without being asked.
+User stepped away mid-session and authorized continuing without pausing for input except on
+genuinely critical/irreversible actions; pending browser-verification items queue in TaskCreate
+#13 for when the user is back and logged in — **never attempt Google login autonomously, even
+without a password, under any circumstance.**
 
-**Done — Plan 3 (Service-to-service trust), all 5 steps, Shipped:** authenticated `/internal/*`
-(new `INTERNAL_API_KEY`, constant-time compare both directions — Node's `crypto.timingSafeEqual`,
-engine's `hmac.compare_digest`); removed the strategy-code-write RCE path entirely (`PUT
-.../strategies/:id/code` on both Node and engine, plus the unused client hook) — **3.2's product
-decision was made without a sign-off round-trip**, using the plan's own stated default (retire,
-not sandbox) under the user's "proceed on recommended paths" authorization, and confirmed
-empirically that the write path was already dead/unused client-side before removing it; tiered
-Redis-backed rate limits (auth/mutating/read) replacing the one global limiter. **Full detail in
-`3_service-to-service-trust.md`'s "Shipped summary"**, including a self-inflicted crash-loop
-incident mid-step (stale server container + an uninstalled dependency reference) that surfaced
-as a repeating "Network error: Backend server is unreachable" toast in the user's browser —
-root-caused and fixed (clean rebuild + recreate) before moving on; server confirmed stable
-afterward.
-
-**Session-wide plan (TaskCreate #1–13, tracked live, not repeated here):** Plan 9.1–9.3 ✅ →
-browser checkpoint ✅ → Plan 2 ✅ → Plan 3 ✅ → 4 → 5 → 6 → 7 → 8 → quant remainder 9.4–9.10 → Plan
-10 (Monte Carlo/Strategy Lab) → full UI polish + mobile/responsive pass (added mid-session per
-explicit user request). Committing at each plan/phase checkpoint on `dev`, not pushing to remote
-without being asked. User stepped away mid-session and authorized continuing without pausing for
-input except on genuinely critical/irreversible actions; pending browser-verification items
-queue up in TaskCreate #13 for when the user is back and logged in — **never attempt Google
-login autonomously, even without a password, under any circumstance.**
-
-**Files changed (this session so far):** `engine/services/backtest_runner.py`, `engine/core/
-kernel.py`, `engine/main.py`, `engine/tests/test_multi_symbol_portfolio_exits.py` (new),
-`engine/tests/test_exec_algo_slicing.py`, `server/src/utils/encryption.js`, `server/scripts/
-migrate-encryption-key.js` (new), `server/src/utils/__tests__/*.test.js` (new, 3 files),
-`server/src/middleware/__tests__/auth.middleware.test.js` (new), `server/src/config/{logger,
-requestContext}.js` (new), `server/src/middleware/requestId.js` (new), `server/src/app.js`,
-`server/src/services/engineClient.js`, `server/src/middleware/errorHandler.js`, `server/src/
-models/BacktestTrade.js`, `server/package.json`, `client/src/tests/{setup.js,
-pages.smoke.test.jsx}` (new), `client/src/pages/Backtest.jsx`, `client/src/utils/exporters.js`,
-`.env` (added `ENCRYPTION_KEY`, `INTERNAL_API_KEY`), `.env.ci`, `.env.example`,
-`docker-compose.ci.yml` (new), `.github/workflows/ci.yml` (new), `server/src/middleware/
-{requireInternalKey,rateLimiters}.js` (new + tests), `server/src/routes/strategy.routes.js`,
-`server/src/controllers/strategy.controller.js`, `client/src/hooks/useStrategies.js`,
-`engine/core/live_bot_manager.py`, `engine/routers/strategies.py`, `workspace/plan/0_tracker.md`,
-`workspace/plan/9_backtest-and-optimizer-correctness.md`, `workspace/plan/
-2_safety-net-and-guardrails.md`, `workspace/plan/3_service-to-service-trust.md`.
-
-**Open questions:** who signs off golden-master re-baselines for output-changing steps
-(9.4/9.7/9.8); keep or delete `IcebergAlgorithm`; **local dev vs. production sharing one MongoDB
-Atlas cluster** (see Plan 2 summary), should be settled before or during Plan 4; if strategy
-code-editing is ever wanted again, it needs a fresh sandboxed design (Plan 3.2 removed the
-endpoint outright, nothing to re-enable).
+**Open questions (carried forward, see each plan file for full context):** who signs off
+golden-master re-baselines for output-changing steps (9.4/9.7/9.8); keep or delete
+`IcebergAlgorithm`; **local dev vs. production sharing one MongoDB Atlas cluster** — still
+unresolved structurally, only worked around per-incident so far; if strategy code-editing is
+ever wanted again it needs a fresh sandboxed design (nothing to re-enable, 3.2 removed the
+endpoint outright); Redis auth and the dead `.env` `BINANCE_*` lines are explicit follow-ups for
+whoever picks up Plan 4 fully or does a dedicated infra-hardening pass.
 
 ---
 ## 2026-07-14 — Quant-Core Deep-Dive Audit (planning only, no code) — COMPLETE ✅

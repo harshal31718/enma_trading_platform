@@ -1,20 +1,26 @@
 const crypto = require('crypto')
 
 const TEST_KEY = 'a'.repeat(32) // exactly 32 bytes as utf8
+const TEST_KEY_V2 = 'c'.repeat(32)
 
 describe('encryption.js (SEC-3 fail-closed)', () => {
   const ORIGINAL_ENV = process.env.ENCRYPTION_KEY
+  const ORIGINAL_PREV_ENV = process.env.ENCRYPTION_KEY_PREV
 
   afterEach(() => {
     if (ORIGINAL_ENV === undefined) delete process.env.ENCRYPTION_KEY
     else process.env.ENCRYPTION_KEY = ORIGINAL_ENV
+    if (ORIGINAL_PREV_ENV === undefined) delete process.env.ENCRYPTION_KEY_PREV
+    else process.env.ENCRYPTION_KEY_PREV = ORIGINAL_PREV_ENV
     jest.resetModules()
   })
 
-  function loadWithKey(key) {
+  function loadWithKey(key, prevKey) {
     jest.resetModules()
     if (key === undefined) delete process.env.ENCRYPTION_KEY
     else process.env.ENCRYPTION_KEY = key
+    if (prevKey === undefined) delete process.env.ENCRYPTION_KEY_PREV
+    else process.env.ENCRYPTION_KEY_PREV = prevKey
     return require('../encryption')
   }
 
@@ -77,5 +83,55 @@ describe('encryption.js (SEC-3 fail-closed)', () => {
     expect(decrypt('')).toBe('')
     expect(decrypt(undefined)).toBe('')
     expect(decrypt(null)).toBe('')
+  })
+
+  // Plan 4 Step 4.4: rotation exercised with mixed-version records.
+  describe('key rotation (v1 -> v2)', () => {
+    test('steady state (no ENCRYPTION_KEY_PREV): everything is v1', () => {
+      const { encrypt } = loadWithKey(TEST_KEY)
+      expect(encrypt('secret')).toMatch(/^v1:/)
+    })
+
+    test('a v1 record written before rotation still decrypts once ENCRYPTION_KEY_PREV is set', () => {
+      // Phase 1: pre-rotation, only the old key is configured.
+      const pre = loadWithKey(TEST_KEY)
+      const legacyRecord = pre.encrypt('old-binance-secret')
+      expect(legacyRecord).toMatch(/^v1:/)
+
+      // Phase 2: rotation window — new ENCRYPTION_KEY, old key demoted to PREV.
+      const rotating = loadWithKey(TEST_KEY_V2, TEST_KEY)
+      expect(rotating.decrypt(legacyRecord)).toBe('old-binance-secret')
+    })
+
+    test('during rotation, new writes are tagged v2 and use the new key', () => {
+      const rotating = loadWithKey(TEST_KEY_V2, TEST_KEY)
+      const freshRecord = rotating.encrypt('new-binance-secret')
+      expect(freshRecord).toMatch(/^v2:/)
+      expect(rotating.decrypt(freshRecord)).toBe('new-binance-secret')
+    })
+
+    test('mixed-version records both decrypt correctly in the same rotation window', () => {
+      const pre = loadWithKey(TEST_KEY)
+      const v1Record = pre.encrypt('legacy-value')
+
+      const rotating = loadWithKey(TEST_KEY_V2, TEST_KEY)
+      const v2Record = rotating.encrypt('fresh-value')
+
+      expect(rotating.decrypt(v1Record)).toBe('legacy-value')
+      expect(rotating.decrypt(v2Record)).toBe('fresh-value')
+    })
+
+    test('after the rotation window closes (ENCRYPTION_KEY_PREV removed), old v1 records no longer decrypt', () => {
+      const pre = loadWithKey(TEST_KEY)
+      const v1Record = pre.encrypt('legacy-value')
+
+      // PREV dropped — the retired key's bytes are gone; a new deploy would
+      // reuse the "v1" version tag for CURRENT_KEY, so the old record now
+      // fails GCM authentication under the wrong key rather than hitting the
+      // "unrecognized envelope" branch — both are "no longer decryptable",
+      // which is the property this test cares about.
+      const postRotation = loadWithKey(TEST_KEY_V2)
+      expect(() => postRotation.decrypt(v1Record)).toThrow()
+    })
   })
 })

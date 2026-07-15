@@ -15,7 +15,11 @@ services:
       start_period: 5s
 
   timescaledb:
-    image: timescale/timescaledb:latest-pg16
+    # Plan 4 Step 4.5 (SEC-7): pinned to the exact version already running in
+    # this environment (was `latest-pg16`, which silently re-pulls a moving
+    # target on any image rebuild — a schema/behavior change could land with
+    # no warning). Bump deliberately, not implicitly.
+    image: timescale/timescaledb:2.26.1-pg16
     ports:
       - "5432:5432"
     environment:
@@ -37,8 +41,21 @@ services:
     ports:
       - "8000:8000"
     volumes: []
-    env_file:
-      - ./.env
+    # Plan 4 Step 4.3 (SEC-4): scoped to exactly what the engine reads — not
+    # the whole shared .env (which also holds JWT_SECRET, ENCRYPTION_KEY,
+    # GOOGLE_CLIENT_SECRET, none of which the engine needs or should see).
+    environment:
+      PYTHON_ENV: ${PYTHON_ENV}
+      ENGINE_PORT: ${ENGINE_PORT}
+      ENGINE_API_KEY: ${ENGINE_API_KEY}
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY}
+      SERVER_URL: ${SERVER_URL}
+      CLIENT_URL: ${CLIENT_URL}
+      MONGO_URI: ${MONGO_URI}
+      MONGO_DB: ${MONGO_DB}
+      TIMESCALE_URL: ${TIMESCALE_URL}
+      REDIS_URL: ${REDIS_URL}
+      BINANCE_FETCH_DELAY_MS: ${BINANCE_FETCH_DELAY_MS}
     depends_on:
       timescaledb:
         condition: service_healthy
@@ -68,8 +85,27 @@ services:
       - "5000:5000"
     volumes:
       - enma_server_node_modules:/app/node_modules
-    env_file:
-      - ./.env
+    # Plan 4 Step 4.3 (SEC-4): scoped to exactly what the server reads.
+    environment:
+      PORT: ${PORT}
+      NODE_ENV: ${NODE_ENV}
+      LOG_LEVEL: ${LOG_LEVEL}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN}
+      JWT_REFRESH_EXPIRES_IN: ${JWT_REFRESH_EXPIRES_IN}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      GOOGLE_CALLBACK_URL: ${GOOGLE_CALLBACK_URL}
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY}
+      SERVER_URL: ${SERVER_URL}
+      MONGO_URI: ${MONGO_URI}
+      MONGO_DB: ${MONGO_DB}
+      REDIS_URL: ${REDIS_URL}
+      ENGINE_URL: ${ENGINE_URL}
+      ENGINE_API_KEY: ${ENGINE_API_KEY}
+      CLIENT_URL: ${CLIENT_URL}
     depends_on:
       redis:
         condition: service_healthy
@@ -95,8 +131,14 @@ services:
       - "5173:5173"
     volumes:
       - enma_client_node_modules:/app/node_modules
-    env_file:
-      - ./.env
+    # Plan 4 Step 4.3 (SEC-4): the client previously received the ENTIRE
+    # shared .env — JWT_SECRET, ENCRYPTION_KEY, GOOGLE_CLIENT_SECRET, MONGO_URI,
+    # all of it — into a Node process running Vite with ~15 third-party
+    # dependencies, any one of which (via a compromised/malicious postinstall
+    # script) could exfiltrate process.env. Only public VITE_* build vars now.
+    environment:
+      VITE_API_URL: ${VITE_API_URL}
+      VITE_SOCKET_URL: ${VITE_SOCKET_URL}
     depends_on:
       server:
         condition: service_healthy

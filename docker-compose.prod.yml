@@ -21,7 +21,8 @@ services:
       start_period: 5s
 
   timescaledb:
-    image: timescale/timescaledb:latest-pg16
+    # Plan 4 Step 4.5 (SEC-7): pinned to match dev exactly — see docker-compose.yml.
+    image: timescale/timescaledb:2.26.1-pg16
     restart: unless-stopped
     environment:
       POSTGRES_DB: enma_candles
