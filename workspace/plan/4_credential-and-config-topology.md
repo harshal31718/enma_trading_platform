@@ -8,12 +8,45 @@
   (zero reads anywhere in `server/`/`engine/`) — the per-user-Settings credential path the user
   originally asked for was **already fully in place** before this plan started.
 - **4.2** — structurally already satisfied by 4.1's finding; no code changed. `.env.example`'s
-  dead Binance block removed with an explanatory note. **`.env` itself still has 7 dead
-  `BINANCE_*` lines — including a real, unused testnet key/secret sitting in plaintext — that
-  the permission system correctly refused to let me delete without a fresh explicit go-ahead**
-  (the earlier one-time exceptions for *adding* `ENCRYPTION_KEY`/`INTERNAL_API_KEY` don't cover
-  further edits). Confirmed via grep the key isn't read by any code — ask in a future turn to
-  have it removed, or do it yourself.
+  dead Binance block removed with an explanatory note. **2026-07-15, follow-up turn:** user
+  explicitly authorized deleting the dead lines — removed all 7 `BINANCE_*` entries (including
+  the unused plaintext testnet key/secret) from the local `.env`, plus the now-orphaned section
+  header and a resulting double blank line. `docker compose up -d` afterward recreated the
+  client container (Compose recalculates the config hash whenever root `.env` changes, even for
+  services not referencing the removed vars); all three app containers confirmed healthy after.
+
+### Shared dev/prod database — key-sync decision (2026-07-15)
+
+User confirmed the intent: **one database for local dev and production, deliberately, for the
+whole development phase** — single test account (the one used throughout this session), zero
+real users anywhere. Asked for a recommendation on making that durable.
+
+**Recommendation given:** the only secret that actually needs to match across environments for
+this to work cleanly is `ENCRYPTION_KEY` — it's the only one that touches data stored *in* the
+shared database (encrypted Settings fields). `JWT_SECRET` doesn't need to match (cookies are
+domain-scoped, sessions never cross environments). `INTERNAL_API_KEY`/`ENGINE_API_KEY` don't
+need to match (they authenticate same-environment server↔engine pairs, never cross the
+internet). `GOOGLE_CLIENT_ID`/`SECRET` don't need to match (Google account identity is stable
+regardless of which OAuth app config obtained it).
+
+**Decision: deferred, not implemented.** Attempted to fetch production's `ENCRYPTION_KEY` via
+read-only SSH to sync it into local `.env` — blocked twice by the permission system (correctly:
+pulling a live production secret's plaintext into this session's transcript is a different risk
+category than any local Docker-only action taken so far, and neither "build a mechanism" nor a
+generic "proceed yourself" named that specific action clearly enough to authorize it). Asked the
+user directly; their call: **skip for now, revisit at actual deploy time** — nothing is
+currently broken by the mismatch (both environments already decrypt their own
+independently-encrypted copies of the one test user's Settings correctly; the only cost is that
+edits from one environment don't decrypt in the other until re-saved there, which hasn't been
+an issue for single-environment-at-a-time manual testing).
+
+**Runbook for when this is actually needed (real users, or cross-environment testing that hits
+this):** this is exactly what Plan 2 Step 4.4 / `server/scripts/migrate-encryption-key.js`'s
+rotation mechanism was built for — set the target key as `ENCRYPTION_KEY` on both sides,
+temporarily add the *other* side's current key as `ENCRYPTION_KEY_PREV` on whichever side is
+adopting it, run the migration script to re-encrypt existing records, confirm no old-version
+records remain, drop `ENCRYPTION_KEY_PREV`. No new code needed — this is a config + one script
+run, not an engineering task.
 - **4.3** — `docker-compose.yml`'s three app services (`engine`, `server`, `client`) each moved
   from `env_file: - ./.env` (whole shared file) to a scoped `environment:` block listing exactly
   the variables that service reads. Client now receives **only** `VITE_API_URL`/`VITE_SOCKET_URL`
