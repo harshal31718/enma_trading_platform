@@ -56,14 +56,48 @@ already cost two rounds of "why did my test count drop" debugging. **Rule going 
 `docker compose build <service>` before every `up -d` that could recreate a container**, not
 just when you know you changed a dependency.
 
-**Session-wide plan (TaskCreate #1–13, tracked live):** 9.1–9.3 ✅ → browser checkpoint ✅ → Plan
-2 ✅ → 3 ✅ → 4 ✅ → **5 (next)** → 6 → 7 → 8 → quant remainder 9.4–9.10 → Plan 10 (Monte Carlo/
-Strategy Lab) → full UI polish + mobile/responsive pass (added mid-session per explicit user
-request). Committing at each plan checkpoint on `dev`, not pushing to remote without being asked.
-User stepped away mid-session and authorized continuing without pausing for input except on
-genuinely critical/irreversible actions; pending browser-verification items queue in TaskCreate
-#13 for when the user is back and logged in — **never attempt Google login autonomously, even
-without a password, under any circumstance.**
+**Also shipped this session (quant remainder + Plan 10 Phase 1a + UI pass):**
+- **Plan 9.4** (QNT-3, opt-in entry-candle SL/TP evaluation) and **9.5** (QNT-12, lookahead-bias
+  sentinel — all 5 seeded strategies pass, zero divergence) — both additive, default-off,
+  golden-master-safe. Plus the **QNT-15** perf fix (`AtrBracketRiskModel`'s ATR history kept
+  sorted incrementally instead of re-sorted every candle). 9.7/9.8/9.9/9.10 (funding ledger,
+  intrabar sim, remaining MC/stats work, fill-model ladder) remain — larger, genuinely
+  behavior-changing, correctly deferred. Detail: `9_backtest-and-optimizer-correctness.md`.
+- **Plan 10 Phase 1a**: rewrote the Monte Carlo engine core (`engine/services/monte_carlo.py`)
+  — vectorized block bootstrap replacing an O(n_runs×n_trades) i.i.d. Python loop, `scale_out`
+  legs excluded, equity-path compounding bug fixed (was silently mixing additive-computed
+  returns with multiplicative application). ~100x faster, response contract preserved. The
+  full job-based architecture (queue, `labResults`, Strategy Lab UI, optimizer exposure) is
+  **not started** — multi-day scope, explicitly out of reach this session. Detail:
+  `10_monte-carlo-strategy-lab.md`'s scoped-delivery note.
+- **UI pass**: live-tested the MC rewrite through the actual Risk Dashboard UI and caught a
+  real bug it exposed (`SimulationResults.jsx` hardcoded "N=2000" — fixed to read the real
+  run count). Desktop visual QA across Dashboard/Settings/Strategies/Trade/RiskDashboard/
+  AdminPanel/AlgoTrading — all clean, aesthetics invariant holds, no regressions from any
+  container restart this session (the user's live/now-stopped session data survived intact).
+  **Could not verify mobile/narrow-viewport rendering** — `resize_window` doesn't actually
+  change `window.innerWidth` in this environment (confirmed via JS, window stays maximized
+  regardless of the tool call's reported "success"); substituted a code-level audit of
+  Tailwind breakpoint usage instead (Navbar has a documented mobile drawer, `SessionCard.jsx`
+  has proper `grid-cols-1`→responsive breakpoints, the shared `Table` component wraps in
+  `overflow-auto` so wide tables scroll rather than break layout) — reasonable but not a
+  substitute for actually seeing it render narrow. Flag this tooling gap to a future session.
+
+**Session-wide plan (TaskCreate #1–13, all resolved except Plan 5):** 9.1–9.3 ✅ → browser
+checkpoint ✅ → Plan 2 ✅ → 3 ✅ → 4 ✅ → **Plan 5 — BLOCKED, see below** → 6/7/8 blocked by 5 →
+9.4/9.5/QNT-15 ✅ → Plan 10 Phase 1a ✅ → UI pass ✅. Committing at each checkpoint on `dev`, not
+pushing to remote without being asked.
+
+**Plan 5 is the one deliberate stop in this session — not a time/scope limit, a judgment call.**
+Plan 5 (Live-trading state integrity) is a 6-step architectural rewrite of the live trading
+state machine (event-sourcing log, real-fill booking, order idempotency, per-symbol locking,
+float→Decimal money math, restart recovery) that the plan document itself calls "the deepest
+design flaw in the repo" and says explicitly not to promote to mainnet before it ships. The
+user had a live algo session running the entire time this decision was made. Rewriting how
+fills/PnL/state work, unsupervised, at the tail of an already-long session, with no way to
+slowly validate each step against a running bot, is how this plan's own failure mode gets
+reintroduced instead of fixed. **Next session: get the user's explicit go-ahead on approach and
+timing before starting Plan 5** — everything downstream (Plans 6, 7, 8) is gated on it.
 
 **Open questions (carried forward, see each plan file for full context):** who signs off
 golden-master re-baselines for output-changing steps (9.4/9.7/9.8); keep or delete
