@@ -44,6 +44,16 @@ _TF_TO_BINANCE = {
 # Server URL for callbacks
 SERVER_URL = os.getenv("SERVER_URL", "http://server:5000")
 
+# Plan 3 Step 3.1 (SEC-1): shared secret authenticating engine -> Node
+# /internal/* calls (distinct from ENGINE_API_KEY, which authenticates the
+# other direction, Node -> engine).
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "")
+
+
+def _internal_headers() -> dict:
+    return {"X-Internal-Key": INTERNAL_API_KEY}
+
+
 TRADING_STATES = ("active", "reducing", "halted")
 
 
@@ -1857,6 +1867,7 @@ class LiveBotManager:
                 await client.patch(
                     f"{SERVER_URL}/internal/algo/sessions/{session_id}/stats",
                     json=data,
+                    headers=_internal_headers(),
                 )
         except Exception as e:
             logger.warning(f"[AlgoBot] Failed to notify Node for session {session_id}: {e}")
@@ -1865,7 +1876,7 @@ class LiveBotManager:
         """Call a Node internal endpoint and return parsed JSON response."""
         try:
             async with httpx.AsyncClient(timeout=45.0) as client:
-                resp = await client.post(f"{SERVER_URL}{path}", json=body)
+                resp = await client.post(f"{SERVER_URL}{path}", json=body, headers=_internal_headers())
                 return resp.json()
         except Exception as e:
             logger.error(f"[AlgoBot] Node internal call failed ({path}): {e}")

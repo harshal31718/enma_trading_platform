@@ -10,7 +10,7 @@ Statuses: `Draft` · `Ready` · `Blocked` · `Verify` · `Shipped` · `Merged→
 |----|-------|--------|----------|-------|------------|---------|---------|
 | 1  | Public access + admin-gated algo/testnet-start | Shipped | — | — | — | — | 2026-07-14 |
 | 2  | Safety net & guardrails | Shipped | P0 | 1–2 | — | 3,4,5 | 2026-07-15 |
-| 3  | Service-to-service trust | Ready | P0 | 1–2 | 2 | 4,8 | 2026-07-14 |
+| 3  | Service-to-service trust | Shipped | P0 | 1–2 | 2 | 4,8 | 2026-07-15 |
 | 4  | Credential & config topology | Ready | P1 | 1 | 2,3 | 8 | 2026-07-14 |
 | 5  | Live-trading state integrity | Ready | P0 | 3 | 2,3 | 6 | 2026-07-14 |
 | 6  | Engine decomposition & exchange abstraction | Ready | P2 | 4, 6.1 | 5 | 7 | 2026-07-14 |
@@ -52,8 +52,11 @@ a golden-master check per Rule C.
   in `2_safety-net-and-guardrails.md`'s "Shipped summary". **Flagged follow-up before Plan 4:**
   local dev shares production's MongoDB Atlas cluster — decide whether to give local dev its
   own database.
-- **3** — Closes the RCE strategy-code path and the unauthenticated `/internal` order routes.
-  Contains a product decision (3.2: retire UI strategy editing vs sandbox it) — needs sign-off.
+- **3** — Shipped 2026-07-15. Closed the RCE strategy-code path (removed, confirmed dead code
+  client-side) and authenticated `/internal/*` (distinct shared secret, constant-time compare
+  both directions), tiered Redis-backed rate limits. Full detail in
+  `3_service-to-service-trust.md`'s "Shipped summary" — includes a self-inflicted crash-loop
+  incident during the step, root-caused and fixed before moving on.
 - **4** — Implements the ".env → per-user Settings" directive for personal credentials + scopes
   container env + rotatable infra secrets.
 - **5** — Highest-value correctness work: exchange as source of truth for live trading state,

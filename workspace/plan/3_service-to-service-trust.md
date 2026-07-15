@@ -1,6 +1,60 @@
 # Plan 3 — Service-to-service trust
 
-**Status:** Ready · **Priority:** P0 · **Depends on:** 2 · **Related:** 4, 8
+**Status:** Shipped 2026-07-15 · **Priority:** P0 · **Depends on:** 2 · **Related:** 4, 8
+
+## Shipped summary
+
+All five steps landed. **Step 3.2 decision was made without a synchronous sign-off round-trip**:
+went with the plan's own stated default (option 1, remove the runtime code-write endpoints
+entirely), on user authorization to proceed on recommended paths while they were away.
+Justification beyond "it's the plan's default": empirically confirmed the write path was already
+dead code — `client/src/hooks/useStrategies.js`'s `useUpdateStrategyCode` was defined but
+imported nowhere, and `client/CLAUDE.md` already documented `CodeViewer.jsx` as read-only. Removing
+it deleted zero live user-facing capability. If a code-editing feature is wanted later, it needs
+a fresh design (sandboxed worker, option 2) — this did not preserve a disabled/gated version of
+the old endpoint to build on top of.
+
+- **3.1** — `server/src/middleware/requireInternalKey.js` (constant-time compare, distinct
+  `INTERNAL_API_KEY` secret) gates `/internal/*`. Engine's `_notify_node`/`_call_node_internal`
+  (`live_bot_manager.py`) and the startup reconciliation POST (`main.py`) attach `X-Internal-Key`.
+  Verified: unauthenticated/wrong-key curl → 401, correct key → 200, real engine startup
+  notification round-trips successfully post-restart.
+- **3.2** — removed `PUT /api/v1/strategies/:id/code` (Node route/controller) and
+  `PUT /strategies/{name}/code` (engine — `ast.parse`, class-name check, disk write,
+  `importlib.reload` into the live process, all gone) plus the unused client mutation hook.
+  `POST /strategies` (create/clone) untouched — confirmed it never accepted raw `code` from the
+  client (only `name`/`description`/`sourceName`/`template`), so it isn't the RCE vector and
+  isn't affected. Verified: `PUT .../code` now 405; `GET .../code` (used by the read-only
+  `CodeViewer.jsx`) still 200.
+- **3.3** — interim only, as scoped: `X-Binance-*` redaction already shipped in Plan 2.4's pino
+  config. Moving the secret out of headers entirely wais on Plan 4.
+- **3.4** — `server/src/middleware/rateLimiters.js`: three Redis-backed tiers (`rate-limit-redis`,
+  new dependency) — `authLimiter` (20/15min) on `/api/v1/auth`, `mutatingLimiter` (60/min) on
+  the entire `/api/v1/trade` and `/api/v1/algo` mounts (simpler and still correct-in-spirit than
+  splitting by HTTP method within those routers — both are higher blast-radius than generic
+  reads regardless of verb), `readLimiter` (10k/15min, the old global default) on everything
+  else. Verified via Redis key inspection (`rl:auth:*`, `rl:mutate:*`, `rl:read:*` all populate
+  correctly per-IP).
+- **3.5** — Node: `crypto.timingSafeEqual` in `requireInternalKey.js` (with an explicit
+  equal-length pre-check, since `timingSafeEqual` throws rather than returning false on a length
+  mismatch — Python's `hmac.compare_digest` doesn't have that footgun). Engine: `main.py`'s
+  `require_api_key` (Node → engine direction) now uses `hmac.compare_digest`.
+
+**Self-inflicted incident during this step (documented, not hidden):** a mid-edit crash loop —
+added a `rate-limit-redis` import before rebuilding the server image to install it, and
+separately the server container had gone stale (missing `ENCRYPTION_KEY`/`INTERNAL_API_KEY` in
+its process env despite `.env` having them — root cause not fully diagnosed, worked around by a
+clean rebuild + recreate). Caused the "Network error: Backend server is unreachable" toast the
+user saw repeatedly in-browser. Root-caused and fixed within the same step by rebuilding both
+images and recreating the containers; server confirmed stable (healthy, no restart loop) before
+moving on.
+
+**Files:** `server/src/middleware/{requireInternalKey,rateLimiters}.js` (new),
+`server/src/middleware/__tests__/requireInternalKey.test.js` (new), `server/src/app.js`,
+`server/src/routes/strategy.routes.js`, `server/src/controllers/strategy.controller.js`,
+`client/src/hooks/useStrategies.js`, `server/package.json`, `engine/main.py`,
+`engine/core/live_bot_manager.py`, `engine/routers/strategies.py`, `.env` (added
+`INTERNAL_API_KEY`), `.env.example`, `.env.ci`.
 
 > Source issues: SEC-1, SEC-2, SEC-5, SEC-6, SYS-1. These are the two most dangerous holes
 > in the system (unauthenticated internal order routes; RCE via strategy-code write) plus the

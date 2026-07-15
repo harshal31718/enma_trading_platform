@@ -51,16 +51,3 @@ export function useStrategyParams(id) {
     gcTime: 1000 * 60 * 15,
   })
 }
-
-export function useUpdateStrategyCode(id) {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: async (code) => {
-      const res = await api.put(`/api/v1/strategies/${id}/code`, { code })
-      return res.data.data
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['strategies', id, 'code'] })
-    },
-  })
-}

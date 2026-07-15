@@ -9,6 +9,7 @@ sys.path.insert(0, '/')
 
 import asyncio
 import contextvars
+import hmac
 import logging
 import uuid
 from contextlib import asynccontextmanager
@@ -58,6 +59,8 @@ for _handler in logging.getLogger().handlers:
 logger = logging.getLogger(__name__)
 
 ENGINE_API_KEY = os.getenv("ENGINE_API_KEY", "")
+# Plan 3 Step 3.1 (SEC-1): shared secret for engine -> Node /internal/* calls.
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "")
 CLIENT_ORIGIN = os.getenv("CLIENT_URL", "http://localhost:5173")
 SERVER_ORIGIN = os.getenv("SERVER_URL", "http://localhost:5000")
 EXCHANGE_RULES_REFRESH_INTERVAL_S = 30 * 60  # utils/symbols.py _rules_cache — see round_price()
@@ -132,7 +135,11 @@ async def lifespan(app: FastAPI):
     try:
         import httpx
         async with httpx.AsyncClient() as client:
-            resp = await client.post(f"{SERVER_ORIGIN}/internal/algo/engine-startup", timeout=10.0)
+            resp = await client.post(
+                f"{SERVER_ORIGIN}/internal/algo/engine-startup",
+                timeout=10.0,
+                headers={"X-Internal-Key": INTERNAL_API_KEY},
+            )
             if resp.status_code == 200:
                 logger.info("Notified Node server of engine startup for session/lock reconciliation")
             else:
@@ -168,7 +175,9 @@ async def require_api_key(request: Request, call_next):
         return await call_next(request)
 
     api_key = request.headers.get("X-API-Key")
-    if not api_key or api_key != ENGINE_API_KEY:
+    # Plan 3 Step 3.5 (SEC-8): constant-time compare — a naive `!=` leaks
+    # timing information proportional to the shared-prefix length.
+    if not api_key or not hmac.compare_digest(api_key, ENGINE_API_KEY):
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
     return await call_next(request)

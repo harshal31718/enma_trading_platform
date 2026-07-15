@@ -4,7 +4,6 @@ const cors = require('cors')
 const pinoHttp = require('pino-http')
 const mongoose = require('mongoose')
 const Redis = require('ioredis')
-const rateLimit = require('express-rate-limit')
 const cookieParser = require('cookie-parser')
 
 require('./config/passport')
@@ -26,7 +25,8 @@ const orderHistoryRoutes = require('./routes/orderHistory.routes')
 const riskRoutes = require('./routes/risk.routes')
 const errorHandler = require('./middleware/errorHandler')
 const { verifyJWT } = require('./middleware/auth.middleware')
-const ApiError = require('./utils/ApiError')
+const requireInternalKey = require('./middleware/requireInternalKey')
+const { authLimiter, mutatingLimiter, readLimiter } = require('./middleware/rateLimiters')
 
 const passport = require('passport')
 
@@ -51,15 +51,6 @@ app.use(pinoHttp({
 }))
 app.use(express.json())
 app.use(passport.initialize())
-
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 10000,
-  handler: (req, res, next) => {
-    next(new ApiError(429, 'TOO_MANY_REQUESTS', 'Too many requests from this IP, please try again after 15 minutes'))
-  },
-})
-app.use('/api/v1/', apiLimiter)
 
 // Unprotected
 app.get('/api/v1/health', async (req, res) => {
@@ -88,22 +79,24 @@ app.get('/api/v1/health', async (req, res) => {
   res.status(statusCode).json(health)
 })
 
-app.use('/api/v1/auth', authRoutes)
-app.use('/internal', internalRoutes)
+app.use('/api/v1/auth', authLimiter, authRoutes)
+// Plan 3 Step 3.1 (SEC-1): engine-only callbacks that can place/close real
+// Binance orders — previously completely unauthenticated.
+app.use('/internal', requireInternalKey, internalRoutes)
 
 // JWT gate — all routes below require a valid cookie
 app.use('/api/v1', verifyJWT)
 
-app.use('/api/v1/strategies', strategyRoutes)
-app.use('/api/v1/candles', candleRoutes)
-app.use('/api/v1/backtest', backtestRoutes)
-app.use('/api/v1/dashboard', dashboardRoutes)
-app.use('/api/v1/trade', tradeRoutes)
-app.use('/api/v1/algo', algoRoutes)
-app.use('/api/v1/settings', settingsRoutes)
-app.use('/api/v1/order-history', orderHistoryRoutes)
-app.use('/api/v1/risk', riskRoutes)
-app.use('/api/v1/admin', adminRoutes)
+app.use('/api/v1/strategies', readLimiter, strategyRoutes)
+app.use('/api/v1/candles', readLimiter, candleRoutes)
+app.use('/api/v1/backtest', readLimiter, backtestRoutes)
+app.use('/api/v1/dashboard', readLimiter, dashboardRoutes)
+app.use('/api/v1/trade', mutatingLimiter, tradeRoutes)
+app.use('/api/v1/algo', mutatingLimiter, algoRoutes)
+app.use('/api/v1/settings', readLimiter, settingsRoutes)
+app.use('/api/v1/order-history', readLimiter, orderHistoryRoutes)
+app.use('/api/v1/risk', readLimiter, riskRoutes)
+app.use('/api/v1/admin', readLimiter, adminRoutes)
 
 app.use(errorHandler)
 

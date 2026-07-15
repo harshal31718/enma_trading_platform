@@ -4,14 +4,12 @@ const {
     listStrategies,
     createStrategy,
     getStrategyCode,
-    updateStrategyCode,
     getStrategyParams,
 } = require('../controllers/strategy.controller')
 
 router.get('/', listStrategies)
 router.post('/', createStrategy)
 router.get('/:id/code', getStrategyCode)
-router.put('/:id/code', updateStrategyCode)
 router.get('/:id/params', getStrategyParams)
 
 module.exports = router

@@ -69,8 +69,22 @@ unresolved risk worth a deliberate call before Plan 4 (credential/config topolog
 golden-master step is an execution smoke check only (`continue-on-error`), not yet a byte-level
 regression gate — no baseline is committed to the repo.
 
+**Done — Plan 3 (Service-to-service trust), all 5 steps, Shipped:** authenticated `/internal/*`
+(new `INTERNAL_API_KEY`, constant-time compare both directions — Node's `crypto.timingSafeEqual`,
+engine's `hmac.compare_digest`); removed the strategy-code-write RCE path entirely (`PUT
+.../strategies/:id/code` on both Node and engine, plus the unused client hook) — **3.2's product
+decision was made without a sign-off round-trip**, using the plan's own stated default (retire,
+not sandbox) under the user's "proceed on recommended paths" authorization, and confirmed
+empirically that the write path was already dead/unused client-side before removing it; tiered
+Redis-backed rate limits (auth/mutating/read) replacing the one global limiter. **Full detail in
+`3_service-to-service-trust.md`'s "Shipped summary"**, including a self-inflicted crash-loop
+incident mid-step (stale server container + an uninstalled dependency reference) that surfaced
+as a repeating "Network error: Backend server is unreachable" toast in the user's browser —
+root-caused and fixed (clean rebuild + recreate) before moving on; server confirmed stable
+afterward.
+
 **Session-wide plan (TaskCreate #1–13, tracked live, not repeated here):** Plan 9.1–9.3 ✅ →
-browser checkpoint ✅ → Plan 2 ✅ → Plan 3 → 4 → 5 → 6 → 7 → 8 → quant remainder 9.4–9.10 → Plan
+browser checkpoint ✅ → Plan 2 ✅ → Plan 3 ✅ → 4 → 5 → 6 → 7 → 8 → quant remainder 9.4–9.10 → Plan
 10 (Monte Carlo/Strategy Lab) → full UI polish + mobile/responsive pass (added mid-session per
 explicit user request). Committing at each plan/phase checkpoint on `dev`, not pushing to remote
 without being asked. User stepped away mid-session and authorized continuing without pausing for
@@ -87,15 +101,19 @@ requestContext}.js` (new), `server/src/middleware/requestId.js` (new), `server/s
 `server/src/services/engineClient.js`, `server/src/middleware/errorHandler.js`, `server/src/
 models/BacktestTrade.js`, `server/package.json`, `client/src/tests/{setup.js,
 pages.smoke.test.jsx}` (new), `client/src/pages/Backtest.jsx`, `client/src/utils/exporters.js`,
-`.env` (added `ENCRYPTION_KEY`), `.env.ci` (new), `docker-compose.ci.yml` (new),
-`.github/workflows/ci.yml` (new), `workspace/plan/0_tracker.md`, `workspace/plan/
-9_backtest-and-optimizer-correctness.md`, `workspace/plan/2_safety-net-and-guardrails.md`.
+`.env` (added `ENCRYPTION_KEY`, `INTERNAL_API_KEY`), `.env.ci`, `.env.example`,
+`docker-compose.ci.yml` (new), `.github/workflows/ci.yml` (new), `server/src/middleware/
+{requireInternalKey,rateLimiters}.js` (new + tests), `server/src/routes/strategy.routes.js`,
+`server/src/controllers/strategy.controller.js`, `client/src/hooks/useStrategies.js`,
+`engine/core/live_bot_manager.py`, `engine/routers/strategies.py`, `workspace/plan/0_tracker.md`,
+`workspace/plan/9_backtest-and-optimizer-correctness.md`, `workspace/plan/
+2_safety-net-and-guardrails.md`, `workspace/plan/3_service-to-service-trust.md`.
 
 **Open questions:** who signs off golden-master re-baselines for output-changing steps
-(9.4/9.7/9.8); keep or delete `IcebergAlgorithm`; Plan 3.2 product decision (retire vs sandbox UI
-strategy editing) needs the user's sign-off when Plan 3 is reached; **new — local dev vs.
-production sharing one MongoDB Atlas cluster** (see Plan 2 summary above), should be settled
-before or during Plan 4.
+(9.4/9.7/9.8); keep or delete `IcebergAlgorithm`; **local dev vs. production sharing one MongoDB
+Atlas cluster** (see Plan 2 summary), should be settled before or during Plan 4; if strategy
+code-editing is ever wanted again, it needs a fresh sandboxed design (Plan 3.2 removed the
+endpoint outright, nothing to re-enable).
 
 ---
 ## 2026-07-14 — Quant-Core Deep-Dive Audit (planning only, no code) — COMPLETE ✅

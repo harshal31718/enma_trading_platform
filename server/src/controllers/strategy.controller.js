@@ -59,27 +59,6 @@ async function getStrategyCode(req, res, next) {
   }
 }
 
-async function updateStrategyCode(req, res, next) {
-  try {
-    const strategy = await Strategy.findById(req.params.id).lean()
-    if (!strategy) throw new ApiError(404, 'NOT_FOUND', 'Strategy not found')
-
-    const response = await engineClient.put(`/strategies/${strategy.name}/code`, {
-      code: req.body.code,
-    })
-
-    res.json(ApiResponse.success(response.data.data))
-  } catch (err) {
-    if (err.response?.status === 400) {
-      return next(new ApiError(400, 'BAD_REQUEST', err.response.data.detail || 'Invalid strategy code'))
-    }
-    if (err.response?.status === 404) {
-      return next(new ApiError(404, 'NOT_FOUND', 'Strategy file not found on engine'))
-    }
-    next(err)
-  }
-}
-
 async function getStrategyParams(req, res, next) {
   try {
     const strategy = await Strategy.findById(req.params.id).lean()
@@ -99,4 +78,4 @@ async function getStrategyParams(req, res, next) {
   }
 }
 
-module.exports = { listStrategies, createStrategy, getStrategyCode, updateStrategyCode, getStrategyParams }
+module.exports = { listStrategies, createStrategy, getStrategyCode, getStrategyParams }

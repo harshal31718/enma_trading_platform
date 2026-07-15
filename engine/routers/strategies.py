@@ -1,8 +1,6 @@
 import asyncio
-import ast
 import importlib
 import re
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -113,10 +111,6 @@ class StrategyCreateRequest(BaseModel):
         return template
 
 
-class StrategyCodeUpdateRequest(BaseModel):
-    code: str
-
-
 @router.get("")
 async def list_strategies():
     """Returns strategy metadata from MongoDB"""
@@ -212,47 +206,6 @@ async def create_strategy(req: StrategyCreateRequest):
             }
         },
     }
-
-
-@router.put("/{name}/code")
-async def update_strategy_code(name: str, req: StrategyCodeUpdateRequest):
-    """Writes updated strategy source code to disk."""
-    strategy_name = _validate_strategy_name(name)
-    strategy_path = _get_strategy_path(strategy_name)
-
-    if not await asyncio.to_thread(strategy_path.exists):
-        raise HTTPException(
-            status_code=404, detail=f"Strategy '{strategy_name}' not found"
-        )
-
-    try:
-        ast.parse(req.code)
-    except SyntaxError as exc:
-        raise HTTPException(
-            status_code=400, detail=f"Syntax error in strategy code: {exc}"
-        )
-
-    top_class = _detect_top_level_class_name(req.code)
-    if top_class != strategy_name:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Strategy code must define a top-level class named '{strategy_name}'. Found '{top_class or 'none'}'.",
-        )
-
-    await asyncio.to_thread(strategy_path.write_text, req.code, encoding="utf-8")
-
-    db = get_database()
-    await db.strategies.update_one(
-        {"name": strategy_name},
-        {"$set": {"updatedAt": datetime.now(timezone.utc)}},
-    )
-
-    module_name = f"strategies.{strategy_name}"
-    if module_name in sys.modules:
-        importlib.reload(sys.modules[module_name])
-
-    now = datetime.now(timezone.utc).isoformat()
-    return {"success": True, "data": {"savedAt": now}}
 
 
 @router.get("/{name}/code")
