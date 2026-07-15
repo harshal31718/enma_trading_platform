@@ -7,6 +7,63 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
+## 2026-07-15 — Plan 9.1–9.3 shipped (quant P0 bug fixes); autonomous multi-plan session started — IN PROGRESS 🔄
+
+**Goal:** User asked to pick up the prior session and, per standing instruction, to then drive
+continuously through the **entire `workspace/plan` catalog** (all plans, all tracks) without
+stopping for check-ins — commit at each checkpoint, only surface genuine blockers (destructive
+git ops, product decisions like Plan 3.2, secrets/`.env`). This entry covers the first
+checkpoint; later checkpoints in this same session will be appended above this one on the next
+handoff write (subject to the 3-entry cap) if the session is still running when a new entry is
+due — check `git log` for anything shipped after this note.
+
+**Done — Plan 9.1–9.3 (QNT-1, QNT-2, QNT-17), all P0, all Shipped:**
+1. **QNT-1** — `services/backtest_runner.py` `_run_shared_portfolio` now calls
+   `adapters[sym].record_equity(strategy, time_t)` after `evaluate_and_route` each candle (it
+   never called this before — the only place that cleared `_entered_this_candle`, which
+   `kernel.check_exits` early-returns on). New test `tests/test_multi_symbol_portfolio_exits.py`
+   drives `_run_shared_portfolio` directly with 2 synthetic symbols and asserts both exit via
+   `stop_loss` + exact cash conservation. Live-data proof: 2-symbol golden-master run now shows
+   real `stop_loss`/`take_profit` exits (previously structurally impossible). Checked
+   `backtestResults` for `symbol` containing "," (the migration the audit called for) — none
+   exist in this environment, so no stale-flag migration was needed.
+2. **QNT-2** — `core/kernel.py` `evaluate_and_route` snapshots `_close_at_open`/`_pending_flip`
+   before the exec-algo clear and restores them after. Two new tests in
+   `tests/test_exec_algo_slicing.py` confirm a close/flip survives an active TWAP algo and
+   actually fires on the next candle.
+3. **QNT-17** — `services/backtest_runner.py`'s `backtestResults` write now persists
+   `alphaParams`, `riskParams`, `slippagePct`, `fundingEnabled`, `fundingRate` (
+   `leverage_sensitivity_runner.py` already read these via `parent.get(...)` — it was written
+   against this contract from the start; the fields were simply never being saved).
+4. **Verification:** single-symbol golden master byte-identical before/after
+   (`pre_qnt1_2_3_baseline` vs `post_qnt1_2_3_fix`, tol=1e-6, 5 strategies) — confirms zero
+   regression on the existing shipped path. Full engine test suite: 84/84 green. New
+   multi-symbol golden-master baseline captured (`multi_symbol_baseline_post_fix`) for future
+   re-baseline diffing on steps 9.4+.
+5. Docs updated: `0_tracker.md` (row 9 + Notes section — also **fixed a pre-existing truncation
+   bug** from the 2026-07-14 session: the Notes section and plan-9 step descriptions were cut
+   off mid-sentence in commit `a5c0bf7`, notes for plans 6–10 were missing entirely; both
+   completed), `9_backtest-and-optimizer-correctness.md` (9.1–9.3 marked Shipped with detail).
+
+**Session-wide plan (TaskCreate #1–12, tracked live, not repeated here):** finish 9.1–9.3 →
+browser-verify the backtest UI still works end-to-end → hardening track Plan 2 → 3 → 4 → 5 → 6
+→ 7 → 8 → quant remainder 9.4–9.10 → Plan 10 (Monte Carlo/Strategy Lab) → full UI polish +
+mobile/responsive pass (last, added mid-session per explicit user request). Committing at each
+plan/phase checkpoint on `dev`, not pushing to remote without being asked. Also asked to
+periodically re-verify via `claude-in-chrome` after each checkpoint that the app still actually
+works, not just that tests pass.
+
+**Files changed:** `engine/services/backtest_runner.py`, `engine/core/kernel.py`,
+`engine/tests/test_multi_symbol_portfolio_exits.py` (new),
+`engine/tests/test_exec_algo_slicing.py`, `workspace/plan/0_tracker.md`,
+`workspace/plan/9_backtest-and-optimizer-correctness.md`.
+
+**Open questions (unchanged, still open, deferred to when 9.4/9.7/9.8 are reached):** who signs
+off golden-master re-baselines for output-changing steps; keep or delete `IcebergAlgorithm`
+(untestable under the constant-slippage fill model until 9.10 lands); Plan 3.2 product decision
+(retire vs sandbox UI strategy editing) needs the user's sign-off when Plan 3 is reached.
+
+---
 ## 2026-07-14 — Quant-Core Deep-Dive Audit (planning only, no code) — COMPLETE ✅
 
 **Goal:** Deep-dive the algotrading core (backtest runner, kernel, fill/margin models, metrics,
@@ -56,8 +113,9 @@ shelf"); `0_tracker.md` gained a Phase column + two-track session protocol. Old 
 (contents relocated, `04_improvement_roadmap.md` superseded by `0_roadmap.md`).
 
 **Open questions:** who signs off golden-master re-baselines for output-changing steps
-(9.4/9.7/9.8); flag/migrate existing multi-symbol `backtestResults` as stale now or with 9.1;
-keep or delete `IcebergAlgorithm` (untestable under constant-slippage fill model).
+(9.4/9.7/9.8); flag/migrate existing multi-symbol `backtestResults` as stale now or with 9.1
+(**resolved 2026-07-15: none exist, no migration needed**); keep or delete `IcebergAlgorithm`
+(untestable under constant-slippage fill model).
 
 ---
 ## 2026-07-03 — UI Fixes: Bot Stopping State, Session List Ranking, Dashboard Section Alignments — COMPLETE ✅
@@ -73,51 +131,3 @@ keep or delete `IcebergAlgorithm` (untestable under constant-slippage fill model
 **Verification done:** Build compilation verified via `npm run build`.
 
 **Files changed:** `client/src/components/algo/SessionCard.jsx`, `client/src/pages/AlgoTrading.jsx`, `client/src/features/dashboard/StrategyLeaderboard.jsx`, `client/src/pages/Dashboard.jsx`.
-
----
-## 2026-07-03 — Chaos Mode Diagnosis + Bot Session Caps + Testnet-Invalid Symbol Blacklist — COMPLETE ✅
-
-**Goal:** User reported chaos-mode WS disconnect storms + TP-order 400s, then a 53-real-vs-4-tracked
-open-position gap. Diagnosed root causes, fixed them, added configurable per-environment session caps
-per the user's exact spec, then fixed a Chaos Wizard UI bug and a distinct testnet-symbol-validity bug
-found while verifying against the live stack.
-
-**Done:**
-1. **Diagnosis + fixes (DECISIONS.md #21/#22 context, no dedicated decision entry for these — see git
-   history for the 6-finding writeup):** WS reconnect thundering herd (no backoff/jitter) → capped
-   exponential backoff + full jitter. Stale exchange-rules cache causing TP algoOrder 400s → periodic
-   30-min refresh + loud warning on cache-miss. Quarterly/delivery contracts (e.g. `ETHUSDT_260925`)
-   reaching TP placement → `contractType` filtering in `get_all_symbols()`. `stop_session()`'s serial
-   close loop timing out and silently reporting `openPositions: []` regardless of what actually closed
-   → bounded-concurrency (semaphore=8) close loop, only reports confirmed-closed symbols.
-   `reconciliation.js` wiping `openPositions` in Mongo before confirming closes → reordered to
-   close-then-write. No full-account safety net → new periodic (10 min) `reconcileFullAccountPositions`
-   sweep, alert-only (does not auto-close).
-2. **Configurable bot session caps (DECISIONS.md #21):** new `Settings.limits.{testnet,mainnet}.
-   {maxSymbolsPerBot,maxConcurrentBots}` + `Settings.chaosMaxTotalSymbols`, replacing the removed
-   `chaosMaxStrategies` (one unified concurrent-bot cap now governs both manual bots and Chaos Mode).
-   Enforced in `algo.controller.js`'s `startSession()`/`startChaos()` (chaos truncates to available
-   slots and reports skips via `errors`, not a hard reject); `chaosAllocator.js`'s round-robin bounded
-   by both the per-strategy and run-wide caps as running counters (not pool pre-truncation, to preserve
-   tier-priority mix); `Settings.jsx` UI added (testnet card live, mainnet card marked "Future" — no
-   enforcement path exists for mainnet, added as pure future-proofing per user instruction); engine
-   `StartSessionRequest.symbols` got a defensive `max_length=250`. Also hardcoded `_getBinanceHeaders()`
-   to `'testnet'` (was reading `Settings.mode`, a latent landmine — harmless today, fixed for
-   consistency with every other Binance-header call site).
-3. **`ChaosWizard.jsx` fix:** its client-side allocation-preview algorithm was a stale duplicate of the
-   OLD unbounded round-robin (from before item 2) and still read the removed `chaosMaxStrategies` field
-   — dialog showed 120+ symbols/strategy even though the server now correctly capped and truncated on
-   launch ("bots started correctly, dialog box showing wrong" — user-reported). Rewrote the preview to
-   mirror `chaosAllocator.js`'s bounded algorithm exactly.
-4. **Testnet-invalid-symbol blacklist (DECISIONS.md #22):** ~60 symbols in demo-fapi's `exchangeInfo`
-   (status=TRADING, contractType=PERPETUAL) are rejected outright by the testnet matching engine —
-   confirmed via a definitive HTTP 400 on both `leverageBracket` and real order placement for the same
-   symbols. New `is_symbol_invalid()` in `utils/symbols.py` blacklists on a definitive 400 specifically
-   (not 429/5xx/timeout, which stay transient/retryable); `get_all_symbols()` excludes blacklisted
-   symbols from future pairlists/Chaos pools; `live_bot_manager.py` aborts a symbol's loop immediately
-   (right after the leverage probe, before opening a WS connection) instead of retrying a doomed order
-   every candle close forever.
-
-**Verification done:** All Python/Node files import/load-check clean in-container after every change.
-Full `docker compose down && up --build -d` cycle run twice. **Environment gotcha worth remembering:**
-`engine` and `client` both ha

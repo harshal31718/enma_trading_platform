@@ -630,6 +630,12 @@ async def _run_shared_portfolio(
         await kernel.check_exits(strategy, sym, candle, is_live=False, index_t=t, time_t=time_t)
         await kernel.evaluate_and_route(strategy, sym, candle, is_live=False, index_t=t, time_t=time_t)
 
+        # QNT-1: clears the per-candle `_entered_this_candle` flag (kernel.check_exits
+        # early-returns while it's set) and updates trade excursions (_mfe/_mae) — this
+        # path never called record_equity, so the flag stuck forever after a symbol's
+        # first entry and every later SL/TP/liquidation/funding check was skipped.
+        adapters[sym].record_equity(strategy, time_t)
+
         # Write realized cash changes (fees, realized PnL) back to the shared wallet.
         shared_balance = strategy.balance
 
@@ -1124,6 +1130,13 @@ async def run_backtest_simulation(
     actual_start = rows_by_sym[first_sym][0]["time"].isoformat()
     actual_end   = rows_by_sym[first_sym][-1]["time"].isoformat()
 
+    # QNT-17: persist the full run config so re-derived runs (leverage sensitivity,
+    # Monte Carlo, any future re-simulation) reproduce THIS run's params instead of
+    # silently falling back to defaults. leverage_sensitivity_runner.py already reads
+    # these fields back via parent.get(...) — they were simply never being written.
+    _effective_slippage_pct = slippage_pct if slippage_pct is not None else SLIPPAGE_PCT
+    _effective_funding_rate = funding_rate if funding_rate is not None else FUNDING_RATE
+
     await db.backtestResults.update_one(
         {"jobId": job_id},
         {
@@ -1140,6 +1153,11 @@ async def run_backtest_simulation(
                 "capital":      capital,
                 "leverage":     leverage,
                 "feeRate":      fee_rate,
+                "slippagePct":  _effective_slippage_pct,
+                "fundingEnabled": funding_enabled,
+                "fundingRate":  _effective_funding_rate,
+                "alphaParams":  alpha_params or {},
+                "riskParams":   risk_params or {},
                 "status":       "completed",
                 "metrics":      metrics,
                 "equityCurve":  equity_curve_docs,

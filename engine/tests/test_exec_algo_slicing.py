@@ -165,3 +165,101 @@ def test_iceberg_fills_full_parent_quantity():
     assert abs(total - 6.0) < 1e-9, f"parent under-filled: {adapter.fills}"
     assert adapter.fills[0][0] == "enter"
     assert all(intent == "add" for intent, _ in adapter.fills[1:])
+
+
+# ── QNT-2 regression: exec-algo mode must not erase close/flip intents ────────
+#
+# Before the fix, the kernel's exec-algo branch unconditionally cleared
+# strategy._close_at_open / strategy._pending_flip before re-routing. Since
+# DefaultExecution.route() encodes a close/flip via those two attributes and
+# returns plan=None, nothing re-created the intent — it was silently erased
+# every time an exec-algo (TWAP/VWAP/Iceberg) was configured.
+
+class _ExitRecordingAdapter(ExecutionAdapter):
+    def __init__(self):
+        self.exits = []
+        self.flips = []
+
+    async def execute_entry(self, strategy, symbol, direction, qty, ref_price,
+                            time_t, index_t, intent="enter", adjust_tag=""):
+        return True
+
+    async def execute_exit(self, strategy, symbol, qty, exit_price, reason,
+                           time_t, index_t, high_t, low_t):
+        self.exits.append((reason, qty))
+        strategy.position = None
+        strategy._pending_flip = None
+
+    async def execute_flip(self, strategy, symbol, new_direction, new_qty, ref_price,
+                           time_t, index_t, high_t, low_t, stop_loss=None, take_profit=None):
+        self.flips.append((new_direction, new_qty))
+        strategy.position = _FakePosition(new_direction, new_qty, ref_price)
+        return True
+
+    async def execute_reduce(self, strategy, symbol, qty, exit_price, time_t, index_t, adjust_tag=""):
+        pass
+
+    async def verify_position(self, strategy, symbol):
+        pass
+
+
+def test_twap_close_at_open_survives_exec_algo_clear():
+    strat = _FakeStrategy()
+    strat.position = _FakePosition("long", 5.0, 100.0)
+    adapter = _ExitRecordingAdapter()
+    algo = TWAPAlgorithm(strat, "BTCUSDT", {"slices": 3})
+    kernel = ExecutionKernel(adapter, algo)
+
+    def fake_evaluate(strategy, current_holding=0.0):
+        strategy._close_at_open = True
+        return None
+
+    orig = kernel_mod.evaluate
+    kernel_mod.evaluate = fake_evaluate
+    try:
+        candle = np.array([1_700_000_000_000.0, 100.0, 100.0, 101.0, 99.0, 5000.0])
+        # Candle t: route() (faked) sets _close_at_open — the exec-algo clear
+        # must not erase it.
+        asyncio.get_event_loop().run_until_complete(
+            kernel.evaluate_and_route(strat, "BTCUSDT", candle, False, 0, None))
+        assert strat._close_at_open is True, (
+            "QNT-2 regression: exec-algo clear erased _close_at_open")
+
+        # Candle t+1: execute_pending must see the surviving intent and close.
+        asyncio.get_event_loop().run_until_complete(
+            kernel.execute_pending(strat, "BTCUSDT", candle, 1, None))
+    finally:
+        kernel_mod.evaluate = orig
+
+    assert adapter.exits == [("strategy_exit", 5.0)], f"close never executed: {adapter.exits}"
+    assert strat.position is None
+
+
+def test_twap_pending_flip_survives_exec_algo_clear():
+    strat = _FakeStrategy()
+    strat.position = _FakePosition("long", 5.0, 100.0)
+    adapter = _ExitRecordingAdapter()
+    algo = TWAPAlgorithm(strat, "BTCUSDT", {"slices": 3})
+    kernel = ExecutionKernel(adapter, algo)
+
+    def fake_evaluate(strategy, current_holding=0.0):
+        strategy._pending_flip = {"direction": "short", "qty": 5.0,
+                                   "stop_loss": None, "take_profit": None}
+        return None
+
+    orig = kernel_mod.evaluate
+    kernel_mod.evaluate = fake_evaluate
+    try:
+        candle = np.array([1_700_000_000_000.0, 100.0, 100.0, 101.0, 99.0, 5000.0])
+        asyncio.get_event_loop().run_until_complete(
+            kernel.evaluate_and_route(strat, "BTCUSDT", candle, False, 0, None))
+        assert strat._pending_flip is not None, (
+            "QNT-2 regression: exec-algo clear erased _pending_flip")
+
+        asyncio.get_event_loop().run_until_complete(
+            kernel.execute_pending(strat, "BTCUSDT", candle, 1, None))
+    finally:
+        kernel_mod.evaluate = orig
+
+    assert adapter.flips == [("short", 5.0)], f"flip never executed: {adapter.flips}"
+    assert strat.position is not None and strat.position.type == "short"

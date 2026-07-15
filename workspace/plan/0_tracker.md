@@ -16,7 +16,7 @@ Statuses: `Draft` · `Ready` · `Blocked` · `Verify` · `Shipped` · `Merged→
 | 6  | Engine decomposition & exchange abstraction | Ready | P2 | 4, 6.1 | 5 | 7 | 2026-07-14 |
 | 7  | Server & client structure | Ready | P2 | 5 | 2,5 | 6 | 2026-07-14 |
 | 8  | Governance, correctness & cleanup | Ready | P3 | 6 | 3,5,6 | all | 2026-07-14 |
-| 9  | Backtest & optimizer correctness (quant core) | Ready | P0 (9.1–9.3) / P1 | 0 + 7 | — (9.1–9.3); 2 (9.5+) | 5,6,8 | 2026-07-14 |
+| 9  | Backtest & optimizer correctness (quant core) | Ready (9.1–9.3 Shipped) | P0 (9.1–9.3 done) / P1 (rest) | 0 + 7 | — (9.1–9.3); 2 (9.5+) | 5,6,8 | 2026-07-15 |
 | 10 | Monte Carlo Optimiser & Strategy Lab | Ready | P1 | 8 | 9 (9.1, 9.3) | 2,7 | 2026-07-14 |
 
 ---
@@ -51,4 +51,21 @@ a golden-master check per Rule C.
   Contains a product decision (3.2: retire UI strategy editing vs sandbox it) — needs sign-off.
 - **4** — Implements the ".env → per-user Settings" directive for personal credentials + scopes
   container env + rotatable infra secrets.
-- **5** — Highest-value correctness work: exchange as s
+- **5** — Highest-value correctness work: exchange as source of truth for live trading state,
+  replacing the current three-way-divergent (exchange / engine memory / Mongo) reconciliation
+  heuristics. Do not promote to mainnet before this is `Shipped`.
+- **6** — Structural cleanup of the live engine: `LiveBotManager` stops being a 2,000-line god
+  class; live/backtest/mainnet vary behind a real exchange abstraction instead of `is_live`
+  flags. Comes after 5 so the correctness model is settled before the code moves.
+- **7** — Structural cleanup of Node/React: controllers stop being 1,000-line god functions,
+  long engine work becomes a job not an HTTP hang, page components stop being 1,700-line
+  monsters. Depends on 2 (tests must exist first) and 5 (render the new state model).
+- **8** — Trailing correctness fixes (ENG-8/14/15/18, SEC-8 remainder/10) + doc reconciliation
+  to the shipped architecture. Last because it only makes sense once 3/5/6 have landed.
+- **9** — Quant-core correctness (see `audit_2_quant-core.md`). Steps 9.1–9.3 (QNT-1 multi-symbol
+  exit-check, QNT-2 exec-algo close/flip erasure, QNT-17 run-config persistence for leverage
+  sensitivity) **Shipped 2026-07-15** — see `handoff.md`. Steps 9.4–9.10 remain `Ready`; several
+  change backtest outputs by design and need a golden-master re-baseline with sign-off (Rule C)
+  before landing.
+- **10** — Job-based Monte Carlo + Optimizer Strategy Lab. Hard-depends on 9.1/9.3, both now
+  shipped — unblocked.

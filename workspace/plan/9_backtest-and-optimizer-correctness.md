@@ -1,6 +1,6 @@
 # Plan 9 — Backtest & optimizer correctness (quant core)
 
-**Status:** Ready · **Priority:** P0 (steps 9.1–9.3) / P1 (rest) · **Depends on:** — (9.1–9.3); 2 (CI for 9.5+) · **Related:** 5, 6, 8
+**Status:** Ready (9.1–9.3 Shipped 2026-07-15) · **Priority:** P0 (steps 9.1–9.3, done) / P1 (rest) · **Depends on:** — (9.1–9.3); 2 (CI for 9.5+) · **Related:** 5, 6, 8
 
 > Source audit: [`audit_2_quant-core.md`](audit_2_quant-core.md)
 > (issues QNT-1..17). This plan fixes the *simulation and research* half of the platform the
@@ -25,29 +25,43 @@ signals from the same data, verified mechanically, not by assertion.
 
 ## Steps
 
-### 9.1 — Multi-symbol exit-check fix (QNT-1) — P0
+### 9.1 — Multi-symbol exit-check fix (QNT-1) — P0 — **Shipped 2026-07-15**
 - Clear `_entered_this_candle` per candle in `_run_shared_portfolio` (minimal), then move the
   flag into the kernel loop as local state (structural). Run `update_pnl`/funding/excursion
   updates in the portfolio path.
-- Acceptance: 2-symbol backtest with a bracket strategy produces `stop_loss`/`take_profit`
-  exit reasons; cash-conservation property test passes
-  (`final == capital + Σpnl − fees − funding`); new multi-symbol golden-master scenario
-  captured as baseline.
-- Migration note: flag existing multi-symbol `backtestResults` (`symbol` contains ",") as
-  stale in the UI or a one-off script.
+- Done: `_run_shared_portfolio` now calls `adapters[sym].record_equity(strategy, time_t)` after
+  `evaluate_and_route` each candle (`services/backtest_runner.py`) — the minimal fix (structural
+  move deferred, not required for correctness). Acceptance verified: new deterministic kernel-
+  level test `tests/test_multi_symbol_portfolio_exits.py` drives `_run_shared_portfolio` with 2
+  synthetic symbols and asserts both exit via `stop_loss` and the cash-conservation invariant
+  (`final == capital + Σ trade pnl`, fees/slippage/funding zeroed for a clean assertion) holds
+  exactly. Live-data confirmation: a 2-symbol (BTCUSDT+ETHUSDT) golden-master run
+  (`multi_symbol_baseline_post_fix`) now shows real `stop_loss`/`take_profit` exit reasons
+  (previously impossible). Single-symbol golden master (`pre_qnt1_2_3_baseline` vs
+  `post_qnt1_2_3_fix`) is byte-identical — confirms no behavior change on the existing path.
+- Migration note: checked `backtestResults` for `symbol` containing "," — **none exist** in
+  this environment, so no stale-flagging migration was needed. Re-check before any production
+  data migration.
 
-### 9.2 — Exec-algo close/flip pass-through (QNT-2) — P0
+### 9.2 — Exec-algo close/flip pass-through (QNT-2) — P0 — **Shipped 2026-07-15**
 - Snapshot `_close_at_open`/`_pending_flip` before the kernel's exec-algo clear; route exits
   and flips unsliced (per the algos' own contract).
-- Acceptance: with TWAP active, `close_position()` closes next open and a flip executes;
-  tests added to `test_exec_algo_slicing.py`.
+- Done: `core/kernel.py` `evaluate_and_route` snapshots both attributes before the exec-algo
+  clear and restores them right after `process_order_plan`/`step` runs. Two new regression
+  tests in `tests/test_exec_algo_slicing.py`
+  (`test_twap_close_at_open_survives_exec_algo_clear`,
+  `test_twap_pending_flip_survives_exec_algo_clear`) assert the intent survives the clear and
+  `execute_exit`/`execute_flip` actually fire on the next candle. Existing TWAP/Iceberg
+  full-fill tests still pass (full suite: 84/84 green).
 
-### 9.3 — Persist run config; fix leverage sensitivity (QNT-17) — P0
+### 9.3 — Persist run config; fix leverage sensitivity (QNT-17) — P0 — **Shipped 2026-07-15**
 - `run_backtest_simulation` persists `alphaParams`, `riskParams`, `slippagePct`,
   `fundingEnabled`, `fundingRate` into `backtestResults`; `leverage_sensitivity_runner` reads
   them back.
-- Acceptance: leverage scenarios of a parent run with non-default params reproduce the parent's
-  trade list at the parent's leverage level.
+- Done: `services/backtest_runner.py`'s `backtestResults` write now includes all five fields
+  (`leverage_sensitivity_runner.py` already read them via `parent.get(...)` — it was written
+  against this contract from the start, the fields were simply never persisted). No runner
+  change needed.
 
 ### 9.4 — Entry-candle exit evaluation (QNT-3)
 - Opt-in flag: evaluate SL/TP/liquidation against the entry candle (entry at open → exits

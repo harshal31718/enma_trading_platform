@@ -333,6 +333,13 @@ class ExecutionKernel:
 
         # Intercept with execution algorithm if configured (A-016)
         if self.exec_algo is not None:
+            # QNT-2: closes and flips are never sliced (the algos' own contract) —
+            # snapshot them before the clear below and restore afterward, otherwise
+            # DefaultExecution.route()'s close/flip intent (encoded on these two
+            # attributes, plan == None) is erased and never re-created.
+            _snapshot_close_at_open = strategy._close_at_open
+            _snapshot_pending_flip = strategy._pending_flip
+
             # Clear what DefaultExecution.route set on strategy, because we will rewrite it with the slice
             strategy.buy = None
             strategy.sell = None
@@ -345,6 +352,9 @@ class ExecutionKernel:
                 plan = self.exec_algo.step(strategy.price, candle[5])
             else:
                 plan = None
+
+            strategy._close_at_open = _snapshot_close_at_open
+            strategy._pending_flip = _snapshot_pending_flip
 
             if plan is not None:
                 # I-01: route continuation slices as an ADD when a same-direction
