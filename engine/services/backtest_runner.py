@@ -696,7 +696,17 @@ async def run_backtest_simulation(
     alpha_params: dict | None = None,
     risk_params: dict | None = None,
     user_id: str = "",
+    _reprep_every_candle: bool = False,
 ) -> dict:
+    # _reprep_every_candle (QNT-12, Plan 9 Step 9.5): test-only lookahead
+    # sentinel hook. Default False is byte-identical to the pre-9.5 code path
+    # (prepare() called once, upfront). When True (single-symbol runs only —
+    # see tests/test_lookahead_sentinel.py), prepare() is re-invoked every
+    # candle on a truncated candles_np[:t+1] array instead of the full
+    # history, simulating what the strategy would see if it could only ever
+    # look backward. A causal strategy produces an identical trade list
+    # either way; one that leaks future data (indexes past self.index, or
+    # normalizes over the whole series) diverges.
     # ── 1. Parse strategy name ──────────────────────────────────────────────
     parts = strategy_file.split("/")
     if len(parts) >= 2 and parts[0] == "strategies":
@@ -956,6 +966,9 @@ async def run_backtest_simulation(
 
                 # Set strategy.candles to include the current candle up front
                 strategy.candles = candles_np[:t + 1]
+
+                if _reprep_every_candle:
+                    strategy.prepare(strategy.candles)
 
                 # Step 1: Open of candle (execute pending buy/sell/flip/close)
                 await kernel.execute_pending(strategy, sym, candle, t, time_t)

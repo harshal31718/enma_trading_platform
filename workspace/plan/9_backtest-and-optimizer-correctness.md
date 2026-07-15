@@ -67,9 +67,29 @@ signals from the same data, verified mechanically, not by assertion.
 - Opt-in flag: evaluate SL/TP/liquidation against the entry candle (entry at open → exits
   checked on that candle's range). Golden-master re-baseline with sign-off when made default.
 
-### 9.5 — Lookahead sentinel in CI (QNT-12, detector for QNT-9)
+### 9.5 — Lookahead sentinel in CI (QNT-12, detector for QNT-9) — **Shipped 2026-07-15**
 - Harness: full-array `prepare()` vs per-candle expanding-window recompute; assert identical
   trade lists for all seeded strategies. Wire into CI (Plan 2's pipeline).
+- Done: `services/backtest_runner.py`'s `run_backtest_simulation` gained a test-only
+  `_reprep_every_candle: bool = False` parameter (default False is byte-identical to the
+  pre-9.5 path — the new branch is unreachable unless a caller explicitly opts in). When True,
+  `prepare()` is re-invoked every candle on `candles_np[:t+1]` instead of once upfront.
+  `engine/scripts/lookahead_sentinel.py` (new, same pattern as `golden_master.py`) runs each of
+  the 5 seeded strategies both ways over a 3-month BTCUSDT window and diffs trade lists.
+  **Result: all 5 strategies pass, zero divergence** — confirms the audit's finding that the
+  seeded strategies were already causal, only the framework lacked a detector. Wired into CI as
+  its own best-effort step (`continue-on-error`, same external-Binance-network caveat as the
+  golden-master step).
+- **Note for future sessions:** the engine container has `volumes: []` — `scripts/golden/*.json`
+  baseline files written by `golden_master.py` do NOT survive a container recreation (only what
+  `docker compose build` bakes into the image persists). A baseline captured in one container
+  lifetime is unrecoverable after any `docker compose up -d`/`build`/restart of `engine`. This
+  session lost its `pre_qnt1_2_3_baseline.json` this way partway through 9.5 — worked around
+  with a determinism check (two fresh runs compared to each other) instead of a true before/after
+  diff, which was sufficient here (the code change is a default-off additive parameter) but
+  won't be for a real output-changing step like 9.4/9.7/9.8. For those, either capture both
+  baseline and post-change snapshots **within the same uninterrupted container session**, or
+  `docker cp` the JSON out to the host between rebuilds.
 
 ### 9.6 — Optimizer overhaul (QNT-6) — **absorbed by Plan 10 (Phase 3)**
 - Walk-forward split layer over `run_backtest_simulation`; report stitched out-of-sample

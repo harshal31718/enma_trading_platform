@@ -48,6 +48,15 @@ jobs:
         continue-on-error: true
         run: docker compose exec -T engine python scripts/golden_master.py run --label ci_smoke --only MicroScalper
 
+      - name: Engine lookahead sentinel (Plan 9 Step 9.5, QNT-12)
+        # Runs each seeded strategy through backtest_runner.py twice — once
+        # with the real full-array prepare(), once re-invoking prepare() every
+        # candle on a truncated array — and asserts identical trade lists. A
+        # divergence means a strategy reads future data. Same external-Binance
+        # caveat as the golden-master step above (best-effort, not blocking).
+        continue-on-error: true
+        run: docker compose exec -T engine python -m scripts.lookahead_sentinel
+
       - name: Dump logs on failure
         if: failure()
         run: docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --tail 200
