@@ -107,12 +107,20 @@ signals from the same data, verified mechanically, not by assertion.
   won't be for a real output-changing step like 9.4/9.7/9.8. For those, either capture both
   baseline and post-change snapshots **within the same uninterrupted container session**, or
   `docker cp` the JSON out to the host between rebuilds.
+- **2026-07-15 note:** `16_lookahead-analysis.md` (a per-trade, per-column lookahead diff)
+  proposed independently in the feature-gap program (plans 11-19) is now `Merged→9` — this
+  step's sentinel already covers the same failure mode as a whole-strategy CI gate. Reopen 16
+  only if this sentinel ever flags a strategy and the failure needs per-column localization.
 
 ### 9.6 — Optimizer overhaul (QNT-6) — **absorbed by Plan 10 (Phase 3)**
 - Walk-forward split layer over `run_backtest_simulation`; report stitched out-of-sample
   metrics only. Deflated Sharpe + PBO/CSCV on the trial set. Optuna TPE + pruning as the
   search engine; min-trades constraint; candles loaded once per optimization; per-combo
   summaries only (no `backtestResults`/trade dumps per combo).
+- **2026-07-15 note:** the feature-gap program (plans 11-19) independently proposed this same
+  scope as `18_walk-forward-analysis.md` + `19_bayesian-hyperopt.md`. Both are now `Merged→10`
+  — their fold-split math and Optuna adapter design are folded into Plan 10 Phase 3 as
+  implementation reference, not built as their originally-specified standalone endpoints.
 
 ### 9.7 — Historical funding ledger (QNT-5)
 - Import `/fapi/v1/fundingRate` into TimescaleDB (idempotent, candle-importer pattern);

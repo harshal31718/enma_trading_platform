@@ -1,4 +1,18 @@
-# S5 — Lookahead-Bias Analysis
+# Plan 16 — Lookahead-Bias Analysis
+
+**Status:** Merged→9 · **Superseded by:** `9_backtest-and-optimizer-correctness.md` step 9.5
+
+> **2026-07-15:** Plan 9 step 9.5 shipped a lookahead sentinel
+> (`engine/scripts/lookahead_sentinel.py`, wired into CI) using the same core technique this
+> file proposes — expanding-window `prepare()` recompute diffed against the full-array run —
+> generalized as a whole-strategy pass/fail gate covering all 5 seeded strategies. This file's
+> narrower per-trade, per-indicator-column bias report below is **not** superseded in the sense
+> of "wrong" — it's a genuinely more diagnostic tool (it says *which* column leaked, 9.5 only
+> says *whether* anything did) — but it is superseded as **new work to schedule now**. Build it
+> only if 9.5's sentinel ever actually flags a strategy and the failure needs localizing. Also
+> relevant once Plan 13 (`self.htf()`) ships, to validate multi-TF alignment specifically — run
+> 9.5's sentinel against any `htf()`-using strategy first; only reach for this file's per-column
+> diff if that fails. The design below is kept as reference, unmodified.
 
 **Goal:** Automatically detect when a strategy "sees the future" — i.e. its entry/exit decisions or
 indicator values change when later candles are withheld. This is the #1 source of fake backtest alpha.

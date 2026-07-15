@@ -1,4 +1,14 @@
-# S8 — Bayesian Hyperopt (Optuna)
+# Plan 19 — Bayesian Hyperopt (Optuna)
+
+**Status:** Merged→10 · **Superseded by:** `10_monte-carlo-strategy-lab.md` Phase 3 (§2.2, §3.3)
+
+> **2026-07-15:** same conflict as `18_walk-forward-analysis.md` — Plan 10 Phase 3 already
+> specifies Optuna TPE as the Strategy Lab's search engine, extending the existing `/optimize`
+> surface rather than this file's proposed `method` param on the old sync endpoint in isolation.
+> **Do not build this file standalone.** Its real value — the `trial.suggest_*` search-space
+> adapter mapping (reusing the existing `param_grid` JSON spec unchanged for both grid and
+> Bayesian) and the async ask/tell-vs-executor design note — is good input for Plan 10 Phase 3's
+> implementation. The design below is kept unmodified as that reference.
 
 **Goal:** Replace brute-force grid search with sample-efficient Bayesian optimization so we find good
 parameters in far fewer backtests. Same objective registry, same backtest path — smarter search.

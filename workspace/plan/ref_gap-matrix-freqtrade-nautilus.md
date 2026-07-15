@@ -5,12 +5,12 @@
 
 > [!NOTE]
 > **This is the gap matrix (reference). The actionable, sequenced subset is now specified in
-> [`workspace/next_phase/`](../next_phase/README.md) as S1–S8** (max position per asset, informative
+> `workspace/plan/` as `12_max-position-per-asset.md`–`19_bayesian-hyperopt.md`** (max position per asset, informative
 > multi-TF, webhooks, data CLI, lookahead/recursive/walk-forward analysis, Bayesian hyperopt).
-> Implementing agents build from `next_phase/`, not from this matrix. This doc stays as the
+> Implementing agents build from those numbered specs, not from this matrix. This doc stays as the
 > full landscape (incl. deferred multi-venue/ML items).
 
-> **Read this with:** `workspace/docs/state/CURRENT_STATE.md`, `workspace/next_phase/README.md`, `workspace/next_phase/REF-future-paths.md`
+> **Read this with:** `workspace/docs/state/CURRENT_STATE.md`, `workspace/plan/mergeContext.md`, `workspace/plan/ref_future-paths.md`
 
 ---
 
@@ -67,7 +67,7 @@ Each row evaluates whether Enma has the feature. Three states:
 | Lookahead analysis | ✅ | ❌ | ❌ | No automated lookahead detection |
 | Recursive analysis | ✅ | ❌ | ❌ | No automated recursion bias detection |
 | Walk-forward analysis | ✅ Custom | ✅ | ❌ | Not implemented |
-| MCPT (Monte Carlo Permutation Test) | ❌ | ❌ | 🟡 Research | `REF-mcpt-research.md` exists but not implemented |
+| MCPT (Monte Carlo Permutation Test) | ❌ | ❌ | 🟡 Research | `ref_mcpt-research.md` exists but not implemented |
 
 ### 1.4 Order Types & Execution
 
@@ -292,9 +292,9 @@ The sequence respects Enma's existing architecture (single-user, crypto, Binance
 
 ## 5. References
 
-- `workspace/next_phase/README.md` — current execution sequence (S1–S8)
-- `workspace/next_phase/REF-future-paths.md` — exploratory ideas (Monte Carlo, volatility forecasting, regime detection)
-- `workspace/next_phase/REF-mcpt-research.md` — Monte Carlo Permutation Tests (research phase)
+- `workspace/plan/mergeContext.md` — current execution sequence (12–19)
+- `workspace/plan/ref_future-paths.md` — exploratory ideas (Monte Carlo, volatility forecasting, regime detection)
+- `workspace/plan/ref_mcpt-research.md` — Monte Carlo Permutation Tests (research phase)
 - `workspace/docs/state/CURRENT_STATE.md` — authoritative Enma feature inventory
 
-> The old `workspace/plan/` docs this section once pointed at (INDEX, RISK_DASHBOARD_PLAN) were deleted — git history.
+> The old `workspace/plan/` docs this section once pointed at (INDEX, RISK_DASHBOARD_PLAN) were deleted — git history. The `workspace/next_phase/` directory itself was merged into `workspace/plan/` (11–19, `ref_*`) on 2026-07-15 — see `mergeContext.md`.

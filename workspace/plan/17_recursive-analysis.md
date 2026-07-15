@@ -1,4 +1,6 @@
-# S6 — Recursive-Formula Analysis
+# Plan 17 — Recursive-Formula Analysis
+
+**Status:** Ready · **Priority:** P2 · **Phase:** 9 · **Depends on:** 11, 13 · **Related:** 16
 
 **Goal:** Detect indicators whose **latest value depends on how much history was loaded** (recursive
 formulas like EMA, RSI/Wilder, SuperTrend). If the most-recent indicator value drifts when you change

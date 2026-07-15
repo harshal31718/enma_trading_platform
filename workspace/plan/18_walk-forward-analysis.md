@@ -1,4 +1,18 @@
-# S7 — Walk-Forward Analysis
+# Plan 18 — Walk-Forward Analysis
+
+**Status:** Merged→10 · **Superseded by:** `10_monte-carlo-strategy-lab.md` Phase 3 (§2.2, §3.1)
+
+> **2026-07-15:** this file's design — a standalone synchronous `POST /optimize/walk-forward`
+> endpoint plus a new `walkForwardResults` collection — **conflicts architecturally** with Plan
+> 10 Phase 3, which already scopes walk-forward as part of the job-based Strategy Lab
+> (`labResults` collection, `POST /api/v1/lab/optimizations`, BullMQ queue + Socket.IO
+> progress). Plan 9's own step 9.6 already flags this scope as "absorbed by Plan 10 Phase 3."
+> Building this file's endpoint as specified would create a surface Phase 3 immediately has to
+> retire. **Do not build this file standalone.** Its real value — the fold-split algorithm
+> (contiguous windows by candle count, anchored-vs-rolling train/test, OOS-stitching, the
+> in-sample-vs-out-of-sample degradation signal) — is genuinely well-specified and should be
+> pulled directly into Plan 10 Phase 3's implementation. The design below is kept unmodified as
+> that reference.
 
 **Goal:** Test strategy robustness across time by splitting the range into sequential
 train→test folds, optimizing on each train window and evaluating out-of-sample on the following test

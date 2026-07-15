@@ -59,3 +59,36 @@ def test_clamp_and_round_qty_reserve_and_tolerance() -> None:
     # 0.584 / 0.55 = 1.06 <= 1.30 (within tolerance).
     qty4 = clamp_and_round_qty("MOCKUSDT", "Binance Futures", 0.55, 100.0, stop_loss_pct=0.10)
     assert qty4 == 0.584
+
+
+def test_clamp_and_round_qty_reduce_only_floors_without_notional_bump() -> None:
+    """Plan 5 Step 5.3 / Plan 20 (ENG-10): reduceOnly orders are exempt from
+    Binance's MIN_NOTIONAL filter (error -4164's own message says so) but
+    NOT from stepSize alignment (-4023/-1111). reduce_only=True must floor
+    to stepSize/minQty and skip the notional bump-up and tolerance abort
+    entirely — a reduce should shrink, never grow, what the strategy asked for."""
+    _rules_cache[("Binance Futures", "MOCKUSDT")] = {
+        "tickSize": Decimal("0.1"),
+        "stepSize": Decimal("0.001"),
+        "minQty": Decimal("0.001"),
+        "minNotional": Decimal("50.0"),
+    }
+
+    # A tiny reduce (notional=1.0, far below minNotional=50.0) must NOT be
+    # bumped up or skipped — reduceOnly is exempt from MIN_NOTIONAL.
+    qty = clamp_and_round_qty("MOCKUSDT", "Binance Futures", 0.01, 100.0, reduce_only=True)
+    assert qty == 0.01  # floored to stepSize (already aligned), not bumped, not skipped
+
+    # A non-stepSize-aligned delta must be floored, not rejected raw.
+    qty2 = clamp_and_round_qty("MOCKUSDT", "Binance Futures", 0.1234567, 100.0, reduce_only=True)
+    assert qty2 == 0.123
+
+    # Below minQty still floors up to minQty (LOT_SIZE.minQty is NOT exempted for reduceOnly).
+    _rules_cache[("Binance Futures", "MOCKUSDT")] = {
+        "tickSize": Decimal("0.1"),
+        "stepSize": Decimal("0.001"),
+        "minQty": Decimal("0.01"),
+        "minNotional": Decimal("50.0"),
+    }
+    qty3 = clamp_and_round_qty("MOCKUSDT", "Binance Futures", 0.001, 100.0, reduce_only=True)
+    assert qty3 == 0.01

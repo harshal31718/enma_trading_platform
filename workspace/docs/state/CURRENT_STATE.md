@@ -31,10 +31,11 @@ Last updated: 2026-07-02 (content relocated into feature SPEC docs and DECISIONS
 - **Exchange Settings**: Centralized configuration for trading fees, backtest defaults, bot defaults, simulation parameters (slippage, funding), and **risk-model defaults** (risk % per trade, reward:risk ratio, max session drawdown, liquidation buffer). All values stored as variables — no hardcoded numbers. Accessible via GET/PUT `/api/v1/settings/exchange`. Forms pre-fill from saved defaults.
 
 ### Strategy Management
-List, create, clone, view, and edit strategies (live code editing, validated + hot-reloaded); 5
-strategies seeded on startup, each bound to a specific Risk/Portfolio model pair. **Detail moved
-2026-07-02 to** `workspace/docs/features/strategy-management/SPEC.md` (Built-in Strategies table) —
-this bullet is a pointer, not a description.
+List, create, clone, and view (read-only) strategies; 5 strategies seeded on startup, each bound
+to a specific Risk/Portfolio model pair. **In-app code editing was removed 2026-07-15** (Plan 3
+Step 3.2, SEC-2 — closed the any-user strategy-code RCE path outright). **Detail moved 2026-07-02
+to** `workspace/docs/features/strategy-management/SPEC.md` (Built-in Strategies table, updated
+2026-07-15 for the edit-path removal) — this bullet is a pointer, not a description.
 
 ### Backtesting
 Full strategy simulation against historical OHLCV, unified five-model pipeline (shared with live
@@ -89,6 +90,27 @@ a dynamic pairlist pipeline, per-symbol leverage clamping, and Chaos Mode multi-
 **Detail moved 2026-07-02 to** `workspace/docs/features/algo-trading/SPEC.md` (Data Flow, Exchange
 State Reconciliation, SL/TP & OCO Safety, Dynamic Pairlist & Symbol Management, Chaos Mode,
 Resilience & Stats sections) — this bullet is a pointer, not a description.
+
+**2026-07-15 additions (Plan 5 + Plan 12 + Plan 20 — not yet folded into the SPEC doc above):**
+- **Execution event log**: append-only `executionEvents` Mongo collection
+  (`engine/services/event_log.py`), engine-written at every position-mutating point (entry, DCA
+  add, exit, close-failed, reconcile-adjustment), seq-ordered per `(session, symbol)`. Node's
+  `handleEngineStats` rejects a stale/out-of-order seq for the same symbol. Additive — the live
+  session's in-memory state and `LiveSession` document remain the actual read path; the log is
+  not yet the source of truth (that's Plan 5 Step 5.6, unstarted). See
+  `workspace/plan/5_live-trading-state-integrity.md`.
+- **Real fills, not fabricated closes**: every close/entry-booking site now reads the actual
+  Binance fill (`avgPrice`) instead of a pre-trade price estimate; a failed close order leaves
+  the position open instead of fabricating a close. Entry orders gained idempotency (client
+  order ID + re-query-before-retry on a raised exception).
+- **Per-symbol locking**: an `asyncio.Lock` per `(session, symbol)` serializes the candle-loop
+  and user-data-stream fill callback, closing a double-close/double-count race.
+- **Session-level max open positions**: optional `maxOpenPositions` on session start caps
+  concurrent open symbols in live/chaos sessions (freqtrade `max_open_trades` equivalent); unset
+  = unlimited (default, unchanged behavior).
+- **DCA scale-out precision**: partial-reduce quantities are now floored to the symbol's Binance
+  `stepSize` before submission (previously unclamped — a live rejection risk once any strategy
+  implements `adjust_trade_position()`, none do yet).
 
 ### Order History (Trade Recorder)
 - Engine writes every completed round-trip trade to MongoDB `tradeRecords` collection via `engine/services/trade_recorder.py → record_trade()` (best-effort, never blocks the position-close path). Called by both `live_bot_manager` close paths (normal close + session stop).

@@ -1,4 +1,38 @@
-# S1 — Max Position Per Asset
+# Plan 12 — Max Position Per Asset
+
+**Status:** Shipped 2026-07-15 (1a confirmed pre-existing, 1b implemented) · **Priority:** P2 · **Phase:** 9 · **Depends on:** 11 · **Related:** 6
+
+## Shipped summary (2026-07-15) — 1b
+
+Implemented as designed. `LiveAdapter.execute_entry()` (`engine/core/live_bot_manager.py`) gained
+a `max_open_positions` check right after the existing rate-limiter guard — same pattern as the
+TradingState/Protections/RateLimiter checks already there (log + `strategy.buy/sell = None` +
+`return False`, no exception). Guard condition: `symbol not in session["open_positions"] and
+len(session["open_positions"]) >= max_open_positions` — only blocks a genuinely new symbol; a
+symbol already counted (e.g. a re-evaluation) is never blocked by its own presence. Session dict
+gained a `max_open_positions` key (`None` = unlimited, the default — byte-identical to
+pre-Plan-12 behavior for every existing session). Wired from Node:
+`server/src/controllers/algo.controller.js`'s `startSession` reads an optional `maxOpenPositions`
+from the request body and passes it as `max_open_positions` to the engine; omitted/invalid values
+resolve to `null` (unlimited). **Chaos sessions deliberately not wired** — chaos mode's per-
+strategy fixed-symbol-list design doesn't have an obvious single cap semantic yet, and leaving it
+unwired is automatically safe (engine defaults to unlimited when the key is absent). No new UI
+control was added (out of scope for 1b's minimal design — the plan only calls for "server passes
+it", not a wizard field); a future Settings/wizard field can set `maxOpenPositions` in the
+request body without any further engine change.
+
+**Verified:** 3 new tests in `engine/tests/test_live_fill_booking.py` — blocked when at cap (and
+confirms zero order calls attempted, not just a returned `False`), allowed for a symbol already
+counted even at cap, and unset cap behaves exactly as before. Full engine suite 127/127 (was 124;
++3). No golden-master re-check needed — this only touches `LiveAdapter` (live path), zero import
+overlap with the backtest path, same reasoning as every other live-adapter-only change this
+session.
+
+> **2026-07-15 audit confirmation:** sub-item 1a below (per-asset notional cap) is already live —
+> `engine/core/strategy.py:353`'s `max_qty()` clamps against `self.max_exposure_notional`, wired
+> from both `backtest_runner.py:900` and `live_bot_manager.py:1096`. The "verify V0" conditions
+> in 1a and the Sequencing section are resolved: it's wired. Only **1b** (session-level
+> `max_open_positions` count gate) is unbuilt.
 
 **Goal:** Cap exposure on a per-symbol basis so a single asset can't dominate the portfolio, and
 cap the number of concurrent open positions in live/chaos multi-symbol runs.

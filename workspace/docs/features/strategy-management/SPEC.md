@@ -1,18 +1,23 @@
 # Feature: Strategy Management
 
 **Status:** Implemented
-**Last updated:** 2026-07-02 — added the live code-editing feature (previously undocumented — this
-doc only covered read-only "View Code"), the `label` param field, and a REST endpoints table;
-previous version dated 2026-06-05.
+**Last updated:** 2026-07-15 — the in-app code-editing feature documented in the 2026-07-02
+revision below was **removed** (Plan 3 Step 3.2, SEC-2: closed the any-user strategy-code RCE
+path outright — confirmed dead client-side first, so this was a no-op removal, not a regression).
+Strategy code is **view-only** again, same as the pre-2026-07-02 state. Only the removed-endpoint
+notes below were updated; the rest of this doc's data-flow diagrams are otherwise unchanged.
+Previous revision (2026-07-02) added the live code-editing feature (previously undocumented —
+that doc only covered read-only "View Code"), the `label` param field, and a REST endpoints
+table; version before that dated 2026-06-05.
 
 ---
 
 ## What It Does
 
-Manages Python trading strategy files. Users can list all available strategies, view and **edit**
-their source code, and extract their configurable parameters. Users can also create new strategies
-from a blank template or clone an existing strategy. Five built-in strategies are seeded on engine
-startup.
+Manages Python trading strategy files. Users can list all available strategies, **view** their
+source code (read-only — in-app editing was removed 2026-07-15, see above), and extract their
+configurable parameters. Users can also create new strategies from a blank template or clone an
+existing strategy. Five built-in strategies are seeded on engine startup.
 
 ---
 
@@ -48,16 +53,11 @@ Engine dynamically imports strategy class, reflects PARAMS schema
 Returns: { paramName: { type, default, min, max, label, description } }
 (`categorical`/`boolean` params return `categories` instead of `min`/`max`)
 
-User edits strategy code
+[REMOVED 2026-07-15 — Plan 3 Step 3.2, SEC-2] User edits strategy code
         ↓
-PUT /api/v1/strategies/:id/code  (Node server)  Req: { code: string }
-        ↓
-Server proxies to engine PUT /strategies/{name}/code
-        ↓
-Engine validates syntax via ast.parse, enforces the top-level class name matches the strategy
-name, writes the file, and hot-reloads the module
-        ↓
-Returns: { savedAt: string }  (400 with a validation error if syntax/class-name check fails)
+PUT /api/v1/strategies/:id/code did NOT survive — this route, its Node proxy, the engine's
+ast.parse validation, and the client editor UI were all removed outright (confirmed dead
+client-side before removal). Strategy code is read-only via GET .../code above.
 
 User creates or clones a strategy
         ↓
@@ -119,8 +119,7 @@ whose name isn't in `DEFAULT_STRATEGIES` (e.g. a stale removed-strategy remnant)
 |--------|------|--------------|
 | GET | `/api/v1/strategies` | List all strategies |
 | POST | `/api/v1/strategies` | Create (blank template) or clone a strategy |
-| GET | `/api/v1/strategies/:id/code` | Read source code |
-| PUT | `/api/v1/strategies/:id/code` | Edit source code (validated, hot-reloaded) |
+| GET | `/api/v1/strategies/:id/code` | Read source code (view-only — no PUT route exists, removed 2026-07-15) |
 | GET | `/api/v1/strategies/:id/params` | Reflect the `PARAMS` schema |
 
 ---
@@ -131,10 +130,10 @@ whose name isn't in `DEFAULT_STRATEGIES` (e.g. a stale removed-strategy remnant)
 |------|------|
 | `client/src/pages/Strategies.jsx` | Main strategy list page |
 | `client/src/features/strategies/StrategyCard.jsx` | Card per strategy with "View Code" button |
-| `client/src/features/strategies/CodeViewer.jsx` | Source code modal (read + edit) |
-| `client/src/hooks/useStrategies.js` | TanStack Query hooks: `useStrategies()`, `useStrategyCode(id)`, `useUpdateStrategyCode(id)` |
-| `server/src/routes/strategy.routes.js` | Route definitions, incl. `PUT /:id/code` |
-| `server/src/controllers/strategy.controller.js` | listStrategies, getStrategyCode, updateStrategyCode, getStrategyParams |
+| `client/src/features/strategies/CodeViewer.jsx` | Source code modal (read-only — edit mode removed 2026-07-15) |
+| `client/src/hooks/useStrategies.js` | TanStack Query hooks: `useStrategies()`, `useStrategyCode(id)` — `useUpdateStrategyCode()` removed 2026-07-15 |
+| `server/src/routes/strategy.routes.js` | Route definitions — `PUT /:id/code` removed 2026-07-15 |
+| `server/src/controllers/strategy.controller.js` | listStrategies, getStrategyCode, getStrategyParams — `updateStrategyCode` removed 2026-07-15 |
 | `server/src/models/Strategy.js` | Mongoose model: name (unique), description, filePath |
-| `engine/routers/strategies.py` | GET /strategies, GET/PUT /strategies/{name}/code, GET /strategies/{name}/params |
+| `engine/routers/strategies.py` | GET /strategies, GET /strategies/{name}/code, GET /strategies/{name}/params — `PUT .../code` removed 2026-07-15 |
 | `engine/core/params.py` | Typed `IntParameter`/`FloatParameter`/etc. classes backing `param_to_dict()` (`label`/`description`/`categories`) |

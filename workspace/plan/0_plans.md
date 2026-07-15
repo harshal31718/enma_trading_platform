@@ -131,4 +131,148 @@ transport (ENG-16), and proper packaging without symlink/`sys.path` hacks (ENG-1
 preserving — golden-master is the contract.
 
 ### 7 — Server & client structure
-[`7_server-an
+[`7_server-and-client-structure.md`](7_server-and-client-structure.md) · **Ready** · P2
+
+Structural cleanup of Node/React: controllers stop being 1,000-line god functions, long engine
+calls become a job (BullMQ) instead of an hour-long HTTP hang, page components stop being
+1,700-line monsters with 29 `useState` calls. Depends on 2 (test harness must exist first) and
+5 (renders the new live-state model 5 introduces).
+
+### 8 — Governance, correctness & cleanup
+[`8_governance-correctness-and-cleanup.md`](8_governance-correctness-and-cleanup.md) · **Ready** · P3
+
+Trailing correctness fixes (ENG-8/14/15/18, SEC-8 remainder/10) plus a doc-reconciliation pass
+so `workspace/docs/` matches the shipped architecture instead of the "server only proxies"
+fiction. Last in the hardening program — only makes sense once 3/5/6 have landed.
+
+---
+
+## Quant-core program (plans 9-10)
+
+Plans 9-10 fix and extend the *simulation and research* half of the platform - backtest
+correctness, the optimizer, and Monte Carlo robustness testing. Unlike 2-8 they don't depend on
+the trust/state remediation program; Plan 9's P0 steps (9.1-9.3) run immediately and in
+parallel with anything else. Source audit: [`audit_2_quant-core.md`](audit_2_quant-core.md).
+
+### 9 — Backtest & optimizer correctness (quant core)
+[`9_backtest-and-optimizer-correctness.md`](9_backtest-and-optimizer-correctness.md) · **Ready (9.1-9.3, 9.4, 9.5, QNT-15 Shipped)** · P0 (9.1-9.3) / P1 (rest)
+
+Fixes shipped-behavior bugs invalidating results users act on today (QNT-1 multi-symbol exits
+never firing, QNT-2 exec-algo erasing close/flip intents, QNT-17 leverage-sensitivity ignoring
+the parent run's real params — all **Shipped 2026-07-15**), then a research-integrity tail:
+entry-candle exits, a lookahead sentinel wired into CI, funding-ledger honesty, intrabar
+simulation, fill-model realism. **9.6** (optimizer walk-forward/DSR/PBO/Optuna) is absorbed by
+Plan 10 Phase 3 rather than built twice; **9.9**'s Monte Carlo portion is absorbed by Plan 10
+Phase 1 (its statistics-honesty portion stays here).
+
+### 10 — Monte Carlo Optimiser & Strategy Lab
+[`10_monte-carlo-strategy-lab.md`](10_monte-carlo-strategy-lab.md) · **Ready (Phase 1a Shipped)** · P1
+
+Rebuilds the currently-broken Monte Carlo/leverage feature into a job-based "Strategy Lab":
+a vectorized block-bootstrap MC engine (**Phase 1a core math Shipped 2026-07-15**), job
+plumbing (`labResults`, `simulationQueue`) to fix the synchronous-multi-minute-`GET`
+anti-pattern (Phase 1b), a dedicated UI (Phase 2), and an honest optimizer surface — walk-
+forward + Deflated Sharpe/PBO + Optuna TPE (Phase 3, absorbs Plan 9's 9.6) — plus MC-scored
+parameter/sizing/leverage selection (Phase 4). Depends on Plan 9 steps 9.1/9.3 (both Shipped).
+
+---
+
+## Feature-gap program (plans 11-19)
+
+Plans 11-19 port high-value features from freqtrade/nautilus_trader that Enma is missing -
+identified in a parallel audit (`ref_gap-matrix-freqtrade-nautilus.md`) and originally staged in
+a second spec directory (`workspace/next_phase/`), folded into this numbering on 2026-07-15
+(see [`mergeContext.md`](mergeContext.md) for the mechanical move; **no re-plan** happened in
+that move — the entries below are the first pass reconciling this program against plans 1-10
+and shipped work). Ordering rule: **risk primitives first, validation tooling next, optimization
+last.** Independent of the hardening program (2-8); can start any time after 11's V0 check.
+
+### 11 — Current-state reconciliation (V0)
+[`11_current-state-reconciliation.md`](11_current-state-reconciliation.md) · **Ready** · P2
+
+A verify-only audit (2026-06-25): the Dashboard, Risk Dashboard, and Monte Carlo/leverage
+features that an old, deleted `INDEX.md` claimed were "missing" turned out to already be built.
+Run its checklist (golden master, dashboard/risk-dashboard rendering, MC endpoint smoke) before
+starting 12-19 — it's the gate, not a build item.
+
+### 12 — Max position per asset
+[`12_max-position-per-asset.md`](12_max-position-per-asset.md) · **Shipped 2026-07-15 — 1a already shipped** · P2
+
+Caps exposure per symbol (notional) and per session (concurrent open-position count), mirroring
+freqtrade's `max_open_trades` / nautilus's per-instrument risk-engine caps. **Confirmed
+2026-07-15: sub-item 1a (per-asset notional cap) is already live** —
+`engine/core/strategy.py:353`'s `max_qty()` already clamps against `max_exposure_notional`,
+wired from both `backtest_runner.py` and `live_bot_manager.py`. **1b** (session-level
+`max_open_positions` count gate in `live_bot_manager.py`) shipped the same day.
+
+### 13 — Informative / multi-timeframe contract
+[`13_informative-multi-timeframe.md`](13_informative-multi-timeframe.md) · **Ready** · P2
+
+Lets a strategy reference a higher timeframe (e.g. 1h trend filtering 5m entries) without
+lookahead — an as-of-aligned, forward-filled `self.htf(timeframe)` helper built on the existing
+`prepare()`/`before()` two-phase contract (porting freqtrade's `@informative` decorator idea,
+Enma-native). Gate any strategy that uses it through Plan 9.5's lookahead sentinel.
+
+### 14 — Webhook notifications
+[`14_webhook-notifications.md`](14_webhook-notifications.md) · **Ready** · P2
+
+POSTs a JSON payload to a per-user-configured URL on trade lifecycle events (entry/exit/
+liquidation/session start-stop-error) — Discord/Slack/IFTTT integration, freqtrade-payload-
+shape-compatible. Server-only, no engine/pipeline touch, no golden master. Scoped per-user via
+`Settings` (its original single-global-config premise predates multi-user auth and was revised).
+
+### 15 — Data conversion CLI
+[`15_data-conversion-cli.md`](15_data-conversion-cli.md) · **Ready** · P3
+
+A thin `engine/scripts/enma_cli.py` (stdlib-only) to export/import candles and backtest trades
+between TimescaleDB/Mongo and CSV/JSON flat files, plus a `list-data` inventory command — for
+offline analysis and reproducible datasets. Must run inside Docker (Rule B); never calls Binance
+directly (local-data tool only).
+
+### 16 — Lookahead-bias analysis
+[`16_lookahead-analysis.md`](16_lookahead-analysis.md) · **Merged→9**
+
+Proposed a per-trade truncated-array diff to detect future-leaking strategies. **Superseded by
+Plan 9 step 9.5** (Shipped 2026-07-15), which already implements the same core technique —
+expanding-window `prepare()` recompute diffed against the full-array run — as a whole-strategy
+CI gate covering all 5 seeded strategies. This file's narrower per-trade, per-indicator-column
+bias report is still useful as a **diagnostic** if the 9.5 sentinel ever flags a strategy (it
+localizes *which* column leaked); keep it as reference, don't build it as new work now.
+
+### 17 — Recursive-formula analysis
+[`17_recursive-analysis.md`](17_recursive-analysis.md) · **Ready** · P2
+
+Distinct from 16: detects indicators whose value drifts with warmup length (EMA/RSI/SuperTrend —
+recursive formulas), answering "is the live rolling 500-candle window long enough?" This is a
+real, unaddressed gap (not covered by anything shipped this session) and the most likely tool to
+catch an actual live/backtest divergence given the live path's rolling-window replay design.
+
+### 18 — Walk-forward analysis
+[`18_walk-forward-analysis.md`](18_walk-forward-analysis.md) · **Merged→10**
+
+Proposed a standalone fold-based train/test orchestration layer with its own synchronous
+`POST /optimize/walk-forward` endpoint and a new `walkForwardResults` collection. **Conflicts
+architecturally with Plan 10 Phase 3**, which already scopes walk-forward as part of the
+job-based Strategy Lab (`labResults`, `/api/v1/lab/optimizations`) — building this file's
+standalone sync endpoint would create a surface Phase 3 immediately has to retire. Keep this
+file's fold-math design (train/test split, anchored-vs-rolling, OOS-stitching) as **input to
+Plan 10 Phase 3's implementation**, not a separate build.
+
+### 19 — Bayesian hyperopt (Optuna)
+[`19_bayesian-hyperopt.md`](19_bayesian-hyperopt.md) · **Merged→10**
+
+Proposed replacing grid search with Optuna TPE sampling directly in `optimizer.py`, gated behind
+a `method` param on the existing sync `/optimize` endpoint. **Same conflict as 18**: Plan 10
+Phase 3 already specifies Optuna as the Strategy Lab's search engine. Keep this file's
+search-space adapter design (`trial.suggest_*` mapping from the existing `param_grid` spec) and
+ask/tell-vs-executor async note as **input to Plan 10 Phase 3**, not a separate build.
+
+### 20 — Binance precision/notional parity (DCA scale-out)
+[`20_binance-precision-notional-parity.md`](20_binance-precision-notional-parity.md) · **Shipped 2026-07-15**
+
+Not part of the original 11–19 catalog — opened and shipped same-day from a user-requested audit
+(Binance UI vs Enma precision/min-notional handling). Found one real gap: DCA scale-out
+(`execute_reduce`) never floored quantity to the symbol's `stepSize`, unlike every other
+order-placement path — closed by adding a `reduce_only` mode to `clamp_and_round_qty()`. Also
+closed a related Plan 5 Step 5.3 (ENG-10) gap found in the same pass: `execute_entry` had no
+order-idempotency handling and never booked the real fill price on success.

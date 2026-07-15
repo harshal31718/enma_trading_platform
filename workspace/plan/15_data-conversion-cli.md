@@ -1,4 +1,6 @@
-# S4 — Data Conversion CLI
+# Plan 15 — Data Conversion CLI
+
+**Status:** Ready · **Priority:** P3 · **Phase:** 9 · **Depends on:** 11 (independent) · **Related:** —
 
 **Goal:** A small command-line tool to export/import candle and backtest-trade data between
 TimescaleDB and flat files (CSV/JSON), for offline analysis, sharing, and reproducible datasets.
@@ -18,7 +20,7 @@ TimescaleDB and flat files (CSV/JSON), for offline analysis, sharing, and reprod
   formats (json, jsongz, hdf5, feather, parquet) and between exchanges' on-disk layouts. Pure I/O, no
   network. Also `list-data` to inventory what's stored.
 - **nautilus `ParquetDataCatalog`** — a versioned on-disk catalog; CSV→Parquet ingest with a defined
-  schema. Heavier than we need now (full catalog is deferred in `REF-gap-matrix-freqtrade-nautilus.md`).
+  schema. Heavier than we need now (full catalog is deferred in `ref_gap-matrix-freqtrade-nautilus.md`).
 
 Port freqtrade's *lightweight* idea: a focused converter + an inventory command. Skip the catalog.
 

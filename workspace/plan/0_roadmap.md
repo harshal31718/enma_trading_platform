@@ -14,7 +14,9 @@ Plan 10.
 
 **Tracks:** Phases 1→2→3 are strictly sequential (the platform-hardening track). Phase 0 is an
 immediate parallel track. Phases 4–6 interleave once 3 is done. Phases 7–8 (quant track)
-depend on Phase 0 + Phase 1's CI, not on the live-side phases.
+depend on Phase 0 + Phase 1's CI, not on the live-side phases. Phase 9 (feature-gap track,
+plans 11–19, folded in 2026-07-15 — see `mergeContext.md`) is independent of all of the above;
+it only needs its own V0 gate (11).
 
 ---
 
@@ -298,7 +300,10 @@ re-run-from-persisted-config reproduces the parent trade list.
 
 - **7.1 (=9.5)** Lookahead sentinel in CI — expanding-window vs full-array `prepare()` diff for
   all seeded strategies (QNT-12; doubles as the live-parity detector for QNT-9). Only needs
-  Phase 1.6's CI; can land early.
+  Phase 1.6's CI; can land early. **Shipped 2026-07-15**
+  (`engine/scripts/lookahead_sentinel.py`, wired into CI). Supersedes Plan 16's proposed
+  per-trade lookahead diff (`16_lookahead-analysis.md`, now `Merged→9`) — reopen 16 only if this
+  sentinel ever flags a strategy and the failure needs per-indicator-column localization.
 - **7.2 (=9.4)** Entry-candle exit evaluation (QNT-3) — opt-in, then default after re-baseline.
 - **7.3 (=9.7)** Historical funding-rate ledger in TimescaleDB; boundary-priced signed funding
   (QNT-5). Pairs with 6.1's Timescale work.
@@ -321,11 +326,44 @@ Job-based Monte Carlo robustness simulator + optimizer UI. Full phases, API cont
 - **8.2 (=Phase 2)** Strategy Lab page, MC tab (fan chart, DD exceedance, ruin card); retire
   `SimulationResults.jsx`.
 - **8.3 (=Phase 3)** Optimizer exposure (Node proxy for the currently-unreachable `/optimize`),
-  walk-forward + DSR/PBO + Optuna, Optimizer tab.
+  walk-forward + DSR/PBO + Optuna, Optimizer tab. Build from, don't duplicate:
+  `18_walk-forward-analysis.md` and `19_bayesian-hyperopt.md` are `Merged->10` stubs (folded
+  2026-07-15) — their fold-split math and Optuna search-space adapter design are the detail
+  source for this step; do NOT build their standalone synchronous `/optimize/walk-forward`
+  endpoint or separate `walkForwardResults` collection, which conflict with this phase's
+  job-based `labResults` architecture.
 - **8.4 (=Phase 4)** MC-scored selection, drawdown-constrained `risk_pct`, MC-banded leverage,
   Backtest-page MC summary strip.
 
 **Gate to exit:** Plan 10's per-phase acceptance criteria; old endpoints retired (410).
+
+## Phase 9 — Freqtrade/Nautilus Feature Gaps (Plans 11-15, 17 · effort S-M · risk low · independent track)
+
+Ported from `workspace/next_phase/` on 2026-07-15 (`mergeContext.md`); reconciled against
+plans 1-10 and shipped work the same day. Additive engine/server features, no trust/state or
+quant-simulation-core overlap — can run any time, gated only by its own V0 (9.1/=11). Plans 16,
+18, 19 are NOT separate steps here — they are `Merged->9`/`Merged->10` stubs, folded into
+Phase 7.1 and Phase 8.3 respectively (see those sections).
+
+- **9.1 (=11)** V0 verification — confirm Dashboard/Risk-Dashboard/Monte-Carlo are actually
+  wired end-to-end (an old deleted `INDEX.md` called them "missing"; audit found them built).
+  Gate for the rest of this phase, not a build item.
+- **9.2 (=12)** Max position per asset. **Scope already narrowed 2026-07-15**: sub-item 1a
+  (per-asset notional cap) confirmed already shipped via `max_qty()`/`max_exposure_notional`
+  (`engine/core/strategy.py:353`) — only 1b (session-level `max_open_positions` count gate in
+  `live_bot_manager.py`) remains to build.
+- **9.3 (=13)** Informative/multi-timeframe contract — `self.htf(timeframe)` helper, as-of
+  aligned + lookahead-safe by construction. Run Phase 7.1's lookahead sentinel against any
+  strategy that adopts it (no new tooling needed — 7.1 already generalizes to any strategy).
+- **9.4 (=14)** Webhook notifications — independent, server-only, no golden master.
+- **9.5 (=15)** Data conversion CLI — independent, engine-only, stdlib, no golden master.
+- **9.6 (=17)** Recursive-formula (warmup-insufficiency) analysis — sequence after 9.3 so it
+  also sweeps multi-TF indicators. Real, unaddressed gap; most likely tool to catch an actual
+  live/backtest divergence given the live path's rolling 500-candle replay window.
+
+**Gate to exit:** 9.1's checklist green; 9.2's 1b count-gate test green; 9.3's alignment test +
+Phase 7.1 sentinel green for any strategy using `htf()`; 9.6 run against all 5 seeded strategies
+with a recorded min-warmup recommendation per strategy.
 
 ---
 
@@ -342,10 +380,11 @@ Job-based Monte Carlo robustness simulator + optimizer UI. Full phases, API cont
 | 6 | 4 (6.1); anytime (6.2/6.3) | drift-reviewer zero-drift report |
 | 7 | 0; 1.6 (CI) — parallel with 2–6 | Signed-off re-baselines; lookahead sentinel green |
 | 8 | 0 (9.1/9.3); 1.6 recommended — parallel with 3–6 | Plan 10 acceptance; legacy sim endpoint retired |
+| 9 | — (independent) — parallel with everything | 9.1 checklist; 9.2 count-gate test; 9.3 alignment + sentinel; 9.6 per-strategy warmup report |
 
 **Mainnet remains gated on Phase 3 shipped** (unchanged from the Plan 5 tracker note).
 **Backtest-trust is gated on Phase 0** — until it ships, multi-symbol results and
 leverage-sensitivity charts are known-wrong (`audit_2_quant-core.md` §1).
 
-*This file sequences plans 1–10; it does not replace them. Update `0_tracker.md` when a phase
+*This file sequences plans 1–19; it does not replace them. Update `0_tracker.md` when a phase
 starts or ships.*

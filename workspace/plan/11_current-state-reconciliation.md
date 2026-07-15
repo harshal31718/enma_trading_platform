@@ -1,4 +1,6 @@
-# 00 — Current-State Reconciliation (audit, 2026-06-25)
+# Plan 11 — Current-State Reconciliation (audit, 2026-06-25)
+
+**Status:** Ready (V0 gate) · **Priority:** P2 · **Phase:** 9 · **Depends on:** — · **Related:** 12-19
 
 **Why this exists:** the old `workspace/plan/INDEX.md` (since deleted — git history) claimed #3/#4/#5 were "remaining." A direct code
 audit found them **already implemented**. This file is the corrected record. Every claim below is
@@ -60,7 +62,7 @@ and the engine wiring of `volatility_multiplier` / `max_exposure_notional` / `cu
   drawdown distribution. Matches the deleted Risk Dashboard plan §7B intent (git history).
 - `engine/routers/leverage_sensitivity.py` + `engine/services/leverage_sensitivity_runner.py` —
   re-run scenarios across leverage `[1,2,5,10,20]`.
-- **MCPT (permutation tests, `REF-mcpt-research.md`) is NOT the same as the bootstrap Monte Carlo
+- **MCPT (permutation tests, `ref_mcpt-research.md`) is NOT the same as the bootstrap Monte Carlo
   above** and is still unbuilt. It remains research; not pulled into S1–S8. Promote later if wanted.
 
 **What V0 must still check:** whether Monte Carlo / leverage sensitivity have a **client surface**

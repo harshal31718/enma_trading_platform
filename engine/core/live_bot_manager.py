@@ -23,6 +23,7 @@ from core.models import (
 from core.params import param_coerce, param_default, param_validate
 from core.pipeline import evaluate
 from services.trade_recorder import record_trade, build_trade_record
+from services.event_log import append_event, reset_session_seq
 from services.user_data_stream import UserDataStreamManager
 from services.pairlist import pairlist_from_config
 from utils.symbols import round_price, clamp_and_round_qty, clamp_leverage, get_ticker_data, is_symbol_invalid
@@ -146,6 +147,25 @@ class LiveAdapter(ExecutionAdapter):
                 strategy.sell = None
                 return False
 
+            # Plan 12 Step 1b: max concurrent open positions (session-level,
+            # live/chaos only — mirrors freqtrade's max_open_trades). Skip
+            # the entry this candle rather than queue it; the strategy
+            # re-evaluates next candle. Deliberately session-orchestrator-
+            # level, not in the five-model pipeline (kept per-symbol-pure).
+            max_open_positions = session.get("max_open_positions")
+            if (
+                max_open_positions is not None
+                and symbol not in session["open_positions"]
+                and len(session["open_positions"]) >= max_open_positions
+            ):
+                logger.info(
+                    f"[AlgoBot] {symbol}: entry skipped — session already at max_open_positions="
+                    f"{max_open_positions} ({len(session['open_positions'])} open)"
+                )
+                strategy.buy = None
+                strategy.sell = None
+                return False
+
         fill_price = ref_price
 
         # Retrieve SL/TP values from strategy (updated by evaluate pipeline or exec_algo)
@@ -224,6 +244,10 @@ class LiveAdapter(ExecutionAdapter):
                         "type": "MARKET",
                         "quantity": _fmt_num(qty),
                         "newOrderRespType": "RESULT",
+                        # Plan 5 Step 5.3 (ENG-10): deterministic id for
+                        # future idempotent-retry support, matching the
+                        # entry/exit paths' convention.
+                        "newClientOrderId": f"enma_{self.session_id[:8]}_{symbol}_{uuid4_hex8()}",
                     }
                     result = await _signed(
                         "POST", "/fapi/v1/order",
@@ -251,6 +275,14 @@ class LiveAdapter(ExecutionAdapter):
                 except Exception as e:
                     logger.error(f"on_increased_position error: {e}")
 
+                dca_seq = await append_event(
+                    session_id=self.session_id,
+                    symbol=symbol,
+                    event_type="fill",
+                    payload={"side": "add", "direction": direction, "qty": qty, "price": fill_price},
+                    client_order_id=str(result.get("orderId")) if result.get("orderId") else None,
+                )
+
                 await self.manager._notify_node(self.session_id, {
                     "pnl": str(round(session["pnl"], 2)),
                     "openPositions": list(session["open_positions"].keys()),
@@ -264,6 +296,7 @@ class LiveAdapter(ExecutionAdapter):
                         "adjustTag": adjust_tag,
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                     },
+                    "seq": dca_seq,
                 })
                 return True
             except Exception as e:
@@ -280,25 +313,54 @@ class LiveAdapter(ExecutionAdapter):
                 raise RuntimeError("Binance Testnet API credentials not configured")
 
             order_id = None
+            entry_client_order_id = f"enma_{self.session_id[:8]}_{symbol}_{uuid4_hex8()}"
             async with (sem if sem else contextlib.nullcontext()):
-                # Step 1: Place the entry MARKET order
+                # Step 1: Place the entry MARKET order.
+                #
+                # Plan 5 Step 5.3 (ENG-10): the entry order carries a
+                # deterministic newClientOrderId so that if the placement
+                # call itself times out or raises (ambiguous — the order
+                # may have actually reached Binance), we query by that id
+                # before concluding the entry failed. Without this, a
+                # timed-out-but-actually-filled entry would report failure,
+                # the strategy would retry next candle, and a second real
+                # position could be opened — the exact duplication ENG-10
+                # exists to prevent (mirrors 5.2's close-path re-query).
                 entry_params = {
                     "symbol": symbol,
                     "side": binance_side,
                     "type": "MARKET",
                     "quantity": _fmt_num(qty),
                     "newOrderRespType": "RESULT",
+                    "newClientOrderId": entry_client_order_id,
                 }
-                entry_result = await _signed(
-                    "POST", "/fapi/v1/order",
-                    _api_key, _api_secret,
-                    params=entry_params,
-                    mode="testnet",
-                )
+                try:
+                    entry_result = await _signed(
+                        "POST", "/fapi/v1/order",
+                        _api_key, _api_secret,
+                        params=entry_params,
+                        mode="testnet",
+                    )
+                except Exception as entry_e:
+                    logger.warning(
+                        f"[AlgoBot] {symbol}: entry order call raised ({entry_e}) — querying by "
+                        f"clientOrderId={entry_client_order_id} before concluding it failed"
+                    )
+                    _real_fill = await _query_real_fill_price(_api_key, _api_secret, symbol, entry_client_order_id)
+                    if _real_fill is None:
+                        raise
+                    logger.warning(
+                        f"[AlgoBot] {symbol}: entry order actually filled despite the raised exception "
+                        f"@ {_real_fill} — proceeding as a successful entry, NOT retrying (would double-enter)"
+                    )
+                    entry_result = {"avgPrice": str(_real_fill)}
                 order_id = entry_result.get("orderId")
+                if entry_result.get("avgPrice"):
+                    fill_price = float(entry_result["avgPrice"])
                 logger.info(
                     f"[AlgoBot] Testnet {direction} entry filled: {symbol} qty={qty} "
-                    f"@ {entry_result.get('avgPrice', fill_price)} orderId={order_id}"
+                    f"@ {entry_result.get('avgPrice', fill_price)} orderId={order_id} "
+                    f"clientOrderId={entry_client_order_id}"
                 )
 
                 # Step 2: Best-effort SL/TP placement (orders placed directly,
@@ -382,10 +444,19 @@ class LiveAdapter(ExecutionAdapter):
                             exit_time=datetime.now(timezone.utc),
                         )
                         await record_trade(_tr)
+                        await append_event(
+                            session_id=self.session_id, symbol=symbol, event_type="fill",
+                            payload={"side": "entry", "direction": direction, "qty": qty, "price": fill_price},
+                        )
+                        _emergency_seq = await append_event(
+                            session_id=self.session_id, symbol=symbol, event_type="fill",
+                            payload={"side": "exit", "qty": qty, "price": fill_price, "realizedPnl": _rpnl_e, "reason": "emergency_exit"},
+                        )
                         await self.manager._notify_node(self.session_id, {
                             "pnl": str(round(session["pnl"], 2)),
                             "openPositions": list(session["open_positions"].keys()),
                             "status": "running",
+                            "seq": _emergency_seq,
                             "event": "position:close",
                             "eventData": {
                                 "symbol": symbol,
@@ -454,12 +525,21 @@ class LiveAdapter(ExecutionAdapter):
         }
         session["open_positions"][symbol] = pos_info
 
+        seq = await append_event(
+            session_id=self.session_id,
+            symbol=symbol,
+            event_type="fill",
+            payload={"side": "entry", "direction": direction, "qty": qty, "price": fill_price},
+            client_order_id=str(order_id) if order_id else None,
+        )
+
         await self.manager._notify_node(self.session_id, {
             "pnl": str(round(session["pnl"], 2)),
             "openPositions": list(session["open_positions"].keys()),
             "status": "running",
             "event": "position:open",
             "eventData": pos_info,
+            "seq": seq,
         })
 
         logger.info(f"[AlgoBot] Testnet {direction} filled: {symbol} qty={qty} @ {fill_price}")
@@ -473,6 +553,23 @@ class LiveAdapter(ExecutionAdapter):
         if not session or strategy.position is None or not strategy.position.is_open:
             return
         if qty <= 0 or qty >= strategy.position.qty:
+            return
+
+        # Plan 5 Step 5.3 / Plan 20 (ENG-10): floor the reduce qty to the
+        # symbol's stepSize before sending it to Binance. Unlike every other
+        # order-placement path in this file, execute_reduce previously sent
+        # the raw strategy-computed delta straight through `_fmt_num()`,
+        # which knows nothing about stepSize — a live rejection risk
+        # (-4023/-1111) the moment a strategy's adjust_trade_position()
+        # returns a non-step-aligned quantity. reduce_only=True skips the
+        # minNotional bump (Binance doesn't check notional on reduceOnly
+        # orders — error -4164's own message says so).
+        qty = clamp_and_round_qty(symbol, "Binance Futures", qty, exit_price, reduce_only=True)
+        if qty <= 0 or qty >= strategy.position.qty:
+            logger.warning(
+                f"[AlgoBot] {symbol}: DCA reduce qty clamped to {qty} (stepSize floor), "
+                f"no longer a valid partial reduce against position.qty={strategy.position.qty} — skipping"
+            )
             return
 
         reduce_side = "SELL" if strategy.position.type == "long" else "BUY"
@@ -641,6 +738,11 @@ class LiveAdapter(ExecutionAdapter):
                 f"[AlgoBot] Testnet close-position FAILED for {symbol}: {e} — "
                 f"position stays open locally, NOT booking a fabricated close"
             )
+            await append_event(
+                session_id=self.session_id, symbol=symbol, event_type="close_failed",
+                payload={"reason": reason, "error": str(e)},
+                client_order_id=client_order_id,
+            )
             await self.manager._notify_node(self.session_id, {
                 "status": "running",
                 "event": "close_failed",
@@ -714,12 +816,19 @@ class LiveAdapter(ExecutionAdapter):
         # per-symbol aggregation (computeSymbolStats) sees this closed trade.
         await record_trade(trade_record)
 
+        exit_seq = await append_event(
+            session_id=self.session_id, symbol=symbol, event_type="fill",
+            payload={"side": "exit", "qty": pos.qty, "price": exit_price, "realizedPnl": realized_pnl, "reason": reason},
+            client_order_id=client_order_id,
+        )
+
         await self.manager._notify_node(self.session_id, {
             "pnl": str(round(session["pnl"], 2)),
             "openPositions": list(session["open_positions"].keys()),
             "status": "running",
             "event": "position:close",
             "eventData": event_data,
+            "seq": exit_seq,
         })
 
         logger.info(f"[AlgoBot] Position closed: {symbol} pnl={realized_pnl:.2f} reason={reason}")
@@ -878,6 +987,14 @@ class LiveBotManager:
             "trading_state": "active",  # A-002: active/reducing/halted
             "protection_manager": protection_manager,  # A-001
             "rate_limiter": rate_limiter,  # A-003
+            # Plan 12 Step 1b: session-level cap on concurrent open symbols
+            # (live/chaos multi-symbol only). None = unlimited (default,
+            # byte-identical to pre-Plan-12 behavior).
+            "max_open_positions": (
+                int(session_config["max_open_positions"])
+                if session_config.get("max_open_positions") not in (None, "")
+                else None
+            ),
             "open_positions": {},  # symbol -> dict with position info
             "strategy_instances": {},  # symbol -> strategy instance
         }
@@ -1006,6 +1123,7 @@ class LiveBotManager:
         self._order_semaphores.pop(session_id, None)
         for _key in [k for k in self._symbol_state_locks if k[0] == session_id]:
             self._symbol_state_locks.pop(_key, None)
+        reset_session_seq(session_id)
 
         logger.info(f"[AlgoBot] Session {session_id} stopped")
 
@@ -1579,6 +1697,10 @@ class LiveBotManager:
             strategy.take_profit = None
 
             await record_trade(trade_record)
+            await append_event(
+                session_id=session_id, symbol=symbol, event_type="fill",
+                payload={"side": "exit", "qty": pos.qty, "price": exit_price, "realizedPnl": realized_pnl, "reason": "session_stop"},
+            )
 
         session["open_positions"].pop(symbol, None)
         return True
@@ -1750,10 +1872,15 @@ class LiveBotManager:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
             session["open_positions"][symbol] = pos_info
+            reconcile_seq = await append_event(
+                session_id=session_id, symbol=symbol, event_type="reconcile_adjustment",
+                payload={"nowOpen": True, "qty": abs(exchange_amt), "price": exchange_entry, "reason": "exchange_had_position_engine_did_not"},
+            )
             await self._notify_node(session_id, {
                 "pnl": str(round(session["pnl"], 2)),
                 "openPositions": list(session["open_positions"].keys()),
                 "status": "running",
+                "seq": reconcile_seq,
                 "event": "position:open",
                 "eventData": pos_info,
             })
@@ -1844,11 +1971,16 @@ class LiveBotManager:
             session["open_positions"].pop(symbol, None)
 
             await record_trade(trade_record)
+            exchange_sync_seq = await append_event(
+                session_id=session_id, symbol=symbol, event_type="reconcile_adjustment",
+                payload={"nowFlat": True, "realizedPnl": realized_pnl, "price": estimated_exit, "reason": "exchange_had_no_position_engine_did"},
+            )
 
             await self._notify_node(session_id, {
                 "pnl": str(round(session["pnl"], 2)),
                 "openPositions": list(session["open_positions"].keys()),
                 "status": "running",
+                "seq": exchange_sync_seq,
                 "event": "position:close",
                 "eventData": event_data,
             })

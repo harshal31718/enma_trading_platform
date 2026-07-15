@@ -382,9 +382,19 @@ def clamp_and_round_qty(
     qty: float,
     price: float,
     stop_loss_pct: float | None = None,
+    reduce_only: bool = False,
 ) -> float:
     """
     Round quantity to step size, ensuring it meets minQty and minNotional filters with a reserve buffer.
+
+    `reduce_only`: Plan 5 Step 5.3 / Plan 20 (ENG-10). Binance exempts
+    `reduceOnly=true` orders from the MIN_NOTIONAL filter (error -4164's own
+    message: "unless you choose reduce only") but NOT from LOT_SIZE/
+    MARKET_LOT_SIZE stepSize alignment. When True, this skips the minNotional
+    bump-up (step 3) and the +30% tolerance abort (step 4) — a reduce qty
+    should only ever be floored to stepSize/minQty, never bumped upward,
+    since bumping toward a notional floor that Binance doesn't enforce here
+    would just reduce more than the strategy asked for.
     """
     if qty <= 0.0:
         return 0.0
@@ -409,6 +419,11 @@ def clamp_and_round_qty(
     # 2. Ensure it meets minimum quantity
     if qty_dec < min_qty_dec:
         qty_dec = min_qty_dec
+
+    if reduce_only:
+        # Binance doesn't check MIN_NOTIONAL on reduceOnly orders — floor to
+        # stepSize/minQty only, never bump upward past what the strategy asked to reduce.
+        return float(qty_dec)
 
     # 3. Ensure it meets minimum notional with reserve buffer (F-008)
     price_dec = Decimal(str(price))

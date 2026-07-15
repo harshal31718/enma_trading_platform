@@ -1,8 +1,56 @@
 # Plan 5 — Live-trading state integrity
 
-**Status:** In progress 2026-07-15 — Steps 5.2, 5.4 shipped · **Priority:** P0 (highest-value correctness work) · **Depends on:** 2, 3 · **Related:** 6
+**Status:** In progress 2026-07-15 — Steps 5.1 (scoped), 5.2, 5.4 shipped · **Priority:** P0 (highest-value correctness work) · **Depends on:** 2, 3 · **Related:** 6
 
 ## Progress log (2026-07-15)
+
+**5.1 — Execution event log (SYS-2/SRV-3) — Shipped, scoped down from the full spec.** Added an
+append-only `executionEvents` Mongo collection (`engine/services/event_log.py`) keyed by
+`(sessionId, symbol)` with a monotonic per-key `seq`. Wired `append_event()` calls into every
+state-mutating site in `live_bot_manager.py`'s `LiveAdapter`: `execute_entry` (position:open,
+DCA add, and the F-018 emergency-exit entry+exit pair), `execute_exit` (both `close_failed` and
+the real-fill close), `_close_position_on_stop`, and both branches of
+`_reconcile_exchange_state` (position discovered open / discovered flat). `_notify_node` now
+carries the assigned `seq` for the three symbol-mutating events (`position:open`,
+`position:close`, `position:adjust`); Node's `handleEngineStats`
+(`server/src/controllers/algo.controller.js`) rejects a PATCH whose `seq` is `<=` the last
+accepted `seq` for that `(sessionId, symbol)` (stored in a new `LiveSession.lastSeqBySymbol`
+field) — this is the ordering guarantee Step 5.4's per-symbol `asyncio.Lock` provides
+engine-side, extended to Node's ingestion endpoint, which isn't itself ordered. New
+`ExecutionEvent.js` Mongoose read model (engine writes, server reads — same ownership pattern as
+`TradeRecord.js`).
+
+**What was deliberately NOT done, and why this is a scope-down, not a shortcut:** the plan as
+written wants `LiveSession`/engine-memory to become **pure derived views** rebuilt from the
+event log — this ships the log itself (the write path + a proven fold/replay function) but
+`live_bot_manager.py`'s in-memory session dict and `LiveSession`'s directly-written fields
+(`pnl`, `openPositions`, `positionDetails`) remain the live read path, unchanged. Making them
+projections is genuinely Step 5.6/Plan-6-shaped work (it changes the session bootstrap sequence
+and needs its own dedicated restart-recovery verification, not a same-day bundle onto 5.1) — see
+the Progress log's original assessment under "Remaining," which this entry narrows rather than
+contradicts. `correlation_id` was dropped from the event schema: Plan 2.3's correlation IDs are
+HTTP-request-scoped (an `AsyncLocalStorage`/contextvar set by request middleware), and
+`live_bot_manager`'s candle loop and WS fill callbacks run as background asyncio tasks outside
+any HTTP request context — `correlation_id_var.get()` would just return the module default
+there, so it wasn't wired in as a no-op field.
+
+**Verified:** 13 new tests (`engine/tests/test_execution_event_log.py`) — seq monotonicity per
+`(session, symbol)`, seq independence across symbols, write-failure-is-swallowed (mirrors
+`trade_recorder.record_trade`'s established best-effort contract exactly), and — the plan's own
+stated acceptance check — `fold_events()` replaying a hand-built event sequence reproduces final
+PnL and open-position state exactly: simple entry→exit, multiple round-trips accumulating
+realized PnL, DCA-add weighted-average entry price, `close_failed` as a correctly-inert no-op
+(Step 5.2's whole point — a failed close must not flip state), and both
+`reconcile_adjustment` directions. Added a matching `_stub_append_event` autouse fixture to
+`test_live_fill_booking.py` (mirrors the existing `_stub_record_trade` fixture) so those tests
+stay hermetic. Full engine suite 121/121 (was 108; +13). Golden master unaffected —
+`live_bot_manager.py` has zero import overlap with the backtest path (`kernel.py`/
+`backtest_runner.py`), same as 5.2/5.4. Verified both engine and server files load/import
+cleanly inside their containers (`docker cp` + `python -c "import ..."` / `node -e "require(...)"`
+— no live Docker Compose watch active this session, so files were copied in directly for
+verification rather than rebuilt).
+
+**Old progress log (5.2, 5.4):**
 
 **5.2 — Real fills, not fabricated closes (ENG-2) — Shipped.** This was "the uncomfortable
 part" made concrete: `LiveAdapter.execute_exit` (`core/live_bot_manager.py`) discarded the
@@ -61,25 +109,30 @@ throughout, both stopped cleanly with no hang — the strongest available eviden
 deadlock short of catching an actual fill mid-candle-loop, which needs organic market timing
 this session didn't wait for.
 
-**Remaining (5.1, 5.3 [partial], 5.5, 5.6) not yet done:**
-- **5.1 (event log)** — not started. This is the largest remaining piece: a new append-only
-  collection, Node/engine write paths, and turning `LiveSession`/engine memory into pure derived
-  views. Steps 5.2/5.4 delivered real correctness value without it by fixing the specific
-  bugs directly — the event log is more Plan-6-shaped (structural) than a same-day addition.
-- **5.3 (order idempotency) — partially covered as a side effect of 5.2**: close orders now
-  carry a deterministic `newClientOrderId` and 5.2's re-query fallback already demonstrates the
-  "detect via client id instead of blindly retrying" pattern. **Not done**: entry orders
-  (`execute_entry`, `execute_flip`) still have no client id / idempotency, and there's no
-  explicit "query by client id before retrying on ambiguous timeout" retry wrapper anywhere —
-  the current re-query is only wired into the close path's fill-price lookup, not as a general
-  retry-safety mechanism.
+**Remaining (5.3 [partial], 5.5, 5.6) not yet done; 5.1 shipped in scoped form:**
+- **5.1 (event log) — Shipped in scoped form** (see Progress log above): the append-only
+  collection, engine write paths at every state-mutating site, and a Node-side seq-ordering
+  guard are done. **Still not done**: turning `LiveSession`/engine memory into *pure* derived
+  views rebuilt from the log — they remain the live read path, the log is additive alongside
+  them. That migration is Step 5.6's job (it depends on this step existing, which it now does).
+- **5.3 (order idempotency) — extended 2026-07-15, found during Plan 20's audit**: close orders
+  (5.2) and now **entry orders** both carry a deterministic `newClientOrderId` and both have a
+  "query by client id before concluding failure" retry-safety wrapper (`execute_entry`'s wrapper
+  added this session — see `20_binance-precision-notional-parity.md`'s Shipped summary; it also
+  fixed a latent bug where entry always booked the pre-trade `ref_price` estimate instead of the
+  real fill even on success). DCA scale-in (`execute_entry`'s `is_dca` branch) got a client id
+  too, no retry wrapper (smaller race window, lower priority). **Still not done**: `execute_flip`
+  has no client id of its own (it delegates to `execute_entry`/`execute_exit`, which now both do,
+  so this may already be adequately covered — not independently verified); `execute_reduce`
+  (DCA scale-out) has no client id or retry wrapper at all — lowest priority since it remains
+  dead code today (no strategy overrides `adjust_trade_position()`).
 - **5.5 (Decimal money)** — not started. Correctly the largest, riskiest remaining piece:
   touches nearly every arithmetic operation across position/PnL/balance math in both engine
   Python and Node, and per the plan's own acceptance criteria needs a *documented* golden-master
   diff (float-precision differences are expected once quantities go through `Decimal`
   rounding) — a deliberate, reviewed change, not something to rush.
-- **5.6 (restart recovery)** — blocked on 5.1 by design (rebuilds session memory from the event
-  log on engine restart); not started.
+- **5.6 (restart recovery)** — depended on 5.1 by design (rebuilds session memory from the event
+  log on engine restart); 5.1's log + `fold_events()` now exist, so 5.6 is unblocked. Not started.
 
 > Source issues: SYS-2, ENG-2, ENG-3, ENG-10, ENG-11, SRV-3. This is the deepest design flaw
 > in the repo: three copies of "truth" (exchange / engine memory / Mongo) reconciled by
@@ -101,17 +154,32 @@ Mongo become *projections* of an append-only event log, not independent truths.
 
 ## Scope / what changes
 
-### Step 5.1 — Define the trade event model (issue SYS-2, SRV-3)
+### Step 5.1 — Define the trade event model (issue SYS-2, SRV-3) — **Shipped in scoped form 2026-07-15**
 - Introduce an append-only **execution event log** (new collection, e.g. `executionEvents`,
   or a Timescale table) keyed by `sessionId`+`symbol`+monotonic `seq`. Event types: intent,
-  order-submitted, fill (partial/full), reconcile-adjustment, close.
+  order-submitted, fill (partial/full), reconcile-adjustment, close. **Done** — Mongo
+  collection, `(sessionId, symbol)`-scoped monotonic seq, event types `fill` (entry/add/exit),
+  `close_failed`, `reconcile_adjustment` (the `intent`/`order-submitted` granularity from the
+  original list collapsed into `fill`'s payload since the engine only has one HTTP round-trip
+  per order today — splitting intent-vs-submitted-vs-filled would need instrumenting the
+  Binance call sites individually, deferred, not blocking).
 - Each event carries a `correlation_id` (Plan 2.4) and, for orders, a `clientOrderId`
   (Step 5.3). Node's `LiveSession` and the engine's in-memory dict become **derived views**
-  rebuilt from events — never the source of a number.
+  rebuilt from events — never the source of a number. **Partially done**: `clientOrderId` is
+  captured where available. `correlation_id` deliberately **not** wired in — Plan 2.4's IDs are
+  HTTP-request-scoped and the live bot's candle loop/WS callbacks run outside any request
+  context, so there's no meaningful value to carry (see Progress log). `LiveSession`/engine
+  memory are **not yet** pure derived views — they remain the live read path; the log is
+  additive. That migration is Step 5.6.
 - `handleEngineStats` (SRV-3) stops persisting arbitrary PnL/positionDetails as truth; it
   records/forwards events with a sequence number and rejects out-of-order or duplicate seqs.
+  **Partially done**: seq-ordering rejection is live for the three symbol-mutating events
+  (`position:open/close/adjust`). `positionDetails`/`pnl` are still written directly by
+  `handleEngineStats` as before — "stops persisting as truth" (i.e. becomes pure passthrough of
+  a derived value) depends on 5.6's projection work.
 - Acceptance check: replaying the event log for a session reproduces its final PnL and open
-  positions exactly.
+  positions exactly. **Done and tested** — `fold_events()` + 13 tests in
+  `test_execution_event_log.py`, see Progress log.
 
 ### Step 5.2 — Book fills from actual exchange fills, not guesses (issue ENG-2)
 - `execute_exit` / `_close_position_on_stop` / emergency-exit must read the **actual fill**

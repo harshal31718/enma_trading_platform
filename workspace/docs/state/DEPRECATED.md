@@ -20,8 +20,9 @@ If something appears here, it does not exist in the codebase and must not be ref
 | `workspace/docs/binance-api.md` | Moved | Reorganized to `workspace/docs/core/` | `workspace/docs/core/binance-api.md` |
 | `workspace/plan/RISK_DASHBOARD_DECISIONS.MD` | Consolidation | Merged into consolidated plan file | `RISK_DASHBOARD_PLAN.MD` (itself since deleted — git history) |
 | `workspace/archive/` (17 files) | Deleted 2026-07-02 | Completed/historical plans; git history is the archive — no archive folders kept | Git history |
-| `workspace/plan/INDEX.md` | Deleted 2026-07-02 | Redirect stub — governance forbids redirect stubs | `workspace/README.md` (map) + `workspace/next_phase/README.md` (build queue) |
+| `workspace/plan/INDEX.md` | Deleted 2026-07-02 | Redirect stub — governance forbids redirect stubs | `workspace/README.md` (map) + `workspace/plan/mergeContext.md` (build queue) |
 | `workspace/plan/deployment_plan.md` | Moved 2026-07-02 | Durable ops runbook, not a transient plan | `workspace/docs/ops/DEPLOYMENT.md` |
+| `workspace/next_phase/` (9 files) | Merged into `workspace/plan/` 2026-07-15 | Two active spec dirs was confusing; `plan/` is the single sequenced queue | `workspace/plan/11_current-state-reconciliation.md`–`19_bayesian-hyperopt.md`, `ref_*.md`, `mergeContext.md` |
 
 **Removed 2026-06-20:** three point-in-time reports — `ai_architecture_report.md`, `ai_infrastructure_audit.md`, `workflow_v2_stabilization_report.md` (all dated 2026-06-05) — were archived to `workspace/docs/archive/` on 2026-06-14, then **deleted** 2026-06-20 as fully superseded by `.claude/GOVERNANCE.md` and `AGENTS.md`. Do not reconstruct. The `workspace/docs/archive/` directory no longer exists; `workspace/archive/` was itself deleted 2026-07-02 — git history is the only archive.
 

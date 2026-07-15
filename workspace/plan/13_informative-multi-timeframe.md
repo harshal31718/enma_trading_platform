@@ -1,4 +1,6 @@
-# S2 — Informative / Multi-Timeframe Contract
+# Plan 13 — Informative / Multi-Timeframe Contract
+
+**Status:** Ready · **Priority:** P2 · **Phase:** 9 · **Depends on:** 11 · **Related:** 16, 17
 
 **Goal:** Let a strategy reference a higher timeframe (e.g. 1h trend filtering 5m entries) without
 lookahead, using the existing two-phase `prepare()`/`before()` contract from workstream #1.

@@ -63,8 +63,10 @@ type SymbolOverride = { maxLeverage?: number, volatilityMultiplier?: number, max
 - **`POST /api/v1/strategies`** -> Req: `{ name, description, sourceName?, template? }` -> `{ strategy: Strategy }`
   - `sourceName` clones an existing strategy by name
   - `template: 'blank'` scaffolds a new blank strategy
-- **`GET /api/v1/strategies/:id/code`** -> `{ code: string }`
-- **`PUT /api/v1/strategies/:id/code`** -> Req: `{ code: string }` -> `{ savedAt: string }`
+- **`GET /api/v1/strategies/:id/code`** -> `{ code: string }` (read-only)
+- **`PUT /api/v1/strategies/:id/code` does NOT exist** — removed 2026-07-15 (Plan 3 Step 3.2,
+  SEC-2: closed the any-user strategy-code RCE path outright, confirmed dead client-side first).
+  Strategy code is view-only via the endpoint above; there is no in-app edit/save path.
 - **`GET /api/v1/strategies/:id/params`** -> `{ params: { [key]: { type, default, min, max, label, description } } }` — `type: "categorical"|"boolean"` params return `categories` instead of `min`/`max`.
 - **`POST /api/v1/backtest`** -> Req: `{ strategyId, exchange, symbol, timeframe, startDate, endDate, capital, leverage, feeRate, riskParams?, alphaParams? }` -> `{ jobId, status }`. `alphaParams` is an optional per-run override of the strategy's Tier-3 PARAMS (keyed by PARAM name); omitted/`{}` ⇒ engine uses each PARAM's default. Server forwards it through the BullMQ payload to the engine's `alphaParams` field (mapped to `alpha_params`).
 - **`GET /api/v1/backtest/:id`** -> `{ id, jobId, status, metrics: BacktestMetric, tradeCount: number, equityCurve: {timestamp, balance}[], underwaterCurve: {timestamp, drawdownPct}[], rollingMetricsCurve: {index, sharpe, volatility}[], returnsHistogram: {label, count, lo, hi}[], mfeMaeScatter: {mfePct, maePct, exitReason, pnl}[] }`
@@ -75,7 +77,7 @@ type SymbolOverride = { maxLeverage?: number, volatilityMultiplier?: number, max
 
 ### Optimization
 - **`GET /api/v1/optimize/objectives`** -> `{ objectives: string[] }` (e.g. `netProfit`, `sharpeRatio`, `profitFactor`) — proxies engine `GET /optimize/objectives`
-- **`POST /api/v1/optimize/run`** -> Req: `{ strategyId, exchange, symbol, timeframe, startDate, endDate, capital, leverage, feeRate, paramGrid, objective }` -> `{ jobId, status }` — proxies engine `POST /optimize/run`. Grid search only (`itertools.product` over `paramGrid`); no Bayesian/optuna support (`workspace/next_phase/S8-bayesian-hyperopt.md`).
+- **`POST /api/v1/optimize/run`** -> Req: `{ strategyId, exchange, symbol, timeframe, startDate, endDate, capital, leverage, feeRate, paramGrid, objective }` -> `{ jobId, status }` — proxies engine `POST /optimize/run`. Grid search only (`itertools.product` over `paramGrid`); no Bayesian/optuna support (`workspace/plan/19_bayesian-hyperopt.md`).
 - **`GET /api/v1/optimize/:id/status`** -> `{ jobId, status, progressPct? }` — proxies engine `GET /optimize/{job_id}/status`
 - **`GET /api/v1/optimize/:id/results`** -> `{ jobId, results: { params: object, metrics: BacktestMetric }[] }`, sorted by the requested objective — proxies engine `GET /optimize/{job_id}/results`
 

@@ -1,4 +1,6 @@
-# S3 — Webhook Notifications
+# Plan 14 — Webhook Notifications
+
+**Status:** Ready · **Priority:** P2 · **Phase:** 9 · **Depends on:** 11 (independent) · **Related:** —
 
 **Goal:** POST a JSON payload to a user-configured URL on trade lifecycle events (entry, exit,
 liquidation, session start/stop, error) so Enma can push to Discord/Slack/IFTTT.
@@ -93,4 +95,4 @@ webhook: {
 - Independent — can ship any time after V0 (no engine/pipeline touch, no golden master).
 - Risk: a slow/hanging webhook endpoint must never stall `handleEngineStats`. Enforce `timeoutMs` and
   fire without `await` blocking the persist path (dispatch after the DB write resolves).
-- Out of scope (deferred per `REF-gap-matrix-freqtrade-nautilus.md`): Telegram. Webhooks cover the notification need.
+- Out of scope (deferred per `ref_gap-matrix-freqtrade-nautilus.md`): Telegram. Webhooks cover the notification need.

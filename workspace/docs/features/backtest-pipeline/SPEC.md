@@ -145,7 +145,7 @@ linspace, categorical values, random-subset support) against 8 objective functio
 calmar, profit, profit_pct, drawdown, sqn, multi). Results persist to MongoDB `optimizationResults`.
 Router: `engine/routers/optimize.py` — `GET /optimize/objectives`, `POST /optimize/run`,
 `GET /optimize/{id}/status`, `GET /optimize/{id}/results` (mirrored at `/api/v1/optimize/*`, see
-`API_CONTRACTS.md`). No Bayesian/optuna support yet — grid search only (`next_phase/S8-bayesian-hyperopt.md`).
+`API_CONTRACTS.md`). No Bayesian/optuna support yet — grid search only (`workspace/plan/19_bayesian-hyperopt.md`).
 
 ---
 

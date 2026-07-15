@@ -58,6 +58,15 @@ slice — it's well-specified, reuses the existing BullMQ/Socket.IO backtest-job
 codebase already proves out, and is the architectural fix (SRV-5) the MC-core rewrite alone
 doesn't address.
 
+**2026-07-15 — Phase 3 design source found:** the feature-gap program (plans 11-19, folded from
+`workspace/next_phase/`) independently specified Phase 3's exact scope as two standalone files:
+`18_walk-forward-analysis.md` (fold-split algorithm, anchored-vs-rolling train/test, OOS
+stitching) and `19_bayesian-hyperopt.md` (Optuna `trial.suggest_*` adapter over the existing
+`param_grid` spec, async ask/tell design). Both are now `Merged→10` — when Phase 3 is
+implemented, build from those two files' math/adapter design, **not** their originally-specified
+standalone sync `/optimize/walk-forward` endpoint or `walkForwardResults` collection, which
+conflict with this plan's `labResults`/job-queue architecture (§3.1-3.2 above).
+
 ---
 
 ## 1. Current state & why it doesn't work

@@ -223,6 +223,14 @@ class BacktestAdapter(ExecutionAdapter):
         if qty <= 0 or qty >= strategy.position.qty:
             return
 
+        # Plan 5 Step 5.3 / Plan 20 (ENG-10): floor to stepSize for
+        # backtest/live parity with the live adapter's execute_reduce (which
+        # now clamps too) — a backtest must never report a scale-out fill at
+        # a precision live Binance would reject.
+        qty = clamp_and_round_qty(symbol, "Binance Futures", qty, exit_price, reduce_only=True)
+        if qty <= 0 or qty >= strategy.position.qty:
+            return
+
         open_t = strategy.candles[index_t, 1]
         was_long = strategy.position.type == "long"
         bounded_exit = bounded_exit_price(

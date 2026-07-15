@@ -13,7 +13,7 @@ Tracked-in-git documentation shared by every AI agent and the user. Entry point 
 | `docs/features/<name>/SPEC.md` | Per-feature deep specs (threshold rules in `.claude/GOVERNANCE.md`) | Per feature |
 | `docs/indicators/`, `docs/strategies/` | Catalogs, one file per item + `INDEX.md` | When adding one |
 | `docs/ops/DEPLOYMENT.md` | Production deployment runbook (OCI VPS, nginx/TLS, dev/main branch model) | Per deploy learning |
-| `next_phase/` | Forward build queue: sequenced specs `S1–S8` + `REF-*` research/backlog | When planning/shipping |
+| `plan/` | Forward build queue: numbered specs `1–19` + `ref_*` research/backlog + `mergeContext.md` | When planning/shipping |
 | `plan/handoff.md` | Session resume log — **max 3 entries**, newest first | Every multi-phase session |
 | `skills/README.md` | Thin pointer to the skill inventory (canonical list in `.claude/GOVERNANCE.md` Part 2) | Never |
 

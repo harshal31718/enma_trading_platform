@@ -58,7 +58,7 @@ double-count:
 
 | Idea (futurePlans) | Official roadmap entry |
 |---|---|
-| ~~Monte Carlo Simulation~~ | **Shipped** — `engine/services/monte_carlo.py`, wired into the Risk Dashboard. Stale as of the 2026-06-25 reconciliation (`00-current-state-reconciliation.md`); row kept for history only. |
+| ~~Monte Carlo Simulation~~ | **Shipped** — `engine/services/monte_carlo.py`, wired into the Risk Dashboard. Stale as of the 2026-06-25 reconciliation (`11_current-state-reconciliation.md`); row kept for history only. |
 | (multi-symbol / multi-exchange ambitions) | "Multi-exchange support" (Planned) |
 | (live mainnet, implied by several) | "Mainnet trading" (Planned) |
 
@@ -69,7 +69,7 @@ double-count:
 | Item | Fit | Effort | Type | Notes / Enma mapping |
 |---|---|---|---|---|
 | **PyPortfolioOpt** | 🟡 | M | Adopt | Mean-Variance / Black-Litterman / risk-parity weight allocation across symbols. Needs a portfolio abstraction first (fork #3). Natural complement to Chaos Mode's multi-symbol fan-out — could decide capital weights instead of round-robin. |
-| ~~**Monte Carlo Simulation**~~ | 🟢 | M | **Shipped, not "Build"** | Stale — `engine/services/monte_carlo.py` is live and wired into the Risk Dashboard per `00-current-state-reconciliation.md` (2026-06-25). This doc predates that reconciliation and was never updated after. Do not schedule this as new work. |
+| ~~**Monte Carlo Simulation**~~ | 🟢 | M | **Shipped, not "Build"** | Stale — `engine/services/monte_carlo.py` is live and wired into the Risk Dashboard per `11_current-state-reconciliation.md` (2026-06-25). This doc predates that reconciliation and was never updated after. Do not schedule this as new work. |
 | **Smart Portfolio Optimizer** | 🟡 | L | Build | Dynamic rebalancing on live signals + risk constraints (beyond static PyPortfolioOpt weights). Depends on portfolio abstraction (#3) and a live risk layer. Pairs with the Risk Management Dashboard (Track D). |
 
 ## Track B — ML / RL & Forecasting
@@ -94,7 +94,7 @@ double-count:
 
 | Item | Fit | Effort | Type | Notes / Enma mapping |
 |---|---|---|---|---|
-| ~~**Risk Management Dashboard**~~ | 🟢 | M | **Shipped, not "Build"** | Stale — `engine/routers/risk.py` + `client/src/pages/RiskDashboard.jsx` (Zones 1–3: margin/exposure/correlation, live metrics, Monte Carlo & leverage-scenario simulation) are live per `00-current-state-reconciliation.md` (2026-06-25). Do not schedule this as new work. |
+| ~~**Risk Management Dashboard**~~ | 🟢 | M | **Shipped, not "Build"** | Stale — `engine/routers/risk.py` + `client/src/pages/RiskDashboard.jsx` (Zones 1–3: margin/exposure/correlation, live metrics, Monte Carlo & leverage-scenario simulation) are live per `11_current-state-reconciliation.md` (2026-06-25). Do not schedule this as new work. |
 | **Personal Quant Research Framework** | 🟢 | L | Build | Structured loop: hypothesis → data → backtest → documented result → iterate. This is arguably the *meta-spine* tying everything together — and Enma's `workspace/docs` + strategy/backtest stack is already a partial implementation. Could formalize as a research-notebook/journal surface. |
 | **Hedge Fund in a Spreadsheet** | 🟢 | S | Research | Replicate allocation/risk/P&L/Monte Carlo in spreadsheet formulas to *understand the math* before coding it. Not a product feature — a learning exercise that de-risks Track A/D builds. Cheap, useful precursor to Monte Carlo + Risk Dashboard. |
 

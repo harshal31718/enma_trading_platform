@@ -43,6 +43,13 @@ const liveSessionSchema = new mongoose.Schema({
   // value live PnL after a page reload — i.e. for positions opened before the
   // browser socket connected. Engine-agnostic; written only by handleEngineStats.
   positionDetails: { type: Object, default: {} },
+  // Plan 5 Step 5.1 (SYS-2): last accepted executionEvents `seq` per symbol,
+  // written by the engine alongside position:open/close/adjust. Guards
+  // against a stale PATCH (from a delayed/retried engine call) overwriting a
+  // newer one for the same symbol — handleEngineStats rejects any position
+  // mutation whose `seq` is <= the stored value. Absent/undefined seq (older
+  // engine builds, or non-position events) skips the guard entirely.
+  lastSeqBySymbol: { type: Object, default: {} },
   logs: {
     type: [
       {

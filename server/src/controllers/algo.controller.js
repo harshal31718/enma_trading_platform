@@ -16,7 +16,7 @@ const { allocateChaosSymbols } = require('../utils/chaosAllocator')
 // POST /api/v1/algo/sessions
 async function startSession(req, res, next) {
   try {
-    const { strategyId, symbols, timeframe, params, capital, leverage, riskParams: riskOverride } = req.body
+    const { strategyId, symbols, timeframe, params, capital, leverage, riskParams: riskOverride, maxOpenPositions } = req.body
 
     if (!strategyId || !symbols || !symbols.length || !timeframe || !capital) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'strategyId, symbols, timeframe, and capital are required')
@@ -120,6 +120,10 @@ async function startSession(req, res, next) {
         user_id: String(req.user.id),
         api_key: apiKey,
         api_secret: apiSecret,
+        // Plan 12 Step 1b: session-level cap on concurrent open symbols.
+        // Optional — omitted/null means unlimited (unchanged behavior).
+        max_open_positions: Number.isFinite(Number(maxOpenPositions)) && maxOpenPositions !== null
+          ? Number(maxOpenPositions) : null,
       })
     } catch (engineErr) {
       // Rollback on engine failure
@@ -312,9 +316,25 @@ async function computeSymbolStats(sessionId) {
 async function handleEngineStats(req, res, next) {
   try {
     const { id } = req.params
-    const { pnl, openPositions, status, event, eventData, positionDetails } = req.body
+    const { pnl, openPositions, status, event, eventData, positionDetails, seq } = req.body
+
+    // Plan 5 Step 5.1 (SYS-2): reject a stale position mutation racing a
+    // newer one for the same symbol (e.g. a delayed/retried engine PATCH
+    // arriving after a later one already landed). Scoped narrowly to the
+    // symbol-mutating position events that carry a `seq` — other fields
+    // (status, generic pnl/log updates) are never guarded by this check.
+    const seqSymbol = eventData && eventData.symbol
+    if (typeof seq === 'number' && seqSymbol && ['position:open', 'position:close', 'position:adjust'].includes(event)) {
+      const existing = await LiveSession.findById(id).select('lastSeqBySymbol').lean()
+      const lastSeq = existing && existing.lastSeqBySymbol ? existing.lastSeqBySymbol[seqSymbol] : undefined
+      if (typeof lastSeq === 'number' && seq <= lastSeq) {
+        console.warn(`[AlgoBot] Rejected stale stats update for session ${id} symbol ${seqSymbol}: seq=${seq} <= lastSeq=${lastSeq}`)
+        return res.json({ success: true, rejected: 'stale_seq' })
+      }
+    }
 
     const updateData = {}
+    if (typeof seq === 'number' && seqSymbol) updateData[`lastSeqBySymbol.${seqSymbol}`] = seq
     if (pnl !== undefined) updateData.pnl = String(pnl)
     if (openPositions !== undefined) updateData.openPositions = openPositions
     if (status && ['running', 'stopping', 'stopped', 'error'].includes(status)) {

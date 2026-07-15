@@ -7,7 +7,7 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
-## 2026-07-15 — Autonomous multi-plan session: 9.1–9.3, Plan 2, 3, 4 shipped — IN PROGRESS 🔄
+## 2026-07-15 — Autonomous multi-plan session: 9.1–9.3, Plan 2/3/4, 11–19 merge, Plan 5.1/5.2/5.4, Plan 20, Plan 11/12 — SESSION END (context limit) ⏸️
 
 **Goal:** pick up the prior session, then drive continuously through the entire `workspace/plan`
 catalog without stopping for check-ins — commit at each plan checkpoint, only surface genuine
@@ -88,24 +88,94 @@ checkpoint ✅ → Plan 2 ✅ → 3 ✅ → 4 ✅ → **Plan 5 — BLOCKED, see 
 9.4/9.5/QNT-15 ✅ → Plan 10 Phase 1a ✅ → UI pass ✅. Committing at each checkpoint on `dev`, not
 pushing to remote without being asked.
 
-**Plan 5 is the one deliberate stop in this session — not a time/scope limit, a judgment call.**
-Plan 5 (Live-trading state integrity) is a 6-step architectural rewrite of the live trading
-state machine (event-sourcing log, real-fill booking, order idempotency, per-symbol locking,
-float→Decimal money math, restart recovery) that the plan document itself calls "the deepest
-design flaw in the repo" and says explicitly not to promote to mainnet before it ships. The
-user had a live algo session running the entire time this decision was made. Rewriting how
-fills/PnL/state work, unsupervised, at the tail of an already-long session, with no way to
-slowly validate each step against a running bot, is how this plan's own failure mode gets
-reintroduced instead of fixed. **Next session: get the user's explicit go-ahead on approach and
-timing before starting Plan 5** — everything downstream (Plans 6, 7, 8) is gated on it.
+**Update — user gave explicit go-ahead on Plan 5 ("Full send, all 6 steps"), work resumed:**
+The pause above was real at the time (correct call — no rubber-stamping unsupervised state-
+machine rewrites against a live session) but the user then explicitly authorized the full scope
+after seeing the reasoning. Shipped since: **5.2** (real fills, not fabricated closes — every
+close-booking site now reads the actual exchange fill, failed closes leave the position open
+instead of fabricating a close), **5.4** (per-symbol `asyncio.Lock` killing the candle-loop vs
+fill-callback race), and **5.1 in scoped form** (append-only `executionEvents` log + Node seq-
+ordering guard + a tested `fold_events()` replay — but `LiveSession`/engine memory are NOT yet
+pure derived views of the log; that's Step 5.6, now unblocked but not started). Detail for all
+three: `5_live-trading-state-integrity.md`. Remaining: 5.3 (entry-order idempotency — partially
+covered as a 5.2 side effect), **5.5 (Decimal money — the largest, riskiest piece, needs its own
+deliberate golden-master sign-off pass, not a same-day bundle)**, 5.6 (restart recovery).
+
+**Also done (same session): merged plans 11–19 into tracking.** A separate concurrent Claude Code
+session had consolidated `workspace/next_phase/` into `workspace/plan/` as new plans 11–19 +
+`ref_*.md` (mechanical move only, see `mergeContext.md`) — this session read all 9 new plan files,
+cross-referenced them against 0–10 and shipped work, and updated `0_tracker.md`/`0_roadmap.md`
+(new Phase 9)/`0_plans.md` to reference them. **Found and fixed two real conflicts**: Plan 16
+(lookahead analysis) is superseded by the already-shipped 9.5 sentinel — now `Merged→9`; Plans 18
+(walk-forward) + 19 (Bayesian hyperopt) duplicate Plan 10 Phase 3's already-scoped job-based
+optimizer design — now `Merged→10`, kept as design reference only. Also **fixed a pre-existing
+bug**: `0_plans.md` was truncated mid-word in the last commit, missing catalog entries for plans
+7–10 entirely — reconstructed them. Confirmed via grep that Plan 12's "1a" (per-asset notional
+cap) is already shipped (`max_qty()`/`max_exposure_notional`), narrowing that plan's scope to
+just the position-count gate. The other session's staged renames were left untouched — only
+content was added on top. Detail: `0_tracker.md` Notes section, `0_plans.md`'s new sections.
+
+**Further shipped after the above (same 2026-07-15 session, later in the day):**
+- **User-requested Binance precision/notional audit** (screenshots comparing Enma's Trade page
+  to Binance's own UI) — dispatched a research agent to compare Binance's real `exchangeInfo`
+  filter semantics against every Enma order-placement surface. Found everything else consistent;
+  **one real gap**: DCA scale-out (`execute_reduce`) never floored qty to the symbol's
+  `stepSize` (a live `-4023`/`-1111` rejection risk, currently dead code — no strategy does DCA
+  scale-out yet). **Fixed same session**: `clamp_and_round_qty(..., reduce_only=True)` in both
+  adapters (`20_binance-precision-notional-parity.md`, Shipped). **Bonus fix found in the same
+  pass**: `execute_entry` had zero order-idempotency handling (Plan 5 Step 5.3, ENG-10) and
+  always booked the pre-trade price estimate instead of the real fill even on a normal success —
+  both fixed.
+- **Plan 11 (V0 verification) — Verified live** via browser against the running stack (real
+  testnet account, 3 open positions, read-only checks — nothing was touched). Dashboard,
+  Risk Dashboard, and MC/leverage-sensitivity UI all confirmed working with real data;
+  `resolveStrategyRiskParams` confirmed wired into both controllers. One already-documented,
+  non-urgent gap reconfirmed (Dashboard's sparkline/calendar components exist but aren't
+  composed into the page — `client/CLAUDE.md` already flagged this before this session).
+- **Plan 12 (max position per asset) — Shipped.** 1a was already live; 1b (session-level
+  `max_open_positions` concurrent-position cap) implemented in `execute_entry`, wired from Node
+  as an optional `maxOpenPositions` field (default unlimited, no behavior change for existing
+  sessions). Chaos sessions deliberately not wired (safe default, no UI control added — out of
+  1b's minimal scope).
+- **Docs drift fix**: found and fixed 3 files (`CURRENT_STATE.md`, `API_CONTRACTS.md`,
+  `strategy-management/SPEC.md`) still describing in-app strategy code editing as live — it was
+  removed outright by Plan 3 Step 3.2 earlier this session and the docs were never updated for
+  it. All three corrected.
+
+**Verification state at session end:** engine suite 127/127 passing (started this session's
+final stretch at 108, +19 across 5.1/20/12). Golden master confirmed inert everywhere it
+mattered — every touched file this final stretch was either live-adapter-only (zero backtest
+overlap, same reasoning as 5.2/5.4) or a default-off/dead-code-path addition. Server files
+verified to load/parse cleanly (`node -e "require(...)"` inside the container). **No live
+Docker Compose watch was active this session — all container verification was done via
+`docker cp` + in-container checks, not a rebuild.** If resuming with `docker compose up -d` or
+`build`, remember the standing lesson: rebuild before any recreate, or freshly-written
+source/test files vanish (engine has `volumes: []`).
+
+**Next session — pick up in this order:**
+1. **Plan 5 remaining: 5.3 (verify `execute_flip`'s idempotency is adequately covered by
+   delegating to the now-idempotent `execute_entry`/`execute_exit` — not independently verified;
+   `execute_reduce` still has no client id, low priority as it's dead code), 5.5 (Decimal
+   money — the largest, riskiest remaining piece, budget real dedicated time, needs a documented
+   golden-master re-baseline with sign-off per Rule C, do NOT rush this), 5.6 (restart recovery —
+   depends on 5.1, now unblocked, but 5.1 only shipped the log+fold function, not the
+   "LiveSession becomes a pure projection" work 5.6 actually needs — that projection work may
+   need to happen as part of 5.6 itself, not before it).**
+2. **Phase 9 remaining: Plan 13 (informative/multi-timeframe `self.htf()` contract — genuinely
+   new feature work, not an audit-fix; scoped in `13_informative-multi-timeframe.md`), 14
+   (webhooks), 15 (data CLI), 17 (recursive-formula/warmup analysis, sequence after 13).** All
+   independent of Plan 5 and each other — can run in parallel with anything.
+3. Plans 6/7/8 remain blocked on Plan 5 fully shipping (not just 5.1/5.2/5.4).
 
 **Open questions (carried forward, see each plan file for full context):** who signs off
-golden-master re-baselines for output-changing steps (9.4/9.7/9.8); keep or delete
+golden-master re-baselines for output-changing steps (9.4/9.7/9.8, 5.5); keep or delete
 `IcebergAlgorithm`; **local dev vs. production sharing one MongoDB Atlas cluster** — still
 unresolved structurally, only worked around per-incident so far; if strategy code-editing is
 ever wanted again it needs a fresh sandboxed design (nothing to re-enable, 3.2 removed the
 endpoint outright); Redis auth and the dead `.env` `BINANCE_*` lines are explicit follow-ups for
-whoever picks up Plan 4 fully or does a dedicated infra-hardening pass.
+whoever picks up Plan 4 fully or does a dedicated infra-hardening pass; event log store choice
+(Mongo, shipped, vs Timescale, considered) — Mongo was used for 5.1, revisit only if volume
+becomes a real concern.
 
 ---
 ## 2026-07-14 — Quant-Core Deep-Dive Audit (planning only, no code) — COMPLETE ✅

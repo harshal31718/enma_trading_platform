@@ -79,6 +79,17 @@ def _stub_record_trade(monkeypatch):
     monkeypatch.setattr(lbm_module, "record_trade", _noop)
 
 
+@pytest.fixture(autouse=True)
+def _stub_append_event(monkeypatch):
+    """Plan 5 Step 5.1: append_event is a live Mongo write — stub it out
+    here so these unit tests stay hermetic (no DB dependency), matching
+    _stub_record_trade above. event_log.py itself is covered by
+    test_execution_event_log.py."""
+    async def _noop(*args, **kwargs):
+        return 1
+    monkeypatch.setattr(lbm_module, "append_event", _noop)
+
+
 # ── _extract_fill_price: pure function ──────────────────────────────────────
 
 def test_extract_fill_price_reads_avg_price():
@@ -247,3 +258,172 @@ def test_user_trades_query_returns_none_when_no_trades(monkeypatch):
     result = asyncio.get_event_loop().run_until_complete(
         _query_real_exit_from_user_trades("k", "s", SYM, datetime.now(timezone.utc)))
     assert result is None
+
+
+# ── execute_entry: Plan 5 Step 5.3 (ENG-10) idempotency ─────────────────────
+
+def _make_flat_strategy():
+    strat = _FakeStrategy(position=None)
+    strat.leverage = 10
+    strat.buy = None
+    strat.sell = None
+    return strat
+
+
+def test_entry_order_timeout_then_actually_filled_does_not_report_failure(monkeypatch):
+    """The entry order call raises (simulated timeout) but the order actually
+    reached Binance — the re-query by clientOrderId must find the real fill
+    and the entry must be treated as successful, NOT retried (which would
+    double-enter a real position, exactly the ENG-10 duplication risk)."""
+    calls = {"n": 0}
+
+    async def flaky_then_found(method, path, api_key, api_secret, params=None, mode="testnet"):
+        if method == "POST" and path == "/fapi/v1/order" and params and params.get("reduceOnly") is None:
+            calls["n"] += 1
+            raise RuntimeError("simulated timeout")
+        if method == "GET" and path == "/fapi/v1/order":
+            return {"avgPrice": "101.5", "status": "FILLED"}
+        raise AssertionError(f"unexpected call {method} {path} {params}")
+
+    monkeypatch.setattr(binance_mod, "send_signed_request", flaky_then_found)
+
+    mgr = LiveBotManager()
+    sid = "sess_entry_timeout"
+    mgr.sessions[sid] = _make_session()
+    mgr.sessions[sid]["open_positions"] = {}
+    notified = _Notified()
+    monkeypatch.setattr(mgr, "_notify_node", notified)
+
+    strat = _make_flat_strategy()
+    adapter = LiveAdapter(mgr, sid)
+
+    ok = asyncio.get_event_loop().run_until_complete(
+        adapter.execute_entry(strat, SYM, "long", 1.0, ref_price=100.0,
+                               time_t=datetime.now(timezone.utc), index_t=0))
+
+    assert ok is True
+    assert calls["n"] == 1  # the raising call happened exactly once, not retried in-process
+    assert strat.position is not None
+    open_events = [c for c in notified.calls if c.get("event") == "position:open"]
+    assert len(open_events) == 1
+    # Booked at the REAL fill price found via re-query, not the ref_price estimate.
+    assert open_events[0]["eventData"]["price"] == "101.5"
+
+
+def test_entry_order_genuine_failure_still_reports_failure(monkeypatch):
+    """When the order truly never reached Binance (re-query finds nothing),
+    execute_entry must still report failure — the idempotency re-query must
+    not paper over a real failure."""
+    async def always_fails(method, path, api_key, api_secret, params=None, mode="testnet"):
+        if method == "POST" and path == "/fapi/v1/order":
+            raise RuntimeError("simulated network error")
+        if method == "GET" and path == "/fapi/v1/order":
+            return {}  # no fill found
+        raise AssertionError(f"unexpected call {method} {path}")
+
+    monkeypatch.setattr(binance_mod, "send_signed_request", always_fails)
+
+    mgr = LiveBotManager()
+    sid = "sess_entry_fail"
+    mgr.sessions[sid] = _make_session()
+    mgr.sessions[sid]["open_positions"] = {}
+    monkeypatch.setattr(mgr, "_notify_node", _Notified())
+
+    strat = _make_flat_strategy()
+    adapter = LiveAdapter(mgr, sid)
+
+    ok = asyncio.get_event_loop().run_until_complete(
+        adapter.execute_entry(strat, SYM, "long", 1.0, ref_price=100.0,
+                               time_t=datetime.now(timezone.utc), index_t=0))
+
+    assert ok is False
+    assert strat.position is None
+
+
+# ── execute_entry: Plan 12 Step 1b (max_open_positions) ─────────────────────
+
+def test_entry_blocked_when_session_at_max_open_positions(monkeypatch):
+    """A new symbol must NOT open when the session is already at its
+    max_open_positions cap — no order call should even be attempted."""
+    order_calls = {"n": 0}
+
+    async def fail_if_called(method, path, api_key, api_secret, params=None, mode="testnet"):
+        order_calls["n"] += 1
+        raise AssertionError("should not place an order when at max_open_positions")
+
+    monkeypatch.setattr(binance_mod, "send_signed_request", fail_if_called)
+
+    mgr = LiveBotManager()
+    sid = "sess_max_open"
+    session = _make_session()
+    session["max_open_positions"] = 2
+    session["open_positions"] = {"BTCUSDT": {}, "ETHUSDT": {}}  # already at cap
+    mgr.sessions[sid] = session
+    monkeypatch.setattr(mgr, "_notify_node", _Notified())
+
+    strat = _make_flat_strategy()
+    adapter = LiveAdapter(mgr, sid)
+
+    ok = asyncio.get_event_loop().run_until_complete(
+        adapter.execute_entry(strat, "SOLUSDT", "long", 1.0, ref_price=100.0,
+                               time_t=datetime.now(timezone.utc), index_t=0))
+
+    assert ok is False
+    assert order_calls["n"] == 0
+    assert strat.position is None
+
+
+def test_entry_allowed_for_already_open_symbol_even_at_cap(monkeypatch):
+    """The cap only blocks NEW symbols — a symbol already counted among the
+    open positions (e.g. a re-evaluation) must not be blocked by its own
+    presence in the count."""
+    async def fake_signed(method, path, api_key, api_secret, params=None, mode="testnet"):
+        if method == "POST" and path == "/fapi/v1/order":
+            return {"orderId": 1, "avgPrice": "100.0", "status": "FILLED"}
+        raise AssertionError(f"unexpected call {method} {path}")
+
+    monkeypatch.setattr(binance_mod, "send_signed_request", fake_signed)
+
+    mgr = LiveBotManager()
+    sid = "sess_max_open_existing"
+    session = _make_session()
+    session["max_open_positions"] = 1
+    session["open_positions"] = {SYM: {}}  # SYM itself already counted
+    mgr.sessions[sid] = session
+    monkeypatch.setattr(mgr, "_notify_node", _Notified())
+
+    strat = _make_flat_strategy()
+    adapter = LiveAdapter(mgr, sid)
+
+    ok = asyncio.get_event_loop().run_until_complete(
+        adapter.execute_entry(strat, SYM, "long", 1.0, ref_price=100.0,
+                               time_t=datetime.now(timezone.utc), index_t=0))
+
+    assert ok is True
+
+
+def test_entry_allowed_when_max_open_positions_unset(monkeypatch):
+    """Default (unset) max_open_positions must behave exactly as before —
+    no cap, no behavior change for any existing session."""
+    async def fake_signed(method, path, api_key, api_secret, params=None, mode="testnet"):
+        if method == "POST" and path == "/fapi/v1/order":
+            return {"orderId": 1, "avgPrice": "100.0", "status": "FILLED"}
+        raise AssertionError(f"unexpected call {method} {path}")
+
+    monkeypatch.setattr(binance_mod, "send_signed_request", fake_signed)
+
+    mgr = LiveBotManager()
+    sid = "sess_no_cap"
+    session = _make_session()
+    session["open_positions"] = {"BTCUSDT": {}, "ETHUSDT": {}, "SOLUSDT": {}, "ADAUSDT": {}}
+    mgr.sessions[sid] = session  # no max_open_positions key at all
+    monkeypatch.setattr(mgr, "_notify_node", _Notified())
+
+    strat = _make_flat_strategy()
+    adapter = LiveAdapter(mgr, sid)
+
+    ok = asyncio.get_event_loop().run_until_complete(
+        adapter.execute_entry(strat, "DOTUSDT", "long", 1.0, ref_price=100.0,
+                               time_t=datetime.now(timezone.utc), index_t=0))
+
+    assert ok is True
