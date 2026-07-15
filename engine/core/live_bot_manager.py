@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -216,7 +217,7 @@ class LiveAdapter(ExecutionAdapter):
                 if not _api_key or not _api_secret:
                     raise RuntimeError("Binance Testnet API credentials not configured")
 
-                async with (sem if sem else asyncio.nullcontext()):
+                async with (sem if sem else contextlib.nullcontext()):
                     add_params = {
                         "symbol": symbol,
                         "side": binance_side,
@@ -279,7 +280,7 @@ class LiveAdapter(ExecutionAdapter):
                 raise RuntimeError("Binance Testnet API credentials not configured")
 
             order_id = None
-            async with (sem if sem else asyncio.nullcontext()):
+            async with (sem if sem else contextlib.nullcontext()):
                 # Step 1: Place the entry MARKET order
                 entry_params = {
                     "symbol": symbol,
@@ -481,7 +482,7 @@ class LiveAdapter(ExecutionAdapter):
             _api_secret = session.get("api_secret", "")
 
             sem = self.manager._order_semaphores.get(self.session_id)
-            async with (sem if sem else asyncio.nullcontext()):
+            async with (sem if sem else contextlib.nullcontext()):
                 reduce_params = {
                     "symbol": symbol,
                     "side": reduce_side,
@@ -584,7 +585,19 @@ class LiveAdapter(ExecutionAdapter):
         # F-003: Close position directly on Binance instead of routing
         # through Node.  Determines position side and sends a reduceOnly
         # MARKET order.
+        #
+        # Plan 5 Step 5.2 (ENG-2): the exchange is the source of truth for
+        # whether this position actually closed and at what price.
+        # - On any failure placing/confirming the close, we `return` before
+        #   touching local position/PnL state — the position stays open and
+        #   reconciliation is responsible for it, instead of silently
+        #   fabricating a close event.
+        # - On success, `exit_price` is overwritten with the REAL avgPrice
+        #   from the fill (falling back to a direct order query if the
+        #   immediate response didn't carry it) instead of the SL/TP
+        #   trigger price / last candle close this function was called with.
         sem = self.manager._order_semaphores.get(self.session_id)
+        client_order_id = f"enma_{self.session_id[:8]}_{symbol}_{uuid4_hex8()}"
         try:
             from services.binance_testnet import send_signed_request as _signed
             _api_key = session.get("api_key", "")
@@ -593,23 +606,52 @@ class LiveAdapter(ExecutionAdapter):
                 raise RuntimeError("Binance Testnet API credentials not configured")
 
             close_side = "SELL" if strategy.is_long else "BUY"
-            async with (sem if sem else asyncio.nullcontext()):
+            async with (sem if sem else contextlib.nullcontext()):
                 close_params = {
                     "symbol": symbol,
                     "side": close_side,
                     "type": "MARKET",
                     "quantity": _fmt_num(abs(pos.qty)),
                     "reduceOnly": "true",
+                    "newOrderRespType": "RESULT",
+                    "newClientOrderId": client_order_id,
                 }
-                await _signed(
+                order_result = await _signed(
                     "POST", "/fapi/v1/order",
                     _api_key, _api_secret,
                     params=close_params,
                     mode="testnet",
                 )
-            logger.info(f"[AlgoBot] Testnet close-position sent for {symbol} reason={reason}")
+            real_fill_price = _extract_fill_price(order_result)
+            if real_fill_price is None:
+                real_fill_price = await _query_real_fill_price(_api_key, _api_secret, symbol, client_order_id)
+            if real_fill_price is None:
+                # The order was accepted (no exception above) but no fill price
+                # is discoverable — extremely unlikely for a MARKET order, but
+                # fail loud rather than silently trusting the trigger estimate.
+                logger.error(
+                    f"[AlgoBot] {symbol}: close order {order_result.get('orderId')} accepted but no fill "
+                    f"price found — booking with the trigger-price estimate ${exit_price}, flagged for reconciliation"
+                )
+            else:
+                exit_price = real_fill_price
+            logger.info(f"[AlgoBot] Testnet close-position filled for {symbol} reason={reason} @ {exit_price}")
         except Exception as e:
-            logger.error(f"[AlgoBot] Testnet close-position failed for {symbol}: {e}")
+            logger.error(
+                f"[AlgoBot] Testnet close-position FAILED for {symbol}: {e} — "
+                f"position stays open locally, NOT booking a fabricated close"
+            )
+            await self.manager._notify_node(self.session_id, {
+                "status": "running",
+                "event": "close_failed",
+                "eventData": {
+                    "symbol": symbol,
+                    "reason": reason,
+                    "error": str(e),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            })
+            return
 
         fee = strategy.execution_model.exit_fee(strategy, pos.qty, exit_price)
         pos.close(exit_price)
@@ -1409,6 +1451,7 @@ class LiveBotManager:
         open_positions tracking in that case, since it may still be open.
         """
         strategy = session.get("strategy_instances", {}).get(symbol)
+        real_fill_price = None
 
         try:
             from services.binance_testnet import send_signed_request as _signed
@@ -1432,20 +1475,26 @@ class LiveBotManager:
 
             if position_amt != 0:
                 close_side = "SELL" if position_amt > 0 else "BUY"
+                client_order_id = f"enma_{session_id[:8]}_{symbol}_{uuid4_hex8()}"
                 close_params = {
                     "symbol": symbol,
                     "side": close_side,
                     "type": "MARKET",
                     "quantity": _fmt_num(abs(position_amt)),
                     "reduceOnly": "true",
+                    "newOrderRespType": "RESULT",
+                    "newClientOrderId": client_order_id,
                 }
-                await _signed(
+                order_result = await _signed(
                     "POST", "/fapi/v1/order",
                     _api_key, _api_secret,
                     params=close_params,
                     mode="testnet",
                 )
-                logger.info(f"[AlgoBot] Close-position sent for {symbol} on stop (amt={position_amt})")
+                real_fill_price = _extract_fill_price(order_result)
+                if real_fill_price is None:
+                    real_fill_price = await _query_real_fill_price(_api_key, _api_secret, symbol, client_order_id)
+                logger.info(f"[AlgoBot] Close-position filled for {symbol} on stop (amt={position_amt}) @ {real_fill_price}")
             else:
                 logger.info(f"[AlgoBot] {symbol}: no position to close on stop")
         except Exception as e:
@@ -1461,7 +1510,12 @@ class LiveBotManager:
             entry_time = datetime.fromisoformat(entry_time_str.replace("Z", "+00:00")) if entry_time_str else datetime.now(timezone.utc)
             executed_by = session.get("strategy_name", "unknown")
             exit_time = datetime.now(timezone.utc)
-            exit_price = strategy.price
+            # Plan 5 Step 5.2 (ENG-2): real fill price when the exchange gave
+            # us one; strategy.price (last candle close) only as a documented
+            # last resort when the close order response never carried it.
+            exit_price = real_fill_price if real_fill_price is not None else strategy.price
+            if real_fill_price is None:
+                logger.warning(f"[AlgoBot] {symbol}: no real fill price on stop-close, booking with last price ${exit_price}")
 
             fee = strategy.execution_model.exit_fee(strategy, pos.qty, exit_price)
             pos.close(exit_price)
@@ -1681,29 +1735,48 @@ class LiveBotManager:
         elif has_local_position and not has_exchange_position:
             logger.warning(f"[AlgoBot] {symbol}: reconciled — exchange has no position, closing local state")
             pos = strategy.position
-            estimated_exit = strategy.price
             sl_price = strategy.stop_loss[1] if strategy.stop_loss else None
             tp_price = strategy.take_profit[1] if strategy.take_profit else None
-            if pos.type == "long":
-                if sl_price is not None and candle_low is not None and candle_low <= sl_price:
-                    estimated_exit = sl_price
-                elif tp_price is not None and candle_high is not None and candle_high >= tp_price:
-                    estimated_exit = tp_price
-            else:
-                if sl_price is not None and candle_high is not None and candle_high >= sl_price:
-                    estimated_exit = sl_price
-                elif tp_price is not None and candle_low is not None and candle_low <= tp_price:
-                    estimated_exit = tp_price
-
-            fee = strategy.execution_model.exit_fee(strategy, pos.qty, estimated_exit)
-            pos.close(estimated_exit)
-            realized_pnl = pos.pnl - fee
-            strategy.balance += realized_pnl
-            session["pnl"] += realized_pnl
-
             exit_time = datetime.now(timezone.utc)
             entry_time_str = session["open_positions"].get(symbol, {}).get("timestamp")
             entry_time = datetime.fromisoformat(entry_time_str.replace("Z", "+00:00")) if entry_time_str else exit_time
+
+            # Plan 5 Step 5.2 (ENG-2): reconstruct the real close from
+            # Binance's own trade history first — the candle/SL-TP guess
+            # below is now a last-resort fallback, not the primary path.
+            real_exit = None
+            net_realized_pnl_from_exchange = None
+            api_key = session.get("api_key", "")
+            api_secret = session.get("api_secret", "")
+            if api_key and api_secret:
+                real_exit_result = await _query_real_exit_from_user_trades(api_key, api_secret, symbol, entry_time)
+                if real_exit_result is not None:
+                    real_exit, net_realized_pnl_from_exchange = real_exit_result
+
+            if real_exit is not None:
+                estimated_exit = real_exit
+            else:
+                logger.warning(f"[AlgoBot] {symbol}: no Binance trade history found for this close — falling back to candle/SL-TP estimate")
+                estimated_exit = strategy.price
+                if pos.type == "long":
+                    if sl_price is not None and candle_low is not None and candle_low <= sl_price:
+                        estimated_exit = sl_price
+                    elif tp_price is not None and candle_high is not None and candle_high >= tp_price:
+                        estimated_exit = tp_price
+                else:
+                    if sl_price is not None and candle_high is not None and candle_high >= sl_price:
+                        estimated_exit = sl_price
+                    elif tp_price is not None and candle_low is not None and candle_low <= tp_price:
+                        estimated_exit = tp_price
+
+            fee = strategy.execution_model.exit_fee(strategy, pos.qty, estimated_exit)
+            pos.close(estimated_exit)
+            # Prefer Binance's own realizedPnl (already net of its commission)
+            # when we have it — it's the authoritative number, not our
+            # recomputation from an average fill price.
+            realized_pnl = net_realized_pnl_from_exchange if net_realized_pnl_from_exchange is not None else (pos.pnl - fee)
+            strategy.balance += realized_pnl
+            session["pnl"] += realized_pnl
 
             event_data = {
                 "symbol": symbol,
@@ -2002,6 +2075,82 @@ def _fmt_num(value: float) -> str:
     """Format a numeric value for Binance API (strip trailing zeros/dot)."""
     s = f"{value:.8f}".rstrip('0').rstrip('.')
     return s if s else '0'
+
+
+def _extract_fill_price(order_result: dict) -> float | None:
+    """Real avgPrice from a Binance order response, or None if unusable.
+
+    Plan 5 Step 5.2 (ENG-2): the caller must NEVER fall back to a candle/
+    trigger-price estimate silently — None here means "go query the order
+    for its real fill," not "use the estimate and move on."
+    """
+    try:
+        price = float(order_result.get("avgPrice", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    return price if price > 0 else None
+
+
+async def _query_real_fill_price(api_key: str, api_secret: str, symbol: str, client_order_id: str) -> float | None:
+    """Fallback when the order response itself didn't carry a usable avgPrice
+    (can happen if Binance processes the fill a beat after the ACK/RESULT
+    response) — queries the order directly by its client id."""
+    try:
+        from services.binance_testnet import send_signed_request as _signed
+        order = await _signed(
+            "GET", "/fapi/v1/order",
+            api_key, api_secret,
+            params={"symbol": symbol, "origClientOrderId": client_order_id},
+            mode="testnet",
+        )
+        return _extract_fill_price(order)
+    except Exception as e:
+        logger.error(f"[AlgoBot] {symbol}: fill-price re-query failed: {e}")
+        return None
+
+
+async def _query_real_exit_from_user_trades(
+    api_key: str, api_secret: str, symbol: str, entry_time: datetime,
+) -> tuple[float, float] | None:
+    """Plan 5 Step 5.2 (ENG-2): reconstruct a close the engine didn't itself
+    execute (SL/TP fired exchange-side, or state drifted) from Binance's own
+    trade history instead of guessing from candle/SL/TP levels.
+
+    Returns (avg_exit_price, net_realized_pnl) — net_realized_pnl is
+    Binance's own realizedPnl minus its own commission for the matched
+    fills, i.e. already the authoritative post-fee number — or None if no
+    matching fills are found.
+    """
+    try:
+        from services.binance_testnet import send_signed_request as _signed
+        trades = await _signed(
+            "GET", "/fapi/v1/userTrades",
+            api_key, api_secret,
+            params={"symbol": symbol, "limit": 20},
+            mode="testnet",
+        )
+    except Exception as e:
+        logger.error(f"[AlgoBot] {symbol}: userTrades query failed: {e}")
+        return None
+
+    if not isinstance(trades, list) or not trades:
+        return None
+
+    entry_ms = entry_time.timestamp() * 1000
+    relevant = [t for t in trades if _safe_float(t.get("time"), 0) >= entry_ms]
+    if not relevant:
+        # Clock skew or an entry_time we don't fully trust — best-effort fall
+        # back to the most recent fills rather than finding nothing.
+        relevant = trades[-3:]
+
+    total_qty = sum(abs(_safe_float(t.get("qty"), 0)) for t in relevant)
+    if total_qty <= 0:
+        return None
+
+    avg_price = sum(_safe_float(t.get("price"), 0) * abs(_safe_float(t.get("qty"), 0)) for t in relevant) / total_qty
+    total_realized_pnl = sum(_safe_float(t.get("realizedPnl"), 0) for t in relevant)
+    total_commission = sum(_safe_float(t.get("commission"), 0) for t in relevant)
+    return avg_price, total_realized_pnl - total_commission
 
 
 def uuid4_hex8() -> str:

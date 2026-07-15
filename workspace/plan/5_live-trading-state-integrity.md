@@ -1,6 +1,44 @@
 # Plan 5 — Live-trading state integrity
 
-**Status:** Ready · **Priority:** P0 (highest-value correctness work) · **Depends on:** 2, 3 · **Related:** 6
+**Status:** In progress 2026-07-15 — Step 5.2 shipped · **Priority:** P0 (highest-value correctness work) · **Depends on:** 2, 3 · **Related:** 6
+
+## Progress log (2026-07-15)
+
+**5.2 — Real fills, not fabricated closes (ENG-2) — Shipped.** This was "the uncomfortable
+part" made concrete: `LiveAdapter.execute_exit` (`core/live_bot_manager.py`) discarded the
+Binance close-order response entirely, closed the local position at the caller-supplied
+trigger-price *estimate* regardless of what actually happened on the exchange, and did so
+**even when placing the close order raised an exception** — silently fabricating a close and
+crediting PnL for a position that might still be open on the exchange. Fixed across all three
+close-booking sites:
+- `execute_exit` (the main SL/TP/strategy-close path): on any failure placing/confirming the
+  close order, now `return`s before touching local position/PnL state — position stays open,
+  Node is notified with a `close_failed` event, reconciliation owns it from there. On success,
+  books the REAL `avgPrice` from the order response (added `newOrderRespType: RESULT` +
+  `newClientOrderId`, matching the entry path's already-correct pattern), falling back to a
+  direct order re-query (`_query_real_fill_price`) if the immediate response didn't carry a
+  usable price.
+- `_close_position_on_stop` (session-stop force-close): failure handling was already correct
+  here (`return False` before touching PnL); only needed the real-fill-price wiring.
+- `_reconcile_exchange_state`'s "position locally but not on exchange" branch: previously
+  *guessed* the exit price from candle SL/TP levels. Now queries Binance's own `/fapi/v1/
+  userTrades` (`_query_real_exit_from_user_trades`) for fills after the position's entry time
+  and uses Binance's own `realizedPnl` (net of `commission`) directly — the candle/SL-TP guess
+  is now a last-resort fallback, logged loudly, not the primary path.
+
+**Verified:** 9 new tests (`tests/test_live_fill_booking.py`) driving the real `LiveAdapter`
+against a stubbed Binance layer — failure-does-not-fabricate-a-close, success-books-real-fill-
+not-trigger-estimate, avgPrice-missing falls back to order re-query, userTrades weighted-average
++ net-PnL computation. **Caught a real, separate, pre-existing bug while writing these**: all
+four `sem if sem else asyncio.nullcontext()` call sites used a nonexistent stdlib reference
+(`asyncio` has no `nullcontext` — that's `contextlib.nullcontext`); harmless in production today
+because `_order_semaphores[session_id]` is always populated before these paths run, but a real
+landmine, fixed. Full suite 103/103. Golden master byte-identical (only `live_bot_manager.py`
+touched, zero backtest-path overlap). Live-tested via a real testnet MicroScalper session
+(stopped before a position opened — waiting on an organic strategy signal wasn't a good use of
+verification time; the deterministic mocked-Binance test suite above is the real verification).
+
+**Remaining (5.1, 5.3–5.6) not yet started** — see the original scope below.
 
 > Source issues: SYS-2, ENG-2, ENG-3, ENG-10, ENG-11, SRV-3. This is the deepest design flaw
 > in the repo: three copies of "truth" (exchange / engine memory / Mongo) reconciled by
