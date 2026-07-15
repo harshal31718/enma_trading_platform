@@ -1,0 +1,102 @@
+# Plan 5 — Live-trading state integrity
+
+**Status:** Ready · **Priority:** P0 (highest-value correctness work) · **Depends on:** 2, 3 · **Related:** 6
+
+> Source issues: SYS-2, ENG-2, ENG-3, ENG-10, ENG-11, SRV-3. This is the deepest design flaw
+> in the repo: three copies of "truth" (exchange / engine memory / Mongo) reconciled by
+> heuristics, exits that book fabricated fills, and PnL kept in floats. It needs Plan 2's
+> tests + correlation logging to be provable, and Plan 3's authenticated boundaries so the
+> event flow it introduces isn't spoofable.
+
+## The uncomfortable part
+
+Until this plan lands, recorded trades and PnL are **best-effort reconstructions, not
+exchange facts** (ENG-2). If real money is ever at stake, this plan gates that — do not
+promote to mainnet before it is `Shipped`.
+
+## Goal
+
+The exchange is the single source of truth. Every position change is derived from an actual
+fill (real `avgPrice`, real qty), captured once, ordered, and idempotent. Engine memory and
+Mongo become *projections* of an append-only event log, not independent truths.
+
+## Scope / what changes
+
+### Step 5.1 — Define the trade event model (issue SYS-2, SRV-3)
+- Introduce an append-only **execution event log** (new collection, e.g. `executionEvents`,
+  or a Timescale table) keyed by `sessionId`+`symbol`+monotonic `seq`. Event types: intent,
+  order-submitted, fill (partial/full), reconcile-adjustment, close.
+- Each event carries a `correlation_id` (Plan 2.4) and, for orders, a `clientOrderId`
+  (Step 5.3). Node's `LiveSession` and the engine's in-memory dict become **derived views**
+  rebuilt from events — never the source of a number.
+- `handleEngineStats` (SRV-3) stops persisting arbitrary PnL/positionDetails as truth; it
+  records/forwards events with a sequence number and rejects out-of-order or duplicate seqs.
+- Acceptance check: replaying the event log for a session reproduces its final PnL and open
+  positions exactly.
+
+### Step 5.2 — Book fills from actual exchange fills, not guesses (issue ENG-2)
+- `execute_exit` / `_close_position_on_stop` / emergency-exit must read the **actual fill**
+  (`avgPrice`, executed qty) from the order response or a follow-up `userTrades` query, and
+  record that — never the SL/TP trigger price, `strategy.price`, or entry==exit.
+- If the close order **fails**, the local position must **not** be marked closed and PnL must
+  **not** be credited. The symbol stays open and is left to reconciliation; the event log
+  records the failure, not a fabricated close.
+- The `_reconcile_exchange_state` "exchange has no position" branch must reconstruct the exit
+  from the real fill (userTrades) rather than estimating from candle/SL/TP.
+- Golden-master: backtest path must stay byte-identical (only the live adapter changes) —
+  run before/after (Rule C). Acceptance check: a forced close-order failure leaves the
+  position open and un-booked; a normal close books the real `avgPrice`.
+
+### Step 5.3 — Order idempotency (issue ENG-10)
+- Every entry/exit/reduce MARKET order carries a deterministic `newClientOrderId`
+  (e.g. `enma_<sessionId8>_<symbol>_<seq>`). On timeout/ambiguous failure, the engine queries
+  by that id before retrying, so a fill that actually happened is detected instead of
+  duplicated or orphaned.
+- Acceptance check: simulate a post-fill timeout; reconciliation finds the order by client id
+  and does not place a second order.
+
+### Step 5.4 — Serialize per-symbol state mutation (issue ENG-3)
+- The candle loop and the user-data `_on_fill` callback both mutate the same session/strategy
+  state across `await` points with no lock. Introduce a **per-symbol async lock**; all
+  reconcile/close/book operations for a symbol acquire it. This removes the double-close /
+  double-count race.
+- Acceptance check: a test firing a fill event concurrently with a candle close produces
+  exactly one close event and one PnL delta.
+
+### Step 5.5 — Decimal money (issue ENG-11)
+- Move prices, quantities, fees, PnL, and balances off `float` to `Decimal` (engine) with
+  explicit quantization at exchange precision; serialize as strings end-to-end. Node likewise
+  stops doing float PnL math on incoming stats.
+- This is a data-pipeline change — golden-master before/after; expect a *documented* diff only
+  where float error previously existed, and justify it in the Completion entry.
+- Acceptance check: accounting invariants (sum of legs == position PnL) hold exactly in tests.
+
+### Step 5.6 — Engine-side state survives restart (issue ENG-7, partial)
+- Because state is now an event log (5.1), the engine rebuilds live-session memory from events
+  on startup instead of losing everything. Wire this into the existing engine-startup→Node
+  reconciliation handshake.
+- Acceptance check: kill and restart the engine mid-session; positions and PnL are recovered
+  from the log + exchange, not zeroed.
+
+## Out of scope
+- Breaking up `LiveBotManager` and the exchange abstraction (Plan 6 — this plan fixes
+  *correctness* within the current structure; Plan 6 restructures it).
+- Client rendering of the new event/state model (Plan 7).
+
+## Acceptance criteria (phase)
+- All position changes trace to a real fill in the event log; no fabricated exit prices.
+- Failed close orders never produce a booked close or PnL credit (tested).
+- Orders are idempotent under retry (tested).
+- No double-count under concurrent fill+candle (tested).
+- Money math is Decimal; accounting invariants exact.
+- Engine recovers session state after restart.
+- Golden-master identical for the backtest path; live-path diffs explained.
+
+## Open questions
+- Event log store: Mongo collection vs Timescale table? (Timescale already holds candles; PnL
+  events are relational/time-series — lean Timescale, but Mongo is simpler operationally.)
+- Do we backfill an event log for currently-running sessions, or require a drain+restart at
+  cutover? Recommend drain+restart.
+
+## Handoff note template
+`Next session: [steps done 5.x], [next step], [golden-master result], [files changed]`

@@ -20,6 +20,11 @@ For every service and document modified, perform these verification steps:
 
 6. **Packages**: Register any new dependency in the relevant service `CLAUDE.md`.
 
+7. **Plan board**: If this work implements (part of) a numbered plan, update its row in
+   `workspace/plan/0_tracker.md` (status + Updated date) and write the handoff entry per
+   Rule G. If it changed what a plan assumed, note that in the plan file rather than letting
+   it drift.
+
 ## Output
 
 Output a summary listing each document updated and any steps skipped. Do not silently skip steps — if a step is not applicable, say so in one line. If a step cannot be completed (e.g. uncertain about a decision), flag it explicitly.

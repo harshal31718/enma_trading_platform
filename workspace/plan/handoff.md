@@ -7,6 +7,59 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
+## 2026-07-14 — Quant-Core Deep-Dive Audit (planning only, no code) — COMPLETE ✅
+
+**Goal:** Deep-dive the algotrading core (backtest runner, kernel, fill/margin models, metrics,
+optimizer, Monte Carlo, live-loop trading semantics) beyond the existing `audit_1_system-design.md` audit;
+web-research current methods; document findings + remediation plan. No implementation (Rule D).
+
+**Done:** 17 new issues **QNT-1..17** documented with code citations in
+`workspace/plan/audit_2_quant-core.md`. Two H-severity shipped bugs:
+(QNT-1) multi-symbol portfolio backtests never fire SL/TP/liquidation/funding after first entry
+(`_entered_this_candle` never cleared — `_run_shared_portfolio` skips `record_equity`);
+(QNT-2) exec-algo mode erases `_close_at_open`/`_pending_flip` intents (kernel clears before
+re-route; route() returns None for close/flip). Also: leverage-sensitivity re-runs with default
+params because run config is never persisted (QNT-17); entry-candle exits impossible in
+backtest but live-active (QNT-3); flat/mispriced funding model (QNT-5); in-sample-only
+optimizer (QNT-6); i.i.d. Monte Carlo (QNT-7); live/backtest fill-timing + rolling-500-window
+parity gaps (QNT-8/9); silent WS candle gaps (QNT-10). Research-backed upgrade paths: walk-forward
++ DSR/PBO + Optuna, detail-timeframe intrabar sim, historical funding ledger, lookahead sentinel,
+block-bootstrap MC, fill-model ladder. New **Plan 9** created
+(`9_backtest-and-optimizer-correctness.md`, steps 9.1–9.3 = P0 bug fixes, runnable in parallel
+with plans 2–8); catalog/tracker/audit_1_system-design.md updated.
+
+**Also done (same session):** detailed **Plan 10 — Monte Carlo Optimiser & Strategy Lab**
+(`10_monte-carlo-strategy-lab.md`). Diagnosis of the broken MC feature: Risk Dashboard's
+`SimulationResults.jsx` fires a cache-forever `GET /risk/backtest/:id/simulation` that makes
+the engine re-run the full backtest 5× + MC synchronously (SRV-5 pattern), with default params
+(QNT-17), all failures blanket-wrapped as 503; engine `/optimize` API has **no Node route and
+no UI** (dead feature). Plan: job-based (BullMQ/Socket.IO reuse), vectorized block-bootstrap MC
+engine, `labResults` collection, dedicated Strategy Lab page (MC tab + Optimizer tab),
+MC-scored param selection + drawdown-constrained risk_pct + MC-banded leverage; 4 phases,
+absorbs 9.6/9.9; hard-depends on 9.1/9.3.
+
+**Also done (same session): plan-folder restructure.** `workspace/plan/refinements/` dissolved
+into the flat plan folder with a file-family taxonomy: `01_project_outline` →
+`research_1_project-outline.md` · `02_market_research` → `research_2_market-survey.md` ·
+`03_better_options` → `research_3_gap-analysis.md` · `04_improvement_roadmap` → **rewritten as
+`0_roadmap.md`** (phased blueprint extended from Phases 1–6 over plans 2–8 to **Phases 0–8
+over plans 1–10**, two parallel tracks: hardening + quant) · `05_algotrading_deep_dive` →
+`audit_2_quant-core.md` · `issues.md` → `audit_1_system-design.md`. All cross-references updated
+across the folder; `0_plans.md` gained the taxonomy + old→new mapping table ("Reference
+shelf"); `0_tracker.md` gained a Phase column + two-track session protocol. Old shorthand like
+"02 §10" inside research docs refers to the old series numbers via the mapping table.
+
+**Files changed (docs only):** new: `audit_2_quant-core.md`, `9_backtest-and-optimizer-correctness.md`,
+`10_monte-carlo-strategy-lab.md`, `0_roadmap.md`; renamed: `research_1_project-outline.md`,
+`research_2_market-survey.md`, `research_3_gap-analysis.md`, `audit_1_system-design.md` (ex
+`issues.md`); updated: `0_plans.md`, `0_tracker.md`, `handoff.md`; deleted: `refinements/`
+(contents relocated, `04_improvement_roadmap.md` superseded by `0_roadmap.md`).
+
+**Open questions:** who signs off golden-master re-baselines for output-changing steps
+(9.4/9.7/9.8); flag/migrate existing multi-symbol `backtestResults` as stale now or with 9.1;
+keep or delete `IcebergAlgorithm` (untestable under constant-slippage fill model).
+
+---
 ## 2026-07-03 — UI Fixes: Bot Stopping State, Session List Ranking, Dashboard Section Alignments — COMPLETE ✅
 
 **Goal:** Resolve three user-reported UI issues on the Dashboard and AlgoTrading pages. (1) Stop button disappears during `'stopping'` state, and needs to remain visible displaying "Stopping" until completely stopped. (2) Bot sessions list needs customized ranking/sorting rules: running first (last started first), then stopped (last stopped first). (3) Strategy Leaderboard title is oversized and has inconsistent margin/padding compared to other Dashboard sections. (4) Align "Live Runs", "Recent Live Runs", and "Recent Backtests" into the same row (3 columns if active live runs exist, else 2 columns).
@@ -67,92 +120,4 @@ found while verifying against the live stack.
 
 **Verification done:** All Python/Node files import/load-check clean in-container after every change.
 Full `docker compose down && up --build -d` cycle run twice. **Environment gotcha worth remembering:**
-`engine` and `client` both have `volumes: []` in `docker-compose.yml` — they rely entirely on
-`docker compose watch` for live source sync, no bind mount fallback. Running `docker compose down`/`up`
-kills any active watch process; a plain `up -d` (no `--build`) after that will silently run STALE code
-with no error. Always `up --build -d` after `down` unless you know watch is actively running. Also hit
-(twice, unrelated to any change here) a transient MongoDB Atlas (cloud, external — `MONGO_URI` is an
-`mongodb+srv://` Atlas connection string, not local Mongo) `ETIMEDOUT` on server startup; resolved both
-times with a plain `docker restart` on the server container.
-
-**Files changed:** `engine/core/live_bot_manager.py`, `engine/utils/symbols.py`, `engine/main.py`,
-`engine/routers/algo.py`; `server/src/services/{reconciliation,server}.js`,
-`server/src/models/Settings.js`, `server/src/controllers/{settings,algo}.controller.js`,
-`server/src/utils/chaosAllocator.js`; `client/src/pages/Settings.jsx`,
-`client/src/components/algo/ChaosWizard.jsx`; docs: `workspace/docs/core/{API_CONTRACTS,DECISIONS}.md`
-(#21, #22), `workspace/docs/state/DEPRECATED.md`, `workspace/docs/features/{auth-settings,
-algo-trading}/SPEC.md`, `engine/CLAUDE.md`.
-
-**Open questions:** (1) `_invalid_symbols` blacklist is in-memory only, resets on engine restart —
-cheap to rediscover (~60 API calls, one each) but not persisted; revisit if restart frequency makes
-that wasteful. (2) `startChaos()`'s concurrent-bot-slot check is a single non-atomic query — accepted
-race for now, would need a distributed lock if concurrent chaos launches become common. (3) The Chaos
-Wizard preview is still a client-side algorithm duplicate of the server's, not a real preview API call
-— will drift again if the server algorithm changes without a matching client update; a dedicated
-`POST /api/v1/algo/chaos/preview` endpoint would remove this whole class of bug.
-
----
-## 2026-07-02 — Dashboard: Testnet+Mainnet Balances, Live Prices, Redesign — COMPLETE (unverified against live stack) ⚠️
-
-**Goal:** Fetch Binance account balance for BOTH testnet and mainnet and show on the Dashboard;
-keep prices live; declutter + mobile-responsive redesign. User-confirmed scope: **mainnet is
-READ-ONLY** (balance display only; all trading stays testnet), live prices = open-position symbols +
-BTC/ETH majors, restructure freely.
-
-**Done — all 5 phases:**
-- **Phase 0 (safety):** `requireBinanceCredentials.js` now hard-pins `X-Binance-Mode: 'testnet'`
-  (was `settings.mode || 'testnet'`); `saveSettingsKeys` rejects a `mode` field. Closes the gap where
-  saving mainnet keys + flipping mode would route real trading to mainnet.
-- **Phase 1 (server):** `Settings.js` +`encryptedMainnetApiKey`/`Secret` (additive, no migration).
-  `saveSettingsKeys` takes `env: 'testnet'|'mainnet'` (mainnet requires both fields + is verified via
-  engine `/trade/verify` w/ `X-Binance-Mode: mainnet` before storage). `getSettingsKeys` returns
-  `hasMainnet*` flags. `verifySettings` takes `env`. New `getBalances` → `GET /api/v1/trade/balances`
-  (public route, JWT only, NOT `requireBinanceCredentials`): decrypts both pairs, `Promise.all` two
-  engine `/trade/account` calls, returns trimmed per-env `{configured,ok,totalWalletBalance,
-  totalMarginBalance,totalUnrealizedProfit,availableBalance}`. **Engine unchanged** (mode already
-  threaded).
-- **Phase 2 (Settings UI):** second key form "Mainnet — Read-Only" + amber Read-Only warning box;
-  removed the "Coming Soon" toast/`handleMainnetClick`; mainnet env card now "Balance monitoring only".
-- **Phase 3 (data+components):** `useAccountBalances()` in `useTrade.js` (60s poll) + added
-  `['trade','balances']` to `useTradeStream`'s ACCOUNT_UPDATE invalidation. New
-  `features/dashboard/{TickerStrip,AccountOverview,BacktestKpiStrip,CollapsibleSection}.jsx`.
-  TickerStrip reuses `useBinanceWS(<sym>@ticker)` (browser-direct, capped 8 symbols, memoized).
-- **Phase 4 (layout):** rewrote `Dashboard.jsx` — order: TickerStrip → AccountOverview →
-  BacktestKpiStrip → Recent Live Runs + Recent Backtests → StrategyLeaderboard → collapsible
-  TimescaleDB Cache. Per-section loading (live-data failure no longer blanks backtest sections).
-  Tables already scroll via the `Table` primitive's `overflow-auto`. `StatCard` now orphaned.
-- **Phase 5 (docs):** dashboard SPEC, API_CONTRACTS, auth-settings SPEC, DECISIONS §9, binance-api
-  §6, CURRENT_STATE, client/CLAUDE.md Dashboard spec + useTrade hooks line, server/CLAUDE.md route
-  list. (MODELS.md is the quant-arch doc, not DB schema — Settings schema doc lives in auth-settings.)
-
-**Verification done:** `node --check` on all changed server files; `vite build` succeeds (2843
-modules, no errors). **NOT verified** (Docker not run this session): live balances fetch for either
-env, mainnet geo-block behavior from server egress IP, ticker strip against real WS, mobile layout.
-
-**Files changed:** `server/src/{middleware/requireBinanceCredentials.js,models/Settings.js,
-controllers/trade.controller.js,routes/trade.routes.js}`; `client/src/pages/{Settings,Dashboard}.jsx`,
-`client/src/hooks/useTrade.js`, `client/src/features/dashboard/{TickerStrip,AccountOverview,
-BacktestKpiStrip,CollapsibleSection}.jsx`; `workspace/docs/core/{API_CONTRACTS,DECISIONS,binance-api}.md`,
-`workspace/docs/features/{dashboard,auth-settings}/SPEC.md`, `workspace/docs/state/CURRENT_STATE.md`,
-`{client,server}/CLAUDE.md`.
-
-**Follow-up (same session): removed `.env` Binance key reads.** `server/src/services/reconciliation.js`
-read `process.env.BINANCE_TESTNET_API_KEY`/`_SECRET` at startup and used them to close positions across
-every orphaned-session symbol — a violation of the documented "credentials live in MongoDB per user,
-not `.env`" invariant, and the cause of the slow serial startup loop that made the server container
-`unhealthy` (reconciliation blocked `listen()` >65s past the healthcheck window). Rewrote it to resolve
-per-user testnet headers from each session owner's `Settings` doc (decrypt via `encryption.js`, cached
-per pass, mode pinned testnet), reusing the `_getBinanceHeaders` pattern from `algo.controller.js`.
-Section 3 (re-lock manual positions) now iterates users who have keys in `Settings` and fetches
-per-user (also fixed a latent bug: it called the engine with no headers and read `data.data.positions`
-when the engine returns the array at `data.data`). Result: reconciliation completes instantly, server
-healthy in ~20s. **Nothing in the codebase now reads Binance keys from `.env`** (grep-verified).
-**Dead `.env` entries remain** (`BINANCE_TESTNET_API_KEY/SECRET`, `BINANCE_API_KEY/SECRET`,
-`BINANCE_MAINNET_API_KEY/SECRET`) — left untouched per the "don't modify `.env`" rule; safe to delete.
-
-**Open questions:** (1) Does `fapi.binance.com` `/fapi/v2/account` succeed from the server's egress
-IP, or is it geo-blocked (451/-2015)? The per-env `{ok:false,error}` shape absorbs it but needs a
-real check. (2) End-to-end: open a non-major testnet position → confirm it appears in TickerStrip
-within 30s and the uPnL tile is nonzero. (3) Mobile 375px pass.
-
-
+`engine` and `client` both ha

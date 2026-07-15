@@ -43,9 +43,14 @@ Using TA-Lib where available.
 Using pandas-ta (build the OHLCV frame via `_frame(candles)`). Keep the return shape
 identical to the TA-Lib adapter.
 
-## Step 5 — Docstring
+## Step 5 — Docstring + causality contract
 
-Add a docstring: what it does, params, return type.
+Add a docstring: what it does, params, return type — **and its causality**: state whether the
+value at index `i` uses only data ≤ `i` (causal — safe to read at `self.index`) or needs future
+bars to confirm (confirmation-lagged, like the swing pivots' `right` window). For lagged
+indicators the docstring MUST state the visibility horizon (read at `i - right`), because
+strategies precompute over the full array in `prepare()` and a naive read at `i` is lookahead
+(`workspace/plan/audit_2_quant-core.md` QNT-12).
 
 ## Step 6 — Update documentation
 

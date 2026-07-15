@@ -11,6 +11,13 @@ defaults to `check`.
 > Runs the REAL backtest runner on a fixed, deterministic config (2024 BTCUSDT/1h, all 5 seeded
 > strategies). Identical candles + identical params + no randomness ⇒ identical metrics. Requires
 > TA-Lib + the engine databases, so it **must run inside the engine container** (Rule B).
+>
+> **Coverage caveat:** the scenario set lives in `engine/scripts/golden_master.py` and is
+> currently single-symbol, funding-off, no exec-algo — it cannot see multi-symbol or exec-algo
+> regressions (this blind spot hid QNT-1/QNT-2; see `workspace/plan/audit_2_quant-core.md` §2).
+> Plan 9.1 adds multi-symbol/exec-algo scenarios; once landed, this gate covers them
+> automatically. Until then, changes to those paths need their own behavioral test, not just a
+> green golden master.
 
 ---
 
