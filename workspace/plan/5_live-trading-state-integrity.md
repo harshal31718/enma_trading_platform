@@ -1,6 +1,6 @@
 # Plan 5 — Live-trading state integrity
 
-**Status:** In progress 2026-07-15 — Step 5.2 shipped · **Priority:** P0 (highest-value correctness work) · **Depends on:** 2, 3 · **Related:** 6
+**Status:** In progress 2026-07-15 — Steps 5.2, 5.4 shipped · **Priority:** P0 (highest-value correctness work) · **Depends on:** 2, 3 · **Related:** 6
 
 ## Progress log (2026-07-15)
 
@@ -38,7 +38,48 @@ touched, zero backtest-path overlap). Live-tested via a real testnet MicroScalpe
 (stopped before a position opened — waiting on an organic strategy signal wasn't a good use of
 verification time; the deterministic mocked-Binance test suite above is the real verification).
 
-**Remaining (5.1, 5.3–5.6) not yet started** — see the original scope below.
+**5.4 — Serialize per-symbol state mutation (ENG-3) — Shipped.** The per-candle loop
+(`_reconcile_exchange_state` → `check_exits` → `evaluate_and_route`) and the user-data WS fill
+callback (`_on_fill`, which also calls `_reconcile_exchange_state` and does F-019 OUO
+peer-cancel) both mutate `strategy.position` / `session["pnl"]` / `session["open_positions"]`
+for the same symbol with no mutual exclusion — a fill landing mid-candle-loop (or vice versa)
+is a real double-close/double-count race, since both paths `await` real Binance HTTP calls,
+giving the event loop many chances to interleave them. Added one `asyncio.Lock` per
+`(session_id, symbol)` (`LiveBotManager._get_symbol_lock`, lazily created, cleaned up on session
+stop), wrapping both critical sections. Confirmed no re-entrancy risk (only these two
+acquisition sites; neither `_reconcile_exchange_state` nor anything it calls re-acquires the
+lock — `asyncio.Lock` is not reentrant, so this was checked explicitly, not assumed).
+
+**Verified:** 5 new tests (`tests/test_symbol_state_lock.py`) — same key returns the same lock
+instance, different symbols/sessions get independent locks, a concurrency test proving two
+coroutines racing for the same symbol's lock genuinely serialize (their critical sections never
+interleave, checked via a shared-state assertion mid-critical-section) rather than corrupt
+shared state, and cleanup removes only the stopped session's locks. Full suite 108/108. Golden
+master byte-identical. **Live-tested with a real 2-symbol testnet session** (BTCUSDT + ETHUSDT
+concurrently, 1m candles) — both ran independently, engine `/health` stayed responsive
+throughout, both stopped cleanly with no hang — the strongest available evidence against a
+deadlock short of catching an actual fill mid-candle-loop, which needs organic market timing
+this session didn't wait for.
+
+**Remaining (5.1, 5.3 [partial], 5.5, 5.6) not yet done:**
+- **5.1 (event log)** — not started. This is the largest remaining piece: a new append-only
+  collection, Node/engine write paths, and turning `LiveSession`/engine memory into pure derived
+  views. Steps 5.2/5.4 delivered real correctness value without it by fixing the specific
+  bugs directly — the event log is more Plan-6-shaped (structural) than a same-day addition.
+- **5.3 (order idempotency) — partially covered as a side effect of 5.2**: close orders now
+  carry a deterministic `newClientOrderId` and 5.2's re-query fallback already demonstrates the
+  "detect via client id instead of blindly retrying" pattern. **Not done**: entry orders
+  (`execute_entry`, `execute_flip`) still have no client id / idempotency, and there's no
+  explicit "query by client id before retrying on ambiguous timeout" retry wrapper anywhere —
+  the current re-query is only wired into the close path's fill-price lookup, not as a general
+  retry-safety mechanism.
+- **5.5 (Decimal money)** — not started. Correctly the largest, riskiest remaining piece:
+  touches nearly every arithmetic operation across position/PnL/balance math in both engine
+  Python and Node, and per the plan's own acceptance criteria needs a *documented* golden-master
+  diff (float-precision differences are expected once quantities go through `Decimal`
+  rounding) — a deliberate, reviewed change, not something to rush.
+- **5.6 (restart recovery)** — blocked on 5.1 by design (rebuilds session memory from the event
+  log on engine restart); not started.
 
 > Source issues: SYS-2, ENG-2, ENG-3, ENG-10, ENG-11, SRV-3. This is the deepest design flaw
 > in the repo: three copies of "truth" (exchange / engine memory / Mongo) reconciled by

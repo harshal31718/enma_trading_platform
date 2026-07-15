@@ -768,6 +768,22 @@ class LiveBotManager:
         # Limit concurrent Binance testnet calls per session to avoid overwhelming
         # the testnet when many symbols fire signals on the same candle close.
         self._order_semaphores: dict[str, asyncio.Semaphore] = {}
+        # Plan 5 Step 5.4 (ENG-3): the per-candle loop (reconcile -> check_exits
+        # -> evaluate_and_route) and the user-data WS fill callback (_on_fill,
+        # which also calls _reconcile_exchange_state) both mutate the same
+        # strategy.position / session["pnl"] / session["open_positions"] state
+        # and can interleave at any await point — a fill landing mid-candle-
+        # loop is a real double-close/double-count race. One lock per
+        # (session_id, symbol) serializes them.
+        self._symbol_state_locks: dict[tuple[str, str], asyncio.Lock] = {}
+
+    def _get_symbol_lock(self, session_id: str, symbol: str) -> asyncio.Lock:
+        key = (session_id, symbol)
+        lock = self._symbol_state_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._symbol_state_locks[key] = lock
+        return lock
 
     async def start_session(self, session_config: dict) -> None:
         """Start a new live bot session. session_config from Node."""
@@ -988,6 +1004,8 @@ class LiveBotManager:
         self._stop_signals.pop(session_id, None)
         self._tasks.pop(session_id, None)
         self._order_semaphores.pop(session_id, None)
+        for _key in [k for k in self._symbol_state_locks if k[0] == session_id]:
+            self._symbol_state_locks.pop(_key, None)
 
         logger.info(f"[AlgoBot] Session {session_id} stopped")
 
@@ -1204,39 +1222,44 @@ class LiveBotManager:
                     f"status={status} clientAlgoId={client_algo_id}"
                 )
 
-                # ── F-019: OUO peer-cancel on partial/full fill ──────
-                # If a tracked algo order (tpsl_ prefix) is FILLED or
-                # PARTIALLY_FILLED, cancel the peer leg to prevent
-                # over-close on a reduced position.
-                if status in ("FILLED", "PARTIALLY_FILLED") and client_algo_id.startswith("tpsl_"):
-                    _pos_info = session.get("open_positions", {}).get(symbol)
-                    if _pos_info and "algo_ids" in _pos_info:
-                        _aids = _pos_info["algo_ids"]
-                        _peer_id = _aids.get("tp") if "sl" in client_algo_id else _aids.get("sl")
-                        if _peer_id:
-                            try:
-                                _api_key = session.get("api_key", "") if session else ""
-                                _api_secret = session.get("api_secret", "") if session else ""
-                                if _api_key and _api_secret:
-                                    await _uds_signed(
-                                        "DELETE", "/fapi/v1/algoOrder",
-                                        _api_key, _api_secret,
-                                        params={"symbol": symbol, "algoId": _peer_id},
-                                        mode="testnet",
+                # Plan 5 Step 5.4 (ENG-3): serialize against the per-candle
+                # loop's reconcile/check_exits/evaluate_and_route block below —
+                # both mutate strategy.position / session state and a fill
+                # landing mid-candle-loop is a real double-close/double-count race.
+                async with self._get_symbol_lock(session_id, symbol):
+                    # ── F-019: OUO peer-cancel on partial/full fill ──────
+                    # If a tracked algo order (tpsl_ prefix) is FILLED or
+                    # PARTIALLY_FILLED, cancel the peer leg to prevent
+                    # over-close on a reduced position.
+                    if status in ("FILLED", "PARTIALLY_FILLED") and client_algo_id.startswith("tpsl_"):
+                        _pos_info = session.get("open_positions", {}).get(symbol)
+                        if _pos_info and "algo_ids" in _pos_info:
+                            _aids = _pos_info["algo_ids"]
+                            _peer_id = _aids.get("tp") if "sl" in client_algo_id else _aids.get("sl")
+                            if _peer_id:
+                                try:
+                                    _api_key = session.get("api_key", "") if session else ""
+                                    _api_secret = session.get("api_secret", "") if session else ""
+                                    if _api_key and _api_secret:
+                                        await _uds_signed(
+                                            "DELETE", "/fapi/v1/algoOrder",
+                                            _api_key, _api_secret,
+                                            params={"symbol": symbol, "algoId": _peer_id},
+                                            mode="testnet",
+                                        )
+                                        logger.info(
+                                            f"[AlgoBot] {symbol}: cancelled peer algo {_peer_id} "
+                                            f"(OUO — {client_algo_id} filled)"
+                                        )
+                                except Exception as _cancel_e:
+                                    logger.warning(
+                                        f"[AlgoBot] {symbol}: peer algo cancel failed: {_cancel_e}"
                                     )
-                                    logger.info(
-                                        f"[AlgoBot] {symbol}: cancelled peer algo {_peer_id} "
-                                        f"(OUO — {client_algo_id} filled)"
-                                    )
-                            except Exception as _cancel_e:
-                                logger.warning(
-                                    f"[AlgoBot] {symbol}: peer algo cancel failed: {_cancel_e}"
-                                )
 
-                await self._reconcile_exchange_state(
-                    session_id, strategy, symbol,
-                    candle_high=None, candle_low=None,
-                )
+                    await self._reconcile_exchange_state(
+                        session_id, strategy, symbol,
+                        candle_high=None, candle_low=None,
+                    )
             _uds.register_fill_callback(symbol, _on_fill)
             _fill_cb_registered = True
 
@@ -1337,55 +1360,59 @@ class LiveBotManager:
                                 strategy.index = len(strategy.candles) - 1
                                 strategy.prepare(strategy.candles)
 
-                                # Phase 5: Reconcile state with exchange BEFORE any decision
-                                # Unconditionally syncs positions AND open orders every loop.
-                                # Self-heals when engine wrongly believes it is flat (F-004),
-                                # reconciles open orders (F-002), and uses exchange data
-                                # as single source of truth (F-001).
-                                await self._reconcile_exchange_state(
-                                    session_id, strategy, symbol,
-                                    candle_high=candle[3], candle_low=candle[4],
-                                )
+                                # Plan 5 Step 5.4 (ENG-3): serialize against
+                                # _on_fill's reconcile call above — see its
+                                # comment for why this lock exists.
+                                async with self._get_symbol_lock(session_id, symbol):
+                                    # Phase 5: Reconcile state with exchange BEFORE any decision
+                                    # Unconditionally syncs positions AND open orders every loop.
+                                    # Self-heals when engine wrongly believes it is flat (F-004),
+                                    # reconciles open orders (F-002), and uses exchange data
+                                    # as single source of truth (F-001).
+                                    await self._reconcile_exchange_state(
+                                        session_id, strategy, symbol,
+                                        candle_high=candle[3], candle_low=candle[4],
+                                    )
 
-                                # Setup execution algorithm if configured (A-016 parity with backtest path)
-                                exec_algo = None
-                                exec_algo_cfg = params.get("exec_algo") if isinstance(params, dict) else None
-                                if exec_algo_cfg and isinstance(exec_algo_cfg, dict):
-                                    algo_type = exec_algo_cfg.get("type")
-                                    algo_params = exec_algo_cfg.get("params", {})
-                                    try:
-                                        from core.models.exec_algo import TWAPAlgorithm, VWAPAlgorithm, IcebergAlgorithm
-                                    except ImportError:
-                                        from engine.core.models.exec_algo import TWAPAlgorithm, VWAPAlgorithm, IcebergAlgorithm
+                                    # Setup execution algorithm if configured (A-016 parity with backtest path)
+                                    exec_algo = None
+                                    exec_algo_cfg = params.get("exec_algo") if isinstance(params, dict) else None
+                                    if exec_algo_cfg and isinstance(exec_algo_cfg, dict):
+                                        algo_type = exec_algo_cfg.get("type")
+                                        algo_params = exec_algo_cfg.get("params", {})
+                                        try:
+                                            from core.models.exec_algo import TWAPAlgorithm, VWAPAlgorithm, IcebergAlgorithm
+                                        except ImportError:
+                                            from engine.core.models.exec_algo import TWAPAlgorithm, VWAPAlgorithm, IcebergAlgorithm
 
-                                    if algo_type == "twap":
-                                        exec_algo = TWAPAlgorithm(strategy, symbol, algo_params)
-                                    elif algo_type == "vwap":
-                                        exec_algo = VWAPAlgorithm(strategy, symbol, algo_params)
-                                    elif algo_type == "iceberg":
-                                        exec_algo = IcebergAlgorithm(strategy, symbol, algo_params)
+                                        if algo_type == "twap":
+                                            exec_algo = TWAPAlgorithm(strategy, symbol, algo_params)
+                                        elif algo_type == "vwap":
+                                            exec_algo = VWAPAlgorithm(strategy, symbol, algo_params)
+                                        elif algo_type == "iceberg":
+                                            exec_algo = IcebergAlgorithm(strategy, symbol, algo_params)
 
-                                adapter = LiveAdapter(self, session_id)
-                                kernel = ExecutionKernel(adapter, exec_algo)
-                                time_t = datetime.fromtimestamp(candle[0] / 1000, tz=timezone.utc)
+                                    adapter = LiveAdapter(self, session_id)
+                                    kernel = ExecutionKernel(adapter, exec_algo)
+                                    time_t = datetime.fromtimestamp(candle[0] / 1000, tz=timezone.utc)
 
-                                await kernel.check_exits(
-                                    strategy=strategy,
-                                    symbol=symbol,
-                                    candle=candle,
-                                    is_live=True,
-                                    index_t=strategy.index,
-                                    time_t=time_t,
-                                )
+                                    await kernel.check_exits(
+                                        strategy=strategy,
+                                        symbol=symbol,
+                                        candle=candle,
+                                        is_live=True,
+                                        index_t=strategy.index,
+                                        time_t=time_t,
+                                    )
 
-                                await kernel.evaluate_and_route(
-                                    strategy=strategy,
-                                    symbol=symbol,
-                                    candle=candle,
-                                    is_live=True,
-                                    index_t=strategy.index,
-                                    time_t=time_t,
-                                )
+                                    await kernel.evaluate_and_route(
+                                        strategy=strategy,
+                                        symbol=symbol,
+                                        candle=candle,
+                                        is_live=True,
+                                        index_t=strategy.index,
+                                        time_t=time_t,
+                                    )
                             except Exception as e:
                                 consecutive_errors += 1
                                 logger.error(
