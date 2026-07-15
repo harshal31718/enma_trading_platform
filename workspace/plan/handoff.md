@@ -45,23 +45,57 @@ due — check `git log` for anything shipped after this note.
    off mid-sentence in commit `a5c0bf7`, notes for plans 6–10 were missing entirely; both
    completed), `9_backtest-and-optimizer-correctness.md` (9.1–9.3 marked Shipped with detail).
 
-**Session-wide plan (TaskCreate #1–12, tracked live, not repeated here):** finish 9.1–9.3 →
-browser-verify the backtest UI still works end-to-end → hardening track Plan 2 → 3 → 4 → 5 → 6
-→ 7 → 8 → quant remainder 9.4–9.10 → Plan 10 (Monte Carlo/Strategy Lab) → full UI polish +
-mobile/responsive pass (last, added mid-session per explicit user request). Committing at each
-plan/phase checkpoint on `dev`, not pushing to remote without being asked. Also asked to
-periodically re-verify via `claude-in-chrome` after each checkpoint that the app still actually
-works, not just that tests pass.
+**Also done — browser-verified 9.1–9.3 live** (user logged in mid-session): ran a real
+BTCUSDT+ETHUSDT MicroScalper backtest through the actual UI, confirmed real interleaved
+`stop_loss`/`take_profit` exits across both symbols. User then flagged the List of Trades table
+had no symbol column — fixed end-to-end (engine tags each trade dict with its adapter's symbol
+at every creation site, persisted to `backtestTrades`, server schema + client table/CSV export
+pass it through), re-verified live in browser. Shipped as its own commit.
 
-**Files changed:** `engine/services/backtest_runner.py`, `engine/core/kernel.py`,
-`engine/tests/test_multi_symbol_portfolio_exits.py` (new),
-`engine/tests/test_exec_algo_slicing.py`, `workspace/plan/0_tracker.md`,
-`workspace/plan/9_backtest-and-optimizer-correctness.md`.
+**Done — Plan 2 (Safety net & guardrails), all 6 steps, Shipped:** server test harness (Jest,
+39 tests: encryption/chaosAllocator/risk/auth.middleware), client test harness (Vitest smoke
+tests, 11 pages — the harness deps/config existed from an earlier session but `src/tests/
+setup.js` was missing so it never actually ran), encryption.js now fails closed with a versioned
+envelope (`v1:`), correlation IDs (`AsyncLocalStorage` + pino, engine-side `contextvars`) with
+`X-Request-Id` threaded server↔engine, engine `/health` now live-pings Mongo+Timescale instead
+of hardcoding `"ok"`, CI (`.github/workflows/ci.yml`). **Full deviation log (important — read
+before touching Plan 3/4) is in `2_safety-net-and-guardrails.md`'s "Shipped summary"**, headline
+items: (a) shipping fail-closed required an unplanned one-off credential migration
+(`server/scripts/migrate-encryption-key.js`) because `ENCRYPTION_KEY` was unset; (b) **discovered
+mid-fix that local dev shares production's MongoDB Atlas cluster** — the logged-in user's real
+Settings doc is encrypted under production's (unavailable) key, correctly left untouched by the
+migration, user will re-save Binance keys locally; this sharing arrangement is a flagged,
+unresolved risk worth a deliberate call before Plan 4 (credential/config topology); (c) CI's
+golden-master step is an execution smoke check only (`continue-on-error`), not yet a byte-level
+regression gate — no baseline is committed to the repo.
 
-**Open questions (unchanged, still open, deferred to when 9.4/9.7/9.8 are reached):** who signs
-off golden-master re-baselines for output-changing steps; keep or delete `IcebergAlgorithm`
-(untestable under the constant-slippage fill model until 9.10 lands); Plan 3.2 product decision
-(retire vs sandbox UI strategy editing) needs the user's sign-off when Plan 3 is reached.
+**Session-wide plan (TaskCreate #1–13, tracked live, not repeated here):** Plan 9.1–9.3 ✅ →
+browser checkpoint ✅ → Plan 2 ✅ → Plan 3 → 4 → 5 → 6 → 7 → 8 → quant remainder 9.4–9.10 → Plan
+10 (Monte Carlo/Strategy Lab) → full UI polish + mobile/responsive pass (added mid-session per
+explicit user request). Committing at each plan/phase checkpoint on `dev`, not pushing to remote
+without being asked. User stepped away mid-session and authorized continuing without pausing for
+input except on genuinely critical/irreversible actions; pending browser-verification items
+queue up in TaskCreate #13 for when the user is back and logged in — **never attempt Google
+login autonomously, even without a password, under any circumstance.**
+
+**Files changed (this session so far):** `engine/services/backtest_runner.py`, `engine/core/
+kernel.py`, `engine/main.py`, `engine/tests/test_multi_symbol_portfolio_exits.py` (new),
+`engine/tests/test_exec_algo_slicing.py`, `server/src/utils/encryption.js`, `server/scripts/
+migrate-encryption-key.js` (new), `server/src/utils/__tests__/*.test.js` (new, 3 files),
+`server/src/middleware/__tests__/auth.middleware.test.js` (new), `server/src/config/{logger,
+requestContext}.js` (new), `server/src/middleware/requestId.js` (new), `server/src/app.js`,
+`server/src/services/engineClient.js`, `server/src/middleware/errorHandler.js`, `server/src/
+models/BacktestTrade.js`, `server/package.json`, `client/src/tests/{setup.js,
+pages.smoke.test.jsx}` (new), `client/src/pages/Backtest.jsx`, `client/src/utils/exporters.js`,
+`.env` (added `ENCRYPTION_KEY`), `.env.ci` (new), `docker-compose.ci.yml` (new),
+`.github/workflows/ci.yml` (new), `workspace/plan/0_tracker.md`, `workspace/plan/
+9_backtest-and-optimizer-correctness.md`, `workspace/plan/2_safety-net-and-guardrails.md`.
+
+**Open questions:** who signs off golden-master re-baselines for output-changing steps
+(9.4/9.7/9.8); keep or delete `IcebergAlgorithm`; Plan 3.2 product decision (retire vs sandbox UI
+strategy editing) needs the user's sign-off when Plan 3 is reached; **new — local dev vs.
+production sharing one MongoDB Atlas cluster** (see Plan 2 summary above), should be settled
+before or during Plan 4.
 
 ---
 ## 2026-07-14 — Quant-Core Deep-Dive Audit (planning only, no code) — COMPLETE ✅

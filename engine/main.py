@@ -8,12 +8,15 @@ except Exception:
 sys.path.insert(0, '/')
 
 import asyncio
+import contextvars
 import logging
+import uuid
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from config.mongo import close_mongo, get_database
 from config.timescale import close_pool, init_pool, get_pool
@@ -32,7 +35,26 @@ from utils.symbols import load_exchange_rules, load_symbol_volume_tiers, load_bo
 
 load_dotenv()
 
-logging.basicConfig(level=logging.INFO)
+# Plan 2 Step 2.4 (SYS-6): every log line carries the correlation id of the
+# request that produced it, threaded from Node's X-Request-Id header (see
+# request_id_middleware below) so one Trade request's id is greppable across
+# both server and engine logs.
+correlation_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("correlation_id", default="-")
+
+
+class _CorrelationIdFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.correlation_id = correlation_id_var.get()
+        return True
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(correlation_id)s] %(name)s: %(message)s",
+)
+for _handler in logging.getLogger().handlers:
+    _handler.addFilter(_CorrelationIdFilter())
+
 logger = logging.getLogger(__name__)
 
 ENGINE_API_KEY = os.getenv("ENGINE_API_KEY", "")
@@ -152,6 +174,21 @@ async def require_api_key(request: Request, call_next):
     return await call_next(request)
 
 
+# Registered last so Starlette makes it the OUTERMOST middleware (runs first on
+# the way in, last on the way out) — every request, including ones require_api_key
+# rejects, gets a correlation id in its logs and an echoed X-Request-Id response header.
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    request_id = request.headers.get("X-Request-Id") or str(uuid.uuid4())
+    token = correlation_id_var.set(request_id)
+    try:
+        response = await call_next(request)
+    finally:
+        correlation_id_var.reset(token)
+    response.headers["X-Request-Id"] = request_id
+    return response
+
+
 app.include_router(candles_router, prefix="/candles", tags=["candles"])
 app.include_router(strategies_router, prefix="/strategies", tags=["strategies"])
 app.include_router(backtest_router, prefix="/backtest", tags=["backtest"])
@@ -165,4 +202,29 @@ app.include_router(optimize_router, prefix="/optimize", tags=["optimize"])
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "engine"}
+    # ENG-13 (Plan 2 Step 2.5): health must reflect LIVE dependency state, not
+    # a hardcoded "ok" — a Docker healthcheck reading this is meaningless
+    # otherwise. Live-pings both DBs on every call (cheap: single round trip
+    # each) rather than trusting a startup-time snapshot that can go stale.
+    health_state = {"status": "ok", "service": "engine", "mongo": "error", "timescale": "error"}
+
+    try:
+        db = get_database()
+        await db.command("ping")
+        health_state["mongo"] = "connected"
+    except Exception as e:
+        logger.warning(f"/health: MongoDB ping failed: {e}")
+
+    try:
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            await conn.fetchval("SELECT 1")
+        health_state["timescale"] = "connected"
+    except Exception as e:
+        logger.warning(f"/health: TimescaleDB ping failed: {e}")
+
+    if health_state["mongo"] != "connected" or health_state["timescale"] != "connected":
+        health_state["status"] = "degraded"
+        return JSONResponse(status_code=503, content=health_state)
+
+    return health_state

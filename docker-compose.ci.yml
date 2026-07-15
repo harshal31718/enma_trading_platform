@@ -1,0 +1,26 @@
+# CI override (Plan 2 Step 2.6). Adds a local, throwaway MongoDB service so
+# GitHub Actions never touches the shared/production Atlas cluster referenced
+# by the real .env — CI always runs against .env.ci instead.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d
+
+services:
+  mongodb:
+    image: mongo:7
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  engine:
+    depends_on:
+      mongodb:
+        condition: service_healthy
+
+  server:
+    depends_on:
+      mongodb:
+        condition: service_healthy

@@ -21,6 +21,7 @@ env/
 dist/
 build/
 .next/
+coverage/
 
 # Logs
 *.log

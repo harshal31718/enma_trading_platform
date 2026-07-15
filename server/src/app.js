@@ -1,13 +1,16 @@
 const express = require('express')
 const helmet = require('helmet')
 const cors = require('cors')
-const morgan = require('morgan')
+const pinoHttp = require('pino-http')
 const mongoose = require('mongoose')
 const Redis = require('ioredis')
 const rateLimit = require('express-rate-limit')
 const cookieParser = require('cookie-parser')
 
 require('./config/passport')
+
+const logger = require('./config/logger')
+const requestId = require('./middleware/requestId')
 
 const authRoutes = require('./routes/auth.routes')
 const adminRoutes = require('./routes/admin.routes')
@@ -36,7 +39,16 @@ app.set('trust proxy', 1)
 app.use(cookieParser())
 app.use(helmet())
 app.use(cors({ origin: process.env.CLIENT_URL || 'http://localhost:5173', credentials: true }))
-app.use(morgan('dev'))
+app.use(requestId)
+app.use(pinoHttp({
+  logger,
+  genReqId: (req) => req.id,
+  customLogLevel: (req, res, err) => {
+    if (res.statusCode >= 500 || err) return 'error'
+    if (res.statusCode >= 400) return 'warn'
+    return 'info'
+  },
+}))
 app.use(express.json())
 app.use(passport.initialize())
 

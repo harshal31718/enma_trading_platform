@@ -1,0 +1,57 @@
+name: CI
+
+# Plan 2 Step 2.6 (SYS-5): the enforcement mechanism for root CLAUDE.md Rule C
+# (golden-master) and the server/client/engine test suites — this is what
+# makes those checks non-optional instead of convention-only.
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use the CI-only environment (never the shared/production .env)
+        run: cp .env.ci .env
+
+      - name: Build images
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml build
+
+      - name: Start the stack and wait for health
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --wait --wait-timeout 180
+
+      - name: Server tests (Jest)
+        run: docker compose exec -T server npm test
+
+      - name: Client tests (Vitest)
+        run: docker compose exec -T client npm test
+
+      - name: Engine tests (pytest)
+        run: docker compose exec -T engine pytest tests/ -q
+
+      - name: Engine golden master (execution smoke check)
+        # Not a byte-level regression gate yet — no baseline is committed to the
+        # repo (Rule C's before/after compare is still a local, per-session
+        # discipline: capture a baseline label, apply the change, capture again,
+        # `golden_master.py compare`). This step only proves the full pipeline
+        # (candle fetch → simulate → persist) executes end-to-end without
+        # raising, so a wired-but-broken pipeline still fails CI. Runs a single
+        # strategy to keep the external Binance REST dependency cheap; allowed
+        # to fail without red-ing the whole build since it depends on Binance
+        # being reachable from the runner.
+        continue-on-error: true
+        run: docker compose exec -T engine python scripts/golden_master.py run --label ci_smoke --only MicroScalper
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --tail 200
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml down -v

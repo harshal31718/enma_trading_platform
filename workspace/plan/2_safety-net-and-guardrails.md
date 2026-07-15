@@ -1,6 +1,73 @@
 # Plan 2 — Safety net & guardrails
 
-**Status:** Ready · **Priority:** P0 (do first) · **Depends on:** — · **Related:** 3, 4, 5
+**Status:** Shipped 2026-07-15 · **Priority:** P0 (do first) · **Depends on:** — · **Related:** 3, 4, 5
+
+## Shipped summary
+
+All six steps landed in one session. Key deviations from plan-as-written, and why:
+
+- **2.1** — Jest (not Vitest, see Open Questions) + Supertest + `mongodb-memory-server` +
+  `ioredis-mock` installed, but the first tests (`encryption.test.js`, `chaosAllocator.test.js`,
+  `risk.test.js`, `auth.middleware.test.js` — 39 tests) turned out to need none of the DB/Redis
+  mocks (all four targets are pure functions or fully mockable at the module boundary) — they're
+  still installed for the next session's controller/route-level tests. Coverage wired via Jest's
+  built-in `collectCoverage`.
+- **2.2** — the harness (Vitest/RTL/MSW deps + `vite.config.js` `test` block) already existed
+  from an earlier session but was never wired — `src/tests/setup.js` didn't exist, so `npm test`
+  would have failed immediately. Created it + one smoke test per page (11 pages) in
+  `pages.smoke.test.jsx`, with jsdom stubs for `ResizeObserver`/`matchMedia`/canvas (lightweight-
+  charts needs `HTMLCanvasElement.getContext` on unmount).
+  **KNOWN GAP:** `msw` is a devDependency but is not actually wired up (no request handlers). All
+  API calls in these smoke tests fail as real network errors against jsdom, which is caught by
+  each page's existing error-state handling. Fine for a mount-only smoke test; a future session
+  should add MSW handlers before writing tests that assert on fetched data.
+- **2.3 — required an unplanned mid-session detour.** `ENCRYPTION_KEY` was unset in `.env`
+  entirely (not just invalid) — shipping fail-closed as originally scoped would have crashed the
+  server on next boot. Discovered mid-fix: this dev environment's `MONGO_URI` points at the
+  **same shared production Atlas cluster** as the deployed VPS (see `DEPLOYMENT.md`), and the
+  logged-in user's real Settings document is encrypted under **production's** `ENCRYPTION_KEY`,
+  which is not available locally. Resolution (user-directed): generated a local-only
+  `ENCRYPTION_KEY`, ran a one-off migration (`server/scripts/migrate-encryption-key.js` — decrypts
+  under the old hardcoded fallback key, re-encrypts under the new key in a versioned `v1:` envelope,
+  idempotent, leaves any field it can't decrypt untouched) against the live Settings collection,
+  and left the one production-encrypted document alone. User will re-save their Binance keys on
+  this local stack. **Flagged, not fixed:** local dev sharing production's database is a latent
+  risk this session surfaced but did not resolve — worth a deliberate decision (point local dev
+  at its own Mongo, or formalize the shared-cluster setup) before Plan 4 (credential topology).
+- **2.4** — implemented as designed: `AsyncLocalStorage`-based `requestContext.js` (no signature
+  changes needed anywhere), `pino-http` replacing `morgan('dev')`, redaction list, engine-side
+  `contextvars` + a logging filter on the root handler, `X-Request-Id` echoed both directions.
+  **Scoping decision:** engine → Node propagation (`_notify_node`/`_call_node_internal` inside
+  `live_bot_manager.py`) was explicitly left out — those are engine-initiated background-loop
+  calls with no inbound request to correlate against, a different tracing problem than the
+  plan's synchronous "one Trade request, one id" acceptance criterion, and touching that
+  2,000-line file here would have pre-empted Plan 6's decomposition. Verified: header round-trips
+  both directions (curl), and the correlation-id log filter mechanism proven directly (not found
+  via uvicorn's own access log, which uses its own logger config outside `logging.basicConfig`'s
+  reach — a real but cosmetic gap, business log lines from application code do carry it correctly).
+- **2.5** — server's `/api/v1/health` was *already* honest (checks Mongo+Redis live, returns 503
+  if either is down) — no ENG-13 equivalent existed there. Only the engine's `/health` was the
+  hardcoded-`"ok"` lie; fixed to live-ping Mongo + TimescaleDB on every call.
+- **2.6** — CI needed a docker-compose override (`docker-compose.ci.yml`) adding a local
+  throwaway `mongodb` service + `.env.ci` (no real secrets) — the real `.env` must never be used
+  in CI given the shared-production-database discovery above. Golden master runs in CI as an
+  **execution smoke check only** (`continue-on-error: true`), not a byte-level regression gate —
+  no baseline is committed to the repo yet, and Binance REST reachability from the runner isn't
+  guaranteed. Rule C's actual before/after byte-compare stays a local, per-session discipline
+  until a committed-baseline policy is designed. **Unverified end-to-end:** validated via
+  `docker compose config` (merges cleanly) but not run against a live swapped `.env` locally
+  (would have required touching the live dev stack's real `.env`) — first real run is the next
+  push to GitHub.
+
+**Files:** `server/src/utils/encryption.js`, `server/scripts/migrate-encryption-key.js` (new),
+`server/src/utils/__tests__/{encryption,chaosAllocator,risk}.test.js` (new),
+`server/src/middleware/__tests__/auth.middleware.test.js` (new), `server/src/config/{logger,
+requestContext}.js` (new), `server/src/middleware/requestId.js` (new), `server/src/app.js`,
+`server/src/services/engineClient.js`, `server/src/middleware/errorHandler.js`,
+`server/package.json`, `client/src/tests/setup.js` (new),
+`client/src/tests/pages.smoke.test.jsx` (new), `engine/main.py`, `.env` (added
+`ENCRYPTION_KEY`, local-only), `.env.ci` (new), `docker-compose.ci.yml` (new),
+`.github/workflows/ci.yml` (new).
 
 > Source issues (see `audit_1_system-design.md`): SRV-2, SEC-3, SYS-5, SYS-6, ENG-13.
 > This plan changes **no product behaviour**. It builds the scaffolding every later plan

@@ -18,10 +18,17 @@
 - express-validator (installed but not used as standalone middleware — validation inline in controllers)
 - express-rate-limit (inline in `app.js`)
 - Helmet.js
-- Morgan for logging
+- pino + pino-http for structured logging (replaces `morgan('dev')`, Plan 2 Step 2.4 — DECISIONS
+  needed: request-id middleware attaches a correlation id to every log line, redacts cookies/
+  `Authorization`/`X-Binance-*`/decrypted secrets)
 - dotenv
 - axios (HTTP calls to Python engine via `services/engineClient.js`)
 - uuid (v4 job ID generation)
+- **Test stack (Plan 2 Step 2.1):** Jest (not Vitest — this is a CommonJS `require()` codebase;
+  Jest needs zero ESM config for that, Vitest would need `vite-node`/extra config for no
+  benefit here) + Supertest (route-level tests) + `mongodb-memory-server` (disposable Mongo,
+  no live infra needed) + `ioredis-mock` (mock Redis). `npm test` runs `jest --runInBand`
+  (serial — `mongodb-memory-server` instances are heavier under parallel workers).
 
 ---
 
@@ -33,12 +40,16 @@ server/
     ├── config/
     │   ├── redis.js        ← ioredis client singleton (shared by BullMQ + pub/sub)
     │   ├── socket.js       ← Socket.IO server setup
-    │   └── passport.js     ← Google OAuth 2.0 strategy (sessionless)
+    │   ├── passport.js     ← Google OAuth 2.0 strategy (sessionless)
+    │   ├── logger.js       ← pino instance, redacts cookies/Authorization/X-Binance-* (Plan 2 2.4)
+    │   └── requestContext.js ← AsyncLocalStorage carrying the current request's correlation id
+    │                            across async calls (controllers → services → engineClient)
     ├── constants/
     │   └── top_symbols.js  ← ~80 tiered symbols (high/mid/low) — Chaos Mode pool
     ├── middleware/
-    │   ├── errorHandler.js          ← global error handler
+    │   ├── errorHandler.js          ← global error handler, logs via config/logger.js with req.id
     │   ├── auth.middleware.js       ← verifyJWT / requireAdmin / requireAlgoAccess (gates all /api/v1/* routes)
+    │   ├── requestId.js             ← reads/generates X-Request-Id, echoes on response, seeds requestContext
     │   └── requireBinanceCredentials.js ← validates X-Binance headers on trade routes
     ├── models/             ← Mongoose models
     │   ├── Strategy.js        ← metadata: name, description, filePath (global, no userId)

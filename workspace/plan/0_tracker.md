@@ -9,7 +9,7 @@ Statuses: `Draft` · `Ready` · `Blocked` · `Verify` · `Shipped` · `Merged→
 | ID | Title | Status | Priority | Phase | Depends on | Related | Updated |
 |----|-------|--------|----------|-------|------------|---------|---------|
 | 1  | Public access + admin-gated algo/testnet-start | Shipped | — | — | — | — | 2026-07-14 |
-| 2  | Safety net & guardrails | Ready | P0 | 1–2 | — | 3,4,5 | 2026-07-14 |
+| 2  | Safety net & guardrails | Shipped | P0 | 1–2 | — | 3,4,5 | 2026-07-15 |
 | 3  | Service-to-service trust | Ready | P0 | 1–2 | 2 | 4,8 | 2026-07-14 |
 | 4  | Credential & config topology | Ready | P1 | 1 | 2,3 | 8 | 2026-07-14 |
 | 5  | Live-trading state integrity | Ready | P0 | 3 | 2,3 | 6 | 2026-07-14 |
@@ -45,8 +45,13 @@ a golden-master check per Rule C.
 
 - **1** — Shipped via commits `ddce1c1` / `efa8cd5` (open login, per-user `requireAlgoAccess`,
   admin user table, Settings request flow). Kept for reference.
-- **2** — Behaviour-neutral scaffolding: server/client test harnesses, fail-closed encryption,
-  correlation logging, CI, loud health. Everything else depends on it.
+- **2** — Shipped 2026-07-15. Server/client test harnesses (39 + 11 tests), fail-closed
+  encryption (required an unplanned credential migration — see plan file for the shared-
+  production-database discovery), correlation IDs + pino logging, honest engine `/health`, CI
+  (`.github/workflows/ci.yml` + `docker-compose.ci.yml` + `.env.ci`). Full detail + deviations
+  in `2_safety-net-and-guardrails.md`'s "Shipped summary". **Flagged follow-up before Plan 4:**
+  local dev shares production's MongoDB Atlas cluster — decide whether to give local dev its
+  own database.
 - **3** — Closes the RCE strategy-code path and the unauthenticated `/internal` order routes.
   Contains a product decision (3.2: retire UI strategy editing vs sandbox it) — needs sign-off.
 - **4** — Implements the ".env → per-user Settings" directive for personal credentials + scopes
