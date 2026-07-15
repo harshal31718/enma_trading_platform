@@ -1,11 +1,62 @@
 # Plan 10 — Monte Carlo Optimiser & Strategy Lab
 
-**Status:** Ready · **Priority:** P1 · **Depends on:** 9 (steps 9.1/9.3 for correct inputs; 9.6/9.9 are absorbed here) · **Related:** 2 (jobs/CI), 7 (client decomposition)
+**Status:** Ready — MC engine core shipped 2026-07-15 (Phase 1a of 4), Phases 1b–4 (job plumbing,
+Strategy Lab UI, optimizer exposure, MC-scored selection) not started · **Priority:** P1 ·
+**Depends on:** 9 (steps 9.1/9.3 for correct inputs — both Shipped; 9.6/9.9 are absorbed here) ·
+**Related:** 2 (jobs/CI), 7 (client decomposition)
 
 > Source findings: `audit_2_quant-core.md` QNT-6/7/17 + the diagnosis in §1
 > below. Scope: the Monte Carlo simulation feature (currently rendered but broken), the
 > parameter optimizer (currently engine-only, **unreachable from the UI**), and a dedicated
-> UI surface that combines them into one "Strategy Lab". Planning only — no code in this file.
+> UI surface that combines them into one "Strategy Lab". Planning only — no code in this file
+> **except the §3.3 MC-engine-core scope note directly below**, which documents what actually
+> shipped against this plan.
+
+## Scoped delivery note (2026-07-15) — read before starting Phase 1b
+
+This plan's full scope (new BullMQ queue/worker, new `labResults` collection, new Node routes,
+a brand-new "Strategy Lab" React page with wizards/charts/tables, Optuna-backed optimizer
+exposure) is a multi-day feature build. In one session, only the highest-value, most
+self-contained slice shipped: **the MC engine core rewrite** (§3.3's methodology), left wired
+into the *existing* synchronous endpoint rather than the new job-based architecture §3.1
+specifies — the SRV-5 architectural defect (multi-minute compute behind a synchronous `GET`)
+is **not fixed**, only the math behind it.
+
+**What shipped:** `engine/services/monte_carlo.py` rewritten — vectorized (numpy) circular block
+bootstrap replacing the O(n_runs × n_trades) pure-Python i.i.d. loop (~100x faster: 5,000 runs
+over a real 38-trade job completed in 0.22s, tested end-to-end through the live
+`/backtest/run/leverage-sensitivity` endpoint); `scale_out` legs excluded from the resampling
+pool (QNT-14); equity-path compounding fixed from a silent mix of additive-return-computed +
+multiplicative-application to consistently additive (each trade's return is a fraction of FIXED
+starting capital, so paths must sum, not compound); default run count raised 2,000 → 5,000.
+Response contract preserved exactly (`ruinProbability`, `drawdownDistribution`) so
+`SimulationResults.jsx` and the existing endpoint keep working unchanged; extra fields
+(`finalEquityPercentiles`, `maxDrawdownPercentiles`, `meta`) added additively for the future
+job-based Lab to consume without another contract break. 6 new tests
+(`engine/tests/test_monte_carlo.py`): empty-trades default, scale_out exclusion, deterministic
+per-jobId seeding, distinct seeds per jobId, exceedance-curve monotonicity, percentile
+ordering. Full engine suite 94/94.
+
+**What did NOT ship (everything else in this file is still an accurate plan, not done):**
+- §3.1 job architecture (queue/worker/Node routes) — the endpoint is still synchronous.
+  `random.Random`'s replacement with `np.random.default_rng` also changes the *exact* sequence
+  of pseudo-random draws vs before (same statistical properties, different bitstream) — outputs
+  for a given jobId will differ numerically from pre-rewrite runs even though both are
+  "correct"; there is no committed golden baseline for MC output to diff against (same gap
+  noted in Plan 9's golden-master-persistence lesson).
+- §3.2 `labResults` persistence / `configHash` caching — every call still fully recomputes.
+- §3.3's remaining items: block length is not user-configurable (hardcoded `max(5, √N)`); the
+  i.i.d. variant is not exposed as a labeled alternative; skip-trades / cost-stress /
+  start-date-perturbation modes (§2.1 items 3–5) don't exist; optimizer walk-forward/DSR/PBO/
+  Optuna (§2.2, absorbs 9.6) untouched — `services/optimizer.py` is unchanged.
+- §4 Strategy Lab UI (new page, wizards, fan chart, trials table, etc.) — nothing built.
+- Everywhere-else items (§4.4): no backtest-page MC summary strip, `SimulationResults.jsx` not
+  retired, Risk Dashboard unchanged.
+
+**Recommended next step for whoever picks this up:** Phase 1b (job plumbing) is the correct next
+slice — it's well-specified, reuses the existing BullMQ/Socket.IO backtest-job pattern this
+codebase already proves out, and is the architectural fix (SRV-5) the MC-core rewrite alone
+doesn't address.
 
 ---
 

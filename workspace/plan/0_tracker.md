@@ -17,7 +17,7 @@ Statuses: `Draft` · `Ready` · `Blocked` · `Verify` · `Shipped` · `Merged→
 | 7  | Server & client structure | Ready | P2 | 5 | 2,5 | 6 | 2026-07-14 |
 | 8  | Governance, correctness & cleanup | Ready | P3 | 6 | 3,5,6 | all | 2026-07-14 |
 | 9  | Backtest & optimizer correctness (quant core) | Ready (9.1–9.3 Shipped) | P0 (9.1–9.3 done) / P1 (rest) | 0 + 7 | — (9.1–9.3); 2 (9.5+) | 5,6,8 | 2026-07-15 |
-| 10 | Monte Carlo Optimiser & Strategy Lab | Ready | P1 | 8 | 9 (9.1, 9.3) | 2,7 | 2026-07-14 |
+| 10 | Monte Carlo Optimiser & Strategy Lab | Ready (Phase 1a shipped) | P1 | 8 | 9 (9.1, 9.3) | 2,7 | 2026-07-15 |
 
 ---
 
@@ -80,5 +80,8 @@ a golden-master check per Rule C.
   sensitivity) **Shipped 2026-07-15** — see `handoff.md`. Steps 9.4–9.10 remain `Ready`; several
   change backtest outputs by design and need a golden-master re-baseline with sign-off (Rule C)
   before landing.
-- **10** — Job-based Monte Carlo + Optimizer Strategy Lab. Hard-depends on 9.1/9.3, both now
-  shipped — unblocked.
+- **10** — Job-based Monte Carlo + Optimizer Strategy Lab. Hard-depends on 9.1/9.3, both
+  shipped. 2026-07-15: **MC engine core rewritten** (vectorized block bootstrap, QNT-7/QNT-14
+  fixes) — the math is now honest, but it's still behind the old synchronous endpoint (SRV-5 not
+  fixed) and nothing else in the plan (job queue, `labResults`, Strategy Lab UI, optimizer
+  exposure) has started. See `10_monte-carlo-strategy-lab.md`'s scoped-delivery note.
