@@ -251,6 +251,7 @@ class BacktestAdapter(ExecutionAdapter):
             # Record the partial exit as a synthetic trade for analytics
             partial_trade = {
                 "type":       strategy.position.type,
+                "symbol":     self.symbol,
                 "qty":        str(qty),
                 "entryPrice": str(self.active_trade["entryPrice"]),
                 "exitPrice":  str(fill_price),
@@ -349,6 +350,7 @@ class BacktestAdapter(ExecutionAdapter):
 
             self.active_trade = {
                 "type":       direction,
+                "symbol":     self.symbol,
                 "qty":        str(qty),
                 "entryPrice": str(fill_price),
                 "entryAt":    time_t.isoformat(),
@@ -516,6 +518,7 @@ class BacktestAdapter(ExecutionAdapter):
 
         self.active_trade = {
             "type":       new_direction,
+            "symbol":     self.symbol,
             "qty":        str(new_qty),
             "entryPrice": str(fill_price),
             "entryAt":    time_t.isoformat(),
@@ -1181,6 +1184,7 @@ async def run_backtest_simulation(
                 "userId":      user_id,
                 "tradeIndex":  i + 1,
                 "type":        tr["type"],
+                "symbol":      tr.get("symbol", ""),
                 "qty":         tr["qty"],
                 "entryPrice":  tr["entryPrice"],
                 "exitPrice":   tr.get("exitPrice", ""),

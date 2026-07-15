@@ -631,6 +631,7 @@ export default function Backtest() {
                           <Table wrapperClassName="flex-1 overflow-y-auto">
                             <TableHeader className="sticky top-0 z-10">
                               <TableRow className="h-11 shrink-0 bg-title-bg title-fade border-b border-slate-700/50">
+                                <TableHead>Symbol</TableHead>
                                 <TableHead>Type</TableHead>
                                 <TableHead>Qty</TableHead>
                                 <TableHead>Entry Price</TableHead>
@@ -652,6 +653,9 @@ export default function Backtest() {
 
                                 return (
                                   <TableRow key={tr.id}>
+                                    <TableCell className="font-mono text-xs text-gray-300">
+                                      {tr.symbol || '-'}
+                                    </TableCell>
                                     <TableCell>
                                       <Badge variant={tr.type === 'long' ? 'profit' : 'destructive'}>
                                         {tr.type.toUpperCase()}

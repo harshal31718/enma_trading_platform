@@ -6,6 +6,7 @@ const BacktestTradeSchema = new mongoose.Schema(
     jobId:       { type: String, required: true, index: true },
     tradeIndex:  { type: Number, required: true },  // 1-based sequential id within the backtest
     type:        { type: String, enum: ['long', 'short'] },
+    symbol:      { type: String },  // e.g. "BTCUSDT" — distinguishes legs in multi-symbol runs
     qty:         { type: String },
     entryPrice:  { type: String },
     exitPrice:   { type: String },

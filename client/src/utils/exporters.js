@@ -13,6 +13,7 @@ export function tradesToCSV(trades) {
     // Define columns in order
     const columns = [
         'id',
+        'symbol',
         'type',
         'qty',
         'entryPrice',
