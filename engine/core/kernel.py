@@ -205,9 +205,30 @@ class ExecutionKernel:
                 )
 
     async def check_exits(
-        self, strategy, symbol: str, candle: np.ndarray, is_live: bool, index_t: int, time_t: datetime
+        self, strategy, symbol: str, candle: np.ndarray, is_live: bool, index_t: int, time_t: datetime,
+        armed_legs: dict | None = None,
     ) -> None:
-        """Verify position on exchange and check SL/TP/liquidation triggers."""
+        """Verify position on exchange and check SL/TP/liquidation triggers.
+
+        armed_legs (Plan 21 A-13, live only): optional {"sl": bool, "tp": bool}
+        telling this method which legs currently have a confirmed-resting
+        exchange bracket order (`open_positions[symbol]["algo_ids"]`, kept
+        armed every candle by A-7's naked-position re-arm detector in
+        `_reconcile_exchange_state`, which runs immediately before this call).
+        A leg with armed_legs[leg]=True is skipped here — the exchange's own
+        MARK_PRICE-triggered conditional order will fire it, and the existing
+        reconcile loop picks up the resulting close within one candle, same
+        as it always has. This avoids the duplicate-execution semantics A-13
+        flagged (engine wick-check vs exchange conditional racing each other,
+        or booking `exit_reason="stop_loss"` for a fill that actually
+        happened on the exchange at a different price). A leg with
+        armed_legs[leg]=False (or missing/`None` altogether, e.g. backtest or
+        the leg not being tracked) falls back to this method's own wick-check
+        exactly as before — this is the "brackets missing" fallback A-7's
+        detector makes explicit. Backtest never passes this (no exchange
+        brackets exist there), so default `None` preserves byte-identical
+        behavior — no golden master impact.
+        """
         if not is_live and not self.entry_candle_exits and getattr(strategy, "_entered_this_candle", False):
             return
 
@@ -240,11 +261,20 @@ class ExecutionKernel:
             exit_reason = "liquidation"
             closed = True
 
+        # A-13: a leg the caller confirms has a live, resting exchange bracket
+        # order is skipped here — the exchange's own MARK_PRICE conditional
+        # will fire it, and reconcile picks up the resulting close within one
+        # candle. `armed_legs` is only ever passed from the live call site
+        # (see this method's docstring); backtest's `armed_legs=None` makes
+        # both flags False, so this changes nothing there.
+        _sl_armed = bool(armed_legs and armed_legs.get("sl"))
+        _tp_armed = bool(armed_legs and armed_legs.get("tp"))
+
         if not closed:
             if strategy.is_long:
                 sl = strategy.stop_loss
                 tp = strategy.take_profit
-                if sl is not None:
+                if sl is not None and not _sl_armed:
                     _, sl_price = sl
                     if low_t <= sl_price:
                         exit_reason = "stop_loss"
@@ -260,7 +290,7 @@ class ExecutionKernel:
                             exit_price = gap_price if gap_price is not None else sl_price
                         else:
                             exit_price = sl_price
-                if not closed and tp is not None:
+                if not closed and tp is not None and not _tp_armed:
                     _, tp_price = tp
                     if high_t >= tp_price:
                         exit_price = tp_price
@@ -269,7 +299,7 @@ class ExecutionKernel:
             elif strategy.is_short:
                 sl = strategy.stop_loss
                 tp = strategy.take_profit
-                if sl is not None:
+                if sl is not None and not _sl_armed:
                     _, sl_price = sl
                     if high_t >= sl_price:
                         exit_reason = "stop_loss"
@@ -285,7 +315,7 @@ class ExecutionKernel:
                             exit_price = gap_price if gap_price is not None else sl_price
                         else:
                             exit_price = sl_price
-                if not closed and tp is not None:
+                if not closed and tp is not None and not _tp_armed:
                     _, tp_price = tp
                     if low_t <= tp_price:
                         exit_price = tp_price

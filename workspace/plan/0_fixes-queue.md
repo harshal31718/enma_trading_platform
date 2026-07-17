@@ -113,7 +113,7 @@ honest. Full detail in each plan file; sequencing in [`0_roadmap.md`](0_roadmap.
 | Informative / multi-timeframe `self.htf()` | 13 | Genuinely new *feature* work, not a "fix." Own focused pass, then 17. |
 | Recursive-formula / warmup-insufficiency analysis | 17 | New analysis tool; **sequence after 13** so it also sweeps multi-TF indicators. |
 | Session Risk Governor (all of Plan 22) | 22 | Multi-step new subsystem; **depends on 21.1–21.4 landing first** (a governor over a wrong-state fill path enforces limits against fiction). |
-| Plan 21 remaining fixes (21.3–21.5, 21.7) | 21 | Sequenced behind 21.1/21.2 in the plan file; medium-sized, not squeeze-ins. |
+| Plan 21 remaining fixes (21.5c only — 21.3/21.4/21.7 all shipped 2026-07-17) | 21 | 21.5c (batched reconcile) needs a session-level concurrency restructure of `_run_symbol_loop`, deliberately deferred, not a squeeze-in. |
 
 **Rule of thumb:** if an item needs a golden-master sign-off, a Plan-5-complete precondition, or more
 than a session, it belongs to a phase in `0_roadmap.md`, not to this queue.

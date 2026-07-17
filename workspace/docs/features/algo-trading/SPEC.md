@@ -33,7 +33,9 @@ If free: creates LiveSession doc (status='starting')
 Engine starts session in background task:
   1. Dynamic import of strategy class
   2. Load historical candles for indicator warmup
-  3. Subscribe to Binance Kline WS: {symbol}@kline_{timeframe} (per symbol)
+  3. Subscribe to Binance mainnet public Kline WS: {symbol}@kline_{timeframe} (per symbol —
+     Plan 21 A-12, shipped 2026-07-17: signal/indicator candles are mainnet-sourced, matching
+     warmup/HTF; order execution below still goes to Testnet)
   4. Set strategy.fee_rate from session_config (not hardcoded)
         ↓
 On each candle close event (per symbol):
@@ -187,6 +189,21 @@ Socket.IO emits algo:session:stopped → client sets status to 'stopped'
   `warning` + a session `log` notification at/above it (A-14). Both are logging-only: neither
   changes a returned quantity, rejects an entry, or alters backtest output. Tests:
   `engine/tests/test_clamp_qty_risk_inflation_log.py`, `engine/tests/test_execute_entry_slippage_log.py`.
+- **Engine wick-check defers to a confirmed-armed exchange bracket (Plan 21.7, A-13, shipped
+  2026-07-17)**: `ExecutionKernel.check_exits` (`engine/core/kernel.py`) previously always ran its
+  own candle high/low wick-check for SL/TP on every live symbol, racing the exchange's own
+  MARK_PRICE-triggered conditional order — mostly benign (reconcile wins the race, a lost race just
+  produces a safely-handled failed reduceOnly close) but produced duplicate-execution semantics and
+  could book `exit_reason="stop_loss"` for a fill that actually happened on the exchange at a
+  different price. `check_exits` gained an optional `armed_legs: dict | None = None` param
+  (`{"sl": bool, "tp": bool}`); a `True` leg skips the local wick-check for that leg entirely
+  (exchange + reconcile handle it, same as always); a `False`/missing leg falls back to the local
+  wick-check exactly as before — the A-7 naked-position fallback made explicit. The live per-candle
+  loop (`live_bot_manager.py`) builds this straight from `open_positions[symbol]["algo_ids"]`,
+  read right after `_reconcile_exchange_state` (which is where A-7 re-arms a missing SL). Backtest
+  never passes this param, so its default `None` keeps every backtest call byte-identical — no
+  golden master impact. Tests: `engine/tests/test_armed_legs_wick_check_skip.py` (7 cases,
+  **actually run with real pytest** — `core/kernel.py` has no TA-Lib/numpy/motor dependency chain).
 - **OUO Partial-Fill Peer-Cancel (F-019)**: SL/TP algo order IDs are tracked in
   `session["open_positions"][symbol]["algo_ids"]`. Two safety nets: (1) the user-data-stream `_on_fill`
   callback cancels the peer leg (`DELETE /fapi/v1/algoOrder`) immediately when a tracked `tpsl_*`

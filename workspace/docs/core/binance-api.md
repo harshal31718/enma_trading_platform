@@ -20,7 +20,15 @@ Note that while the main front-end demo trading interface is unified at demo.bin
   `wss://fstream.binance.com/public/ws` for depth streams and
   `wss://fstream.binance.com/market/ws` for everything else — no code connects to the bare `/ws` path.
 - **User Data Stream** (private account/order updates, not public market data):
-  `wss://fstream.binancefuture.com/ws` — see §7 below for the `listenKey` lifecycle.
+  `wss://fstream.binancefuture.com/ws` — see §7 below for the `listenKey` lifecycle. Stays
+  testnet-pinned since it reports fills/positions for the account that actually trades there.
+- **Engine's live candle feed for signals** (Plan 21 A-12, `DECISIONS.md` #24, shipped
+  2026-07-17): `engine/core/live_bot_manager.py`'s per-symbol kline stream connects to
+  `wss://fstream.binance.com/market/ws/{symbol}@kline_{interval}` (mainnet, public, no auth) —
+  it previously used testnet's own kline feed, which broke the §2 guardrail below and could
+  splice discontinuously against the (already-mainnet) warmup/HTF candles on illiquid testnet
+  symbols. Order **execution** (entries, SL/TP placement) is unaffected — every signed call stays
+  `mode="testnet"`.
 
 ---
 

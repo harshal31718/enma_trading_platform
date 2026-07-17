@@ -1,6 +1,6 @@
 # 21 — Live Algo-Trading Industry-Standard Audit (signals → orders → SL/TP → monitoring)
 
-**Status:** In progress (21.1–21.4 shipped 2026-07-17, code-side pending container test run + live re-verification; 21.5 partially shipped 2026-07-17 — (a)+(b) done, (c) batched reconcile deferred; 21.7 A-11+A-14 shipped, A-12+A-13 decided 2026-07-17 — `DECISIONS.md` #24/#25 — implementation pending) · **Created:** 2026-07-16
+**Status:** In progress (21.1–21.4 shipped 2026-07-17, code-side pending container test run + live re-verification; 21.5 partially shipped 2026-07-17 — (a)+(b) done, (c) batched reconcile deferred; **21.7 fully shipped 2026-07-17** — A-11/A-12/A-13/A-14 all code-complete, pending container test run + live re-verification) · **Created:** 2026-07-16
 **Scope:** the full autonomous live-trading path — signal generation (five-model pipeline),
 order placement, SL/TP bracket placement, fill detection, reconciliation, monitoring, and
 session stop — audited against industry-standard failproof expectations (freqtrade /
@@ -356,7 +356,7 @@ inflated in either case). Tests: `engine/tests/test_clamp_qty_risk_inflation_log
 **actually executed with real pytest this session** (not just `ast.parse`), since
 `utils/symbols.py` has no TA-Lib/numpy dependency chain; all 5 passed.
 
-### A-12 · Indicator series splices mainnet history onto testnet live candles · [Likely] · **Low (document at minimum)** — **decided 2026-07-17, not yet implemented**
+### A-12 · Indicator series splices mainnet history onto testnet live candles · [Likely] · **Low (document at minimum)** — **fixed 2026-07-17**
 
 Warmup candles come from mainnet data (TimescaleDB via the importer, REST fallback
 `fapi.binance.com`), HTF updates also mainnet; live candles come from the **testnet** kline WS
@@ -368,10 +368,29 @@ testnet. Becomes a real decision the day mainnet trading is considered.
 
 **Decided:** source live klines from mainnet's public WS (the larger-effort option) — see
 `DECISIONS.md` #24. Order execution stays on testnet; only the signal/indicator price feed moves.
-**Not yet implemented** — next step is the actual code change (client's `binanceWS.js` pattern is
-the reference implementation to port into the engine's live candle feed).
 
-### A-13 · Engine-side wick-check exits duplicate the exchange conditionals · [Certain] · **Low** — **decided 2026-07-17, not yet implemented**
+**Shipped:** new `_kline_ws_url(symbol, timeframe)` helper + `_MAINNET_WS_BASE` constant
+(`engine/core/live_bot_manager.py`) build `wss://fstream.binance.com/market/ws/{symbol}@kline_
+{interval}` — mirrors `client/src/lib/binanceWS.js`'s own routing (kline streams go to
+`/market/ws/`, only `@depth*` streams use `/public/ws/`). `_run_symbol_loop`'s WS connect now
+calls this instead of building a `fstream.binancefuture.com` URL — no other change to that loop
+(parsing, reconnect backoff+jitter, warmup-completion logic all untouched, since both hosts speak
+the identical kline WS schema). Warmup (TimescaleDB/REST) and HTF candles
+(`_fetch_htf_candles`) were already mainnet-sourced, so the whole live signal path is now
+consistently mainnet end-to-end — the splice point A-12 flagged no longer exists. Order execution
+is untouched: every signed Binance call in this file still passes `mode="testnet"`; the
+account-scoped User Data Stream (fills/positions) also stays testnet-pinned, since that's the
+account actually trading. Public market data needs no auth, so this required no credential
+changes. Tests: `engine/tests/test_kline_ws_url.py` (5 cases — mainnet path is `/market/ws/` not
+`/public/ws/`, correct stream-name construction, symbol lowercased regardless of input case,
+regression guard that the old testnet host string never appears, arbitrary Binance intervals
+pass through) — **actually run with real pytest against the genuine function**, not a
+reimplementation: the test stubs the three third-party modules (`websockets`, `motor`, `asyncpg`)
+that don't install in this dev sandbox just enough to satisfy `live_bot_manager.py`'s import-time
+requirements, then imports and calls the real `_kline_ws_url`; inside the actual container (where
+these are genuinely installed) the stubs never engage.
+
+### A-13 · Engine-side wick-check exits duplicate the exchange conditionals · [Certain] · **Low** — **fixed 2026-07-17**
 
 `kernel.check_exits` (live) market-closes on a candle high/low touch of SL/TP using last-price
 wicks, while the exchange conditional triggers on MARK_PRICE. The overlap is mostly benign
@@ -383,7 +402,24 @@ fallback when brackets are missing — which A-7's detector makes explicit).
 
 **Decided:** skip the engine-side wick-check while exchange brackets are confirmed armed, falling
 back to it automatically when A-7's naked-position detector finds brackets missing — see
-`DECISIONS.md` #25. **Not yet implemented.**
+`DECISIONS.md` #25.
+
+**Shipped:** `ExecutionKernel.check_exits` (`engine/core/kernel.py`) gained an optional
+`armed_legs: dict | None = None` parameter — `{"sl": bool, "tp": bool}`. A leg with
+`armed_legs[leg]=True` skips its wick-check entirely (the exchange's own MARK_PRICE conditional
+fires it; reconcile picks up the resulting close within one candle, unchanged from today). A leg
+that's `False`/missing/the whole dict `None` falls back to the existing wick-check exactly as
+before — `None` is the default, so every backtest call site (which never passes this) is
+byte-identical, zero golden-master impact. The live call site
+(`live_bot_manager.py`'s per-candle loop, right after `_reconcile_exchange_state` — which is where
+A-7 re-arms a missing SL before this point) builds `armed_legs` straight from
+`open_positions[symbol]["algo_ids"]` (`{"sl": bool(id), "tp": bool(id)}`) and passes it in. Tests:
+`engine/tests/test_armed_legs_wick_check_skip.py` (7 cases — default-None preserves prior
+behavior, SL-armed defers to TP, both-armed skips entirely, SL-missing falls back, short-side
+symmetry, backtest-path unaffected even if mistakenly passed, missing dict key defaults to
+not-armed) — **actually run with real pytest**, `core/kernel.py` has no TA-Lib/numpy/motor
+dependency chain. Zero regression: the 8 pre-existing `check_exits` tests
+(`test_entry_candle_exits.py`, `test_exec_algo_slicing.py`) all still pass unchanged.
 
 ### A-14 · No slippage guard on market entries · [Certain] · **Info / improvement** — **fixed 2026-07-17 (Plan 21.7)**
 
@@ -536,7 +572,7 @@ and testable; per-step engine tests against a stubbed Binance layer follow the
 | 21.4 | A-6 + A-7 + **M-4 + M-5** (emergency-exit truth; naked-position detector/re-arm; exchange-SL amend-on-tighten; reject entry on invalid bracket + clear local state on drop) | M | **P1** | **Shipped 2026-07-17** — F-018 emergency-exit path rewritten with a 3-attempt retry ladder + real-fill booking (A-6); `_reconcile_exchange_state` Case 3 naked-position detector/re-arm with bounded force-close (A-7); new `_maybe_amend_exchange_sl()` cancel+replace on tighten, wired into `_run_symbol_loop` (M-4); `execute_entry`'s SL/TP validity check now rejects invalid-SL entries outright, still drop-and-continue for invalid TP (M-5). Tests: `engine/tests/test_reconcile_naked_position_rearm.py`, `engine/tests/test_maybe_amend_exchange_sl.py`, `engine/tests/test_execute_entry_bracket_safety.py`. Container test run + live re-verification still pending. |
 | 21.5 | A-9 (weight tracking, 429/418 handling, batched reconcile) + **A-15** (reconcile Case 2 false-close-on-query-failure, found while shipping A-9) | M | **P2** | **Partially shipped 2026-07-17** — (a) weight tracking + (b) 429/418/Retry-After backpressure done in `binance_testnet.py`, plus A-15's fix in `_reconcile_exchange_state`. (c) batched `positionRisk`/`openAlgoOrders` per candle wave — the big weight win for Chaos runs — deferred as a larger concurrency refactor, remains open. Tests: `engine/tests/test_binance_backpressure.py` (18 cases, actually run with real pytest this session, not just `ast.parse`). |
 | 21.6 | A-10 (automatic session-drawdown kill-switch) | S–M | **Merged→22.1** | Absorbed by Plan 22's Session Risk Governor (`22_risk-management-industry-standard.md`) — same scope, better home. Do not implement twice. |
-| 21.7 | A-11/A-12/A-13/A-14 (risk-inflation logging, data-provenance decision, wick-check dedup, slippage guard) | S each | P2 | **A-11 + A-14 shipped 2026-07-17.** **A-12 + A-13 decided 2026-07-17** (`DECISIONS.md` #24/#25) — mainnet-WS live klines for signals, skip engine wick-check while brackets armed — implementation still pending. |
+| 21.7 | A-11/A-12/A-13/A-14 (risk-inflation logging, data-provenance decision, wick-check dedup, slippage guard) | S each | P2 | **All four shipped 2026-07-17.** A-11/A-14 logging-only; A-12 (`DECISIONS.md` #24 — mainnet-WS live klines for signals) and A-13 (`DECISIONS.md` #25 — skip engine wick-check while brackets armed) code-complete, pending container test run + live re-verification like the rest of Plan 21. |
 
 **Sequencing vs existing plans:** 21.1/21.2 fold naturally into the F7 follow-up (`0_fixes-queue.md`
 priority item) — they should be treated as *the* next live-trading session's work, ahead of F8.

@@ -58,6 +58,26 @@ _TF_TO_BINANCE = {
     "monthly": "1M",
 }
 
+# Plan 21 A-12 (DECISIONS.md #24): live indicator/signal candles are sourced
+# from Binance mainnet's public kline WebSocket, not testnet's own feed —
+# warmup candles (TimescaleDB/REST) and HTF candles (_fetch_htf_candles) were
+# already mainnet-sourced, so testnet's live ticks were the one remaining
+# splice point where the price series could step discontinuously on an
+# illiquid testnet symbol. Order EXECUTION is untouched — every signed
+# Binance call in this file still passes mode="testnet"; only the read-only
+# kline stream this constant builds URLs from moves. No auth needed (public
+# market data), same as the client's own `binanceWS.js` connection.
+# Mirrors that file's routing: kline streams go to /market/ws/ (only @depth*
+# streams use /public/ws/, not relevant here).
+_MAINNET_WS_BASE = "wss://fstream.binance.com/market/ws"
+
+
+def _kline_ws_url(symbol: str, timeframe: str) -> str:
+    """Mainnet public kline stream URL for the live signal/indicator feed
+    (A-12). `symbol` is the trading pair (any case), `timeframe` a Binance
+    interval string (e.g. "1h") — same stream-name format testnet used."""
+    return f"{_MAINNET_WS_BASE}/{symbol.lower()}@kline_{timeframe}"
+
 # Server URL for callbacks
 SERVER_URL = os.getenv("SERVER_URL", "http://server:5000")
 
@@ -1806,9 +1826,11 @@ class LiveBotManager:
             _account_cb_registered = True
 
         stop_event = self._stop_signals.get(session_id)
-        # btcusdt@kline_1h  — Binance stream name format
-        ws_symbol = symbol.lower()
-        ws_url = f"wss://fstream.binancefuture.com/ws/{ws_symbol}@kline_{timeframe}"
+        # A-12: mainnet public kline stream feeds the signal/indicator path;
+        # order execution (entries, SL/TP, position management) stays on
+        # testnet via the existing signed REST calls elsewhere in this file —
+        # see `_kline_ws_url`'s docstring and DECISIONS.md #24.
+        ws_url = _kline_ws_url(symbol, timeframe)
         # Capped exponential backoff + full jitter (mirrors UserDataStreamManager
         # ._run_ws in services/user_data_stream.py). A Chaos session can hold ~80
         # symbols, each running this same loop — a flat retry delay would have
@@ -1938,6 +1960,19 @@ class LiveBotManager:
                                     kernel = ExecutionKernel(adapter, exec_algo)
                                     time_t = datetime.fromtimestamp(candle[0] / 1000, tz=timezone.utc)
 
+                                    # Plan 21 A-13: tell check_exits which legs
+                                    # already have a confirmed-resting exchange
+                                    # bracket order (algo_ids, just refreshed by
+                                    # the reconcile call above — A-7 re-arms a
+                                    # missing SL there before this point) so it
+                                    # skips its own wick-check for that leg
+                                    # instead of racing the exchange conditional.
+                                    _armed_algo_ids = (session.get("open_positions", {}).get(symbol) or {}).get("algo_ids") or {}
+                                    _armed_legs = {
+                                        "sl": bool(_armed_algo_ids.get("sl")),
+                                        "tp": bool(_armed_algo_ids.get("tp")),
+                                    }
+
                                     await kernel.check_exits(
                                         strategy=strategy,
                                         symbol=symbol,
@@ -1945,6 +1980,7 @@ class LiveBotManager:
                                         is_live=True,
                                         index_t=strategy.index,
                                         time_t=time_t,
+                                        armed_legs=_armed_legs,
                                     )
 
                                     await kernel.evaluate_and_route(
