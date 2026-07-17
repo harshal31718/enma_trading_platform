@@ -133,6 +133,24 @@ signals from the same data, verified mechanically, not by assertion.
 - Block bootstrap, 5–10k runs, percentile bands, configurable ruin threshold, exclude
   scale-out legs; leg-vs-round-trip separation in trade statistics; fail-loud metric registry;
   no `"inf"` strings in persisted metrics.
+- **Fail-loud metric registry — Shipped 2026-07-17.** `StatisticRegistry.compute_all()`
+  (`engine/services/metrics.py`) previously swallowed EVERY exception from ANY registered
+  `Statistic.compute()` into a silent `"0.00"` fallback — a genuinely broken metric (a coding bug,
+  an unexpected data shape) was indistinguishable from a legitimately-zero one. Now logs
+  `logger.error(..., exc_info=True)` on the failing stat's name + exception before falling back —
+  the fallback VALUE is unchanged (never poison the result doc; a broken stat still shouldn't fail
+  the whole backtest), only the failure is now diagnosable. Golden master confirmed byte-identical
+  (none of the 5 seeded strategies' stats currently throw — this is purely an observability
+  addition on a path the default baseline never exercises). New tests in
+  `engine/tests/test_metrics_fixes.py` (+3): fallback value unchanged on a simulated broken stat,
+  the failure is logged with the stat name + message, a healthy stat produces zero log noise.
+  Container suite: 377/377 passed (up from 374).
+- **Still open**: `"inf"`-string persistence (audited — currently dormant, zero client-side
+  `parseFloat`/`Number()` consumption of `profitFactor`/`expectancyRatio`/`payoffRatio` found;
+  real but not yet an active bug), leg-vs-round-trip separation (QNT-14, a larger structural
+  change — scale-out legs are currently counted as independent trades in every downstream
+  statistic including `totalTrades`/`winRate`/SQN's √N term), and the block-bootstrap Monte Carlo
+  work (absorbed by Plan 10 Phase 1).
 
 ### 9.10 — Fill-model ladder (QNT-11) + small hardening (QNT-4/15/16)
 - Spread half-cost → volatility-scaled slippage → √-impact (cached 24h volume as ADV);

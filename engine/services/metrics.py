@@ -23,10 +23,13 @@ Design notes
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable, Sequence
 import math
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 # ── Context object passed to every statistic ──────────────────────────────────
@@ -524,11 +527,18 @@ class StatisticRegistry:
         return [s.name for s in self._stats]
 
     def compute_all(self, ctx: MetricContext) -> dict[str, Any]:
+        """QNT-13: a stat that raises must be diagnosable, not silently
+        indistinguishable from a legitimately-zero metric. The fallback
+        value is unchanged (never poison the result doc — a broken stat
+        shouldn't fail the whole backtest) but the failure is now logged
+        loudly with the exception, same "log-only, zero output change on
+        the happy path" pattern as Plan 24 S-3 / Plan 21.7 A-11/A-14."""
         out: dict[str, Any] = {}
         for stat in self._stats:
             try:
                 out[stat.name] = stat.compute(ctx)
-            except Exception:  # never poison the result doc
+            except Exception as e:
+                logger.error(f"[metrics] stat '{stat.name}' failed to compute — {e}", exc_info=True)
                 out[stat.name] = "0.00" if isinstance(stat.name, str) else 0
         return out
 

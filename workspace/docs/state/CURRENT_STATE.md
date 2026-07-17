@@ -3,7 +3,17 @@
 **Authority:** This is the single source of truth for what ENMA currently does.
 Read this before starting any work. If this conflicts with chat history, this document wins.
 
-Last updated: 2026-07-17 (Plan 17 — recursive-formula / warmup-insufficiency analysis tool
+Last updated: 2026-07-17 (Plan 9 Step 9.11-B decided: PCM edge-vs-cost gate stays opt-in/off by
+default — user's explicit call, no code change, zero re-baseline risk. Plan 9 Step 9.9's
+fail-loud metric registry shipped same day: `StatisticRegistry.compute_all()`
+(`engine/services/metrics.py`) now logs any stat computation failure with the stat name +
+exception instead of silently returning `"0.00"` indistinguishable from a legitimately-zero
+metric — fallback value unchanged, golden master byte-identical (no seeded strategy's stats
+currently throw). Container suite 377/377 passed (up from 374). 9.9's other three sub-items
+(`"inf"`-string persistence — audited, currently dormant, zero client consumption found; QNT-14
+leg-vs-round-trip trade-statistics separation; block-bootstrap Monte Carlo, absorbed by Plan 10)
+remain open.
+Earlier: 2026-07-17 Plan 17 — recursive-formula / warmup-insufficiency analysis tool
 shipped: `engine/scripts/recursive.py` sweeps each seeded strategy's `prepare()`-computed
 indicators across warmup sizes [200, 400, 500, 1000, 2000] and reports pct-drift vs. a full-history
 baseline at a fixed anchor candle — the operationally important question is whether live's rolling

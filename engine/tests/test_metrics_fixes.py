@@ -13,6 +13,8 @@ from services.metrics import (
     SortinoStat,
     ProfitFactorStat,
     PayoffRatioStat,
+    Statistic,
+    StatisticRegistry,
 )
 
 _YEAR_MS = 365.25 * 24 * 3600 * 1000.0
@@ -89,3 +91,52 @@ def test_profit_factor_finite_with_losses():
 def test_profit_factor_zero_when_no_trades():
     ctx = _ctx([1000.0, 1000.0], trades=[])
     assert ProfitFactorStat().compute(ctx) == "0.00"
+
+
+# ── QNT-13: StatisticRegistry.compute_all fails loud, not silent ─────────────
+
+class _BrokenStat(Statistic):
+    name = "brokenStat"
+    def compute(self, ctx):
+        raise ValueError("simulated stat bug")
+
+
+class _IntNameBrokenStat(Statistic):
+    name = "brokenIntStat"
+    def compute(self, ctx):
+        raise RuntimeError("simulated int-metric bug")
+
+
+def test_compute_all_still_falls_back_to_zero_on_exception():
+    """Fallback VALUE is unchanged — a broken stat must never poison the
+    result doc or crash the whole backtest."""
+    r = StatisticRegistry()
+    r.register(_BrokenStat())
+    r.register(ProfitFactorStat())
+    ctx = _ctx([1000.0, 1050.0], trades=_trades([100.0, -50.0]))
+    out = r.compute_all(ctx)
+    assert out["brokenStat"] == "0.00"
+    assert out["profitFactor"] == "2.00"  # the healthy stat is unaffected
+
+
+def test_compute_all_logs_the_failure(caplog):
+    """QNT-13: a broken metric must now be diagnosable via logs, not
+    silently indistinguishable from a legitimately-zero one."""
+    import logging
+    r = StatisticRegistry()
+    r.register(_BrokenStat())
+    ctx = _ctx([1000.0, 1000.0], trades=[])
+    with caplog.at_level(logging.ERROR, logger="services.metrics"):
+        r.compute_all(ctx)
+    assert any("brokenStat" in rec.message and "simulated stat bug" in rec.message for rec in caplog.records)
+
+
+def test_compute_all_no_log_on_success(caplog):
+    import logging
+    r = StatisticRegistry()
+    r.register(ProfitFactorStat())
+    ctx = _ctx([1000.0, 1050.0], trades=_trades([100.0, -50.0]))
+    with caplog.at_level(logging.ERROR, logger="services.metrics"):
+        out = r.compute_all(ctx)
+    assert out["profitFactor"] == "2.00"
+    assert len(caplog.records) == 0

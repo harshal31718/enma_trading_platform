@@ -7,6 +7,60 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
+## 2026-07-17 — Plan 9.11 Step B decided (stays opt-in) + Plan 9.9 fail-loud metric registry shipped (QNT-13, one of four sub-items)
+
+**Goal:** user said "proceed with next logical step." Step B (activate the now-fixed cost gate by
+default vs. leave opt-in) was explicitly called out in the prior turn as needing the user's own
+sign-off — asked via AskUserQuestion rather than deciding unilaterally. User chose "leave opt-in."
+With that resolved (no code, no re-baseline), picked the next decision-free, well-scoped item:
+QNT-13's fail-loud metric registry finding, one of 9.9's four sub-items, matching this session's
+established pattern (small `[Certain]` audit finding, golden-master-inert fix, not a new feature).
+
+**Done — 9.11 Step B:** no code change. `min_edge_mult` stays `0.0` everywhere (already shipped
+this way by Step A) — the gate exists and is correct but is inert unless a strategy or
+`risk_params.governor.min_edge_mult` explicitly opts in.
+
+**Done — 9.9 fail-loud metric registry (QNT-13):** `StatisticRegistry.compute_all()`
+(`engine/services/metrics.py`) previously swallowed EVERY exception from ANY registered
+`Statistic.compute()` into a silent `"0.00"` fallback (`except Exception: ... # never poison the
+result doc`) — a genuinely broken metric was indistinguishable from a legitimately-zero one. Now
+logs `logger.error(f"[metrics] stat '{stat.name}' failed to compute — {e}", exc_info=True)` before
+falling back — the fallback VALUE is unchanged (a broken stat still shouldn't fail the whole
+backtest), only the failure is now diagnosable. Same "log-only, zero happy-path output change"
+pattern as Plan 24 S-3 / Plan 21.7 A-11/A-14.
+
+**Verification:** new tests in `engine/tests/test_metrics_fixes.py` (+3, using a `_BrokenStat`
+subclass that raises): fallback value unchanged and a healthy sibling stat unaffected, the failure
+is logged with the stat name + exception message, a fully-healthy registry produces zero log
+noise. **Golden master run before/after per root CLAUDE.md Rule C**: `compare --a pre_qnt13 --b
+post_qnt13` → `GOLDEN-MASTER OK` (5/5 seeded strategies, tol 1e-6) — confirms byte-identical (none
+of the 5 seeded strategies' stats currently throw, so this is purely an observability addition on
+a path the default baseline never exercises). Container suite: **377/377 passed** (up from
+374/374 at session start).
+
+**Files changed:** `engine/services/metrics.py` (`StatisticRegistry.compute_all`, new module
+logger); `engine/tests/test_metrics_fixes.py` (+3 cases); docs:
+`9_backtest-and-optimizer-correctness.md`, `0_tracker.md`,
+`workspace/docs/state/CURRENT_STATE.md`, `handoff.md`. Not yet committed as of this entry — see
+next session note.
+
+**NOT done — audited but deliberately out of scope:** the other three 9.9 sub-items —
+`"inf"`-string persistence (`ProfitFactorStat`/`ExpectancyRatioStat`/`PayoffRatioStat` return the
+literal string `"inf"`; audited client-side and found ZERO current `parseFloat`/`Number()`
+consumption of these fields anywhere in `client/src` — real per the audit but currently dormant,
+not an active bug to fix speculatively), QNT-14 (leg-vs-round-trip trade-statistics separation —
+a materially larger structural change: scale-out legs are counted as independent trades in
+`totalTrades`/`winRate`/SQN's √N term/Monte Carlo's resample pool today), and the block-bootstrap
+Monte Carlo rework (already absorbed by Plan 10 Phase 1, not this plan's scope). Plan 9's other
+steps — 9.7 (funding ledger), 9.8 (intrabar sim), 9.10 (fill-model ladder) — are all larger,
+new-mechanism work, not scoped this session.
+
+**Next session:** commit this work (not yet committed as of this entry). Then either (a) scope one
+of 9.7/9.8/9.10 as a real design task (each needs its own golden-master re-baseline once a default
+changes, per this plan's standing protocol — larger than this session's three items), or (b)
+revisit QNT-14/inf-strings if a concrete downstream consumer appears. Plan 22/24's live Testnet
+re-verification remain the standing genuinely-blocked items across the whole plan set.
+
 ## 2026-07-17 — Plan 17 shipped: recursive-formula / warmup-insufficiency analysis (`engine/scripts/recursive.py`) — **no live-vs-backtest drift risk found at w=500 for any seeded strategy**
 
 **Goal:** user said "ok proceed with it" after Plan 13 shipped — Plan 13's own tracker note named
@@ -111,60 +165,3 @@ warmup-insufficiency analysis explicitly sequences after 13 "so it also sweeps m
 indicators"), or (b) survey `0_tracker.md` fresh — Plan 9.11 Step B (cost-gate activation decision)
 and Plan 9's other steps (9.7–9.10) remain open, all requiring a golden-master re-baseline +
 sign-off rather than being decision-free.
-
-## 2026-07-17 — Plan 9.11 Step A shipped: PCM edge-vs-cost gate rewired to the object it actually reads, formula fixed to quote-vs-quote, `Signal.magnitude` wired in — **golden-master-inert, no live-verification gap** ✅
-
-**Goal:** with Plan 24 fully shipped and only live Testnet re-verification left pending (same
-genuinely-blocked status as Plan 22), surveyed `0_tracker.md`'s Active work table fresh for the
-next unblocked, decision-free item per the prior handoff's own suggestion. Compared Plan 13
-(multi-timeframe `htf()` contract — a new contract spanning 3 files, real design surface) against
-Plan 9.11 Step A (cost-gate resurrection — three `[Certain]` audit findings, explicitly scoped by
-the plan's own text as "Step A: golden-master-inert", no decisions needed). Chose 9.11 Step A —
-same shape as what made Plan 24 tractable in one session.
-
-**Done:** `engine/core/models/portfolio.py`'s `DefaultPortfolioModel._edge_beats_cost()` — the
-PCM edge-vs-cost veto that Plan 21's five-model audit found was dead on arrival:
-- **M-1 (wired to the wrong object):** `backtest_runner.py`/`live_bot_manager.py` both injected
-  `min_edge_mult` onto `strategy.cost_model`, but the gate reads `self.min_edge_mult` where `self`
-  is the **portfolio model** instance. Both injection sites now write
-  `strategy.portfolio_model.min_edge_mult` instead.
-- **M-2 (dimensionally inconsistent):** the old formula compared a bare per-unit price distance
-  (`conviction × risk_per_unit × rrr`) against a whole-position quote-currency cost, making the
-  veto boundary a function of the symbol's absolute price level (always-pass on BTC, always-veto
-  on sub-cent symbols). Fixed to quote-vs-quote: `edge_total = edge_frac × risk_per_unit ×
-  qty_est × rrr`, using the same `qty_est = min(budget/risk_per_unit, max_notional/price)` the
-  Cost Model already computes internally for `cost.total`.
-- **M-3 (dead field):** `Signal.magnitude` was documented as feeding this gate but read by
-  nothing. `edge_frac` now uses `sig.magnitude` when the alpha model provides one (nonzero),
-  falling back to `abs(sig.conviction)` otherwise.
-- **Also fixed both injection sites' default** from `0.05` to `0.0` per the plan's own Step A
-  instruction — since the `0.05` never reached the gate under the M-1 bug, this is a no-op, not a
-  behavior change (confirmed by golden master below).
-
-**Verification:** new `engine/tests/test_edge_beats_cost_gate.py` (5 cases) — gate-off always
-passes regardless of cost; a scaled-edge boundary case flips on cost; **the veto boundary is
-price-level invariant** (identical relative risk/cost setup on a BTC-priced vs. a sub-cent symbol
-produces the identical verdict — the concrete regression test for M-2's fix); magnitude overrides
-conviction when provided; the alpha-level veto still short-circuits regardless of `min_edge_mult`.
-**Golden master run before/after per root CLAUDE.md Rule C** (extracted pre-change file contents
-from `git show HEAD:...` since the container has `volumes: []` and the working files were already
-edited — `docker cp`'d the pre-change versions in, captured `pre_9_11_stepA`, `docker cp`'d the
-fixed versions back in, captured `post_9_11_stepA`): `compare --a pre_9_11_stepA --b
-post_9_11_stepA` → `GOLDEN-MASTER OK` (5/5 seeded strategies, tol 1e-6). Container suite:
-**358/358 passed** (up from 353/353 at session start).
-
-**Files changed:** `engine/core/models/portfolio.py` (`_edge_beats_cost`),
-`engine/services/backtest_runner.py` (injection site), `engine/core/live_bot_manager.py`
-(injection site); new `engine/tests/test_edge_beats_cost_gate.py`; docs:
-`9_backtest-and-optimizer-correctness.md`, `21_live-algo-industry-standard-audit.md` (M-1/M-2/M-3
-marked fixed), `0_tracker.md`, `handoff.md`. Committed (`8454072`).
-
-**NOT done:** Step B (deciding whether to activate the gate at `min_edge_mult=0.05` by default) is
-untouched — the plan's own text requires this be a separate, re-baselined product decision, not
-bundled with Step A. The gate exists and is correct now, but is still opt-in/inert by default.
-
-**Next session:** either (a) bring Step B to the user as an explicit product decision (activate at
-0.05 default-on vs. leave opt-in), or (b) continue surveying `0_tracker.md` — Plan 13
-(multi-timeframe `htf()` contract, P2, self-contained) remains a plausible next candidate, not yet
-investigated beyond the initial survey this session.
-
