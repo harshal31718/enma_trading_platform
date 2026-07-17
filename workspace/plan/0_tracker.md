@@ -16,7 +16,7 @@ this board no longer duplicates it).
 | 21 | Live algo industry-standard audit — **fixes** | 21.5c (batched reconcile) (21.1–21.4 + 21.5a/b + all of 21.7 [A-11/A-12/A-13/A-14] shipped, container-verified 2026-07-17 [301/301 pytest], pending live re-verification only; 21.6 → Merged→22.1) | In progress (21.1–21.4, 21.5a/b, 21.7 all shipped + container-verified 2026-07-17) | P2 (21.5c) | — | 2026-07-17 |
 | 5  | Live-trading state integrity | 5.5 (Decimal money, golden-master sign-off), 5.6 (restart recovery / projection) | In progress | P0 | 21.1–21.2 inform 5.6 | 2026-07-16 |
 | 22 | Industry-standard risk management (Session Risk Governor) | ALL SHIPPED (22.1–22.7, container/Jest-verified 2026-07-17 [330/330 pytest, 88/88 jest], 22.6 golden-master-verified, 22.7 live-verified in-browser) — pending live Testnet re-verification only | **Done** (pending live re-verification) | — | 21 (21.1–21.4, shipped) | 2026-07-17 |
-| 9  | Backtest & optimizer correctness (quant core) | 9.7 (funding ledger); 9.10's fill-model ladder shipped — liquidation fee needs a DECISIONS.md call, warmup fail-loud deferred to Plan 8 | Ready | P1 | — | 2026-07-17 |
+| 9  | Backtest & optimizer correctness (quant core) | ALL STEPS SHIPPED (9.1–9.11, container-verified 2026-07-17 [415/415 pytest], golden-master re-confirmed for every step) — 3 deliberately deferred sub-items remain: liquidation fee (needs a DECISIONS.md product call), warmup fail-loud (needs Plan 8 coordination), `"inf"`-string persistence (dormant, no active consumer) | **Done** | — | — | 2026-07-17 |
 | 10 | Monte Carlo Optimiser & Strategy Lab | Phases 1b–4 (job plumbing, `labResults`, UI, optimizer w/ walk-forward + Optuna) | Ready | P1 | 9 (9.1/9.3, shipped) | 2026-07-16 |
 | 13 | Informative / multi-timeframe contract (`self.htf()`) | Shipped — primitive only, no seeded strategy adopts it yet | **Done** | — | — | 2026-07-17 |
 | 17 | Recursive-formula / warmup-insufficiency analysis | Shipped — no live-vs-backtest drift risk found at w=500 for any seeded strategy | **Done** | — | — | 2026-07-17 |
@@ -232,6 +232,15 @@ pipeline-touching steps) a golden-master check per Rule C.
   confirmed byte-identical. `backtest_runner.py` fetches 1m candles only when opted in and the
   base timeframe isn't already 1m (zero fetch cost by default). No 1m-fetch size guardrail added
   — a long backtest opting in would fetch a very large candle set, left as a known limitation.
+  **9.7's historical funding ledger shipped 2026-07-17 — Plan 9 is now fully complete within its
+  own scope (9.1–9.11 all shipped).** New TimescaleDB `funding_rates` hypertable (added to
+  `docker/timescale/init.sql` AND applied live), `services/funding_importer.py` +
+  `funding_manager.py` (mirrors the candle-importer/manager idempotent-fetch pattern exactly),
+  wired via a new opt-in `historical_funding` param — `BacktestAdapter.charge_funding()` charges
+  each REAL Binance funding event's own signed rate + mark price instead of the flat-rate/
+  fixed-8h-boundary fallback. Manually verified end-to-end against real mainnet data (22 real
+  BTCUSDT funding events fetched, idempotent re-fetch confirmed). Default `None` reproduces the
+  exact pre-9.7 code path — golden master byte-identical.
 - **10** — MC core math is honest (Phase 1a shipped) but still behind the old synchronous
   endpoint; everything else (job queue, `labResults`, Strategy Lab UI, optimizer exposure)
   unstarted. Phase 3 absorbs plans 18/19 — build from their design notes, not their specs.

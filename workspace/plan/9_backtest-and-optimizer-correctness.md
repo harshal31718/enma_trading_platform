@@ -122,9 +122,54 @@ signals from the same data, verified mechanically, not by assertion.
   — their fold-split math and Optuna adapter design are folded into Plan 10 Phase 3 as
   implementation reference, not built as their originally-specified standalone endpoints.
 
-### 9.7 — Historical funding ledger (QNT-5)
+### 9.7 — Historical funding ledger (QNT-5) — **Shipped 2026-07-17**
 - Import `/fapi/v1/fundingRate` into TimescaleDB (idempotent, candle-importer pattern);
   charge boundary-priced signed funding in backtest; keep flat-rate as explicit fallback.
+- **Done.** Endpoint verified against official Binance docs first (root `CLAUDE.md` Rule A):
+  `GET /fapi/v1/fundingRate`, public/no signing, `symbol`/`startTime`/`endTime`/`limit` (max 1000),
+  ascending order, rows `{symbol, fundingRate, fundingTime, markPrice}` — documented in
+  `binance-api.md` §2. New TimescaleDB hypertable `funding_rates` (`time`, `exchange`, `symbol`,
+  `funding_rate`, `mark_price`; unique index on `(time, exchange, symbol)`) — added to
+  `docker/timescale/init.sql` for future fresh deployments AND applied directly to the live
+  running database (init.sql only runs on a fresh volume, confirmed via `\dt` before/after).
+  New `engine/services/funding_importer.py` (`import_funding_rates`, mirrors
+  `candle_importer.py`'s idempotent `ON CONFLICT DO NOTHING` upsert pattern, paginates via
+  Binance's own `fundingTime` cursor since — unlike klines — there's no fixed interval to derive
+  "next" from) and `engine/services/funding_manager.py` (`ensure_funding_available`, the single
+  entry point, mirrors `candle_manager.py`'s contract). **Manually verified end-to-end against
+  real Binance mainnet data**: fetched 22 real funding events for BTCUSDT 2024-01-01..08 (3/day,
+  matching the expected ~8h cadence), confirmed idempotent re-fetch (second call hits the
+  count-based cache, zero duplicate rows).
+- **Backtest wiring** (`services/backtest_runner.py`): new `historical_funding: bool = False`
+  param. When `True` and `exchange == "Binance Futures"`, fetches funding events for the same date
+  range into a numpy array per symbol, passed to `BacktestAdapter(historical_funding_events=...)`.
+  `charge_funding()` gained a new branch: when `historical_funding_events is not None`, walks
+  forward event-by-event (not boundary-by-boundary) charging each event's OWN signed
+  `funding_rate` against its OWN `mark_price` (falling back to the candle's `close_t` when
+  Binance omitted `markPrice`) — genuinely more realistic than the flat-rate fallback in three
+  ways: (1) real signed rates instead of one constant for the whole backtest, (2) Binance's own
+  irregular event timestamps instead of an assumed-fixed 00:00/08:00/16:00 UTC boundary schedule,
+  (3) each event's own mark price instead of the candle's last-trade close. Default `None`
+  (unchanged) reproduces the exact pre-9.7 flat-rate/fixed-boundary code path — same condition
+  structure, same walk logic, verified byte-identical.
+- **Verification:** golden master confirmed byte-identical (Rule C; the default golden-master
+  config also has `funding_enabled=False`, so this is doubly inert by default). New
+  `engine/tests/test_historical_funding.py` (8 cases): default path unaffected by the new
+  constructor param; funding-disabled short-circuits regardless of events; a real event charges
+  its own rate AND mark price (not the candle's close); missing `mark_price` falls back to
+  `close_t`; short positions receive when the rate is positive (sign convention matches the
+  flat-rate branch); multiple events in one window are each charged exactly once with the cursor
+  advancing correctly across two separate `charge_funding()` calls (no double-charge); no events
+  in the window charges nothing and leaves the cursor untouched; an empty (non-`None`) events
+  array is historical-mode-charging-nothing, distinct from `None`'s flat-rate fallback. Container
+  suite: 415/415 passed (up from 407). `binance-api.md` and `engine/CLAUDE.md` (services listing,
+  DB schema table, Binance-call-site allowlist) updated.
+- **Not implemented — deliberately deferred:** no server/API surface to actually SET
+  `historical_funding=True` from a backtest request (same "mechanism only, not the
+  user-facing feature" scoping as 9.4's `entry_candle_exits` and every other opt-in flag shipped
+  this session) — reachable only by calling `run_backtest_simulation` directly with the kwarg.
+  Making it user-facing (a UI toggle, wired through the same path as `funding_enabled`) is a
+  separate, smaller follow-up whenever someone wants to actually use this.
 
 ### 9.8 — Detail-timeframe intrabar simulation (ENG-18, QNT-3 residual) — **Shipped 2026-07-17**
 - Opt-in sub-candle loop (1m detail) inside `check_exits` for SL/TP ordering. Re-baseline.

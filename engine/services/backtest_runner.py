@@ -14,6 +14,7 @@ from core.models import BacktestExecution
 from core.pipeline import evaluate
 from core.params import param_coerce, param_validate
 from services.candle_manager import ensure_candles_available
+from services.funding_manager import ensure_funding_available
 from utils.timeframes import annual_factor, required_base_candles_for_htf, to_ms
 from decimal import ROUND_DOWN, ROUND_UP
 from utils.symbols import _MAX_LEVERAGE_OFFLINE_MAP, clamp_and_round_qty, round_price
@@ -196,13 +197,22 @@ except ImportError:
 
 
 class BacktestAdapter(ExecutionAdapter):
-    def __init__(self, execution_model, fee_rate: float, slippage_pct: float, funding_enabled: bool, funding_rate: float, symbol: str):
+    def __init__(
+        self, execution_model, fee_rate: float, slippage_pct: float, funding_enabled: bool, funding_rate: float,
+        symbol: str, historical_funding_events: np.ndarray | None = None,
+    ):
         self.execution = execution_model
         self.fee_rate = fee_rate
         self.slippage_pct = slippage_pct
         self.funding_enabled = funding_enabled
         self.funding_rate = funding_rate
         self.symbol = symbol
+        # QNT-5 (Plan 9 Step 9.7), opt-in, default None: real historical
+        # funding events [ts_ms, signed_rate, mark_price_or_nan] for this
+        # symbol, fetched via services/funding_manager.py. None (default)
+        # preserves the flat-rate/fixed-8h-boundary fallback exactly —
+        # charge_funding() only takes this branch when explicitly provided.
+        self.historical_funding_events = historical_funding_events
 
         self.trades = []
         self.active_trade = None
@@ -289,8 +299,35 @@ class BacktestAdapter(ExecutionAdapter):
             logger.error(f"on_reduced_position error: {e}")
 
     async def charge_funding(self, strategy, close_t: float, time_t: datetime) -> None:
-        if self.funding_enabled and self.funding_rate and self.last_funding_dt is not None:
-            side_sign = 1.0 if strategy.position.type == "long" else -1.0
+        if not (self.funding_enabled and self.last_funding_dt is not None):
+            return
+        side_sign = 1.0 if strategy.position.type == "long" else -1.0
+
+        if self.historical_funding_events is not None:
+            # QNT-5 (Plan 9 Step 9.7): real, signed, symbol-specific funding
+            # events (Binance's own fundingTime/fundingRate/markPrice)
+            # instead of the flat-rate/fixed-8h-boundary fallback below.
+            # Charges each event strictly after last_funding_dt and up to
+            # and including time_t — same "walk forward, advance the
+            # cursor" shape as the flat-rate branch, just event-driven
+            # instead of boundary-derived.
+            events = self.historical_funding_events
+            last_ms = self.last_funding_dt.timestamp() * 1000.0
+            time_ms = time_t.timestamp() * 1000.0
+            mask = (events[:, 0] > last_ms) & (events[:, 0] <= time_ms)
+            if np.any(mask):
+                for row in events[mask]:
+                    event_rate = row[1]
+                    event_mark = row[2] if not np.isnan(row[2]) else close_t
+                    funding = side_sign * strategy.position.qty * event_mark * event_rate
+                    self.total_funding += funding
+                    strategy.balance -= funding
+                self.last_funding_dt = datetime.fromtimestamp(
+                    float(events[mask][-1, 0]) / 1000.0, tz=timezone.utc,
+                )
+            return
+
+        if self.funding_rate:
             boundary = _next_funding_boundary(self.last_funding_dt)
             while boundary <= time_t:
                 funding = side_sign * strategy.position.qty * close_t * self.funding_rate
@@ -708,6 +745,7 @@ async def run_backtest_simulation(
     _reprep_every_candle: bool = False,
     round_trip_stats: bool = False,
     intrabar_detail: bool = False,
+    historical_funding: bool = False,
 ) -> dict:
     # entry_candle_exits (QNT-3, Plan 9 Step 9.4): opt-in, default off. When
     # True, SL/TP/liquidation are evaluated against the same candle a
@@ -744,6 +782,16 @@ async def run_backtest_simulation(
     # SL-first assumption. Default False is byte-identical to the pre-9.8
     # path (no 1m fetch happens at all). See
     # workspace/plan/9_backtest-and-optimizer-correctness.md Step 9.8.
+    # historical_funding (QNT-5, Plan 9 Step 9.7): opt-in, default off. When
+    # True (and funding_enabled=True), charges real historical Binance
+    # funding events (own fundingTime/fundingRate/markPrice per symbol,
+    # engine/services/funding_manager.py) instead of the flat-rate/
+    # fixed-8h-boundary fallback. Default False never fetches funding
+    # history and preserves the exact pre-9.7 charge_funding() code path —
+    # byte-identical. Only meaningful for "Binance Futures" (funding is a
+    # perpetual-futures mechanic; funding_manager.py raises on any other
+    # exchange). See workspace/plan/9_backtest-and-optimizer-correctness.md
+    # Step 9.7.
     # ── 1. Parse strategy name ──────────────────────────────────────────────
     parts = strategy_file.split("/")
     if len(parts) >= 2 and parts[0] == "strategies":
@@ -789,6 +837,10 @@ async def run_backtest_simulation(
     # timeframe isn't already 1m (nothing to resolve at 1m granularity) —
     # default False means this loop never runs, zero fetch cost.
     detail_candles_by_sym: dict = {}
+    # Plan 9 Step 9.7: real historical funding events per symbol, only
+    # fetched when historical_funding=True. None (default) means
+    # BacktestAdapter falls back to the flat-rate/fixed-8h path unchanged.
+    funding_events_by_sym: dict = {}
 
     for sym in symbols:
         candles_available = await ensure_candles_available(
@@ -900,6 +952,34 @@ async def run_backtest_simulation(
                     [r["low"]    for r in detail_rows],
                     [r["volume"] for r in detail_rows],
                 ]).astype(np.float64) if detail_rows else np.empty((0, 6), dtype=np.float64)
+
+        if historical_funding and exchange == "Binance Futures":
+            _funding_ok = await ensure_funding_available(
+                job_id=job_id, exchange=exchange, symbol=sym,
+                start_date=start_date, end_date=end_date,
+            )
+            if not _funding_ok:
+                logger.error(
+                    f"[{job_id}] {sym}: failed to fetch historical funding rates — "
+                    f"falling back to the flat-rate/fixed-8h-boundary funding model"
+                )
+                funding_events_by_sym[sym] = None
+            else:
+                async with pool.acquire() as conn:
+                    funding_rows = await conn.fetch(
+                        """
+                        SELECT time, funding_rate, mark_price
+                        FROM funding_rates
+                        WHERE exchange = $1 AND symbol = $2 AND time >= $3 AND time < $4
+                        ORDER BY time ASC
+                        """,
+                        exchange, sym, start_dt, end_dt,
+                    )
+                funding_events_by_sym[sym] = np.column_stack([
+                    [r["time"].timestamp() * 1000 for r in funding_rows],
+                    [float(r["funding_rate"]) for r in funding_rows],
+                    [float(r["mark_price"]) if r["mark_price"] is not None else np.nan for r in funding_rows],
+                ]).astype(np.float64) if funding_rows else None
 
     # Plan 22 Step 22.6: opt-in inverse-volatility allocation, config-gated
     # via risk_params["allocation"] == "inverse_vol" (default "equal" — the
@@ -1059,7 +1139,10 @@ async def run_backtest_simulation(
             strategy.execution_model = execution
 
             # Initialize adapter and kernel
-            adapter = BacktestAdapter(execution, fee_rate, _slippage, _funding_on, _fund_rate, sym)
+            adapter = BacktestAdapter(
+                execution, fee_rate, _slippage, _funding_on, _fund_rate, sym,
+                historical_funding_events=funding_events_by_sym.get(sym),
+            )
             adapters[sym] = adapter
 
             # Setup execution algorithm if configured

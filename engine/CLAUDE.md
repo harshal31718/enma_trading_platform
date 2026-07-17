@@ -64,6 +64,8 @@ engine/
 ├── services/
 │   ├── candle_importer.py  ← fetch OHLCV from Binance REST (/klines) via httpx, write to TimescaleDB
 │   ├── candle_manager.py   ← ensure_candles_available(): single entry point for candle data
+│   ├── funding_importer.py ← fetch historical funding rates from Binance REST (/fundingRate) via httpx, write to TimescaleDB (Plan 9 Step 9.7)
+│   ├── funding_manager.py  ← ensure_funding_available(): single entry point for funding-rate data (Plan 9 Step 9.7)
 │   ├── progress.py         ← publish progress to Redis pub/sub channel progress:{jobId}
 │   ├── backtest_runner.py  ← backtest simulation loop (candle replay, fee/margin/SL-TP logic, metric computation)
 │   ├── binance_testnet.py  ← HMAC-signed Binance REST requests; _BASE_URLS dict for testnet/mainnet
@@ -311,7 +313,7 @@ The engine connects to two databases. Connection configs live in `config/mongo.p
 | Database | Driver | Config file | Owns |
 |---|---|---|---|
 | MongoDB | motor (`AsyncIOMotorClient`) | `config/mongo.py` | `backtestResults`, `liveSessions`, `tradeRecords` (engine is sole writer; server reads via Mongoose) |
-| TimescaleDB | asyncpg (connection pool) | `config/timescale.py` | `candles` hypertable — all OHLCV data |
+| TimescaleDB | asyncpg (connection pool) | `config/timescale.py` | `candles` hypertable — all OHLCV data; `funding_rates` hypertable — historical Binance Futures funding events (Plan 9 Step 9.7) |
 
 **TimescaleDB candles hypertable schema:**
 
@@ -335,6 +337,22 @@ CREATE INDEX ON candles (exchange, symbol, timeframe, time DESC);
 ```
 
 No `user_id` column — candles are shared globally across users.
+
+**TimescaleDB funding_rates hypertable schema (Plan 9 Step 9.7):**
+
+```sql
+CREATE TABLE funding_rates (
+    time             TIMESTAMPTZ  NOT NULL,  -- Binance's own fundingTime (irregular per symbol)
+    exchange         TEXT         NOT NULL,  -- always "Binance Futures" — funding is a perpetual-futures-only mechanic
+    symbol           TEXT         NOT NULL,
+    funding_rate     NUMERIC      NOT NULL,  -- signed: positive = longs pay shorts
+    mark_price       NUMERIC      NULL       -- mark price the fee was calculated against; NULL if Binance omitted it
+);
+SELECT create_hypertable('funding_rates', 'time');
+CREATE UNIQUE INDEX ON funding_rates (time, exchange, symbol);
+```
+
+No `user_id` column — funding history is shared globally across users, same as `candles`.
 
 **Rules:**
 - **Never write candle data to MongoDB.** TimescaleDB is the exclusive candle store.
@@ -406,7 +424,7 @@ TA-Lib is built from source inside the engine Docker container. It is **not** in
 ## What Claude Code must NOT do in engine/
 
 - Implement routing logic, auth, or database management for user accounts
-- Call Binance API from routers — only from `services/candle_importer.py` and `services/binance_testnet.py`
+- Call Binance API from routers — only from `services/candle_importer.py`, `services/funding_importer.py`, and `services/binance_testnet.py`
 - Modify the BaseStrategy interface without a DECISIONS.md entry
 - Use synchronous blocking calls inside async FastAPI routes
 - Add pip packages not in requirements.txt without updating root CLAUDE.md (see root CLAUDE.md for platform-wide rules)

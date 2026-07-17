@@ -3,7 +3,23 @@
 **Authority:** This is the single source of truth for what ENMA currently does.
 Read this before starting any work. If this conflicts with chat history, this document wins.
 
-Last updated: 2026-07-17 (Plan 9 Step 9.11-B decided: PCM edge-vs-cost gate stays opt-in/off by
+Last updated: 2026-07-17 (**Plan 9 — ALL STEPS SHIPPED (9.1–9.11)**, container-verified 415/415
+pytest. Same session, in order: 9.11-B decided (cost gate stays opt-in), 9.9's QNT-14 leg-vs-
+round-trip trade-statistics separation (new opt-in `aggregate_legs_to_round_trips()`), 9.10's
+opt-in fill-model ladder (`LadderedTransactionCostModel` — volatility-scaled slippage +
+√-impact), 9.8's opt-in intrabar (1m detail) SL/TP-ordering resolution
+(`ExecutionKernel.intrabar_detail`), and 9.7's historical funding ledger (new TimescaleDB
+`funding_rates` hypertable + `funding_importer.py`/`funding_manager.py`, real Binance funding
+events replace the flat-rate fallback when opted in — manually verified against real mainnet
+data). **Every mechanism ships opt-in/default-off** — golden master re-confirmed byte-identical
+after each step, zero behavior change for any existing backtest unless a caller explicitly opts
+in. Three sub-items deliberately deferred: liquidation fee (QNT-4, contradicts a documented
+`engine/CLAUDE.md` contract — needs a `DECISIONS.md` product call, not a mechanical fix),
+warmup-insufficiency fail-loud (QNT-16, needs Plan 8 coordination per 9.10's own text), and
+`"inf"`-string metric persistence (QNT-13's other half — audited, genuinely dormant, zero
+client/server consumption found). See `9_backtest-and-optimizer-correctness.md` for full detail
+on each step.
+Earlier: 2026-07-17 Plan 9 Step 9.11-B decided: PCM edge-vs-cost gate stays opt-in/off by
 default — user's explicit call, no code change, zero re-baseline risk. Plan 9 Step 9.9's
 fail-loud metric registry shipped same day: `StatisticRegistry.compute_all()`
 (`engine/services/metrics.py`) now logs any stat computation failure with the stat name +

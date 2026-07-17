@@ -43,6 +43,16 @@ Testnet endpoints are designed for transactional load testing, meaning their his
 - Futures Historical Mark Price: `GET https://fapi.binance.com/fapi/v1/markPriceKlines`
 - Spot Real-Time Feed: WebSocket `wss://stream.binance.com:9443/ws/[symbol]@kline_[interval]`
 - Futures Real-Time Feed: WebSocket `wss://fstream.binance.com/ws/[symbol]@kline_[interval]`
+- **Futures Historical Funding Rate** (Plan 9 Step 9.7, QNT-5, verified against official docs
+  2026-07-17): `GET https://fapi.binance.com/fapi/v1/fundingRate` — public, no signing. Params:
+  `symbol`, `startTime`/`endTime` (ms, both inclusive), `limit` (max 1000, default 100 — if
+  neither `startTime` nor `endTime` is sent, the most recent 200 records are returned). Ascending
+  order. Response rows: `{symbol, fundingRate, fundingTime, markPrice}` — `fundingRate` is signed
+  (positive = longs pay shorts), `fundingTime` is the event's own timestamp (irregular per symbol,
+  not always exactly every 8h), `markPrice` is the mark price the funding fee was calculated
+  against. Same §2 guardrail applies: mainnet only — funding history is a market-wide fact, not
+  account-specific, so testnet's fragmented/wiped data pool is never the source. Used by
+  `engine/services/funding_importer.py` / `funding_manager.py`.
 
 ---
 
