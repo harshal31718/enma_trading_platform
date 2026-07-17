@@ -26,6 +26,12 @@ Last updated: 2026-07-02 (workspace restructure: archive/ deleted, inventory rec
 
 **Conflict resolution:** If docs ≠ code → code wins. Update the docs immediately after.
 
+**Live-trading state note (Plan 5 Step 5.1):** the append-only `executionEvents` Mongo collection
+(`engine/services/event_log.py`, engine-written at every state-mutating site) is the fact record
+for live-trading state and outranks any derived read — but `LiveSession`/engine memory are **not
+yet** pure projections of that log (that's Step 5.6, unstarted); they remain the live read path
+today. See `workspace/docs/state/CURRENT_STATE.md` and `workspace/plan/5_live-trading-state-integrity.md`.
+
 ---
 
 ## Documentation Ownership

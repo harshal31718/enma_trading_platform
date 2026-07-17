@@ -11,8 +11,11 @@ import { Calendar as CalendarIcon } from 'lucide-react';
  * Props:
  *   days: [{ date: 'YYYY-MM-DD', pnl: number, trades: number }]
  *   timeframe: '30d' | '90d' | 'all' — client-side filter on `days`
+ *   headerActions: optional ReactNode rendered before the day-count badge
+ *     (e.g. a timeframe toggle) — a slot, not an absolute overlay, so it
+ *     never collides with the badge.
  */
-export default function DashboardCalendar({ days = [], timeframe = 'all' }) {
+export default function DashboardCalendar({ days = [], timeframe = 'all', headerActions = null }) {
     const filtered = useMemo(() => {
         if (!days || days.length === 0) return [];
         if (timeframe === 'all') return days;
@@ -63,9 +66,12 @@ export default function DashboardCalendar({ days = [], timeframe = 'all' }) {
                     <CalendarIcon className="size-4 text-emerald-400" />
                     <span>Performance Calendar</span>
                 </div>
-                <span className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">
-                    {filtered.length} day{filtered.length === 1 ? '' : 's'}
-                </span>
+                <div className="flex items-center gap-2">
+                    {headerActions}
+                    <span className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">
+                        {filtered.length} day{filtered.length === 1 ? '' : 's'}
+                    </span>
+                </div>
             </div>
 
             <div className="max-h-[320px] overflow-y-auto p-3">

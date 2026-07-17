@@ -141,6 +141,6 @@ If the user pushes back, don't fold. Hold your position unless they give genuine
 - Do not rewrite files outside the scope of the current task.
 - Do not introduce new libraries or npm/pip packages without updating root and service `CLAUDE.md` files.
 - Do not touch database configurations directly; all queries must go through existing Mongoose models (Node) or motor/asyncpg (Engine).
-- Do not make direct Binance calls from server/ or client/ folders.
+- Do not make direct *signed/authenticated* Binance calls from server/ or client/ folders (only `engine/` signs requests). Exception: `client/`'s direct public `wss://fstream.binance.com` WebSocket for market data (no auth) — see `client/src/lib/binanceWS.js`.
 - Do not modify `.env` files.
 - **Do not run git commands that revert or discard post-last-commit changes** (staged or unstaged) without explicit user instruction. See Rule H above.

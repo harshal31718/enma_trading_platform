@@ -90,9 +90,9 @@ Returns: { strategy: Strategy }
 - **Server never imports strategy code.** All Python reflection happens inside the engine only.
 - **Param overrides reject, don't clamp (F-015/F-016).** An out-of-range param value raises a
   `ValueError` instead of being silently clamped to `min`/`max`.
-- **Code edits are validated before write.** `ast.parse` syntax check + top-level class-name match are
-  enforced server-side (engine) before a `PUT /code` write is accepted; the module is hot-reloaded on
-  success, no engine restart required.
+- ~~Code edits are validated before write~~ — **removed 2026-07-15 (Plan 3 Step 3.2).** In-app strategy
+  code editing (and the `PUT /code` endpoint) no longer exists; code is read-only. See "Data Flow"
+  above and `workspace/plan/3_service-to-service-trust.md`'s Shipped summary.
 
 ---
 

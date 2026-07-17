@@ -1,6 +1,6 @@
 # Plan 5 — Live-trading state integrity
 
-**Status:** In progress 2026-07-15 — Steps 5.1 (scoped), 5.2, 5.4 shipped · **Priority:** P0 (highest-value correctness work) · **Depends on:** 2, 3 · **Related:** 6
+**Status:** In progress 2026-07-16 — Steps 5.1 (scoped), 5.2, 5.3, 5.4 shipped · **Priority:** P0 (highest-value correctness work) · **Depends on:** 2, 3 · **Related:** 6
 
 ## Progress log (2026-07-15)
 
@@ -109,23 +109,29 @@ throughout, both stopped cleanly with no hang — the strongest available eviden
 deadlock short of catching an actual fill mid-candle-loop, which needs organic market timing
 this session didn't wait for.
 
-**Remaining (5.3 [partial], 5.5, 5.6) not yet done; 5.1 shipped in scoped form:**
+**5.3 — Order idempotency (ENG-10) — Shipped 2026-07-16 (fixes-queue F2).** Closed the last two
+gaps flagged below: `execute_flip`'s idempotency-by-delegation was independently verified rather
+than assumed — 3 new tests (`engine/tests/test_execute_flip_idempotency.py`) drive the real
+`LiveAdapter.execute_flip` against a stubbed Binance layer and prove (a) an exit-leg failure
+returns `False` without ever attempting the entry leg, position stays open in its original
+direction; (b) an ambiguous entry-leg timeout still resolves to a successful flip via
+`execute_entry`'s existing query-by-client-id guard, booking the real re-queried fill price; (c)
+a genuine entry-leg failure after a successful exit leaves the strategy flat (`position is
+None`) — never stuck half-flipped, never silently retried into a duplicate order. No new client
+id was added to `execute_flip` itself — verified unnecessary given the two legs' existing
+guarantees; the reasoning is captured as a comment at the call site so a future reader doesn't
+have to re-derive it. `execute_reduce` gained its own deterministic `newClientOrderId` (matching
+the entry/exit/DCA-add convention), no retry wrapper (still dead code — no strategy overrides
+`adjust_trade_position()`). Full engine suite 130/130 (127 existing + 3 new). Golden master not
+applicable — live-adapter-only, zero import overlap with the backtest path.
+
+**Remaining (5.5, 5.6) not yet done; 5.1 shipped in scoped form, 5.3 now fully shipped:**
 - **5.1 (event log) — Shipped in scoped form** (see Progress log above): the append-only
   collection, engine write paths at every state-mutating site, and a Node-side seq-ordering
   guard are done. **Still not done**: turning `LiveSession`/engine memory into *pure* derived
   views rebuilt from the log — they remain the live read path, the log is additive alongside
   them. That migration is Step 5.6's job (it depends on this step existing, which it now does).
-- **5.3 (order idempotency) — extended 2026-07-15, found during Plan 20's audit**: close orders
-  (5.2) and now **entry orders** both carry a deterministic `newClientOrderId` and both have a
-  "query by client id before concluding failure" retry-safety wrapper (`execute_entry`'s wrapper
-  added this session — see `20_binance-precision-notional-parity.md`'s Shipped summary; it also
-  fixed a latent bug where entry always booked the pre-trade `ref_price` estimate instead of the
-  real fill even on success). DCA scale-in (`execute_entry`'s `is_dca` branch) got a client id
-  too, no retry wrapper (smaller race window, lower priority). **Still not done**: `execute_flip`
-  has no client id of its own (it delegates to `execute_entry`/`execute_exit`, which now both do,
-  so this may already be adequately covered — not independently verified); `execute_reduce`
-  (DCA scale-out) has no client id or retry wrapper at all — lowest priority since it remains
-  dead code today (no strategy overrides `adjust_trade_position()`).
+- **5.3 (order idempotency) — Shipped 2026-07-16** (see the dedicated paragraph above this list).
 - **5.5 (Decimal money)** — not started. Correctly the largest, riskiest remaining piece:
   touches nearly every arithmetic operation across position/PnL/balance math in both engine
   Python and Node, and per the plan's own acceptance criteria needs a *documented* golden-master

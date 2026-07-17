@@ -87,6 +87,44 @@ def _safe_float(val, default):
         return default
 
 
+def _extract_fill_client_id(order_data: dict) -> str:
+    """A-2 fix (Plan 21.1): pull the client/algo id off an ORDER_TRADE_UPDATE
+    `o` payload safely.
+
+    Binance's real payload has no `"clientOrderId"` key — the field is `"c"`.
+    The previous code read `.get("clientOrderId", "")` (always `""`) and fell
+    back to `.get("i", "")`, Binance's numeric `orderId` (an int in the JSON).
+    Calling `.startswith(...)` on that int raised `AttributeError` on every
+    FILLED/PARTIALLY_FILLED frame, which killed `_on_fill` before its
+    reconcile call ever ran — the event-driven fill path (F-020) was dead
+    code. Always returns a `str`, coercing the int-orderId fallback so the
+    caller's `.startswith()` check can never crash.
+    """
+    return str(order_data.get("c") or order_data.get("i") or "")
+
+
+def _binance_error_detail(exc: Exception) -> str:
+    """Extract Binance's own {code, msg} body from a failed signed call.
+
+    httpx.HTTPStatusError's default str() is just "Client error '400 Bad
+    Request' for url '...'" — it never surfaces the response body, which is
+    the only place the actual reason (bad precision, filter failure, order
+    would immediately trigger, etc.) lives. `engine/routers/trade.py`'s route
+    handlers already parse `exc.response.json()` themselves; this gives the
+    live-bot's fire-and-forget SL/TP/order call sites the same visibility so
+    failures are diagnosable from logs instead of a generic "400 Bad Request".
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        try:
+            body = exc.response.json()
+            code = body.get("code", exc.response.status_code)
+            msg = body.get("msg", "")
+            return f"{code} {msg}".strip()
+        except Exception:
+            return f"{exc.response.status_code} {exc.response.text[:300]}"
+    return str(exc)
+
+
 class LiveAdapter(ExecutionAdapter):
     def __init__(self, manager: LiveBotManager, session_id: str):
         self.manager = manager
@@ -343,8 +381,8 @@ class LiveAdapter(ExecutionAdapter):
                     )
                 except Exception as entry_e:
                     logger.warning(
-                        f"[AlgoBot] {symbol}: entry order call raised ({entry_e}) — querying by "
-                        f"clientOrderId={entry_client_order_id} before concluding it failed"
+                        f"[AlgoBot] {symbol}: entry order call raised ({_binance_error_detail(entry_e)}) — "
+                        f"querying by clientOrderId={entry_client_order_id} before concluding it failed"
                     )
                     _real_fill = await _query_real_fill_price(_api_key, _api_secret, symbol, entry_client_order_id)
                     if _real_fill is None:
@@ -390,7 +428,7 @@ class LiveAdapter(ExecutionAdapter):
                         # Track algo order ID for OUO peer-cancel (F-019)
                         _placed_algo_ids["sl"] = sl_result.get("algoId")
                     except Exception as sl_e:
-                        logger.warning(f"[AlgoBot] SL placement failed for {symbol}: {sl_e}")
+                        logger.warning(f"[AlgoBot] SL placement failed for {symbol}: {_binance_error_detail(sl_e)}")
                         # ── F-018: Emergency market exit ────────────────────
                         # Entry filled but SL placement failed → position is
                         # naked. Force-close at market immediately.
@@ -492,17 +530,19 @@ class LiveAdapter(ExecutionAdapter):
                         logger.info(f"[AlgoBot] TP placed for {symbol}: algoId={tp_result.get('algoId')}")
                         _placed_algo_ids["tp"] = tp_result.get("algoId")
                     except Exception as tp_e:
-                        logger.warning(f"[AlgoBot] TP placement failed for {symbol}: {tp_e}")
+                        _tp_detail = _binance_error_detail(tp_e)
+                        logger.warning(f"[AlgoBot] TP placement failed for {symbol}: {_tp_detail}")
                         await self.manager._notify_node(self.session_id, {
                             "event": "log",
-                            "eventData": {"type": "warning", "message": f"{symbol}: TP skipped — {tp_e}"},
+                            "eventData": {"type": "warning", "message": f"{symbol}: TP skipped — {_tp_detail}"},
                         })
 
         except Exception as e:
-            logger.error(f"[AlgoBot] Testnet order failed for {symbol}: {e}")
+            _order_detail = _binance_error_detail(e)
+            logger.error(f"[AlgoBot] Testnet order failed for {symbol}: {_order_detail}")
             await self.manager._notify_node(self.session_id, {
                 "event": "log",
-                "eventData": {"type": "error", "message": f"Order failed {symbol}: {e}"}
+                "eventData": {"type": "error", "message": f"Order failed {symbol}: {_order_detail}"}
             })
             strategy.buy = None
             strategy.sell = None
@@ -573,6 +613,14 @@ class LiveAdapter(ExecutionAdapter):
             return
 
         reduce_side = "SELL" if strategy.position.type == "long" else "BUY"
+        # Plan 5 Step 5.3 (ENG-10) tail (F2): deterministic newClientOrderId,
+        # matching the entry/exit/DCA-add paths' convention. No retry-on-
+        # ambiguous-failure wrapper here (unlike execute_entry) — lowest
+        # priority since this remains dead code today (no strategy overrides
+        # adjust_trade_position() to trigger a scale-out); the id alone is
+        # enough for a future reconciliation pass to find the order by client
+        # id instead of guessing.
+        reduce_client_order_id = f"enma_{self.session_id[:8]}_{symbol}_{uuid4_hex8()}"
         try:
             from services.binance_testnet import send_signed_request as _signed
             _api_key = session.get("api_key", "")
@@ -587,6 +635,7 @@ class LiveAdapter(ExecutionAdapter):
                     "quantity": _fmt_num(qty),
                     "reduceOnly": "true",
                     "newOrderRespType": "RESULT",
+                    "newClientOrderId": reduce_client_order_id,
                 }
                 result = await _signed(
                     "POST", "/fapi/v1/order",
@@ -597,7 +646,7 @@ class LiveAdapter(ExecutionAdapter):
                 fill_price = float(result.get("avgPrice", exit_price))
                 logger.info(
                     f"[AlgoBot] DCA reduce {strategy.position.type}: {symbol} -{qty} @ {fill_price} "
-                    f"orderId={result.get('orderId')}"
+                    f"orderId={result.get('orderId')} clientOrderId={reduce_client_order_id}"
                 )
 
             realized_pnl = strategy.position.reduce_qty(qty, fill_price)
@@ -837,6 +886,25 @@ class LiveAdapter(ExecutionAdapter):
         self, strategy, symbol: str, new_direction: str, new_qty: float, ref_price: float, time_t: datetime,
         index_t: int, high_t: float, low_t: float, stop_loss: float | None = None, take_profit: float | None = None
     ) -> bool:
+        # Plan 5 Step 5.3 (ENG-10) tail (F2): execute_flip carries no
+        # newClientOrderId of its own — verified sufficient (test_
+        # execute_flip_idempotency.py) because it delegates the entire order
+        # lifecycle to the two legs below, each already idempotent on its
+        # own terms:
+        #   - execute_exit: no-ops if strategy.position is already None (a
+        #     retried flip after the exit leg already landed re-checks live
+        #     state, not a client id, and simply skips re-closing); on a
+        #     failure placing the close, it returns before mutating state and
+        #     leaves the position open — this function then bails via the
+        #     `strategy.position is not None` guard below, so a failed exit
+        #     never reaches the entry leg.
+        #   - execute_entry: generates its own fresh newClientOrderId per
+        #     call and has its own query-by-id-before-retrying guard for an
+        #     ambiguous (timeout-but-maybe-filled) failure.
+        # A composed flip can therefore never double-close or double-enter;
+        # the only observable failure modes are "stayed in the old position"
+        # (exit failed) or "ended up flat" (exit ok, entry genuinely failed)
+        # — both are safe, inert states for reconciliation to find.
         await self.execute_exit(
             strategy=strategy,
             symbol=symbol,
@@ -1334,7 +1402,7 @@ class LiveBotManager:
                 if symbol_s != symbol:
                     return
                 status = order_data.get("X", "")
-                client_algo_id = order_data.get("clientOrderId", "") or order_data.get("i", "")
+                client_algo_id = _extract_fill_client_id(order_data)
                 logger.info(
                     f"[AlgoBot] {symbol}: user-data fill event — "
                     f"status={status} clientAlgoId={client_algo_id}"
@@ -1349,13 +1417,22 @@ class LiveBotManager:
                     # If a tracked algo order (tpsl_ prefix) is FILLED or
                     # PARTIALLY_FILLED, cancel the peer leg to prevent
                     # over-close on a reduced position.
-                    if status in ("FILLED", "PARTIALLY_FILLED") and client_algo_id.startswith("tpsl_"):
-                        _pos_info = session.get("open_positions", {}).get(symbol)
-                        if _pos_info and "algo_ids" in _pos_info:
-                            _aids = _pos_info["algo_ids"]
-                            _peer_id = _aids.get("tp") if "sl" in client_algo_id else _aids.get("sl")
-                            if _peer_id:
-                                try:
+                    #
+                    # A-2 fix: the whole OUO block is now wrapped in its own
+                    # try/except so ANY failure here (a bad client_algo_id
+                    # shape, a cancel-call exception, a malformed session
+                    # dict) can never prevent the reconcile call below from
+                    # running. Previously an uncaught exception in this block
+                    # (e.g. .startswith() on an int) killed the callback
+                    # before reconcile ever executed — the event-driven fill
+                    # path is only useful if reconcile is unconditional.
+                    try:
+                        if status in ("FILLED", "PARTIALLY_FILLED") and client_algo_id.startswith("tpsl_"):
+                            _pos_info = session.get("open_positions", {}).get(symbol)
+                            if _pos_info and "algo_ids" in _pos_info:
+                                _aids = _pos_info["algo_ids"]
+                                _peer_id = _aids.get("tp") if "sl" in client_algo_id else _aids.get("sl")
+                                if _peer_id:
                                     _api_key = session.get("api_key", "") if session else ""
                                     _api_secret = session.get("api_secret", "") if session else ""
                                     if _api_key and _api_secret:
@@ -1369,10 +1446,11 @@ class LiveBotManager:
                                             f"[AlgoBot] {symbol}: cancelled peer algo {_peer_id} "
                                             f"(OUO — {client_algo_id} filled)"
                                         )
-                                except Exception as _cancel_e:
-                                    logger.warning(
-                                        f"[AlgoBot] {symbol}: peer algo cancel failed: {_cancel_e}"
-                                    )
+                    except Exception as _cancel_e:
+                        logger.warning(
+                            f"[AlgoBot] {symbol}: OUO peer-cancel step failed — "
+                            f"reconcile still proceeds: {_cancel_e}"
+                        )
 
                     await self._reconcile_exchange_state(
                         session_id, strategy, symbol,
@@ -1643,7 +1721,7 @@ class LiveBotManager:
             else:
                 logger.info(f"[AlgoBot] {symbol}: no position to close on stop")
         except Exception as e:
-            logger.error(f"[AlgoBot] Close-position failed for {symbol} on stop: {e}")
+            logger.error(f"[AlgoBot] Close-position failed for {symbol} on stop: {_binance_error_detail(e)}")
             return False
 
         # Update local PnL tracking if the engine knew about this position

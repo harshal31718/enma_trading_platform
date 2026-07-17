@@ -71,7 +71,7 @@ client/
 │   │   │   ├── CachedCandlesTable.jsx  ← TimescaleDB candle cache summary table
 │   │   │   ├── RecentActivityTable.jsx ← last 5 backtest runs with View deep-links
 │   │   │   ├── StrategyLeaderboard.jsx ← per-strategy averaged metrics
-│   │   │   └── DashboardCalendar.jsx   ← performance-calendar component; currently unused (not wired into Dashboard.jsx — candidate for removal or wiring in a future pass)
+│   │   │   └── DashboardCalendar.jsx   ← performance-calendar heatmap, wired into Dashboard.jsx (fixes-queue F5, 2026-07-16) with a 30D/90D/All toggle
 │   │   └── strategies/
 │   │       ├── CodeViewer.jsx          ← read-only pre block rendered in a Dialog
 │   │       ├── StrategyCard.jsx        ← card: name, description, type badge, View button
@@ -171,7 +171,7 @@ client/
 - Always clean up socket listeners in useEffect cleanup functions
 - Never call `socket.emit` directly from components — use hooks
 - **Binance Public WebSocket feed:**
-  - Connection manager `src/lib/binanceWS.js` manages a single `WebSocket` connection to `wss://fstream.binance.com/ws` (or `wss://fstream.binance.com/stream`).
+  - Connection manager `src/lib/binanceWS.js` manages `WebSocket` connections to `wss://fstream.binance.com/public/ws` (depth streams) or `wss://fstream.binance.com/market/ws` (everything else) — never the bare `/ws` or `/stream` path. See `workspace/docs/core/binance-api.md` for the authoritative path reference.
   - Custom hook `useBinanceWS(symbol, stream, callback)` registers/unregisters callbacks dynamically to prevent duplicate connections.
   - Isolate state updates to specific sub-components (e.g. `TickerBar`, `OrderBook`, `RecentTrades`) to avoid parent re-renders of the terminal layout.
   - Update lightweight-charts series imperatively using `seriesRef.current.update` inside the hook's callback to bypass React re-rendering cycles.

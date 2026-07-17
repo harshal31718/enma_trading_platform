@@ -83,9 +83,12 @@ engine/
 │   ├── rate_limiter.py    ← Binance per-IP rate-limit guard
 │   └── risk_math.py       ← shared risk/notional/liquidation-buffer math helpers
 ├── scripts/
-│   └── golden_master.py   ← byte-equivalence check for pipeline refactors (root CLAUDE.md Rule C)
+│   ├── golden_master.py   ← byte-equivalence check for pipeline refactors (root CLAUDE.md Rule C)
+│   ├── enma_cli.py        ← data conversion CLI (Plan 15): list-data, export-candles, import-candles, export-trades — run via `python -m scripts.enma_cli <cmd>` inside the container; local-data only, never calls Binance
+│   └── _io_formats.py     ← CSV/JSON read+write + row<->DB-record transforms for enma_cli.py (stdlib csv/json only, no new deps)
 ├── tests/
-│   └── test_boundaries.py ← service-boundary contract tests
+│   ├── test_boundaries.py ← service-boundary contract tests
+│   └── test_cli_roundtrip.py ← enma_cli.py export/import round-trip (hermetic — fake asyncpg pool + fake Mongo collection)
 ├── main.py                ← FastAPI app entry point
 ├── requirements.txt
 └── .env

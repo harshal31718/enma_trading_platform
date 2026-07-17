@@ -115,6 +115,24 @@ const settingsSchema = new mongoose.Schema(
       }, { _id: false }),
       default: {}
     },
+
+    // ── Webhook Notifications (Plan 14 / fixes-queue F3) ─────────────────────
+    // Fire-and-forget POST on trade lifecycle events (Discord/Slack/IFTTT).
+    // Dispatch lives in server/src/utils/webhook.js — never blocks or throws
+    // into the trade path. `events` is opt-in (freqtrade-style default: only
+    // the "you should know about this" events, not every entry/exit).
+    webhook: {
+      enabled:   { type: Boolean, default: false },
+      url:       { type: String,  default: '' },
+      format:    { type: String,  enum: ['json', 'form'], default: 'json' },
+      events: {
+        type: [String],
+        default: ['exit_fill', 'liquidation', 'session_error'],
+        enum: ['entry_fill', 'exit_fill', 'liquidation', 'session_start', 'session_stop', 'session_error'],
+      },
+      retries:   { type: Number, default: 2,    min: 0,    max: 5     },
+      timeoutMs: { type: Number, default: 5000, min: 1000, max: 30000 },
+    },
   },
   { timestamps: true }
 )

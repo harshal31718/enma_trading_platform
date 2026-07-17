@@ -215,6 +215,61 @@ with truncated strategies reported in the response's `errors` array rather than 
   Positions panel bucket-ordered Open → Traded → Remaining (side/leverage/live-PnL plus cumulative
   trades/qty/margin/notional/realised PnL from `symbolStats`).
 
+### ⚠️ Open issues found in a live Chaos run (2026-07-16 — fixes-queue F7)
+
+A MicroScalper Chaos session (15 auto-selected symbols, 1m, 50x) was run live against Binance
+Testnet specifically to answer the long-standing "does `ORDER_TRADE_UPDATE` fire for algo/
+conditional orders" question (see `CURRENT_STATE.md`'s Known Technical Debt). It surfaced one
+confirmed answer and two separate, still-open bugs:
+
+1. **F-020's event-driven fill path does not reliably catch algo/conditional TP-SL fills —
+   confirmed live, not theoretical.** BSBUSDT opened and was closed by its conditional SL/TP
+   4 seconds later (per Binance's own Order History: entry `19:54:04`, conditional sell filled
+   `19:54:08`, IST); ESPORTSUSDT the same pattern, 9 seconds. Enma's session UI kept showing both
+   as open `LONG` positions for roughly another 50-55 seconds — until the next 1m candle close
+   drove `_reconcile_exchange_state()`'s unconditional per-loop poll, which is what actually
+   caught and closed them (`14:25:04` UTC "Closed BSBUSDT"/"Closed ESPORTSUSDT" in the activity
+   log). **Conclusion: the system is silently running on the ~60s REST-poll fallback, not the
+   real-time WS path, for at least some conditional-order fills.** This matches the "if no, it's
+   a 60s staleness window, not a correctness bug" framing the fixes-queue anticipated — but it
+   means every session currently carries up to ~60s where the UI (and the strategy's own
+   in-memory `strategy.position`) says a symbol is open when Binance has already closed it.
+   **Root cause isolated and code-fixed 2026-07-17 (Plan 21.1, finding A-2):** the WS frame does
+   arrive, but `_on_fill`'s client-id lookup read a non-existent `clientOrderId` key, fell back to
+   the numeric `orderId` (an int), and crashed on `.startswith("tpsl_")` — the exception was caught
+   by the outer per-callback try/except, so `_reconcile_exchange_state()` at the end of `_on_fill`
+   never ran. The event-driven path was dead code on every real fill; the system was always
+   running on the ~60s REST-poll fallback. Fixed by reading Binance's real `"c"` field via the new
+   `_extract_fill_client_id()` helper (`engine/core/live_bot_manager.py`) and by wrapping the OUO
+   peer-cancel block in its own try/except so the reconcile call can no longer be skipped by an
+   earlier failure in the callback. Regression tests:
+   `engine/tests/test_on_fill_client_id_extraction.py`. **Not yet re-verified live** — needs a
+   fresh Chaos/small-session reproduction with this fix in place to confirm the ~60s staleness is
+   actually gone before this item is closed.
+
+2. **TP placement is failing outright on some symbols with a raw `400 Bad Request`** —
+   `BCHUSDT`, then `ETHUSDT`, both hit this in the same run (`TP skipped` in the activity log).
+   This looks like the same symptom the 2026-07-03 stale-tick-size-cache bug above was fixed for
+   (`round_price()`/`clamp_and_round_qty()` reading from a cache populated once at startup and
+   never refreshed for newly-relisted symbols) — but that fix already shipped, so either it has a
+   gap (e.g. a symbol entering an active Chaos run's auto-selected pool that wasn't in the
+   original tier-cache warm set) or this is a distinct cause. **Genuinely unknown right now**
+   because the failure was only ever logged as httpx's generic `"Client error '400 Bad Request'
+   for url '...'"` — Binance's actual `{code, msg}` body was discarded, not logged. **Fixed
+   2026-07-16**: `_binance_error_detail()` added to `live_bot_manager.py`, wired into the entry,
+   SL, and TP placement failure logs, so the *next* reproduction will show the real Binance error
+   code instead of a dead end. Root cause still open pending that reproduction.
+3. **A position stayed shown as open after the session was fully stopped** — `FXSUSDT SHORT`
+   remained in the Positions panel with no live PnL/qty/notional after `Stop` completed and every
+   other symbol showed `CLOSED`. Not yet investigated — candidates: the entry itself may have
+   failed/never actually filled on Binance (a phantom local-only position, possibly linked to the
+   same TP-failure class above if `execute_entry` proceeded without confirming the fill), or
+   `stop_session()`'s close loop skipped this one symbol for an unrelated reason. Needs the
+   engine logs for this specific symbol/session to diagnose.
+
+**Status: session stopped, not yet re-run with the improved error logging.** See `handoff.md`'s
+2026-07-16 entry for the full session trace and next steps.
+
 ---
 
 ## REST Endpoints

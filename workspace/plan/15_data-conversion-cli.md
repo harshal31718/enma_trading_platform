@@ -1,9 +1,42 @@
 # Plan 15 — Data Conversion CLI
 
-**Status:** Ready · **Priority:** P3 · **Phase:** 9 · **Depends on:** 11 (independent) · **Related:** —
+**Status:** Shipped 2026-07-16 (fixes-queue F4) · **Priority:** P3 · **Phase:** 9 · **Depends on:** 11 (independent) · **Related:** —
 
 **Goal:** A small command-line tool to export/import candle and backtest-trade data between
 TimescaleDB and flat files (CSV/JSON), for offline analysis, sharing, and reproducible datasets.
+
+## Shipped summary (2026-07-16)
+
+Implemented exactly as designed below — four subcommands in `engine/scripts/enma_cli.py`
+(`list-data`, `export-candles`, `import-candles`, `export-trades`), pure CSV/JSON<->DB-record
+transforms in `engine/scripts/_io_formats.py` (stdlib `csv`/`json` only, no new deps, `engine/
+CLAUDE.md` updated). `list-data` reuses `services/candle_manager.py`'s
+`get_cached_candles_summary()` verbatim rather than reimplementing the query, which structurally
+guarantees it matches `GET /candles/cached`. `import-candles` reuses `services/
+candle_importer.py`'s exact `INSERT ... ON CONFLICT DO NOTHING` (same column order, same
+conflict target), so re-importing a file is always a safe no-op. `export-trades` is read-only —
+no `import-trades` command exists, matching the original design (no round-trip requirement for
+trades).
+
+Verification, three ways: (1) 12 new hermetic tests in `engine/tests/test_cli_roundtrip.py`,
+following the repo's established mocking convention (a fake asyncpg pool/connection replicating
+the real `(time, exchange, symbol, timeframe, instrument_type)` unique index for ON CONFLICT
+semantics; a fake Mongo collection for `backtestTrades`) — no live DB dependency in the test
+itself. Full engine suite 142/142 (130 + 12) after this change. (2) A real round trip against the
+live stack's actual TimescaleDB data: exported BTCUSDT/1d (565 rows, the smallest cached set) to
+CSV, re-imported the same file into the same live table, confirmed via `list-data` that the count
+stayed at exactly 565 — no duplication, genuinely idempotent against production data, not just a
+mock. (3) `list-data`'s real output was inspected directly against the live cache inventory.
+
+CSV precision note (flagged as a risk in the original design): candle columns are Postgres
+NUMERIC, which asyncpg returns as `decimal.Decimal`; converted to Python `float` on export to
+match every other consumer in this not-yet-Decimal codebase (Plan 5.5 hasn't landed). Python's
+`str(float)` is a shortest-round-tripping representation since Python 3.1, so the CSV path
+round-trips exactly for any float actually produced by this pipeline — verified directly in the
+hermetic tests, not just assumed.
+
+Files: new `engine/scripts/enma_cli.py`, new `engine/scripts/_io_formats.py`, new `engine/tests/
+test_cli_roundtrip.py`, `engine/CLAUDE.md` (folder-structure doc).
 
 ---
 

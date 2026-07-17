@@ -16,7 +16,9 @@ these on 2026-07-14 — mapping below):
 - **`0_*.md`** — meta: **`0_plans.md`** (this file — the catalog: what each plan is, one
   paragraph each, plus how plans relate), **`0_tracker.md`** (the board: ID, status, priority,
   dependencies, phase), **`0_roadmap.md`** (the phased execution blueprint: Phases 0–8 over
-  the plans, with per-step objective/implementation/verification).
+  the plans, with per-step objective/implementation/verification), **`0_fixes-queue.md`** (the
+  punch-list: the small, independent, ship-any-time items pulled out of the plans and sequenced to
+  close one by one — with an explicit "not small, stays in the roadmap" carve-out).
 - **`N_<slug>.md`** — one plan per file. Numbered by creation order, not priority.
   Priority lives in the tracker, so a plan can be reprioritised without renaming the file.
 - **`audit_*.md`** — evidence: issue catalogs with IDs, severities, confidence tags. Plans
@@ -92,7 +94,7 @@ with per-step acceptance checks, phase acceptance criteria, open questions, hand
 The live board is [`0_tracker.md`](0_tracker.md).
 
 ### 2 — Safety net & guardrails
-[`2_safety-net-and-guardrails.md`](2_safety-net-and-guardrails.md) · **Ready** · P0
+[`2_safety-net-and-guardrails.md`](2_safety-net-and-guardrails.md) · **Shipped 2026-07-15** · P0
 
 Behaviour-neutral scaffolding every later plan needs: server + client test harnesses (there
 are none today), fail-closed & versioned encryption (SEC-3), correlation IDs + structured
@@ -100,21 +102,21 @@ redacted logging (SYS-6), a CI gate that runs tests + golden-master (SYS-5), and
 that stops lying when a DB is down (ENG-13). Nothing else should start before this lands.
 
 ### 3 — Service-to-service trust
-[`3_service-to-service-trust.md`](3_service-to-service-trust.md) · **Ready** · P0
+[`3_service-to-service-trust.md`](3_service-to-service-trust.md) · **Shipped 2026-07-15** · P0
 
 Flips the inverted trust topology (SYS-1). Authenticates the `/internal/*` order routes
 (SEC-1), closes the strategy-code RCE path (SEC-2 — carries a product decision), moves secrets
 off custom headers (SEC-6), adds real tiered rate limiting (SEC-5), constant-time compares.
 
 ### 4 — Credential & config topology
-[`4_credential-and-config-topology.md`](4_credential-and-config-topology.md) · **Ready** · P1
+[`4_credential-and-config-topology.md`](4_credential-and-config-topology.md) · **Mostly Shipped 2026-07-15 — residual: Redis `requirepass` (fixes-queue F8)** · P1
 
 Implements the ".env → per-user Settings" directive: removes personal Binance credentials from
 env/files (SEC-9), stops injecting the shared `.env` into every container incl. the client
 (SEC-4), makes infra secrets rotatable, pins images and authenticates Redis (SEC-7).
 
 ### 5 — Live-trading state integrity
-[`5_live-trading-state-integrity.md`](5_live-trading-state-integrity.md) · **Ready** · P0
+[`5_live-trading-state-integrity.md`](5_live-trading-state-integrity.md) · **In progress — 5.1 (scoped)/5.2/5.3/5.4 Shipped; 5.5 (Decimal) + 5.6 (restart recovery) remain** · P0
 
 The deepest fix. Makes the exchange the single source of truth via an append-only event log
 (SYS-2, SRV-3), books real fills instead of fabricated exit prices (ENG-2), adds order
@@ -188,7 +190,7 @@ and shipped work). Ordering rule: **risk primitives first, validation tooling ne
 last.** Independent of the hardening program (2-8); can start any time after 11's V0 check.
 
 ### 11 — Current-state reconciliation (V0)
-[`11_current-state-reconciliation.md`](11_current-state-reconciliation.md) · **Ready** · P2
+[`11_current-state-reconciliation.md`](11_current-state-reconciliation.md) · **Verified 2026-07-15 (complete — it was a verify-only gate)** · P2
 
 A verify-only audit (2026-06-25): the Dashboard, Risk Dashboard, and Monte Carlo/leverage
 features that an old, deleted `INDEX.md` claimed were "missing" turned out to already be built.
@@ -214,7 +216,7 @@ lookahead — an as-of-aligned, forward-filled `self.htf(timeframe)` helper buil
 Enma-native). Gate any strategy that uses it through Plan 9.5's lookahead sentinel.
 
 ### 14 — Webhook notifications
-[`14_webhook-notifications.md`](14_webhook-notifications.md) · **Ready** · P2
+[`14_webhook-notifications.md`](14_webhook-notifications.md) · **Shipped 2026-07-16 (fixes-queue F3)** · P2
 
 POSTs a JSON payload to a per-user-configured URL on trade lifecycle events (entry/exit/
 liquidation/session start-stop-error) — Discord/Slack/IFTTT integration, freqtrade-payload-
@@ -222,7 +224,7 @@ shape-compatible. Server-only, no engine/pipeline touch, no golden master. Scope
 `Settings` (its original single-global-config premise predates multi-user auth and was revised).
 
 ### 15 — Data conversion CLI
-[`15_data-conversion-cli.md`](15_data-conversion-cli.md) · **Ready** · P3
+[`15_data-conversion-cli.md`](15_data-conversion-cli.md) · **Shipped 2026-07-16 (fixes-queue F4)** · P3
 
 A thin `engine/scripts/enma_cli.py` (stdlib-only) to export/import candles and backtest trades
 between TimescaleDB/Mongo and CSV/JSON flat files, plus a `list-data` inventory command — for
@@ -276,3 +278,68 @@ Not part of the original 11–19 catalog — opened and shipped same-day from a 
 order-placement path — closed by adding a `reduce_only` mode to `clamp_and_round_qty()`. Also
 closed a related Plan 5 Step 5.3 (ENG-10) gap found in the same pass: `execute_entry` had no
 order-idempotency handling and never booked the real fill price on success.
+
+### 21 — Live algo industry-standard audit (fill path, brackets, kill-switch)
+[`21_live-algo-industry-standard-audit.md`](21_live-algo-industry-standard-audit.md) · **Draft (audit complete 2026-07-16, fixes unstarted)**
+
+Full read-through audit of the live trading path (signals → orders → SL/TP → fill detection →
+reconciliation → stop) against industry-standard failproof expectations. 14 findings (A-1…A-14),
+headlined by three `[Certain]` critical/high defects that are the likely root causes of F7 item 1:
+the `userTrades` real-exit reconstruction call is missing its credential arguments (dead since
+Plan 5.2 shipped), the user-data-stream `_on_fill` callback crashes with `AttributeError` on
+every FILLED frame (event-driven reconcile is dead code), and `LISTEN_KEY_EXPIRED` permanently
+kills the stream. Plus: no close path cancels resting `closePosition:true` SL/TP conditionals
+(live wrong-money hazard on symbol re-entry), emergency-exit fabricates its close and can leave
+a naked position, no naked-position detector, `ACCOUNT_UPDATE` ignored, no 429/weight handling,
+no automatic session-level drawdown kill-switch. 7-step remediation plan (21.1–21.7), all
+live-adapter-only, no golden-master impact; 21.1/21.2 are the designated F7 follow-up work.
+
+### 22 — Industry-standard risk management (Session Risk Governor)
+[`22_risk-management-industry-standard.md`](22_risk-management-industry-standard.md) · **Ready (scope decided 2026-07-16, unstarted)**
+
+Consolidates and refines the scattered risk-management plans (`ref_gap-matrix` §1.6,
+`ref_future-paths` Track D + forks #2/#3, Plan 12 continuation, Plan 21's A-10/A-11) into one
+architecture: an engine-side **Session Risk Governor** with pre-trade + periodic checks —
+aggregate session drawdown auto-kill-switch, daily loss limit, true cross-symbol open-risk budget
+(the existing `max_portfolio_risk` is per-symbol despite its name), margin-utilization ceiling,
+**enforced** live VaR/CVaR limits (user decision — Zone 1 graduates from display-only),
+correlation-aware concentration caps, and a config-gated inverse-volatility allocation layer
+(fork #3 = yes; fork #2 = rule-based only, no GARCH/ML). Also found: `liq_buffer_pct` is
+decorative today (`respects_liq_buffer()` has no pipeline call site). 7 steps; 22.1 absorbs Plan
+21's step 21.6; depends on Plan 21's 21.1–21.4 fill-path fixes landing first. Only 22.6
+(allocation) is golden-master-gated (config default `equal` keeps backtests byte-identical).
+**2026-07-16 addendum:** Plan 21 gained Part A2 — a five-model pipeline audit (M-1…M-6):
+the "default-on" cost gate has never fired (injected onto `cost_model`, read from
+`portfolio_model` — M-1), its formula is dimensionally inconsistent (M-2), `Signal.magnitude`
+is dead (M-3), trailing stops never amend the exchange SL order (M-4), and entries proceed with
+invalid brackets (M-5). Fixes routed: M-1/M-2/M-3 → new Plan 9 step 9.11 (Step A inert, Step B
+re-baselined); M-4/M-5 → 21.4; M-6 → 22.6. `CURRENT_STATE.md`'s false "cost gate active" claim
+corrected same day.
+
+### 23 — New strategy: high-risk/high-leverage breakout scalper ("MarginSurge")
+[`23_high-risk-leverage-strategy.md`](23_high-risk-leverage-strategy.md) · **Draft (design only, 2026-07-16)**
+
+User-requested high-risk strategy plan. Reframes the "fixed high returns" ask honestly (leverage
+scales both tails; the plan's §6 gates are allowed to kill the strategy). Design: 5m/15m
+volatility-compression Donchian breakout with ADX/MFI/EMA-200 confirmation and the AtrBracket
+ATR-percentile filter; 0.75×ATR stop, 2R take-profit, breakeven at 1R, 1×ATR trail, 24-candle
+time stop; leverage (20–50x) selected by leverage-sensitivity + Monte Carlo ruin curves, not
+assumed; sizing `risk_pct` 3–5%; margin-heavy = max concurrent positions + high utilization
+under the (future) 22.1 governor ceiling. Uses only existing models/indicators. Backtest gates
+startable now; live phase hard-gated on 21.1–21.4 (fill path + M-4 trailing) and soft-gated on
+22.2 (liq-buffer wiring — currently decorative, B-1).
+
+### 24 — BestSupertrend fixes (never trades at defaults)
+[`24_bestsupertrend-fixes.md`](24_bestsupertrend-fixes.md) · **Ready (audited 2026-07-16)** · P1
+
+User-reported "never generates trades" — confirmed and root-caused: at the platform's own
+defaults (`defaultLeverage: 1`, strategy `position_size_pct: 1.0`), required margin =
+equity×(1+slippage) > balance, so `EntryFill.affordable()` rejects **every** entry in backtest
+(one hidden log line) and Binance rejects with `-2019` in live. Four more `[Certain]` flaws:
+live HTF supertrend is one full HTF bar staler than backtest (`tsl[-2]` on an array that
+already excludes the open bar); unsatisfiable tf/timeframe combos (weekly/monthly on ≤4h base,
+or any HTF-fetch failure on sub-1h base) silently produce zero trades forever instead of
+failing loud; the `order_type` param name collides with `OrderPlan.order_type` via
+`DefaultExecution.route()`'s getattr; docs claim `SignalExitRiskModel` while code binds
+`AtrBracketRiskModel`. Fix order S-1→S-5; S-1/S-2 need a (cheap) BestSupertrend golden
+re-baseline; live verification gated on 21.1–21.2.

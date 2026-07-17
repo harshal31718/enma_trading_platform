@@ -1,9 +1,42 @@
 # Plan 14 — Webhook Notifications
 
-**Status:** Ready · **Priority:** P2 · **Phase:** 9 · **Depends on:** 11 (independent) · **Related:** —
+**Status:** Shipped 2026-07-16 (fixes-queue F3) · **Priority:** P2 · **Phase:** 9 · **Depends on:** 11 (independent) · **Related:** —
 
 **Goal:** POST a JSON payload to a user-configured URL on trade lifecycle events (entry, exit,
 liquidation, session start/stop, error) so Enma can push to Discord/Slack/IFTTT.
+
+## Shipped summary (2026-07-16)
+
+Implemented as designed below, with one scope note: `handleEngineStats` is server-side event
+fan-out as planned, but the six lifecycle events map to the two existing hook points rather than
+new engine instrumentation — `startSession` (session_start) and `handleEngineStats`'s
+`position:open`/`position:close`/`status:error`/`stopped` branches (entry_fill, exit_fill +
+conditional `liquidation` when `exitReason === 'liquidation'`, session_error, session_stop). The
+`liquidation` event is wired and tested but not yet observed live — the live adapter's
+`execute_exit` never currently passes `reason="liquidation"` (that path is backtest-only in
+`kernel.py`; live liquidation would surface via reconciliation with some other reason today), so
+this event fires the day live liquidation detection lands, not before.
+
+Files: `server/src/models/Settings.js` (`webhook` sub-schema), new `server/src/utils/webhook.js`
+(`dispatchWebhook`, `sendTestWebhook`, `VALID_EVENTS`), new `server/src/utils/__tests__/
+webhook.test.js` (14 tests), `server/src/controllers/settings.controller.js` (nested-object
+validation + `testWebhook` controller, same dot-path pattern as `limits`), `server/src/routes/
+settings.routes.js` (`POST /webhook/test`), `server/src/controllers/algo.controller.js` (dispatch
+call sites), `client/src/hooks/useExchangeSettings.js` (`useTestWebhook`), `client/src/pages/
+Settings.jsx` (Notifications panel).
+
+Verification: unit tests caught a real bug (`events: []` was being treated as "unfiltered"
+instead of "opted into nothing" — fixed the filter's short-circuit condition); full server suite
+63/63 after the fix. Live-verified via Claude in Chrome against the actual running stack: panel
+renders, "Send Test" round-trips a real HTTP POST (both a failure — httpbin.org 503 — and a
+success — postman-echo.com 200 — surfaced correctly as toasts), and the saved config survives a
+full page reload (persisted through Mongo, not just local state). No golden master needed
+(server-only change, zero engine/pipeline touch).
+
+**Not done / deferred:** Telegram (explicitly out of scope per the original design). A real live
+`exit_fill` delivery during an actual bot/chaos session was not separately observed — the "Send
+Test" round trip plus the unit-tested dispatch logic covers this at the point of shipping; revisit
+if a future session runs a live/chaos session and can confirm a real trade event lands.
 
 ---
 

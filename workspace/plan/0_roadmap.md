@@ -18,9 +18,26 @@ depend on Phase 0 + Phase 1's CI, not on the live-side phases. Phase 9 (feature-
 plans 11–19, folded in 2026-07-15 — see `mergeContext.md`) is independent of all of the above;
 it only needs its own V0 gate (11).
 
+## Status snapshot (2026-07-16)
+
+| Phase | Status | Remaining |
+|-------|--------|-----------|
+| 0 | ✅ **Shipped 2026-07-15** | — |
+| 1 | ✅ **Shipped 2026-07-15** (Plans 2/3/4) | Redis `requirepass` (fixes-queue F8) |
+| 2 | ✅ **Shipped 2026-07-15** (2.1/2.2 via Plan 3's RCE-path *removal*; 2.3 via Plan 2) | 2.4 (full OTel) — optional, deferred |
+| 3 | 🟡 **Partial** — 3.1–3.4 shipped (as Plan 5 steps 5.3/5.2/5.4/5.1-scoped) | 3.5 (=5.5 Decimal), 5.6 (restart recovery), **Phase 3b below** |
+| 3b | 🔴 **Unstarted** (added 2026-07-16, Plans 21+22) | All — the current P0 track |
+| 4–6 | 🔴 Blocked on Phase 3 (Plan 5) fully landing | All (8.1 of Phase 6.3's Plan-8 scope shipped as F6) |
+| 7 | 🟡 7.1 (=9.5) shipped | 7.2–7.5 (each golden-master re-baseline) |
+| 8 | 🟡 8.1 core math (Plan 10 Phase 1a) shipped | 8.1 job plumbing, 8.2–8.4 |
+| 9 | 🟡 9.1/9.2/9.4/9.5 shipped/verified | 9.3 (=Plan 13), 9.6 (=Plan 17) |
+
+Completed-phase sections below are kept for reference (per-step verification detail); work
+top-down from the snapshot + `0_tracker.md`'s Execution order.
+
 ---
 
-## Phase 0 — Quant-Core P0 Bug Fixes (Plan 9 · steps 9.1–9.3 · effort S · risk low · **start immediately, parallel to everything**)
+## Phase 0 — Quant-Core P0 Bug Fixes (Plan 9 · steps 9.1–9.3) · ✅ **SHIPPED 2026-07-15**
 
 Shipped-behavior bugs invalidating results users act on today. Full steps + acceptance:
 [`9_backtest-and-optimizer-correctness.md`](9_backtest-and-optimizer-correctness.md) §9.1–9.3.
@@ -38,7 +55,7 @@ Evidence: [`audit_2_quant-core.md`](audit_2_quant-core.md) QNT-1/2/17.
 **Gate to exit:** multi-symbol bracket test green; exec-algo close/flip test green;
 re-run-from-persisted-config reproduces the parent trade list.
 
-## Phase 1 — Fail-Closed Foundations (Plans 2 + 3 + 4 · effort S · risk low)
+## Phase 1 — Fail-Closed Foundations (Plans 2 + 3 + 4) · ✅ **SHIPPED 2026-07-15** (residual: F8 Redis auth)
 
 ### 1.1 Fail-closed encryption
 - **Objective:** Missing/invalid `ENCRYPTION_KEY` must crash the server at boot; `decrypt()`
@@ -99,7 +116,7 @@ re-run-from-persisted-config reproduces the parent trade list.
   (needs candle fixtures).
 - **Verification:** CI red on an intentionally broken PR; green on main.
 
-## Phase 2 — Strategy Ownership & Observability (Plans 3 + 2 · effort S–M · risk low)
+## Phase 2 — Strategy Ownership & Observability (Plans 3 + 2) · ✅ **SHIPPED 2026-07-15** (2.4 OTel optional, deferred; 2.1 satisfied by outright *removal* of the code-edit path, not admin-gating)
 
 ### 2.1 Strategy editing → operator-owned artifacts *(product decision — sign-off required, per Plan 3 §3.2)*
 - **Objective:** Close the any-user-RCE path: `PUT /strategies/:id/code` becomes admin-only;
@@ -137,7 +154,7 @@ re-run-from-persisted-config reproduces the parent trade list.
   instrumentation; OTLP exporter to a local collector (compose service) or console in dev.
 - **Verification:** A backtest request produces a connected multi-service trace in the viewer.
 
-## Phase 3 — Live-Trading State Integrity (Plan 5 · effort M · risk medium · **gate for any future mainnet**)
+## Phase 3 — Live-Trading State Integrity (Plan 5 · **gate for any future mainnet**) · 🟡 **PARTIAL — 3.1–3.4 shipped as Plan 5's 5.3/5.2/5.4/5.1-scoped; 3.5 (Decimal) + 5.6 (restart recovery) remain**
 
 > Golden-master before/after each step. Decimal (3.5) intentionally changes outputs —
 > re-baseline with sign-off.
@@ -195,6 +212,33 @@ re-run-from-persisted-config reproduces the parent trade list.
   known-debt item).
 - **Verification:** Golden-master diff reviewed + re-baselined. Property test: ledger sums
   associative regardless of order. `test_risk_math.py` extended for Decimal.
+
+## Phase 3b — Live Fill-Path Correctness & Risk Governor (Plans 21 + 22 · added 2026-07-16 · **the current P0 track**)
+
+Grew out of the 2026-07-16 industry-standard audit (`21_live-algo-industry-standard-audit.md`)
+and the risk-management consolidation (`22_risk-management-industry-standard.md`). Sits between
+Phase 3's shipped steps and 3.5/5.6: it fixes the fill-detection machinery Phase 3's remaining
+work will build on, then layers session-scoped risk enforcement over the corrected state.
+
+- **3b.1 (=21.1)** Three surgical fill-path fixes — userTrades credentials (A-1), `_on_fill`
+  crash (A-2), LISTEN_KEY_EXPIRED stream-kill (A-3). Prerequisite for any further F7 diagnosis.
+- **3b.2 (=21.2)** ACCOUNT_UPDATE-driven reconcile — closes the ~60s staleness window
+  event-type-agnostically.
+- **3b.3 (=21.3)** Cancel resting SL/TP conditionals on every close path (stale
+  `closePosition:true` triggers are a live wrong-money hazard).
+- **3b.4 (=21.4)** Emergency-exit truth + naked-position detector/re-arm.
+- **3b.5 (=22.1–22.3)** Session Risk Governor hard checks: aggregate drawdown kill-switch,
+  daily loss limit, true cross-symbol open-risk budget, margin ceiling, liq-buffer wiring,
+  protections parity. (21.6 merged into 22.1.)
+- **3b.6 (=22.4–22.7)** Enforced VaR/CVaR + correlation caps + inverse-vol allocation
+  (config-gated, golden-master-inert at defaults) + platform surface.
+- **Deferred within 3b:** 21.5 (rate-limit/weight hygiene — pairs naturally with Phase 4.2's
+  budget work), 21.7 (P3 notes/decisions).
+
+**Gate to exit:** a conditional SL/TP fill reflects in session state in seconds, not ~60s; no
+open algo orders survive any close path; a governor breach demonstrably auto-sets
+`trading_state` and blocks entries; Zone 1 VaR number and enforced VaR number come from the
+same function.
 
 ## Phase 4 — Exchange Abstraction & Transport Efficiency (Plan 6 · effort M · risk medium)
 
@@ -337,7 +381,7 @@ Job-based Monte Carlo robustness simulator + optimizer UI. Full phases, API cont
 
 **Gate to exit:** Plan 10's per-phase acceptance criteria; old endpoints retired (410).
 
-## Phase 9 — Freqtrade/Nautilus Feature Gaps (Plans 11-15, 17 · effort S-M · risk low · independent track)
+## Phase 9 — Freqtrade/Nautilus Feature Gaps (Plans 11-15, 17 · independent track) · 🟡 **MOSTLY SHIPPED — 9.1 (=11) verified, 9.2 (=12), 9.4 (=14), 9.5 (=15) shipped; remaining: 9.3 (=13), 9.6 (=17)**
 
 Ported from `workspace/next_phase/` on 2026-07-15 (`mergeContext.md`); reconciled against
 plans 1-10 and shipped work the same day. Additive engine/server features, no trust/state or
@@ -371,20 +415,21 @@ with a recorded min-warmup recommendation per strategy.
 
 | Phase | Depends on | Gate to exit |
 |-------|-----------|--------------|
-| 0 | — (immediate, parallel) | Multi-symbol bracket + exec-algo close/flip + config-persistence tests green |
+| 0 | — (immediate, parallel) — **✅ shipped** | Multi-symbol bracket + exec-algo close/flip + config-persistence tests green |
 | 1 | — | CI green incl. new security tests; stack boots with scoped env |
 | 2 | 1 (CI) | Non-admin RCE path closed; one trace ID spans a request end-to-end |
-| 3 | 1, 2.3 | Soak: 24h testnet session, recorded PnL == exchange-derived PnL; replay test green |
-| 4 | 3 | Golden-master equivalence; 1h soak, zero 429s; gap-backfill test green |
+| 3 | 1, 2.3 — **🟡 partial (3.5, 5.6 remain)** | Soak: 24h testnet session, recorded PnL == exchange-derived PnL; replay test green |
+| 3b | 3.1–3.4 shipped — **🔴 current P0** | Phase 3b gate above (fill-path seconds-not-minutes; no surviving brackets; governor auto-trip) |
+| 4 | 3 **and 3b.3/3b.4** | Golden-master equivalence; 1h soak, zero 429s; gap-backfill test green |
 | 5 | 1 (harness); parallel with 4 | Supertest + RTL suites green in CI |
 | 6 | 4 (6.1); anytime (6.2/6.3) | drift-reviewer zero-drift report |
 | 7 | 0; 1.6 (CI) — parallel with 2–6 | Signed-off re-baselines; lookahead sentinel green |
 | 8 | 0 (9.1/9.3); 1.6 recommended — parallel with 3–6 | Plan 10 acceptance; legacy sim endpoint retired |
 | 9 | — (independent) — parallel with everything | 9.1 checklist; 9.2 count-gate test; 9.3 alignment + sentinel; 9.6 per-strategy warmup report |
 
-**Mainnet remains gated on Phase 3 shipped** (unchanged from the Plan 5 tracker note).
-**Backtest-trust is gated on Phase 0** — until it ships, multi-symbol results and
-leverage-sensitivity charts are known-wrong (`audit_2_quant-core.md` §1).
+**Mainnet remains gated on Phase 3 AND Phase 3b shipped** — Plan 21 proved the live fill path
+misses conditional fills and Plan 22's governor doesn't exist yet; neither state is
+mainnet-acceptable. **Backtest-trust gate (Phase 0) is satisfied** — shipped 2026-07-15.
 
-*This file sequences plans 1–19; it does not replace them. Update `0_tracker.md` when a phase
+*This file sequences plans 1–22; it does not replace them. Update `0_tracker.md` when a phase
 starts or ships.*

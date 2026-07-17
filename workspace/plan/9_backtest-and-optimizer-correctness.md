@@ -149,6 +149,27 @@ signals from the same data, verified mechanically, not by assertion.
   the default golden-master run at all — zero risk to the existing baseline; full suite 88/88.
   Fill-model ladder + liquidation fee + warmup fail-loud remain undone.
 
+### 9.11 — Cost-gate resurrection: rewire, fix dimensions, wire-or-delete `magnitude` (M-1/M-2/M-3, added 2026-07-16)
+- **Source:** Plan 21's five-model audit addendum (`21_live-algo-industry-standard-audit.md`
+  Part A2). Three `[Certain]` findings: **M-1** — the "default-on" cost gate never fires because
+  `live_bot_manager.py:1262`/`backtest_runner.py:905` inject `min_edge_mult=0.05` onto
+  `cost_model` while the live gate (`DefaultPortfolioModel._edge_beats_cost`) reads
+  `portfolio_model.min_edge_mult` (0.0); **M-2** — the gate's formula compares a per-unit price
+  distance (`conviction × risk_per_unit × rrr`) against a whole-position quote cost
+  (`cost.total`), making any activated gate a function of the symbol's absolute price level
+  (always-pass on BTC-priced, always-veto on sub-cent symbols); **M-3** — `Signal.magnitude` is
+  documented as feeding this gate but is read by nothing.
+- **Step A (golden-master-inert):** route the injected value to the object the gate actually
+  reads; fix the formula to quote-vs-quote (`edge_total = |conviction| × risk_per_unit ×
+  qty_est × rrr`, same `qty_est` as `estimate()`); wire `magnitude` in as the edge term where
+  provided (fallback conviction) or delete the field; **default `min_edge_mult` to 0.0
+  everywhere** (both injection sites) so behavior stays byte-identical. Unit-test the gate's
+  veto boundary on a high-priced and a sub-cent symbol.
+- **Step B (separate, re-baselined):** decide whether to activate at 0.05 by default —
+  golden-master re-baseline + sign-off, per this plan's standing protocol. Do not bundle with
+  Step A. `CURRENT_STATE.md`'s Risk-Model bullet already carries the 2026-07-16 correction;
+  update it again when A/B land.
+
 ## Acceptance criteria (phase)
 
 - All shipped backtest paths (single, multi, exec-algo, funding-on) covered by golden-master

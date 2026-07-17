@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { ChevronRight } from 'lucide-react'
 
 import PageWrapper from '../components/layout/PageWrapper'
@@ -11,11 +12,14 @@ import TickerStrip from '../features/dashboard/TickerStrip'
 import AccountOverview from '../features/dashboard/AccountOverview'
 import BacktestKpiStrip from '../features/dashboard/BacktestKpiStrip'
 import CollapsibleSection from '../features/dashboard/CollapsibleSection'
+import DashboardCalendar from '../features/dashboard/DashboardCalendar'
+import EquitySparkline from '../components/charts/EquitySparkline'
+import DrawdownSparkline from '../components/charts/DrawdownSparkline'
 import { useNavigate } from 'react-router-dom'
 import { formatPnl } from '../utils/formatters'
 
-import { useDashboardStats, useCachedCandles } from '../hooks/useDashboard'
-import { useBacktestsList } from '../hooks/useBacktest'
+import { useDashboardStats, useCachedCandles, useDashboardCalendar } from '../hooks/useDashboard'
+import { useBacktestsList, useBacktestResult } from '../hooks/useBacktest'
 import { useAlgoSessions } from '../hooks/useAlgoSessions'
 import { useAccountBalances, useTradePositions } from '../hooks/useTrade'
 
@@ -157,11 +161,19 @@ function PanelSection({ title, loading, children }) {
   )
 }
 
+const CALENDAR_TIMEFRAMES = [
+  { value: '30d', label: '30D' },
+  { value: '90d', label: '90D' },
+  { value: 'all', label: 'All' },
+]
+
 export default function Dashboard() {
   const { data: statsData, isLoading: loadingStats } = useDashboardStats()
   const { data: candlesData, isLoading: loadingCandles } = useCachedCandles()
   const { data: listData, isLoading: loadingBacktests } = useBacktestsList(1, 5)
   const { data: algoSessions = [], isLoading: loadingSessions } = useAlgoSessions()
+  const { data: calendarData, isLoading: loadingCalendar } = useDashboardCalendar()
+  const [calendarTimeframe, setCalendarTimeframe] = useState('90d')
 
   // Live account data — failures here must not blank the backtest sections.
   const { data: balances } = useAccountBalances()
@@ -171,6 +183,13 @@ export default function Dashboard() {
   const leaderboard = statsData?.leaderboard ?? []
   const cachedCandles = candlesData?.cached ?? []
   const recentRuns = listData?.backtests ?? []
+  const calendarDays = calendarData?.days ?? []
+
+  // Equity/drawdown sparklines mirror the most recently completed backtest
+  // (Dashboard is a cross-strategy overview, not tied to one run — the
+  // latest completed run is the only well-defined "current" equity curve).
+  const { data: latestRun, isLoading: loadingLatestRun } = useBacktestResult(stats.latestRunId)
+  const latestRunEquityCurve = latestRun?.equityCurve ?? []
 
   // "Live Runs" = currently active sessions (auto-hides when none are running).
   // "Recent Live Runs" = finished sessions (stopped/error), mirroring "Recent Backtests".
@@ -204,6 +223,58 @@ export default function Dashboard() {
       ) : (
         <BacktestKpiStrip stats={stats} />
       )}
+
+      {/* ── Latest Run — Equity / Drawdown sparklines ───────────────────── */}
+      {stats.latestRunId && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-0 border-t border-slate-700/50">
+          <div className="bg-title-bg border-b lg:border-b-0 lg:border-r border-slate-700/50">
+            <PanelSection title="Latest Run — Equity Curve" loading={loadingLatestRun}>
+              <div className="p-3">
+                <EquitySparkline data={latestRunEquityCurve} />
+              </div>
+            </PanelSection>
+          </div>
+          <div className="bg-title-bg">
+            <PanelSection title="Latest Run — Drawdown" loading={loadingLatestRun}>
+              <div className="p-3">
+                <DrawdownSparkline data={latestRunEquityCurve} />
+              </div>
+            </PanelSection>
+          </div>
+        </div>
+      )}
+
+      {/* ── Performance Calendar ─────────────────────────────────────────── */}
+      <div className="border-t border-slate-700/50">
+        {loadingCalendar ? (
+          <div className="bg-title-bg border border-slate-700/50 p-4">
+            <Skeleton className="h-[200px] bg-slate-800/50" />
+          </div>
+        ) : (
+          <DashboardCalendar
+            days={calendarDays}
+            timeframe={calendarTimeframe}
+            headerActions={
+              <div className="flex items-center gap-1">
+                {CALENDAR_TIMEFRAMES.map(({ value, label }) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setCalendarTimeframe(value)}
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border transition-colors ${
+                      calendarTimeframe === value
+                        ? 'bg-emerald-400/10 text-emerald-400 border-emerald-500/20'
+                        : 'bg-slate-500/10 text-slate-400 border-slate-500/20 hover:text-slate-200'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            }
+          />
+        )}
+      </div>
 
       {/* ── Live Runs, Recent Live Runs & Recent Backtests ──────────────── */}
       <div className={`grid grid-cols-1 ${ (loadingSessions || liveRuns.length > 0) ? 'lg:grid-cols-3' : 'lg:grid-cols-2' } gap-0 border-t border-slate-700/50`}>

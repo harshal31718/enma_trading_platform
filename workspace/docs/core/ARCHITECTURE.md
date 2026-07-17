@@ -37,18 +37,18 @@ Enma is a full-stack algorithmic trading platform for writing Python strategies,
 
 ## Database Responsibilities
 
-- **MongoDB (Node/Engine)**: `strategies` (global, no `userId`), `users`, `platformConfig`, `backtestResults`, `backtestTrades` (split from results to avoid BSON limits), `backtestLeverageScenarios`, `liveSessions`, `tradeOrders`, `tradeExecutions`, `tradeRecords`, `tradeTransactions`, `Settings`.
+- **MongoDB (Node/Engine)**: `strategies` (global, no `userId`), `users`, `platformConfig`, `backtestResults`, `backtestTrades` (split from results to avoid BSON limits), `backtestLeverageScenarios`, `liveSessions`, `tradeOrders`, `tradeExecutions`, `tradeRecords`, `tradeTransactions`, `Settings`, `executionEvents` (append-only, engine-written fact log for live-trading state; Plan 5 Step 5.1 — see `CURRENT_STATE.md`).
 - **TimescaleDB (Engine only)**: `candles` hypertable. Only Python engine reads/writes candles via asyncpg.
 - **Redis (Node/Engine)**: BullMQ (`bull:backtest`), symbol locks (`server/src/services/symbolLock.js`), backtest cancel flags (`backtest:cancel:{jobId}`), progress streams (`progress:{jobId}`), live-metrics cache (`risk:live-metrics:{userId}`, 10s TTL).
 
 ## Binance Environment Model
 
-There are exactly two Binance environments. Only Testnet is implemented today.
+There are exactly two Binance environments. Testnet is fully implemented (order placement + everything else); Mainnet is read-only today (key verification + balance display) — no mainnet order placement exists. See `workspace/docs/core/binance-api.md` for the full read-only mainnet surface.
 
 | Mode | Base URL | Money | Status |
 |---|---|---|---|
 | **Testnet** | `https://demo-fapi.binance.com` | Fake | ✅ Active — all orders go here |
-| **Mainnet** | `https://fapi.binance.com` | Real | 🔒 Not yet implemented |
+| **Mainnet** | `https://fapi.binance.com` | Real | 🟡 Read-only only — key verification + balance display (`X-Binance-Mode: mainnet` on `/trade/verify`, `/trade/account`); no order placement |
 
 Rules:
 - The **authenticated/signed** base URLs are defined **once** in `engine/services/binance_testnet.py` (`_BASE_URLS` dict). All signed Binance calls go through `send_signed_request` from that module — no other file defines the *signed* base.
@@ -60,7 +60,7 @@ Rules:
 
 ## Key Architectural Rules
 
-1. **Multi-user, invite-only**: Google OAuth + JWT cookie. `userId` scopes every mutable Mongoose model (`BacktestResult`, `BacktestTrade`, `BacktestLeverageScenario`, `LiveSession`, `Settings`, `TradeOrder`, `TradeExecution`, `TradeTransaction`, `TradeRecord`). `Strategy` stays global by design — no `userId`.
+1. **Multi-user, open login + per-feature gating**: Google OAuth + JWT cookie; login is open to anyone with a Google account (Plan 1, shipped 2026-07-14 — replaced the earlier invite-only model). `userId` scopes every mutable Mongoose model (`BacktestResult`, `BacktestTrade`, `BacktestLeverageScenario`, `LiveSession`, `Settings`, `TradeOrder`, `TradeExecution`, `TradeTransaction`, `TradeRecord`). `Strategy` stays global by design — no `userId`. Algo Trading start actions are gated per-user via `requireAlgoAccess` (admins bypass by role); Backtest, manual Trade, and Binance key entry are open to all authenticated users.
 2. **Engine is the Writer**: Engine writes `backtestResults` and `backtestTrades` directly. Server does NOT double-write these.
 3. **Keep-Alive**: Node uses `http.Agent` `keepAlive: true`, and Engine uses `httpx.AsyncClient` connection pooling.
 4. **Local Dev**: Fully containerized with `docker-compose`. `node_modules` are in named volumes, TA-Lib is built inside the `engine` Dockerfile.

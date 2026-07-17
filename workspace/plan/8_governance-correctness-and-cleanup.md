@@ -14,16 +14,32 @@ and the smaller hardening items are done.
 
 ## Scope / what changes
 
-### Step 8.1 — Reconcile governance docs to reality (issue SYS-4, SYS-3)
-- `CLAUDE.md`/`AGENTS.md` Rule 2 ("Node only proxies to engine", "no direct Binance calls
-  outside engine") is already false — the engine calls Binance directly (F-003) and Node's
-  internal handlers place orders. Rewrite the load-bearing invariants to match what Plans 3–6
-  actually shipped. Remove dead statements; make the source-of-truth hierarchy reflect the
-  event log (Plan 5).
+### Step 8.1 — Reconcile governance docs to reality (issue SYS-4, SYS-3) · **✅ shipped 2026-07-16 (fixes-queue F6)**
+- **Correction to this step's own premise:** the original SYS-4 finding ("Node's internal
+  handlers place orders" / "no direct Binance calls outside engine is already false") was
+  audited against the actual call graph and does **not** hold — `algo.controller.js`'s
+  "internal handler" functions (`handleAlgoPlaceOrder` etc., called by the engine over
+  `/internal/*`) only decrypt credentials and forward them back to the engine via
+  `engineClient`; they never call Binance directly. `CLAUDE.md`/`AGENTS.md` Rule 2 was already
+  literally true. What *was* genuinely stale: (a) the rule's phrasing didn't carve out the
+  client's direct public Binance WebSocket for market data, creating a false-contradiction with
+  the architecture doc — fixed by qualifying both to "no *signed/authenticated*" calls; (b) the
+  source-of-truth hierarchy (`.claude/GOVERNANCE.md`) never mentioned Plan 5's `executionEvents`
+  log — added a note; (c) several unrelated real drift items were found instead: `ARCHITECTURE.md`
+  still said "invite-only" (Plan 1 shipped open login 2026-07-14) and "Mainnet not implemented"
+  (mainnet read-only balance/verify has existed since Plan 4/20); `strategy-management/SPEC.md`'s
+  "Key Invariants" section still asserted live code-editing validation (Plan 3.2 removed the
+  feature 2026-07-15, but this one bullet was missed in that pass); `client/CLAUDE.md` still
+  documented a stale `binanceWS.js` path (`/ws`/`/stream` instead of the real `/public/ws`,
+  `/market/ws`); `DECISIONS.md` §6 never got an entry for the invite-only→open-login transition.
+  All fixed same session — see `handoff.md`'s 2026-07-16 entry for the full file list.
 - Document the strategy-asset model decided in Plan 3.2 (retired UI editing / sandboxed worker)
   including versioning and the prod named-volume divergence (`engine/strategies` volume makes
-  deployed code differ from the image — SYS-3).
-- Acceptance check: no invariant in the governance docs is contradicted by the code.
+  deployed code differ from the image — SYS-3). **Not done this pass** — the SYS-3 named-volume
+  divergence item is a distinct, still-open doc gap; carried forward, not part of F6's scope
+  (which was strictly the truth-telling audit, not new documentation of undocumented behavior).
+- Acceptance check: no invariant in the governance docs is contradicted by the code — confirmed
+  via a dedicated audit subagent pass, findings applied same session.
 
 ### Step 8.2 — Application-layer request validation (issue SEC-10)
 - Add a schema-validation layer (zod/joi/celebrate) to the Node API. Controllers stop

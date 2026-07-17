@@ -24,3 +24,15 @@ export function useUpdateExchangeSettings() {
     },
   })
 }
+
+// Plan 14 / fixes-queue F3: one-shot delivery test against a URL that may not
+// be saved yet — lets the Settings page's "Send Test" button verify
+// connectivity before the user commits to "Save".
+export function useTestWebhook() {
+  return useMutation({
+    mutationFn: async ({ url, format, timeoutMs }) => {
+      const res = await api.post('/api/v1/settings/webhook/test', { url, format, timeoutMs })
+      return res.data.data
+    },
+  })
+}

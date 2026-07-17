@@ -40,10 +40,10 @@ Flow: client ↔ server (REST + Socket.IO) ↔ engine (HTTP). Client connects di
 |------|--------|
 | **Multi-user, open login + per-feature gating** | Google OAuth + JWT cookie; **login is open to anyone**. All `/api/v1/*` routes require `verifyJWT`. Data is scoped per user via `userId` on all mutable Mongoose models (BacktestResult, BacktestTrade, LiveSession, Settings, TradeOrder, TradeExecution, TradeTransaction, TradeRecord). Strategies stay global/shared — no `userId` on `Strategy`. **Algo Trading is gated per-user** via `requireAlgoAccess` on the start actions (`POST /algo/sessions`, `POST /algo/chaos`); admins bypass via role. Backtest, manual Trade, and Binance key entry are open to all authenticated users. Access is requested from Settings and granted/revoked by admins from the Admin panel user table (`User.algoAccess.status`: `none`\|`requested`\|`granted`). |
 | **Layer boundaries** | Financial / indicator / order logic lives in `engine/` only. `server/` is a gateway + job queue. `client/` is UI. |
-| **Binance isolation** | Only `engine/` calls Binance. Never from `server/` or `client/`. Read `workspace/docs/core/binance-api.md` before any Binance work. |
+| **Binance isolation** | No *signed/authenticated* Binance calls from `server/` or `client/` — only `engine/` holds signing logic (`engine/services/binance_testnet.py`). The one documented exception: `client/` opens a direct **public** `wss://fstream.binance.com` WebSocket for market data only (no auth, no orders) — see `client/src/lib/binanceWS.js`. Read `workspace/docs/core/binance-api.md` before any Binance work. |
 | **Engine is sole writer** | `backtestResults` + `backtestTrades` are written only by the engine. Server updates `status`/`error` only. |
 | **TimescaleDB isolation** | Candles only, engine only. Server never connects to TimescaleDB. |
-| **Testnet only** | All live orders go to Binance Testnet. Mainnet is not implemented. |
+| **Testnet order placement only** | All live *order placement* goes to Binance Testnet. Mainnet **trading** is not implemented — but read-only mainnet key verification + balance display exist (`Settings.encryptedMainnetApiKey`, `X-Binance-Mode: mainnet` on `/trade/verify` and `/trade/account`). Don't assume zero mainnet code exists. |
 | **No Redux** | Zustand for UI state, TanStack Query for server state. |
 | **P&L colors** | `emerald-400` (profit) / `red-400` (loss). Never generic `green`. |
 | **No ccxt** | Engine uses `httpx` + native HMAC-signed REST. ccxt is a rejected approach. |

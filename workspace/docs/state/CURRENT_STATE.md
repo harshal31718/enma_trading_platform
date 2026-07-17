@@ -3,7 +3,9 @@
 **Authority:** This is the single source of truth for what ENMA currently does.
 Read this before starting any work. If this conflicts with chat history, this document wins.
 
-Last updated: 2026-07-02 (content relocated into feature SPEC docs and DECISIONS.md; see
+Last updated: 2026-07-16 (Known Technical Debt: confirmed the algo/conditional-order
+`ORDER_TRADE_UPDATE` gap live and logged two new open bugs from a live Chaos run — see below.
+Earlier relocation: content moved into feature SPEC docs and DECISIONS.md; see
 `workspace/plan/current_state_relocation.md` for the relocation plan and
 `workspace/docs/features/*/SPEC.md` for the moved detail)
 
@@ -127,8 +129,13 @@ Resilience & Stats sections) — this bullet is a pointer, not a description.
 
 ### Risk Model & Strategy Execution Refinements
 `AtrBracketRiskModel` supports optional trailing stop / breakeven move / ATR-percentile veto (all
-default-off); a default cost gate (`min_edge_mult=0.05`) and portfolio exposure cap
-(`max_portfolio_risk=0.06`) are active by default. Strategies precompute indicators once in
+default-off); a portfolio exposure cap (`max_portfolio_risk=0.06`) is active by default.
+**Correction 2026-07-16:** the cost gate (`min_edge_mult=0.05`) previously described here as
+"active by default" has in fact **never fired** — the value is injected onto `cost_model` but the
+gate reads `portfolio_model.min_edge_mult` (default 0.0). The gate is dead code today, and its
+edge-vs-cost formula is also dimensionally inconsistent. See
+`workspace/plan/21_live-algo-industry-standard-audit.md` findings M-1/M-2 (fix routed to Plan 9
+step 9.11, golden-master-gated). Strategies precompute indicators once in
 `prepare()` (both backtest and the rolling live window), leaving `before()` as a pure index lookup —
 replaces the former O(N²) per-candle recompute. **Rationale + verification detail moved 2026-07-02 to**
 `workspace/docs/core/DECISIONS.md` #18–19 — this bullet is a pointer, not a description.
@@ -186,9 +193,41 @@ detail (commands, per-phase byte-equivalence, issue-by-issue fix list) moved to
 
 ## Known Technical Debt
 
-- **Live bot PnL on exchange_sync exits**: when Binance closes a position via SL/TP and the engine detects it via reconciliation, the exit price is estimated from the local SL/TP prices. If neither SL nor TP was set, it falls back to current candle close. The user data stream (F-020) partially mitigates this by detecting fills in real-time. For exact fill prices an additional `GET /fapi/v1/userTrades` call would be needed (not yet implemented).
+- **Live bot PnL on exchange_sync exits — partially fixed 2026-07-17 (Plan 21.1, A-1)**: when Binance closes a position via SL/TP and the engine detects it via reconciliation, `_query_real_exit_from_user_trades()` calls `GET /fapi/v1/userTrades` to reconstruct the real exit price/PnL from Binance's own trade history. This call previously omitted its required `api_key`/`api_secret` arguments — a `TypeError` on every invocation, swallowed by the surrounding `except Exception`, always returning `None` — so every `exchange_sync` close silently fell back to the candle/SL-TP estimate. **The credentials are now passed** (see `21_live-algo-industry-standard-audit.md` A-1); regression tests added in `engine/tests/test_query_real_exit_from_user_trades.py`. Not yet confirmed against a real live session's Binance trade history — do that before closing 21.1 fully.
 - **Live bot entry fee not tracked**: `session["pnl"]` only deducts the exit fee per trade. Entry fees paid to Binance are not subtracted locally, so session PnL overstates profits by one taker fee per round-trip. Acceptable approximation for now.
-- **Resolved 2026-07-02 (see DECISIONS.md #20)**: the Trade page's `open-orders`/`positions`/`account` REST polling (previously 30s/3s/10s, dominated by an un-symbol-filtered `open-orders` call costing 480 weight/min on a budget shared across all users via the server's single outbound IP) is now backed by a per-user Binance User Data Stream (`engine/services/manual_trade_stream.py`) with REST reduced to a 90s/30s/60s safety net. **Remaining gap**: whether Binance emits `ORDER_TRADE_UPDATE` for algo/conditional orders (`/fapi/v1/algoOrder`, this platform's TP/SL mechanism) before they trigger is unconfirmed against a live account — Docker wasn't running during implementation. Worth a real end-to-end check next time the stack is up; if unconfirmed orders don't emit the event, they fall back to the 60s REST poll rather than showing wrong data (the cache patch never guesses), so this is a staleness-window risk, not a correctness one.
+- **Resolved 2026-07-02 (see DECISIONS.md #20)**: the Trade page's `open-orders`/`positions`/`account` REST polling (previously 30s/3s/10s, dominated by an un-symbol-filtered `open-orders` call costing 480 weight/min on a budget shared across all users via the server's single outbound IP) is now backed by a per-user Binance User Data Stream (`engine/services/manual_trade_stream.py`) with REST reduced to a 90s/30s/60s safety net.
+- **CONFIRMED 2026-07-16 (fixes-queue F7, live Chaos run against Binance Testnet) — algo/conditional
+  order fills are NOT reliably caught by the real-time WS path.** BSBUSDT and ESPORTSUSDT both
+  closed via their conditional SL/TP within single-digit seconds of opening (per Binance's own
+  Order History), but Enma's session UI kept showing both as open for ~50-55 more seconds until
+  the next 1m candle-close drove the per-loop REST reconciliation poll, which is what actually
+  caught and closed them — not the user-data-stream fill callback (F-020). **This means every
+  live/chaos session currently carries up to ~60s where the UI and the strategy's own in-memory
+  position state say a symbol is open when Binance has already closed it.** **Root cause isolated
+  and code-fixed 2026-07-17 (Plan 21.1, A-2):** `_on_fill`'s client-id lookup read a non-existent
+  `clientOrderId` key and fell back to the numeric `orderId` (an int), so `.startswith("tpsl_")`
+  raised `AttributeError` on every genuinely-delivered FILLED/PARTIALLY_FILLED frame — caught by
+  the outer per-callback try/except, which meant `_reconcile_exchange_state()` at the end of
+  `_on_fill` never ran. The event-driven fill path was dead code even when Binance emitted the
+  event; every close silently waited for the next candle-close REST poll instead. Fixed by reading
+  the real `"c"` field (str-coerced) via the new `_extract_fill_client_id()` helper, and by
+  wrapping the OUO peer-cancel block in its own try/except so the reconcile call can no longer be
+  skipped by a failure earlier in the callback. **Not yet re-verified against a live Chaos run** —
+  the original ~60s staleness symptom needs to be reproduced again with this fix in place before
+  F7 is closed. Detail + full timeline: `workspace/docs/features/algo-trading/SPEC.md`'s "Open
+  issues found in a live Chaos run" section, `21_live-algo-industry-standard-audit.md` (A-2), and
+  `workspace/plan/handoff.md`.
+- **OPEN 2026-07-16 — TP placement failing outright on some symbols (`400 Bad Request`)**, found in
+  the same live Chaos run (`BCHUSDT`, then `ETHUSDT`). Possibly a recurrence of the 2026-07-03
+  stale-tick-size-cache bug (see `algo-trading/SPEC.md`'s "Resilience & Stats") for symbols outside
+  the original tier-cache warm set, or a distinct cause — genuinely unknown because the failure was
+  only ever logged as httpx's generic `"400 Bad Request"` message, discarding Binance's actual
+  `{code, msg}` body. **Logging fixed same day** (`_binance_error_detail()` in
+  `live_bot_manager.py`, wired into entry/SL/TP failure logs) so the next reproduction will show
+  the real cause. Root cause itself still open.
+- **OPEN 2026-07-16 — a position (`FXSUSDT SHORT`) stayed shown as open after a full session stop**,
+  same live run. Not yet investigated. Candidates: the entry may never have actually filled on
+  Binance (phantom local-only position), or `stop_session()`'s close loop skipped this symbol.
 
 ---
 

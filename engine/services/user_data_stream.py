@@ -55,6 +55,11 @@ class UserDataStreamManager:
         self._api_key = api_key
         self._api_secret = api_secret
         self._fill_callbacks: dict[str, list[callable]] = {}
+        # F7 fix: per-symbol ACCOUNT_UPDATE callbacks. Binance emits an
+        # ACCOUNT_UPDATE on *any* position change (plain order, conditional/
+        # algo order, liquidation, ADL), so this is the event-type-agnostic
+        # signal the fill path was missing for /fapi/v1/algoOrder TP-SL fills.
+        self._account_callbacks: dict[str, list[callable]] = {}
         self._stream_callbacks: list[callable] = []
         self._listen_key: str | None = None
         self._ws_task: asyncio.Task | None = None
@@ -114,6 +119,39 @@ class UserDataStreamManager:
             if not self._fill_callbacks[symbol]:
                 self._fill_callbacks.pop(symbol, None)
 
+    def register_account_callback(self, symbol: str, callback: callable) -> None:
+        """Register an async callback for ACCOUNT_UPDATE position deltas on
+        *symbol* (F7 fix).
+
+        The callback is called as::
+
+            await callback(position_data: dict)
+
+        where ``position_data`` is one entry of the ``a.P`` array from an
+        ``ACCOUNT_UPDATE`` event (fields: ``s`` symbol, ``pa`` positionAmt,
+        ``ep`` entryPrice, ``up`` unrealizedPnl, …). Unlike the fill callback
+        (which only fires on ``ORDER_TRADE_UPDATE`` FILLED/PARTIALLY_FILLED and
+        so misses conditional/algo-order fills), this fires on every position
+        change Binance reports — the reliable close signal for the live bot.
+        """
+        if symbol not in self._account_callbacks:
+            self._account_callbacks[symbol] = []
+        self._account_callbacks[symbol].append(callback)
+
+    def unregister_account_callback(self, symbol: str, callback: callable | None = None) -> None:
+        """Remove a previously registered ACCOUNT_UPDATE callback.  If
+        *callback* is None remove all callbacks for *symbol*."""
+        if symbol not in self._account_callbacks:
+            return
+        if callback is None:
+            self._account_callbacks.pop(symbol, None)
+        else:
+            self._account_callbacks[symbol] = [
+                cb for cb in self._account_callbacks[symbol] if cb is not callback
+            ]
+            if not self._account_callbacks[symbol]:
+                self._account_callbacks.pop(symbol, None)
+
     async def start(self) -> None:
         """Create a listen key and start the WebSocket listener."""
         if self._running:
@@ -143,6 +181,7 @@ class UserDataStreamManager:
         await self._delete_listen_key()
         self._listen_key = None
         self._fill_callbacks.clear()
+        self._account_callbacks.clear()
         self._stream_callbacks.clear()
         logger.info("[UserDataStream] Stopped.")
 
@@ -213,10 +252,28 @@ class UserDataStreamManager:
                         except json.JSONDecodeError:
                             continue
 
+                        # F7 diagnostic (2026-07-16): log the raw event type of
+                        # every user-data frame so a live reproduction shows
+                        # exactly what Binance emits for an algo/conditional
+                        # (/fapi/v1/algoOrder) TP-SL fill — whether it arrives as
+                        # ORDER_TRADE_UPDATE at all, as a different event type
+                        # (e.g. CONDITIONAL_ORDER_TRADE_UPDATE / STRATEGY_UPDATE)
+                        # that _Event.parse currently drops, or only as an
+                        # ACCOUNT_UPDATE. Remove once the fill-path root cause is
+                        # addressed (Plan 5 Step 5.6).
+                        _raw_etype = msg.get("e")
+                        logger.info(f"[UserDataStream] frame e={_raw_etype}")
+
                         etype = _Event.parse(msg)
                         if etype == _Event.ORDER_TRADE_UPDATE:
-                            await self._handle_order_trade_update(msg.get("o", {}))
-                            await self._dispatch_stream_callbacks(etype, msg.get("o", {}))
+                            _o = msg.get("o", {})
+                            logger.info(
+                                f"[UserDataStream] ORDER_TRADE_UPDATE raw: sym={_o.get('s')} "
+                                f"X={_o.get('X')} type={_o.get('o')} origType={_o.get('ot')} "
+                                f"clientId={_o.get('c')} orderId={_o.get('i')}"
+                            )
+                            await self._handle_order_trade_update(_o)
+                            await self._dispatch_stream_callbacks(etype, _o)
                         elif etype == _Event.ACCOUNT_UPDATE:
                             await self._handle_account_update(msg.get("a", {}))
                             await self._dispatch_stream_callbacks(etype, msg.get("a", {}))
@@ -226,7 +283,26 @@ class UserDataStreamManager:
                             logger.warning("[UserDataStream] Listen key expired — reconnecting")
                             self._listen_key = await self._create_listen_key()
                             ws_url = f"{_BINANCE_FUTURES_WS}/{self._listen_key}"
-                            return  # Reconnect loop picks up the new URL
+                            # A-3 fix: `return` here exited the whole _run_ws
+                            # coroutine (there is no caller that re-invokes
+                            # it), silently killing the user-data stream for
+                            # the rest of the session — the old comment
+                            # claiming "reconnect loop picks it up" was wrong.
+                            # `break` exits only the `async for` (and, via the
+                            # `async with`, the current ws connection), so the
+                            # outer `while self._running` loop re-enters and
+                            # reconnects using the refreshed `ws_url` above.
+                            break
+                        else:
+                            # UNRECOGNIZED by _Event.parse — the key F7 diagnostic.
+                            # If an algo/conditional TP-SL fill surfaces here, the
+                            # real-time fill path never sees it (parse returns None;
+                            # the frame was previously dropped with no trace). Dump
+                            # the whole frame so the reproduction captures Binance's
+                            # actual event name + shape.
+                            logger.warning(
+                                f"[UserDataStream] UNHANDLED event e={_raw_etype} — full frame: {raw}"
+                            )
             except asyncio.CancelledError:
                 return
             except Exception as e:
@@ -305,9 +381,24 @@ class UserDataStreamManager:
                 continue
             amt = float(pos.get("pa", 0))
             entry_price = float(pos.get("ep", 0))
-            logger.debug(
+            # F7 diagnostic: INFO (was debug) so a fast conditional-order
+            # close's position-goes-to-zero delta is visible at default level,
+            # timestamped against the candle-close reconcile.
+            logger.info(
                 f"[UserDataStream] {symbol}: account update — positionAmt={amt} entryPrice={entry_price}"
             )
+            # F7 fix: dispatch to per-symbol ACCOUNT_UPDATE callbacks. This is
+            # the event-agnostic close signal — it fires for conditional/algo
+            # (/fapi/v1/algoOrder) TP-SL fills that never surface as an
+            # ORDER_TRADE_UPDATE the fill path can see, closing the ~60s window
+            # where the engine still believed a Binance-closed position was open.
+            for cb in self._account_callbacks.get(symbol, []):
+                try:
+                    await cb(pos)
+                except Exception as e:
+                    logger.error(
+                        f"[UserDataStream] {symbol}: account callback error: {e}"
+                    )
 
 
 # No module-level singleton — each live session creates its own

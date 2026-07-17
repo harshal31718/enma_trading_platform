@@ -39,6 +39,12 @@ explicitly so individual items don't get evaluated in a vacuum:
 > engine breaks the backtest=live `pipeline.evaluate()` invariant and isn't ground truth for
 > validating our sim. Re-open only if we outgrow the in-house engine.
 
+> **Resolved (2026-07-16) — Forks #2 and #3** (decided by the user for Plan 22,
+> `22_risk-management-industry-standard.md`): **#2 = classical/rule-based only for now** — no
+> GARCH/regime-ML; vol-forecasting stays exploratory below. **#3 = yes, introduce a portfolio
+> layer** — starting with an inverse-volatility `allocate()` variant (Plan 22.6); PyPortfolioOpt
+> adoption deliberately deferred until inverse-vol proves insufficient.
+
 1. **Crypto-only vs. add equities.** A whole cluster (Stock Screener, Insider/Form-4 tracker, FinBERT,
    much of News Sentiment) assumes a *stock* data domain Enma doesn't have today. Adding equities means
    a new market-data source, new symbols model, and arguably a separate route — a second product surface.

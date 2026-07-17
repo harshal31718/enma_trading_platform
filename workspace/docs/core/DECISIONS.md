@@ -82,6 +82,17 @@ routes). `userId` now scopes every mutable Mongoose model (`BacktestResult`, `Ba
 switch to multi-user was driven by needing invite-only shared access without giving every user the
 same Binance credentials or trade history.
 
+**Decision (superseded 2026-07-14 — Plan 1):** Invite-only was itself superseded by **open Google
+login** — anyone with a Google account can sign in; there is no invite/whitelist gate on
+authentication anymore. Per-feature gating replaces per-user invite: only Algo Trading's start
+actions (`POST /algo/sessions`, `POST /algo/chaos`) require admin-granted access
+(`requireAlgoAccess`, `User.algoAccess.status`), requested from Settings and granted/revoked from
+the Admin panel. Backtest, manual Trade, and Binance key entry are open to all authenticated users.
+**Rationale:** Invite-only added friction without a corresponding security need — the real
+sensitive surface is starting live algo sessions (real orders, shared Testnet/Mainnet credentials
+per user), not signing in. Gating that one action per-user is more precise than gating the whole
+platform per-invite.
+
 ## 7. Frontend Architecture
 **Decision:** React + Vite + Zustand + TanStack Query + shadcn/ui.
 **Rationale:** Zustand handles simple global states (auth), TanStack Query handles caching and server state, shadcn gives complete control over components without library lock-in.

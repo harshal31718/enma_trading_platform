@@ -66,7 +66,12 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      # Engine boot loads exchange rules + volume tiers + book tickers for
+      # ~700 futures + ~3600 spot symbols (40-70s of httpx calls before
+      # "Application startup complete"). At 30s it passed only by the retry
+      # margin; a slow-network day would mark it unhealthy and cascade the
+      # same abort down to server -> client. 90s gives real headroom.
+      start_period: 90s
     develop:
       watch:
         - action: sync
@@ -116,7 +121,15 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
-      start_period: 20s
+      # start_period must exceed the CMD's on-boot `npm install` (the
+      # enma_server_node_modules volume overlays the image's node_modules, so
+      # npm resolve/audit re-runs every start — ~2 min on Docker Desktop for
+      # Windows). At 20s compose marked the container unhealthy mid-install and
+      # aborted the dependent client with "dependency failed to start". During
+      # start_period, failing checks keep the container "starting" (not
+      # "unhealthy"), so dependents wait instead of aborting; it flips to
+      # healthy the instant the first check passes, so a fast boot is unaffected.
+      start_period: 180s
     develop:
       watch:
         - action: sync

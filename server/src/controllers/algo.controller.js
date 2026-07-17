@@ -12,6 +12,7 @@ const { lockSymbol, releaseSymbolLock, getAllLockedSymbols, isSymbolFree, getSym
 const { getIO } = require('../config/socket')
 const { resolveModelParams, resolveStrategyRiskParams } = require('../utils/risk')
 const { allocateChaosSymbols } = require('../utils/chaosAllocator')
+const { dispatchWebhook } = require('../utils/webhook')
 
 // POST /api/v1/algo/sessions
 async function startSession(req, res, next) {
@@ -137,6 +138,16 @@ async function startSession(req, res, next) {
 
     // 6. Update status to running
     await LiveSession.findByIdAndUpdate(session._id, { status: 'running' })
+
+    // Plan 14 / F3: fire-and-forget — never awaited, dispatchWebhook never
+    // throws, so this can never delay or fail the response below.
+    dispatchWebhook(req.user.id, 'session_start', {
+      sessionId: String(session._id),
+      strategy: strategy.name,
+      symbols,
+      capital: String(capital),
+      leverage: Number(leverage) || 1,
+    })
 
     const io = getIO()
     io.to(`user:${req.user.id}`).emit('algo:session:log', {
@@ -397,6 +408,17 @@ async function handleEngineStats(req, res, next) {
             },
           },
         }).catch(() => { })
+
+        // Plan 14 / F3: fire-and-forget, never awaited/blocking.
+        dispatchWebhook(String(session.userId), 'entry_fill', {
+          sessionId: id,
+          strategy: session.strategyName,
+          symbol: eventData.symbol,
+          side: eventData.side,
+          qty: eventData.qty,
+          entryPrice: eventData.price,
+          leverage: eventData.leverage,
+        })
       }
 
       if (event === 'position:close' && eventData) {
@@ -415,6 +437,27 @@ async function handleEngineStats(req, res, next) {
           // Clear the persisted snapshot — the position is no longer open.
           $unset: { [`positionDetails.${eventData.symbol}`]: '' },
         }).catch(() => { })
+
+        // Plan 14 / F3: fire-and-forget, never awaited/blocking. `session`
+        // here is the pre-`$unset` snapshot fetched above (a plain JS object,
+        // unaffected by the DB write that just ran), so positionDetails for
+        // this symbol is still the entry-side data we need for the payload.
+        const closedPos = session.positionDetails && session.positionDetails[eventData.symbol]
+        const exitWebhookPayload = {
+          sessionId: id,
+          strategy: session.strategyName,
+          symbol: eventData.symbol,
+          side: closedPos ? closedPos.side : undefined,
+          qty: closedPos ? closedPos.qty : undefined,
+          entryPrice: closedPos ? closedPos.price : undefined,
+          exitPrice: eventData.exitPrice,
+          pnl: eventData.pnl,
+          exitReason: eventData.exitReason,
+        }
+        dispatchWebhook(String(session.userId), 'exit_fill', exitWebhookPayload)
+        if (eventData.exitReason === 'liquidation') {
+          dispatchWebhook(String(session.userId), 'liquidation', exitWebhookPayload)
+        }
 
         // Push to trade history
         const currentBalance = parseFloat(session.capital) + parseFloat(session.pnl || '0')
@@ -451,6 +494,12 @@ async function handleEngineStats(req, res, next) {
           type: 'error',
           message: errMsg
         })
+        // Plan 14 / F3: fire-and-forget, never awaited/blocking.
+        dispatchWebhook(String(session.userId), 'session_error', {
+          sessionId: id,
+          strategy: session.strategyName,
+          error: errMsg,
+        })
         // Release all symbol locks for errored sessions
         if (session?.symbols) {
           for (const sym of session.symbols) {
@@ -473,6 +522,12 @@ async function handleEngineStats(req, res, next) {
       }
 
       if (event === 'stopped') {
+        // Plan 14 / F3: fire-and-forget, never awaited/blocking.
+        dispatchWebhook(String(session.userId), 'session_stop', {
+          sessionId: id,
+          strategy: session.strategyName,
+        })
+
         // Final per-symbol aggregation — captures positions force-closed during
         // the stop sequence (which emit no position:close event).
         try {
