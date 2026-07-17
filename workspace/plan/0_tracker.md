@@ -15,7 +15,7 @@ this board no longer duplicates it).
 |----|-------|-----------------|--------|----------|------------|---------|
 | 21 | Live algo industry-standard audit — **fixes** | 21.5c (batched reconcile) (21.1–21.4 + 21.5a/b + all of 21.7 [A-11/A-12/A-13/A-14] shipped code-side, pending container test run + live re-verification; 21.6 → Merged→22.1) | In progress (21.1–21.4, 21.5a/b, 21.7 all shipped 2026-07-17) | P2 (21.5c) | — | 2026-07-17 |
 | 5  | Live-trading state integrity | 5.5 (Decimal money, golden-master sign-off), 5.6 (restart recovery / projection) | In progress | P0 | 21.1–21.2 inform 5.6 | 2026-07-16 |
-| 22 | Industry-standard risk management (Session Risk Governor) | 22.2–22.7 (22.1 shipped code-side 2026-07-17: `SessionRiskGovernor` core, capital integrity gate, `execute_entry`/`_push_stats` wiring, `risk_breach` webhook — pending container test run + live re-verification) | In progress (22.1 shipped code-side 2026-07-17) | P1 (22.2–22.3) / P2 (rest) | 21 (21.1–21.4, shipped) | 2026-07-17 |
+| 22 | Industry-standard risk management (Session Risk Governor) | 22.3–22.7 (22.1+22.2 shipped code-side 2026-07-17: governor core, capital integrity gate, portfolio open-risk budget, liq-buffer guard, `risk_breach` webhook — pending container test run + live re-verification) | In progress (22.1+22.2 shipped code-side 2026-07-17) | P1 (22.3) / P2 (rest) | 21 (21.1–21.4, shipped) | 2026-07-17 |
 | 9  | Backtest & optimizer correctness (quant core) | 9.7 (funding ledger), 9.8 (intrabar sim), 9.9 (stats portion), 9.10 (fill-model ladder), **9.11 (cost-gate resurrection, M-1/M-2/M-3 — Step A inert, Step B re-baselined)** | Ready | P1 | — | 2026-07-16 |
 | 10 | Monte Carlo Optimiser & Strategy Lab | Phases 1b–4 (job plumbing, `labResults`, UI, optimizer w/ walk-forward + Optuna) | Ready | P1 | 9 (9.1/9.3, shipped) | 2026-07-16 |
 | 13 | Informative / multi-timeframe contract (`self.htf()`) | All | Ready | P2 | — | 2026-07-16 |
@@ -161,14 +161,18 @@ pipeline-touching steps) a golden-master check per Rule C.
 - **22** — Scope decisions taken 2026-07-16: portfolio layer yes (fork #3), rule-based only
   (fork #2), VaR/CVaR enforced (Zone 1 graduates from display-only). Found while grounding:
   `liq_buffer_pct` is decorative (no pipeline call site) and `max_portfolio_risk` is per-symbol
-  despite its name. **Capital-control audit (user question, 2026-07-16):** risk-% per trade is
+  despite its name — **both resolved 2026-07-17 by 22.2**: `respects_liq_buffer()` is now wired
+  into `execute_entry` (with the computed liq price in the veto log), and the governor's new
+  `check_portfolio_risk()` is the true cross-symbol enforcement point (the per-symbol
+  `DefaultPortfolioModel` check is left as-is for backtest, not removed — no golden-master
+  benefit to touching it). **Capital-control audit (user question, 2026-07-16):** risk-% per trade is
   genuinely parameter-controlled (3 clamp layers: `utils/risk.js` → Zone 2 cascade → engine
   F-014 floor) and per-bot/new-bot launch limits exist (`maxSymbolsPerBot`, `maxConcurrentBots`,
   chaos caps, `maxOpenPositions`) — but session `capital` itself is honor-system: presence-check
   only, no numeric bounds, never compared to the wallet, no cross-session reservation, and Chaos
-  commits `capital × strategyCount` unchecked (findings B-11/B-12, fix = 22.1's capital
-  integrity gate; Part F Q5 wants a reject-vs-warn decision). Do not start 22.1 before
-  21.1–21.4. Part F open questions want user answers before 22.1 implementation.
+  commits `capital × strategyCount` unchecked (findings B-11/B-12, fixed 2026-07-17 by 22.1's
+  capital integrity gate). **22.1 and 22.2 both shipped code-side 2026-07-17** — 22.3 (protections
+  parity + risk-integrity events) is next in the plan's own sequencing, not yet started.
 - **9** — Remaining steps 9.7–9.10 change backtest outputs **by design** → per-step golden-master
   re-baseline with sign-off (Rule C). Who signs off is still an open question.
 - **10** — MC core math is honest (Phase 1a shipped) but still behind the old synchronous

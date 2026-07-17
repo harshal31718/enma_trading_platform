@@ -139,8 +139,14 @@ Resilience & Stats sections) — this bullet is a pointer, not a description.
 - **`risk_breach` webhook event**: new `Settings.webhook.events` enum value (opt-in by default).
   `handleEngineStats` persists the new `tradingState`, emits `algo:session:update` +
   `algo:session:log`, and dispatches the webhook.
-- Not yet shipped: 22.2 (portfolio open-risk budget + `liq_buffer_pct` wiring), 22.3 (protections
-  parity + risk-integrity events), 22.4–22.7. See `workspace/plan/22_risk-management-industry-standard.md`.
+- **Portfolio open-risk budget + liquidation buffer (22.2, shipped 2026-07-17)**:
+  `SessionRiskGovernor.check_portfolio_risk()` — the TRUE cross-symbol Σ `|entry−stop|×qty` /
+  equity, vetoing past `max_portfolio_risk` (default 0.06, same field name the pre-existing
+  per-symbol `DefaultPortfolioModel` check used — kept for config compat, superseded for live
+  sessions specifically). `respects_liq_buffer()` (previously decorative, zero call sites) is now
+  wired into `execute_entry` too, vetoing with the computed liquidation price in the log.
+- Not yet shipped: 22.3 (protections parity + risk-integrity events), 22.4–22.7. See
+  `workspace/plan/22_risk-management-industry-standard.md`.
 
 ### Order History (Trade Recorder)
 - Engine writes every completed round-trip trade to MongoDB `tradeRecords` collection via `engine/services/trade_recorder.py → record_trade()` (best-effort, never blocks the position-close path). Called by both `live_bot_manager` close paths (normal close + session stop).

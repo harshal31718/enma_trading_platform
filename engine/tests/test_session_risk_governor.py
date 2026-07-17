@@ -196,3 +196,53 @@ def test_pre_trade_checks_standing_limits_before_margin():
     v = gov.check_pre_trade(equity=750.0, used_margin=10.0, now=_dt())
     assert v.ok is False
     assert v.check_name == "aggregate_drawdown"
+
+
+# ── Portfolio open-risk budget (Plan 22 Step 22.2) ──────────────────────────
+
+def test_portfolio_risk_defaults_to_six_percent():
+    gov = SessionRiskGovernor()
+    assert gov.max_portfolio_risk == 0.06
+
+
+def test_portfolio_risk_within_budget_passes():
+    gov = SessionRiskGovernor({"max_portfolio_risk": 0.06})
+    v = gov.check_portfolio_risk(open_risk=500.0, equity=10_000.0)
+    assert v.ok is True
+
+
+def test_portfolio_risk_past_budget_breaches():
+    gov = SessionRiskGovernor({"max_portfolio_risk": 0.06})
+    v = gov.check_portfolio_risk(open_risk=700.0, equity=10_000.0)
+    assert v.ok is False
+    assert v.check_name == "portfolio_open_risk"
+    assert "7.0%" in v.reason
+
+
+def test_portfolio_risk_exactly_at_budget_passes():
+    """> not >=, matching this repo's convention for boundary checks
+    (see capitalGate.js's exactly-at-balance test)."""
+    gov = SessionRiskGovernor({"max_portfolio_risk": 0.06})
+    v = gov.check_portfolio_risk(open_risk=600.0, equity=10_000.0)
+    assert v.ok is True
+
+
+def test_portfolio_risk_zero_or_negative_disables_the_check():
+    gov = SessionRiskGovernor({"max_portfolio_risk": 0.0})
+    v = gov.check_portfolio_risk(open_risk=999_999.0, equity=10.0)
+    assert v.ok is True
+
+    gov2 = SessionRiskGovernor({"max_portfolio_risk": -0.1})
+    v2 = gov2.check_portfolio_risk(open_risk=999_999.0, equity=10.0)
+    assert v2.ok is True
+
+
+def test_portfolio_risk_fails_closed_on_zero_or_negative_equity():
+    gov = SessionRiskGovernor({"max_portfolio_risk": 0.06})
+    v = gov.check_portfolio_risk(open_risk=100.0, equity=0.0)
+    assert v.ok is False
+    assert v.check_name == "portfolio_open_risk"
+    assert "fail-closed" in v.reason
+
+    v2 = gov.check_portfolio_risk(open_risk=100.0, equity=-50.0)
+    assert v2.ok is False

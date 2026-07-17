@@ -432,11 +432,27 @@ reuses it to derive `total_pnl` (replacing the old inline per-symbol sum).
 `LiveSession.tradingState`, emits `algo:session:update` + `algo:session:log`, and dispatches the
 webhook with `{sessionId, strategy, checkName, reason, newState}`.
 
-**Not yet shipped:** 22.2 (portfolio open-risk budget + `liq_buffer_pct` wired into the governor),
-22.3 (protections parity + risk-integrity events), 22.4–22.7 (VaR/CVaR enforcement,
-correlation-aware concentration cap, and further hardening). Full Zone 2 UI/schema wiring for the
-governor's config keys is 22.7's scope — 22.1 reads them as plain engine-side defaults. See
-`workspace/plan/22_risk-management-industry-standard.md` and `DECISIONS.md` #23/#24/#25.
+**Portfolio open-risk budget + liquidation buffer (Plan 22 Step 22.2, shipped 2026-07-17):**
+`SessionRiskGovernor.check_portfolio_risk()` computes the TRUE cross-symbol aggregate —
+Σ `|entry − stop| × qty` across every open position plus the candidate entry, over session
+equity — vetoing past `max_portfolio_risk` (default 0.06, same field name `core/models/
+portfolio.py`'s per-symbol check already used, kept for config compat and cascaded from
+`risk_params` the same way as `max_session_dd`). This supersedes that per-symbol check for live
+sessions (a Plan 21 audit finding: despite the name, it never saw other open symbols); the
+per-symbol check itself is untouched for backtest. New `LiveBotManager.
+_compute_open_risk_breakdown()` reads each open symbol's live `strategy.stop_loss` (reflects
+trailing tightening immediately). Wired into `execute_entry` right after the M-5 SL/TP validity
+check — vetoes with a log naming every contributing symbol and its risk amount, applies to DCA
+scale-ins too. The same call site also wires `respects_liq_buffer()` (`core/models/risk.py`,
+previously decorative — zero pipeline call sites) — computes the actual liquidation price via
+`core/margin.py` for the veto log (not just the bool), fails *open* on an unexpected exception in
+the check itself (distinct from an actual computed violation, which vetoes).
+
+**Not yet shipped:** 22.3 (protections parity + risk-integrity events), 22.4–22.7 (VaR/CVaR
+enforcement, correlation-aware concentration cap, and further hardening). Full Zone 2 UI/schema
+wiring for the governor's config keys is 22.7's scope — 22.1/22.2 read them as plain engine-side
+defaults. See `workspace/plan/22_risk-management-industry-standard.md` and `DECISIONS.md`
+#23/#24/#25.
 **Pending container test run + live re-verification** — the governor class itself has 18/18 real
 pytest passes standalone (`engine/tests/test_session_risk_governor.py`); the wiring into
 `live_bot_manager.py` was verified via `py_compile`/`ast.parse` + manual review (the file has a

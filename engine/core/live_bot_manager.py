@@ -396,6 +396,89 @@ class LiveAdapter(ExecutionAdapter):
                 tp_price = None
                 strategy.take_profit = None
 
+        # Plan 22 Step 22.2: portfolio open-risk budget + liquidation-buffer
+        # veto. Placed here (not in the earlier pre-trade gate block) because
+        # both need the finalized sl_price/qty this candle actually produced
+        # — after clamp_and_round_qty and M-5's SL validity check, not the
+        # pre-clamp values. Applies to DCA adds too (unconditional, like M-5
+        # above) since a scale-in also changes committed risk/notional.
+        risk_governor = session.get("risk_governor")
+        if risk_governor is not None and sl_price is not None:
+            _open_risk_breakdown = self.manager._compute_open_risk_breakdown(session)
+            _candidate_risk = abs(fill_price - sl_price) * qty
+            _equity_pr, _ = self.manager._compute_session_equity_and_margin(session)
+            _pr_verdict = risk_governor.check_portfolio_risk(
+                open_risk=sum(_open_risk_breakdown.values()) + _candidate_risk,
+                equity=_equity_pr,
+            )
+            if not _pr_verdict.ok:
+                _contributors = ", ".join(
+                    f"{s}(${r:.2f})" for s, r in _open_risk_breakdown.items()
+                ) or "none"
+                logger.warning(
+                    f"[AlgoBot] {symbol}: entry blocked by risk governor — {_pr_verdict.reason}; "
+                    f"existing contributors: {_contributors}; candidate {symbol}(${_candidate_risk:.2f})"
+                )
+                await self.manager._notify_node(self.session_id, {
+                    "event": "log",
+                    "eventData": {
+                        "type": "warning",
+                        "message": (
+                            f"{symbol}: entry blocked — portfolio open-risk budget "
+                            f"({_pr_verdict.reason}); contributors: {_contributors}"
+                        ),
+                    },
+                })
+                strategy.buy = None
+                strategy.sell = None
+                strategy.stop_loss = None
+                strategy.take_profit = None
+                return False
+
+            # Liquidation-buffer guard (audit finding: respects_liq_buffer()
+            # existed but had zero pipeline call sites — decorative). Computes
+            # the actual liq price for the log itself rather than trusting
+            # only the bool, per this step's acceptance criterion.
+            try:
+                try:
+                    from core.margin import liquidation_price as _liq_price_fn, initial_margin as _im_fn
+                except ImportError:  # pragma: no cover - top-level module root
+                    from engine.core.margin import liquidation_price as _liq_price_fn, initial_margin as _im_fn
+                _liq_margin = _im_fn(qty * fill_price, strategy.leverage)
+                _liq_price = _liq_price_fn(direction, qty, fill_price, _liq_margin)
+                _liq_respected = strategy.risk_model.respects_liq_buffer(
+                    strategy, fill_price, sl_price, qty, strategy.leverage, direction,
+                )
+            except Exception as _liq_e:
+                logger.warning(
+                    f"[AlgoBot] {symbol}: liquidation-buffer check failed to compute, "
+                    f"allowing entry — {_liq_e}"
+                )
+                _liq_respected = True
+                _liq_price = None
+
+            if not _liq_respected:
+                logger.warning(
+                    f"[AlgoBot] {symbol}: entry blocked — stop {sl_price} sits inside the "
+                    f"liquidation buffer (computed liq price ${_liq_price:.4f}, direction={direction}, "
+                    f"leverage={strategy.leverage}x)"
+                )
+                await self.manager._notify_node(self.session_id, {
+                    "event": "log",
+                    "eventData": {
+                        "type": "warning",
+                        "message": (
+                            f"{symbol}: entry blocked — stop too close to liquidation "
+                            f"(computed liq≈${_liq_price:.4f})"
+                        ),
+                    },
+                })
+                strategy.buy = None
+                strategy.sell = None
+                strategy.stop_loss = None
+                strategy.take_profit = None
+                return False
+
         binance_side = "BUY" if direction == "long" else "SELL"
         sem = self.manager._order_semaphores.get(self.session_id)
 
@@ -1343,9 +1426,15 @@ class LiveBotManager:
         # sub-object can override it plus set the governor-only keys
         # (max_daily_loss_pct, max_margin_utilization, breach_action,
         # auto_flatten_on_halt). Full Zone 2 UI/schema wiring is 22.7's scope.
+        # Plan 22 Step 22.2: `max_portfolio_risk` is reused the same way —
+        # it's the SAME field name `core/models/portfolio.py` already resolves
+        # per-symbol (config compat, per the plan's own wording), just also
+        # handed to the governor here for the true cross-symbol check.
         governor_cfg = dict(risk_params.get("governor", {}) or {})
         if "max_session_dd" not in governor_cfg and risk_params.get("max_session_dd") is not None:
             governor_cfg["max_session_dd"] = risk_params.get("max_session_dd")
+        if "max_portfolio_risk" not in governor_cfg and risk_params.get("max_portfolio_risk") is not None:
+            governor_cfg["max_portfolio_risk"] = risk_params.get("max_portfolio_risk")
         risk_governor = SessionRiskGovernor(governor_cfg)
 
         self.sessions[session_id] = {
@@ -2906,6 +2995,33 @@ class LiveBotManager:
             strat.position.margin if strat.position else 0.0 for strat in instances
         )
         return equity, used_margin
+
+    @staticmethod
+    def _compute_open_risk_breakdown(session: dict) -> dict[str, float]:
+        """Plan 22 Step 22.2: per-symbol `|entry - stop| * qty` for every
+        currently-open position, keyed by symbol. This is the TRUE
+        cross-symbol aggregate `DefaultPortfolioModel.construct()`
+        (`core/models/portfolio.py`) structurally cannot compute — each
+        symbol's pipeline call only ever sees its own strategy instance, not
+        the session's other open symbols (Plan 21 audit finding: despite the
+        name, `max_portfolio_risk` there is a per-symbol check).
+
+        Reads each symbol's *current* `strategy.stop_loss` (not a stale
+        entry-time snapshot) so a trailing/breakeven-tightened stop is
+        reflected immediately — the same live value `_maybe_amend_exchange_sl`
+        pushes to the exchange. `sum(breakdown.values())` is the aggregate;
+        callers needing to name contributing symbols in a veto log use the
+        breakdown directly (see `execute_entry`).
+        """
+        breakdown: dict[str, float] = {}
+        for symbol, strat in session.get("strategy_instances", {}).items():
+            if strat.position is None or not strat.position.is_open:
+                continue
+            if strat.stop_loss is None:
+                continue
+            _, stop_price = strat.stop_loss
+            breakdown[symbol] = abs(strat.position.entry_price - stop_price) * strat.position.qty
+        return breakdown
 
     async def _apply_governor_breach(
         self, session_id: str, session: dict, verdict,

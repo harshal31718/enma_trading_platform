@@ -176,12 +176,54 @@ over-commit the wallet across running sessions (incl. the Chaos multiplier) is r
 per the Q5 decision; engine clamps and logs when the server check was bypassed.
 
 ### 22.2 — Correct portfolio open-risk budget + wire `liq_buffer_pct` · P1 · S–M
+
+**Status: shipped code-side 2026-07-17** — pending container test run + live re-verification,
+same as every other Plan 21/22 step so far.
+
 Compute true cross-symbol open risk (Σ |entry−stop|·qty over open positions / session equity) in
 the governor pre-trade check; deprecate the per-symbol misuse in `DefaultPortfolioModel` (keep
 the field name for config compat, route it to the governor). Wire `respects_liq_buffer()` into
 the pre-trade path (veto + log when the stop sits inside the liquidation buffer).
 Acceptance: an entry pushing aggregate open risk past the budget is vetoed with a log naming the
 contributing symbols; a stop inside the liq buffer vetoes with the computed liq price in the log.
+
+**Shipped:** `SessionRiskGovernor.check_portfolio_risk(*, open_risk, equity)` (`engine/core/models/
+governor.py`) — new `max_portfolio_risk` config field, same name `core/models/portfolio.py`
+already reads per-symbol (config compat, per this step's own wording); `<= 0` disables, fails
+closed on `equity <= 0`, defaults 0.06 matching `portfolio.py`'s existing default. The per-symbol
+check in `DefaultPortfolioModel.construct()` is deliberately left untouched (backtest has no
+session-level governor to route to; removing it would be a golden-master-risking behavior change
+for zero live benefit) — this is the actual cross-symbol enforcement point for live/chaos.
+New `LiveBotManager._compute_open_risk_breakdown(session) -> dict[symbol, risk]` (static method,
+next to `_compute_session_equity_and_margin`) reads each open symbol's *current*
+`strategy.stop_loss` (reflects trailing/breakeven tightening immediately, not a stale entry-time
+snapshot) via `session["strategy_instances"]`. Wired into `execute_entry` right after M-5's SL/TP
+validation (needs the finalized sl_price/qty, not the pre-clamp values) — vetoes with a log naming
+every contributing symbol and its risk contribution, applies to DCA scale-ins too (same
+unconditional placement as M-5). `start_session` cascades `risk_params.max_portfolio_risk` into
+`governor_cfg` the same way `max_session_dd` already does.
+
+Liquidation-buffer guard wired at the same call site: computes the actual liq price via
+`core/margin.py`'s `liquidation_price`/`initial_margin` (not just trusting
+`respects_liq_buffer()`'s bool) so the veto log can show it per this step's acceptance criterion;
+an unexpected exception computing the check fails *open* (logs a warning, entry proceeds) —
+distinct from an actual computed violation, which vetoes.
+
+Tests: `engine/tests/test_session_risk_governor.py` (+6 cases for `check_portfolio_risk`, real
+pytest, no numpy dependency) and new `engine/tests/
+test_execute_entry_portfolio_risk_and_liq_buffer.py` (8 cases driving the real
+`LiveAdapter.execute_entry` against a stubbed Binance layer — no-governor skips both new checks
+entirely, within-budget enters normally, past-budget vetoes with no order placed, the veto log
+names contributing symbols, `max_portfolio_risk<=0` disables the check, a stop inside the liq
+buffer vetoes with the computed liq price in the log, a stop clear of it enters normally, and an
+exception in the liq-buffer computation fails open). **Actually run with real pytest** — this
+sandbox's `websockets`/`motor`/`asyncpg` install timeouts were worked around by stubbing those
+three modules in `sys.modules` just enough to satisfy `live_bot_manager.py`'s import-time
+requirements (see the new test file's `_ensure_importable()`), then importing and driving the
+REAL module — not a reimplementation. Inside the actual container these packages are genuinely
+installed and the stubs never engage. Side effect: this also made the previously
+container-only `test_execute_entry_bracket_safety.py` (21.4) runnable for real in this sandbox,
+since the stubs land in `sys.modules` once and persist for the whole pytest process.
 
 ### 22.3 — Protections parity + risk-integrity events · P1 · S–M
 Add `MaxDrawdown` and `LowProfitPairs` protections (freqtrade semantics) to

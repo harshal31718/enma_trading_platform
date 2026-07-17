@@ -63,6 +63,11 @@ class SessionRiskGovernor:
       max_session_dd         (float, default 0.20)   — existing knob, now session-scoped
       max_daily_loss_pct     (float|None, default None = off)
       max_margin_utilization (float, default 0.8)
+      max_portfolio_risk     (float, default 0.06)   — 22.2: same field name
+                              `core/models/portfolio.py` already reads per-symbol
+                              (config compat); here it's the TRUE cross-symbol
+                              aggregate, which per-symbol construct() structurally
+                              cannot compute (Plan 21 audit finding). <= 0 disables.
       breach_action           ("reducing"|"halted", default "reducing")
       auto_flatten_on_halt   (bool, default False)   — DECISIONS.md #23
     """
@@ -75,6 +80,7 @@ class SessionRiskGovernor:
             float(raw_daily) if raw_daily not in (None, "") else None
         )
         self.max_margin_utilization = float(cfg.get("max_margin_utilization", 0.8))
+        self.max_portfolio_risk = float(cfg.get("max_portfolio_risk", 0.06))
         breach_action = cfg.get("breach_action", "reducing")
         self.breach_action = breach_action if breach_action in ("reducing", "halted") else "reducing"
         # DECISIONS.md #23: opt-in, off by default. The governor never acts
@@ -185,3 +191,47 @@ class SessionRiskGovernor:
         caller to auto-transition `trading_state` (via `self.breach_action`)
         — this method itself only evaluates, never mutates session state."""
         return self._check_standing_limits(equity, now)
+
+    def check_portfolio_risk(self, *, open_risk: float, equity: float) -> GovernorVerdict:
+        """Plan 22 Step 22.2: true cross-symbol open-risk budget — pre-trade
+        only, called from `execute_entry` once the candidate entry's own
+        stop/qty are known. `open_risk` is the caller-computed sum of
+        `|entry - stop| * qty` across every currently-open position PLUS the
+        candidate entry being evaluated (this method takes the plain total,
+        same separation-of-concerns as `check_pre_trade`'s equity/used_margin
+        — the governor never reaches into session/strategy internals itself).
+
+        This supersedes `DefaultPortfolioModel.construct()`'s `max_portfolio_risk`
+        check (`core/models/portfolio.py`), which is structurally per-symbol
+        only (each symbol's pipeline call has no visibility into other open
+        symbols) despite the name suggesting a portfolio-wide budget — a Plan
+        21 audit finding. That per-symbol check is left in place (backtest
+        has no session-level governor to route to, and removing it would be
+        a golden-master-risking behavior change for no live benefit); this is
+        the actual cross-symbol enforcement point for live/chaos sessions.
+
+        `max_portfolio_risk <= 0` disables this check entirely (matches
+        `portfolio.py`'s own "0 disables" convention for the same field).
+        Fails closed on equity <= 0 (cannot compute a percentage), same as
+        the margin ceiling check.
+        """
+        if self.max_portfolio_risk <= 0:
+            return GovernorVerdict(ok=True)
+        if equity <= 0:
+            return GovernorVerdict(
+                ok=False,
+                reason="equity <= 0 — cannot compute portfolio open-risk budget (fail-closed)",
+                check_name="portfolio_open_risk",
+            )
+        risk_pct = open_risk / equity
+        if risk_pct > self.max_portfolio_risk:
+            return GovernorVerdict(
+                ok=False,
+                reason=(
+                    f"aggregate open risk {risk_pct:.1%} (across all open positions + this "
+                    f"candidate entry) exceeds max_portfolio_risk {self.max_portfolio_risk:.1%} "
+                    f"(${open_risk:.2f} at risk / equity ${equity:.2f})"
+                ),
+                check_name="portfolio_open_risk",
+            )
+        return GovernorVerdict(ok=True)
