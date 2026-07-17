@@ -212,11 +212,16 @@ detail (commands, per-phase byte-equivalence, issue-by-issue fix list) moved to
   event; every close silently waited for the next candle-close REST poll instead. Fixed by reading
   the real `"c"` field (str-coerced) via the new `_extract_fill_client_id()` helper, and by
   wrapping the OUO peer-cancel block in its own try/except so the reconcile call can no longer be
-  skipped by a failure earlier in the callback. **Not yet re-verified against a live Chaos run** —
-  the original ~60s staleness symptom needs to be reproduced again with this fix in place before
-  F7 is closed. Detail + full timeline: `workspace/docs/features/algo-trading/SPEC.md`'s "Open
-  issues found in a live Chaos run" section, `21_live-algo-industry-standard-audit.md` (A-2), and
-  `workspace/plan/handoff.md`.
+  skipped by a failure earlier in the callback. **A second, independent backstop shipped the same
+  day (Plan 21.2, A-8):** a per-symbol `_on_account_update` callback now reconciles immediately on
+  any OPEN<->FLAT disagreement between Binance's `ACCOUNT_UPDATE` position delta and the local
+  view — this path is event-type-agnostic (Binance emits `ACCOUNT_UPDATE` for every position
+  change, including algo-order fills, regardless of `ORDER_TRADE_UPDATE` semantics), so it closes
+  the staleness window even if A-2's `ORDER_TRADE_UPDATE` fix turns out to have gaps. **Not yet
+  re-verified against a live Chaos run** — the original ~60s staleness symptom needs to be
+  reproduced again with both fixes in place before F7 is closed. Detail + full timeline:
+  `workspace/docs/features/algo-trading/SPEC.md`'s "Open issues found in a live Chaos run" section,
+  `21_live-algo-industry-standard-audit.md` (A-2, A-8), and `workspace/plan/handoff.md`.
 - **OPEN 2026-07-16 — TP placement failing outright on some symbols (`400 Bad Request`)**, found in
   the same live Chaos run (`BCHUSDT`, then `ETHUSDT`). Possibly a recurrence of the 2026-07-03
   stale-tick-size-cache bug (see `algo-trading/SPEC.md`'s "Resilience & Stats") for symbols outside
@@ -224,7 +229,26 @@ detail (commands, per-phase byte-equivalence, issue-by-issue fix list) moved to
   only ever logged as httpx's generic `"400 Bad Request"` message, discarding Binance's actual
   `{code, msg}` body. **Logging fixed same day** (`_binance_error_detail()` in
   `live_bot_manager.py`, wired into entry/SL/TP failure logs) so the next reproduction will show
-  the real cause. Root cause itself still open.
+  the real cause. Root cause itself still open, but **as of Plan 21.4 (A-7, 2026-07-17) this class
+  self-heals**: a TP-400 leaves a position with only its SL live, which is fine (TP is
+  lower-stakes); a symmetric SL-400/failure that leaves a position genuinely naked is now detected
+  by `_reconcile_exchange_state`'s naked-position re-arm and either re-placed or, after 3
+  consecutive re-arm failures, force-closed — see A-7 below.
+- **Fixed 2026-07-17 (Plan 21.3/21.4, A-4/A-5/A-6/A-7/M-4/M-5)** — bracket/SL integrity gaps found
+  by the `21_live-algo-industry-standard-audit.md` audit, all code-side shipped, pending container
+  `pytest` run + live re-verification: (1) resting SL/TP algo orders are now cancelled on every
+  close path (`execute_exit`, `_close_position_on_stop`, the emergency-exit path, and reconcile
+  Case 2) via `_cancel_symbol_algo_orders()` — previously only the OUO peer-cancel covered the
+  in-band close case, leaving orphaned conditional orders on the other three paths (A-4/A-5); (2)
+  the F-018 emergency-exit path (entry filled, SL placement failed) now retries the market close up
+  to 3x with backoff and books the real fill price instead of fabricating `exit_price = fill_price`,
+  and records nothing on total failure rather than falsely marking a still-open, still-naked
+  position as closed (A-6); (3) reconcile now detects a position with no live exchange stop and
+  re-arms it, force-closing after 3 consecutive failures instead of running naked indefinitely
+  (A-7); (4) a tightened trailing/breakeven stop (`DefaultExecution.route()` Path 5) is now pushed
+  to the exchange via cancel+replace instead of staying local-only for the position's entire life
+  (M-4); (5) an entry whose SL lands on the wrong side of the fill price is now rejected outright
+  instead of silently entering naked on that leg (M-5).
 - **OPEN 2026-07-16 — a position (`FXSUSDT SHORT`) stayed shown as open after a full session stop**,
   same live run. Not yet investigated. Candidates: the entry may never have actually filled on
   Binance (phantom local-only position), or `stop_session()`'s close loop skipped this symbol.

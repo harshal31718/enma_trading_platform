@@ -34,6 +34,11 @@ logger = logging.getLogger(__name__)
 # How many historical candles to load for indicator warmup
 WARMUP_CANDLES = 200
 
+# A-7 (Plan 21.4): consecutive naked-position SL re-arm failures before the
+# reconcile loop gives up and force-closes the position for safety, rather
+# than letting it run unprotected indefinitely.
+_NAKED_POSITION_MAX_REARM_ATTEMPTS = 3
+
 # Maps strategy tf param values to Binance interval strings (case-sensitive: "1M" = monthly)
 _TF_TO_BINANCE = {
     "1h": "1h",
@@ -101,6 +106,29 @@ def _extract_fill_client_id(order_data: dict) -> str:
     caller's `.startswith()` check can never crash.
     """
     return str(order_data.get("c") or order_data.get("i") or "")
+
+
+def _account_update_needs_reconcile(pos_data: dict, has_local_position: bool) -> bool:
+    """A-8 fix (Plan 21.2): decide whether an ACCOUNT_UPDATE position delta
+    (one entry of the `a.P[]` array) disagrees with the engine's local view
+    enough to warrant an immediate reconcile, instead of waiting for the
+    next candle-close poll.
+
+    Binance emits ACCOUNT_UPDATE with a position delta for EVERY position
+    change — plain orders, conditional/algo TP-SL fills, liquidations,
+    manual closes — regardless of whether ORDER_TRADE_UPDATE fires for algo
+    orders the way `_on_fill`'s `tpsl_` client-id match depends on. This is
+    the event-type-agnostic fallback that closes the ~60s staleness window.
+
+    Only the OPEN<->FLAT boundary is treated as reconcile-worthy here — a
+    quantity-only change on an already-agreed-open position is left to the
+    next candle-close reconcile (which also refreshes unrealized PnL/mark
+    price), keeping this callback cheap and focused on the actual staleness
+    bug rather than firing on every position-size tick.
+    """
+    exchange_amt = _safe_float(pos_data.get("pa"), 0.0)
+    has_exchange_position = exchange_amt != 0
+    return has_exchange_position != has_local_position
 
 
 def _binance_error_detail(exc: Exception) -> str:
@@ -245,20 +273,49 @@ class LiveAdapter(ExecutionAdapter):
             strategy.sell = None
             return False
 
+        # M-5 fix (Plan 21.4): a stop-loss that lands on the wrong side of
+        # the reference price used to size it is a genuinely invalid
+        # bracket, not a "nice to have we can skip" — the old behavior
+        # dropped it (sl_price = None) and let the entry proceed anyway,
+        # naked on the SL leg, with no re-check ever placing a stop later.
+        # Industry pattern (freqtrade): do not enter without a valid stop.
+        # Reject the entry outright instead, and clear the strategy's own
+        # stop_loss/take_profit tuples so next candle's check_exits can't
+        # read a stale, already-invalid stop as instantly triggered (the
+        # second half of M-5 — "clear local state on drop").
         if sl_price is not None:
             if direction == "long" and sl_price >= fill_price:
-                logger.warning(f"[AlgoBot] {symbol}: SL {sl_price} >= entry {fill_price}, dropping SL")
-                sl_price = None
+                logger.warning(
+                    f"[AlgoBot] {symbol}: SL {sl_price} >= entry ref {fill_price} — "
+                    f"rejecting entry, no bracket-less entries (M-5)"
+                )
+                strategy.buy = None
+                strategy.sell = None
+                strategy.stop_loss = None
+                strategy.take_profit = None
+                return False
             elif direction == "short" and sl_price <= fill_price:
-                logger.warning(f"[AlgoBot] {symbol}: SL {sl_price} <= entry {fill_price}, dropping SL")
-                sl_price = None
+                logger.warning(
+                    f"[AlgoBot] {symbol}: SL {sl_price} <= entry ref {fill_price} — "
+                    f"rejecting entry, no bracket-less entries (M-5)"
+                )
+                strategy.buy = None
+                strategy.sell = None
+                strategy.stop_loss = None
+                strategy.take_profit = None
+                return False
+        # TP invalid is lower-stakes (missed upside target, not a naked risk
+        # exposure) — still drop-and-continue, but clear the local tuple too
+        # so it can't be misread as an instantly-triggered stale target.
         if tp_price is not None:
             if direction == "long" and tp_price <= fill_price:
                 logger.warning(f"[AlgoBot] {symbol}: TP {tp_price} <= entry {fill_price}, dropping TP")
                 tp_price = None
+                strategy.take_profit = None
             elif direction == "short" and tp_price >= fill_price:
                 logger.warning(f"[AlgoBot] {symbol}: TP {tp_price} >= entry {fill_price}, dropping TP")
                 tp_price = None
+                strategy.take_profit = None
 
         binance_side = "BUY" if direction == "long" else "SELL"
         sem = self.manager._order_semaphores.get(self.session_id)
@@ -432,29 +489,126 @@ class LiveAdapter(ExecutionAdapter):
                         # ── F-018: Emergency market exit ────────────────────
                         # Entry filled but SL placement failed → position is
                         # naked. Force-close at market immediately.
-                        try:
-                            _close_side = "SELL" if binance_side == "BUY" else "BUY"
-                            _close_params = {
-                                "symbol": symbol,
-                                "side": _close_side,
-                                "type": "MARKET",
-                                "quantity": _fmt_num(qty),
-                                "reduceOnly": "true",
-                            }
-                            await _signed(
-                                "POST", "/fapi/v1/order",
-                                _api_key, _api_secret,
-                                params=_close_params,
-                                mode="testnet",
+                        #
+                        # A-6 fix (Plan 21.4): this used to (1) always book
+                        # the trade at exit_price=fill_price (the ENTRY
+                        # price, fabricating exactly -fee as PnL, regardless
+                        # of what the emergency close actually filled at —
+                        # violated Plan 5.2's real-fills-not-fabricated-
+                        # closes invariant, which execute_exit already
+                        # honors) and (2) on a FAILED emergency close, still
+                        # recorded the position as closed and returned —
+                        # leaving Binance holding a real, naked position
+                        # while the engine believed it was flat, with no
+                        # retry and no loud alert. Now: retry the emergency
+                        # close up to 3x with backoff; on eventual success,
+                        # book the REAL fill price (same _extract_fill_price
+                        # -> _query_real_fill_price ladder as execute_exit);
+                        # on total failure, record NOTHING (mirrors 5.2's
+                        # execute_exit contract) and leave strategy.position
+                        # untouched (still None here) — the very next
+                        # per-symbol reconcile pass's Case 1 will discover
+                        # the real Binance position and restore full local
+                        # state properly (leverage, algo_ids from whatever's
+                        # actually open), which is more correct than
+                        # hand-assembling a rough Position object in this
+                        # failure branch. A-7 extends reconcile to also
+                        # re-arm a missing stop on a restored naked position.
+                        _emergency_client_id = f"enma_{self.session_id[:8]}_{symbol}_{uuid4_hex8()}_emrg"
+                        _close_side = "SELL" if binance_side == "BUY" else "BUY"
+                        _close_params = {
+                            "symbol": symbol,
+                            "side": _close_side,
+                            "type": "MARKET",
+                            "quantity": _fmt_num(qty),
+                            "reduceOnly": "true",
+                            "newOrderRespType": "RESULT",
+                            "newClientOrderId": _emergency_client_id,
+                        }
+                        _emergency_result = None
+                        _emergency_last_error: Exception | None = None
+                        _EMERGENCY_CLOSE_ATTEMPTS = 3
+                        for _attempt in range(1, _EMERGENCY_CLOSE_ATTEMPTS + 1):
+                            try:
+                                _emergency_result = await _signed(
+                                    "POST", "/fapi/v1/order",
+                                    _api_key, _api_secret,
+                                    params=_close_params,
+                                    mode="testnet",
+                                )
+                                logger.warning(
+                                    f"[AlgoBot] {symbol}: emergency MARKET close sent "
+                                    f"(SL placement failed) — attempt {_attempt}/{_EMERGENCY_CLOSE_ATTEMPTS}"
+                                )
+                                break
+                            except Exception as _close_e:
+                                _emergency_last_error = _close_e
+                                logger.error(
+                                    f"[AlgoBot] {symbol}: emergency MARKET close attempt "
+                                    f"{_attempt}/{_EMERGENCY_CLOSE_ATTEMPTS} FAILED: "
+                                    f"{_binance_error_detail(_close_e)}"
+                                )
+                                if _attempt < _EMERGENCY_CLOSE_ATTEMPTS:
+                                    await asyncio.sleep(_attempt * 1.0)
+
+                        # A-4 fix (Plan 21.3): defensive bracket cleanup. In
+                        # today's placement order (SL attempted before TP)
+                        # nothing should actually be resting here — this SL
+                        # failure fires before TP is ever attempted below —
+                        # but cancel-all is cheap and correct even if that
+                        # ordering ever changes, so call it unconditionally
+                        # rather than assuming the ordering invariant holds.
+                        await self.manager._cancel_symbol_algo_orders(session, symbol, _placed_algo_ids)
+
+                        if _emergency_result is None:
+                            # All attempts failed. Do NOT fabricate a close —
+                            # leave strategy.position as-is (still None at
+                            # this point in execute_entry) and alert loudly.
+                            # Binance is holding a real, naked position; the
+                            # next reconcile pass is responsible for finding
+                            # and restoring it.
+                            logger.error(
+                                f"[AlgoBot] {symbol}: CRITICAL — emergency close FAILED after "
+                                f"{_EMERGENCY_CLOSE_ATTEMPTS} attempts. Position is OPEN and "
+                                f"UNPROTECTED on Binance (last error: "
+                                f"{_binance_error_detail(_emergency_last_error) if _emergency_last_error else 'unknown'}). "
+                                f"Reconciliation will restore it next candle."
                             )
-                            logger.warning(f"[AlgoBot] {symbol}: emergency MARKET close sent (SL placement failed)")
-                        except Exception as _close_e:
-                            logger.error(f"[AlgoBot] {symbol}: emergency MARKET close FAILED: {_close_e}")
+                            await self.manager._notify_node(self.session_id, {
+                                "event": "log",
+                                "eventData": {
+                                    "type": "error",
+                                    "message": (
+                                        f"{symbol}: CRITICAL — SL placement failed AND the emergency "
+                                        f"close failed {_EMERGENCY_CLOSE_ATTEMPTS}x. Position is OPEN "
+                                        f"and UNPROTECTED on Binance. Will self-heal via reconciliation "
+                                        f"next candle, but check this symbol now."
+                                    ),
+                                },
+                            })
+                            strategy.buy = None
+                            strategy.sell = None
+                            return False
+
+                        # Emergency close succeeded (possibly after retrying)
+                        # — book the REAL fill price, not the entry price.
+                        _real_exit_price = _extract_fill_price(_emergency_result)
+                        if _real_exit_price is None:
+                            _real_exit_price = await _query_real_fill_price(
+                                _api_key, _api_secret, symbol, _emergency_client_id,
+                            )
+                        if _real_exit_price is None:
+                            logger.error(
+                                f"[AlgoBot] {symbol}: emergency close accepted but no real fill "
+                                f"price found — booking with the entry-price estimate ${fill_price} "
+                                f"as a last resort, flagged for reconciliation"
+                            )
+                            _real_exit_price = fill_price
 
                         # Record the trade locally with emergency_exit reason
                         _pos_e = Position(direction, qty, fill_price)
-                        _fee_e = strategy.execution_model.exit_fee(strategy, _pos_e.qty, fill_price)
-                        _pos_e.close(fill_price)
+                        _fee_e = strategy.execution_model.exit_fee(strategy, _pos_e.qty, _real_exit_price)
+                        _pos_e.close(_real_exit_price)
                         _rpnl_e = _pos_e.pnl - _fee_e
                         strategy.balance += _rpnl_e
                         session["pnl"] += _rpnl_e
@@ -465,7 +619,7 @@ class LiveAdapter(ExecutionAdapter):
                             side=direction,
                             qty=str(qty),
                             entry_price=str(fill_price),
-                            exit_price=str(fill_price),
+                            exit_price=str(_real_exit_price),
                             sl_order_price=str(sl_price),
                             tp_order_price=None,
                             margin=str(_pos_e.margin) if _pos_e.margin else None,
@@ -488,7 +642,7 @@ class LiveAdapter(ExecutionAdapter):
                         )
                         _emergency_seq = await append_event(
                             session_id=self.session_id, symbol=symbol, event_type="fill",
-                            payload={"side": "exit", "qty": qty, "price": fill_price, "realizedPnl": _rpnl_e, "reason": "emergency_exit"},
+                            payload={"side": "exit", "qty": qty, "price": _real_exit_price, "realizedPnl": _rpnl_e, "reason": "emergency_exit"},
                         )
                         await self.manager._notify_node(self.session_id, {
                             "pnl": str(round(session["pnl"], 2)),
@@ -499,7 +653,7 @@ class LiveAdapter(ExecutionAdapter):
                             "eventData": {
                                 "symbol": symbol,
                                 "pnl": str(round(_rpnl_e, 2)),
-                                "exitPrice": str(fill_price),
+                                "exitPrice": str(_real_exit_price),
                                 "exitReason": "emergency_exit",
                                 "timestamp": datetime.now(timezone.utc).isoformat(),
                             },
@@ -855,11 +1009,18 @@ class LiveAdapter(ExecutionAdapter):
             exit_tag=strategy.exit_tag or "",
         )
 
+        # A-4 fix (Plan 21.3): capture the tracked SL/TP algo ids before
+        # dropping local position tracking, then cancel them — a
+        # closePosition:"true" bracket left resting after this close would
+        # market-close whatever position exists on this symbol later.
+        _closed_algo_ids = (session["open_positions"].get(symbol) or {}).get("algo_ids")
+
         strategy.position = None
         strategy.stop_loss = None
         strategy.take_profit = None
         strategy._pending_flip = None
         session["open_positions"].pop(symbol, None)
+        await self.manager._cancel_symbol_algo_orders(session, symbol, _closed_algo_ids)
 
         # Persist the trade record BEFORE notifying Node so the server's
         # per-symbol aggregation (computeSymbolStats) sees this closed trade.
@@ -1396,6 +1557,7 @@ class LiveBotManager:
         from services.binance_testnet import send_signed_request as _uds_signed
         _uds = session.get("uds") if session else None
         _fill_cb_registered = False
+        _account_cb_registered = False
         if _uds and _uds._running:
             async def _on_fill(order_data: dict) -> None:
                 symbol_s = order_data.get("s", "")
@@ -1458,6 +1620,59 @@ class LiveBotManager:
                     )
             _uds.register_fill_callback(symbol, _on_fill)
             _fill_cb_registered = True
+
+            # Plan 21 Step 21.2 (A-8): ACCOUNT_UPDATE-driven reconcile.
+            # Binance emits ACCOUNT_UPDATE with a P[] position delta for
+            # EVERY position change — plain orders, conditional/algo
+            # (/fapi/v1/algoOrder) TP-SL fills, liquidations, manual closes
+            # — regardless of whether ORDER_TRADE_UPDATE fires for algo
+            # orders (the open F7 question _on_fill's `tpsl_` match depends
+            # on). This is the event-type-agnostic fallback that closes the
+            # ~60s window: if a position's open/flat state disagrees with
+            # what this engine believes, reconcile immediately instead of
+            # waiting for the next candle-close poll. ORDER_TRADE_UPDATE
+            # handling (_on_fill) stays as richer, faster enrichment when it
+            # does fire correctly; this is the backstop that doesn't depend
+            # on algo-order client-id semantics at all.
+            async def _on_account_update(pos_data: dict) -> None:
+                pos_symbol = pos_data.get("s", "")
+                if pos_symbol != symbol:
+                    return
+                has_local_position = strategy.position is not None and strategy.position.is_open
+
+                if not _account_update_needs_reconcile(pos_data, has_local_position):
+                    # Open/flat agree — nothing to reconcile. A quantity-only
+                    # change on an already-agreed-open position is picked up
+                    # by the next candle-close reconcile; this callback exists
+                    # specifically to close the OPEN<->FLAT staleness window.
+                    return
+
+                lock = self._get_symbol_lock(session_id, symbol)
+                if lock.locked():
+                    # Debounce (21.2 spec): a reconcile is already in flight
+                    # for this symbol (candle loop or _on_fill) and will
+                    # observe this same fresh exchange state when it runs —
+                    # queuing a second one here is a redundant Binance call,
+                    # so skip rather than wait.
+                    logger.info(
+                        f"[AlgoBot] {symbol}: account-update reconcile skipped — "
+                        f"one already in flight"
+                    )
+                    return
+
+                logger.info(
+                    f"[AlgoBot] {symbol}: account update reports position "
+                    f"{'OPEN' if _safe_float(pos_data.get('pa'), 0.0) != 0 else 'FLAT'} but local view says "
+                    f"{'OPEN' if has_local_position else 'FLAT'} — reconciling now"
+                )
+                async with lock:
+                    await self._reconcile_exchange_state(
+                        session_id, strategy, symbol,
+                        candle_high=None, candle_low=None,
+                    )
+
+            _uds.register_account_callback(symbol, _on_account_update)
+            _account_cb_registered = True
 
         stop_event = self._stop_signals.get(session_id)
         # btcusdt@kline_1h  — Binance stream name format
@@ -1609,6 +1824,15 @@ class LiveBotManager:
                                         index_t=strategy.index,
                                         time_t=time_t,
                                     )
+
+                                    # M-4 fix (Plan 21.4): if route()'s Path 5
+                                    # just tightened strategy.stop_loss
+                                    # (trailing/breakeven/Chandelier), amend
+                                    # the resting exchange SL to match — see
+                                    # _maybe_amend_exchange_sl's docstring.
+                                    await self._maybe_amend_exchange_sl(
+                                        session, session_id, strategy, symbol,
+                                    )
                             except Exception as e:
                                 consecutive_errors += 1
                                 logger.error(
@@ -1657,7 +1881,214 @@ class LiveBotManager:
                     _uds.unregister_fill_callback(symbol, _on_fill)
                 except Exception:
                     pass
+            if _account_cb_registered:
+                try:
+                    _uds.unregister_account_callback(symbol, _on_account_update)
+                except Exception:
+                    pass
 
+
+    async def _cancel_symbol_algo_orders(
+        self, session: dict, symbol: str, algo_ids: dict | None = None,
+    ) -> None:
+        """Plan 21 Step 21.3 (A-4/A-5): cancel every resting SL/TP conditional
+        (`/fapi/v1/algoOrder`) order for *symbol* after any close.
+
+        These brackets are placed with `closePosition:"true"` — a stale
+        trigger left armed after a close will market-close *whatever
+        position exists on that symbol later*: the same session re-entering,
+        a later bot session on the same symbol, or a user manually trading
+        it once the Redis lock releases. This is a wrong-money-outcome bug,
+        not hygiene, and industry-standard (freqtrade cancels the exchange
+        stoploss on every exit; nautilus ties bracket lifecycle to the
+        position via `ContingencyType`).
+
+        Call from every close path: `execute_exit` success, session-stop
+        close, the F-018 emergency-exit path, and reconcile Case 2 (the
+        exchange-side SL/TP-fired case, where the WS/reconcile OUO
+        peer-cancel structurally can't fire — see A-5).
+
+        If *algo_ids* (the `{"sl": id, "tp": id}` dict this engine tracked
+        for the position, from `session["open_positions"][symbol]
+        ["algo_ids"]`) is given and has at least one id, cancel exactly
+        those — no extra Binance call. Otherwise fall back to
+        `GET /fapi/v1/openAlgoOrders` for the symbol and cancel everything
+        found, so untracked/orphaned brackets (a restored position, a
+        session-stop close on a symbol the engine never fully tracked)
+        don't survive either.
+
+        Best-effort: failures are logged, never raised. The position this
+        bracket protected is already closed by the time this runs, so a
+        cancel failure here is a "loose resting order" alert, not a reason
+        to fail the close that triggered it. An already-triggered/expired
+        id failing to cancel is an expected, common case (e.g. the peer leg
+        already died via OUO peer-cancel) — not worth a warning-level log.
+        """
+        api_key = session.get("api_key", "")
+        api_secret = session.get("api_secret", "")
+        if not api_key or not api_secret:
+            return
+
+        from services.binance_testnet import send_signed_request as _signed
+
+        ids_to_cancel: list[str] = []
+        if algo_ids:
+            ids_to_cancel = [str(v) for v in algo_ids.values() if v]
+
+        if not ids_to_cancel:
+            try:
+                open_algo = await _signed(
+                    "GET", "/fapi/v1/openAlgoOrders",
+                    api_key, api_secret,
+                    params={"symbol": symbol},
+                    mode="testnet",
+                )
+                if isinstance(open_algo, list):
+                    ids_to_cancel = [str(ao.get("algoId")) for ao in open_algo if ao.get("algoId")]
+            except Exception as e:
+                logger.warning(
+                    f"[AlgoBot] {symbol}: openAlgoOrders lookup for post-close bracket "
+                    f"cleanup failed — {_binance_error_detail(e)}"
+                )
+                return
+
+        for algo_id in ids_to_cancel:
+            try:
+                await _signed(
+                    "DELETE", "/fapi/v1/algoOrder",
+                    api_key, api_secret,
+                    params={"symbol": symbol, "algoId": algo_id},
+                    mode="testnet",
+                )
+                logger.info(f"[AlgoBot] {symbol}: cancelled resting algo order {algo_id} after close")
+            except Exception as e:
+                logger.info(
+                    f"[AlgoBot] {symbol}: algo order {algo_id} cancel skipped (likely already "
+                    f"gone) — {_binance_error_detail(e)}"
+                )
+
+    async def _maybe_amend_exchange_sl(
+        self, session: dict, session_id: str, strategy, symbol: str,
+    ) -> None:
+        """M-4 fix (Plan 21.4): cancel+replace the resting exchange SL algo
+        order when the risk model's maintain path (`DefaultExecution.route()`
+        Path 5, `engine/core/models/execution.py` — shared with backtest, NOT
+        touched by this fix) tightens `strategy.stop_loss` — trailing stops,
+        breakeven moves, Chandelier exits. Previously the tightened value
+        was written to `strategy.stop_loss` LOCALLY ONLY; the exchange-side
+        `closePosition:"true"` STOP_MARKET order stayed at its ORIGINAL,
+        widest trigger for the position's entire life. Between candles, only
+        the stale wide stop protected the position on Binance — real
+        enforcement of the tightened stop was entirely the engine's own
+        candle-close wick check (`kernel.check_exits`), up to one candle
+        late, and it market-closes while the stale conditional stays armed
+        (compounding A-4/A-5's hazard class). Industry pattern (freqtrade
+        `stoploss_on_exchange` adjustment): amend the exchange stop on every
+        tighten ≥ 1 tick.
+
+        Deliberately live-only — this method is called from
+        `_run_symbol_loop` after `kernel.evaluate_and_route()`, never from
+        the backtest path, so it cannot affect backtest outputs (no
+        golden-master re-baseline needed, matching the rest of Plan 21).
+
+        No-ops if there's no open position, no `stop_loss`, or the stop
+        hasn't tightened since the last amend (tracked via
+        `open_positions[symbol]["armed_sl_price"]` — direction-aware: a
+        higher SL is a tighten for longs, a lower SL is a tighten for
+        shorts; anything else, including a widening, is left alone since
+        `move_to_breakeven`/`trail_stop` are themselves documented to only
+        ever tighten, never loosen).
+        """
+        if strategy.position is None or not strategy.position.is_open or strategy.stop_loss is None:
+            return
+
+        pos_info = session.get("open_positions", {}).get(symbol)
+        if not pos_info:
+            return
+
+        new_sl_price = strategy.stop_loss[1]
+        if new_sl_price is None:
+            return
+
+        armed_sl_price = _safe_float(pos_info.get("armed_sl_price"), None)
+        if armed_sl_price is None:
+            # Nothing recorded yet (session just started, or the first pass
+            # after a Case-1 restore) — the entry-time placement or the
+            # restore is already the armed order; record the baseline
+            # without amending anything.
+            pos_info["armed_sl_price"] = str(new_sl_price)
+            session["open_positions"][symbol] = pos_info
+            return
+
+        is_long = strategy.position.type == "long"
+        tightened = (new_sl_price > armed_sl_price) if is_long else (new_sl_price < armed_sl_price)
+        if not tightened:
+            return
+
+        api_key = session.get("api_key", "")
+        api_secret = session.get("api_secret", "")
+        if not api_key or not api_secret:
+            return
+
+        from services.binance_testnet import send_signed_request as _signed
+
+        sl_rounding = ROUND_DOWN if is_long else ROUND_UP
+        rounded_sl = round_price(symbol, "Binance Futures", new_sl_price, rounding=sl_rounding)
+        if rounded_sl is None:
+            return
+
+        old_algo_ids = dict(pos_info.get("algo_ids") or {})
+        old_sl_id = old_algo_ids.get("sl")
+
+        try:
+            # closePosition:"true" conditional orders don't support amend-
+            # in-place — cancel+replace is the only path. Cancel first; if
+            # the old id is already gone (e.g. it triggered right before we
+            # got here) that's fine, proceed to place the new one anyway.
+            if old_sl_id:
+                try:
+                    await _signed(
+                        "DELETE", "/fapi/v1/algoOrder",
+                        api_key, api_secret,
+                        params={"symbol": symbol, "algoId": old_sl_id},
+                        mode="testnet",
+                    )
+                except Exception as _cancel_e:
+                    logger.info(
+                        f"[AlgoBot] {symbol}: old SL {old_sl_id} cancel-before-amend "
+                        f"skipped (likely already gone) — {_binance_error_detail(_cancel_e)}"
+                    )
+
+            close_side = "SELL" if is_long else "BUY"
+            result = await _signed(
+                "POST", "/fapi/v1/algoOrder",
+                api_key, api_secret,
+                params={
+                    "algoType": "CONDITIONAL",
+                    "symbol": symbol,
+                    "side": close_side,
+                    "type": "STOP_MARKET",
+                    "triggerPrice": _fmt_num(rounded_sl),
+                    "workingType": "MARK_PRICE",
+                    "closePosition": "true",
+                    "clientAlgoId": f"tpsl_{uuid4_hex8()}_sl",
+                },
+                mode="testnet",
+            )
+            old_algo_ids["sl"] = result.get("algoId")
+            pos_info["algo_ids"] = old_algo_ids
+            pos_info["armed_sl_price"] = str(rounded_sl)
+            session["open_positions"][symbol] = pos_info
+            logger.info(
+                f"[AlgoBot] {symbol}: exchange SL amended (tighten) "
+                f"{armed_sl_price} -> {rounded_sl} algoId={result.get('algoId')}"
+            )
+        except Exception as e:
+            logger.warning(
+                f"[AlgoBot] {symbol}: exchange SL amend-on-tighten failed — "
+                f"{_binance_error_detail(e)} (engine-side candle-close wick-check "
+                f"remains as fallback protection until the next successful amend)"
+            )
 
     async def _close_position_on_stop(
         self, session_id: str, symbol: str, _pos_info: dict | None, session: dict
@@ -1779,6 +2210,15 @@ class LiveBotManager:
                 session_id=session_id, symbol=symbol, event_type="fill",
                 payload={"side": "exit", "qty": pos.qty, "price": exit_price, "realizedPnl": realized_pnl, "reason": "session_stop"},
             )
+
+        # A-4 fix (Plan 21.3): cancel any resting SL/TP brackets for this
+        # symbol before dropping local tracking — called for every session
+        # symbol (not just ones the engine still tracked), so pass tracked
+        # ids if we have them (cheap) and let the helper fall back to
+        # discovering + cancelling untracked ones otherwise.
+        await self._cancel_symbol_algo_orders(
+            session, symbol, (_pos_info or {}).get("algo_ids"),
+        )
 
         session["open_positions"].pop(symbol, None)
         return True
@@ -2042,11 +2482,21 @@ class LiveBotManager:
                 exit_time=exit_time,
             )
 
+            # A-5 fix (Plan 21.3): Case 2 means the exchange SL/TP already
+            # fired — the surviving peer leg is exactly the bracket that
+            # section 6's OUO peer-cancel below CANNOT reach (it's guarded
+            # by has_exchange_position, which is False here by definition).
+            # Capture the tracked ids before dropping local tracking and
+            # cancel both — whichever leg triggered is already gone on
+            # Binance's side, cancelling it again is a harmless no-op.
+            _closed_algo_ids = (session["open_positions"].get(symbol) or {}).get("algo_ids")
+
             strategy.position = None
             strategy.stop_loss = None
             strategy.take_profit = None
             strategy._pending_flip = None
             session["open_positions"].pop(symbol, None)
+            await self._cancel_symbol_algo_orders(session, symbol, _closed_algo_ids)
 
             await record_trade(trade_record)
             exchange_sync_seq = await append_event(
@@ -2075,6 +2525,116 @@ class LiveBotManager:
             existing_info["price_missing"] = exchange_mark_price is None
             if symbol in session["open_positions"]:
                 session["open_positions"][symbol] = existing_info
+
+            # ── A-7 fix (Plan 21.4): naked-position detection + re-arm ──
+            # Nothing previously verified an open position still has a live
+            # protective stop on the exchange. Restored orphans (Case 1 with
+            # no open algo orders), TP/SL-placement 400s (F7 item 2's
+            # class), and A-6 emergency-close-failure survivors can all end
+            # up running naked, silently, forever. freqtrade re-places a
+            # missing exchange stoploss on every iteration; mirror that here.
+            if strategy.stop_loss is not None:
+                _has_live_sl = any(
+                    "STOP" in str(_o.get("type") or "").upper()
+                    or str(_o.get("clientOrderId") or "").endswith("sl")
+                    for _o in open_orders
+                )
+                _rearm_counters = session.setdefault("_naked_position_rearm_attempts", {})
+                if not _has_live_sl:
+                    _attempt_n = _rearm_counters.get(symbol, 0) + 1
+                    logger.warning(
+                        f"[AlgoBot] {symbol}: naked position detected — strategy has a "
+                        f"stop_loss but no live SL algo order exists on the exchange "
+                        f"(re-arm attempt {_attempt_n})"
+                    )
+                    _sl_qty, _sl_price_raw = strategy.stop_loss
+                    _sl_rounding = ROUND_DOWN if strategy.position.type == "long" else ROUND_UP
+                    _sl_price_new = round_price(symbol, "Binance Futures", _sl_price_raw, rounding=_sl_rounding) if _sl_price_raw else None
+                    _rearmed = False
+                    if _api_key and _api_secret and _sl_price_new:
+                        try:
+                            _rearm_side = "SELL" if strategy.position.type == "long" else "BUY"
+                            _rearm_result = await _signed(
+                                "POST", "/fapi/v1/algoOrder",
+                                _api_key, _api_secret,
+                                params={
+                                    "algoType": "CONDITIONAL",
+                                    "symbol": symbol,
+                                    "side": _rearm_side,
+                                    "type": "STOP_MARKET",
+                                    "triggerPrice": _fmt_num(_sl_price_new),
+                                    "workingType": "MARK_PRICE",
+                                    "closePosition": "true",
+                                    "clientAlgoId": f"tpsl_{uuid4_hex8()}_sl",
+                                },
+                                mode="testnet",
+                            )
+                            logger.warning(
+                                f"[AlgoBot] {symbol}: naked-position SL re-armed @ "
+                                f"{_sl_price_new} algoId={_rearm_result.get('algoId')}"
+                            )
+                            _existing_pi = session["open_positions"].get(symbol, {})
+                            _aids = dict(_existing_pi.get("algo_ids") or {"sl": None, "tp": None})
+                            _aids["sl"] = _rearm_result.get("algoId")
+                            _existing_pi["algo_ids"] = _aids
+                            session["open_positions"][symbol] = _existing_pi
+                            _rearmed = True
+                            _rearm_counters.pop(symbol, None)
+                            await self._notify_node(session_id, {
+                                "event": "log",
+                                "eventData": {
+                                    "type": "warning",
+                                    "message": f"{symbol}: naked position detected — SL re-armed @ {_sl_price_new}",
+                                },
+                            })
+                        except Exception as _rearm_e:
+                            logger.error(
+                                f"[AlgoBot] {symbol}: naked-position SL re-arm attempt "
+                                f"{_attempt_n}/{_NAKED_POSITION_MAX_REARM_ATTEMPTS} FAILED: "
+                                f"{_binance_error_detail(_rearm_e)}"
+                            )
+                    if not _rearmed:
+                        _rearm_counters[symbol] = _attempt_n
+                        await self._notify_node(session_id, {
+                            "event": "log",
+                            "eventData": {
+                                "type": "error",
+                                "message": (
+                                    f"{symbol}: naked position — SL re-arm failed "
+                                    f"({_attempt_n}/{_NAKED_POSITION_MAX_REARM_ATTEMPTS})"
+                                ),
+                            },
+                        })
+                        if _attempt_n >= _NAKED_POSITION_MAX_REARM_ATTEMPTS:
+                            logger.error(
+                                f"[AlgoBot] {symbol}: naked position SL re-arm failed "
+                                f"{_NAKED_POSITION_MAX_REARM_ATTEMPTS}x — force-closing for safety "
+                                f"rather than continuing to run unprotected"
+                            )
+                            await self._notify_node(session_id, {
+                                "event": "log",
+                                "eventData": {
+                                    "type": "error",
+                                    "message": (
+                                        f"{symbol}: force-closing after "
+                                        f"{_NAKED_POSITION_MAX_REARM_ATTEMPTS} failed SL re-arm "
+                                        f"attempts — position was running unprotected too long"
+                                    ),
+                                },
+                            })
+                            _rearm_counters.pop(symbol, None)
+                            _force_close_adapter = LiveAdapter(self, session_id)
+                            await _force_close_adapter.execute_exit(
+                                strategy=strategy, symbol=symbol,
+                                qty=strategy.position.qty,
+                                exit_price=exchange_mark_price if exchange_mark_price is not None else strategy.position.entry_price,
+                                reason="naked_position_force_close",
+                                time_t=datetime.now(timezone.utc),
+                                index_t=getattr(strategy, "index", 0),
+                                high_t=0.0, low_t=0.0,
+                            )
+                else:
+                    _rearm_counters.pop(symbol, None)
 
         # ── 6. Check for orders filled on exchange that engine hasn't processed ──
         _tracked_algo_ids: dict[str, str | None] = {"sl": None, "tp": None}

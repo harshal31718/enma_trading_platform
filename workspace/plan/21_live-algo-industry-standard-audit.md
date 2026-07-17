@@ -1,6 +1,6 @@
 # 21 — Live Algo-Trading Industry-Standard Audit (signals → orders → SL/TP → monitoring)
 
-**Status:** In progress (21.1 shipped 2026-07-17; 21.2–21.5, 21.7 not started) · **Created:** 2026-07-16
+**Status:** In progress (21.1–21.4 shipped 2026-07-17, code-side pending container test run + live re-verification; 21.5, 21.7 not started) · **Created:** 2026-07-16
 **Scope:** the full autonomous live-trading path — signal generation (five-model pipeline),
 order placement, SL/TP bracket placement, fill detection, reconciliation, monitoring, and
 session stop — audited against industry-standard failproof expectations (freqtrade /
@@ -110,7 +110,7 @@ polling with no operator-visible signal.
 self._running` reconnect loop re-enters with the refreshed URL. Add a keep-alive failure
 escalation (N consecutive keep-alive failures → recreate the key proactively).
 
-### A-4 · Engine-initiated closes never cancel the resting SL/TP conditional orders · [Certain] · **High — live trading hazard**
+### A-4 · Engine-initiated closes never cancel the resting SL/TP conditional orders · [Certain] · **High — live trading hazard** — **fixed 2026-07-17 (Plan 21.3)**
 
 `DELETE /fapi/v1/algoOrder` is called from exactly two places in the live bot (both OUO
 peer-cancel paths: `_on_fill` and reconcile section 6). **No close path cancels the brackets:**
@@ -133,7 +133,18 @@ from: `execute_exit` success path, `_close_position_on_stop` (cancel before or a
 plus a cancel-all for symbols with no tracked ids), the emergency-exit path, and reconcile
 Case 2 (see A-5). Acceptance: after any close, `GET /fapi/v1/openAlgoOrders?symbol=X` is empty.
 
-### A-5 · Reconcile Case 2 leaves the surviving bracket leg armed · [Certain] · **Medium** (same hazard class as A-4)
+**Shipped:** `LiveBotManager._cancel_symbol_algo_orders(session, symbol, algo_ids=None)`
+(`engine/core/live_bot_manager.py`) — cancels tracked ids directly by `algoId` if
+`session["open_positions"][symbol]["algo_ids"]` has at least one, otherwise falls back to
+`GET /fapi/v1/openAlgoOrders` + cancels everything discovered. Best-effort throughout (a failed
+cancel is logged, never raised — the position is already closed by the time this runs). Wired
+into all four call sites named in the fix above. Note on the emergency-exit path specifically: in
+the current placement order (SL attempted before TP), nothing is actually resting there when this
+path fires (TP is never reached), so the call there is a defensive no-op today — kept anyway so a
+future change to placement order doesn't silently reopen this gap. Tests:
+`engine/tests/test_cancel_symbol_algo_orders.py`.
+
+### A-5 · Reconcile Case 2 leaves the surviving bracket leg armed · [Certain] · **Medium** (same hazard class as A-4) — **fixed 2026-07-17 (Plan 21.3)**
 
 When reconcile finds "local position open, exchange flat" (Case 2 — the exchange SL/TP fired),
 the peer leg is supposed to die via OUO peer-cancel. But: the WS peer-cancel path is dead (A-2),
@@ -143,7 +154,15 @@ very case where the position just closed**. Net: after every exchange-side SL/TP
 by polling, the surviving leg stays armed until manually cancelled. Fold into the A-4 helper —
 Case 2 must cancel all tracked algo ids for the symbol.
 
-### A-6 · Emergency-exit path fabricates its close and can silently leave a naked position · [Certain] · **High**
+**Shipped:** Case 2 now captures `session["open_positions"][symbol]["algo_ids"]` before popping
+local tracking and calls `_cancel_symbol_algo_orders` with those ids — whichever leg triggered is
+already gone on Binance's side, so cancelling it again is a harmless no-op; the surviving peer
+gets cancelled for real. Covered by the same `test_cancel_symbol_algo_orders.py` suite (the
+helper itself is what's under test; the call-site wiring was verified by direct code read since
+`_reconcile_exchange_state` remains too deeply embedded to drive in a unit test per this repo's
+convention).
+
+### A-6 · Emergency-exit path fabricates its close and can silently leave a naked position · [Certain] · **High** — **fixed 2026-07-17 (Plan 21.4)**
 
 `execute_entry`'s F-018 block (SL placement failed after entry filled):
 1. It books the trade with `exit_price = fill_price` (the **entry** price) — never reads the
@@ -161,7 +180,24 @@ ladder as `execute_exit`), book the real price; on close failure do NOT record a
 local state open (matching 5.2's contract), emit a loud `error` notification + webhook, and let
 a retry ladder (e.g. 3 attempts with backoff) run before surrendering to reconciliation.
 
-### A-7 · No naked-position detection or stop re-arming · [Certain] · **Medium**
+**Shipped:** the F-018 block in `execute_entry` (`engine/core/live_bot_manager.py`) now retries
+the emergency MARKET close up to 3 attempts with `1s × attempt` backoff between; on eventual
+success books the real fill via `_extract_fill_price(_emergency_result)` falling back to
+`_query_real_fill_price(...)`, exactly mirroring `execute_exit`'s existing contract, rather than
+the old fabricated `exit_price = fill_price` (entry price). On total failure across all 3
+attempts: records no trade, sends a CRITICAL-worded `log`/`error` notification, and leaves
+`strategy.position` exactly as it was (still `None` at this point in the entry flow) instead of
+fabricating a close — the next `_reconcile_exchange_state` Case 1 pass restores the real Binance
+state, and A-7's naked-position re-arm takes it from there. Also folds in A-4: calls
+`_cancel_symbol_algo_orders` defensively right after the emergency-close attempts regardless of
+outcome. Tests: `engine/tests/test_execute_entry_bracket_safety.py`
+(`test_sl_failure_emergency_close_succeeds_first_try_books_real_price`,
+`test_sl_failure_emergency_close_retries_then_succeeds`,
+`test_sl_failure_emergency_close_total_failure_records_nothing`,
+`test_emergency_close_cancels_any_already_placed_algo_orders`). Not yet run in-container or
+live-verified — same open item as 21.1–21.3.
+
+### A-7 · No naked-position detection or stop re-arming · [Certain] · **Medium** — **fixed 2026-07-17 (Plan 21.4)**
 
 Nothing in the loop verifies that an open position has a live protective stop on the exchange.
 Restored orphans (Case 1) with no open algo orders, TP/SL-placement 400s (the F7 item-2 class),
@@ -173,7 +209,21 @@ no tracked/open SL algo order exists on the exchange → re-place it (with the s
 as entry) and log/notify; after N consecutive re-place failures → force-close (configurable).
 This also converts the F7 TP-400 class from "TP skipped" (permanent) to self-healing.
 
-### A-8 · `ACCOUNT_UPDATE` is received and ignored — the event-type-agnostic fix for the 60s window · [Certain] · **High (enabler)**
+**Shipped:** `_reconcile_exchange_state` Case 3 (`engine/core/live_bot_manager.py`) now checks,
+whenever `strategy.stop_loss` is set, whether any resting exchange order looks like a live SL
+(`type` containing `STOP` or `clientOrderId` ending in `sl`); if not, attempts a direction-aware
+re-arm via the same rounding path `execute_entry` uses. Success resets a per-symbol failure
+counter (`session["_naked_position_rearm_attempts"]`) and updates `algo_ids`/notifies; failure
+increments the counter, and after `_NAKED_POSITION_MAX_REARM_ATTEMPTS` (3) consecutive failures
+across separate reconcile passes, force-closes via `LiveAdapter.execute_exit` for safety rather
+than run naked indefinitely, then resets the counter. A live SL resets the counter too (so a
+transient failure doesn't carry a stale count into a future position on the same symbol). Tests:
+`engine/tests/test_reconcile_naked_position_rearm.py` (5 cases: re-arm on missing SL, no-op when
+a live SL exists, no-op when `strategy.stop_loss` is unset, single failure doesn't force-close,
+`_NAKED_POSITION_MAX_REARM_ATTEMPTS` consecutive failures does force-close and resets the
+counter). Not yet run in-container or live-verified.
+
+### A-8 · `ACCOUNT_UPDATE` is received and ignored — the event-type-agnostic fix for the 60s window · [Certain] · **High (enabler)** — **fixed 2026-07-17 (Plan 21.2)**
 
 `_handle_account_update` only logs. Binance emits `ACCOUNT_UPDATE` with a `P[]` position delta
 for **every** position change — including closes executed by conditional/algo orders,
@@ -187,6 +237,20 @@ amount) disagrees with the local view, schedule `_reconcile_exchange_state` unde
 per-symbol lock (debounced, e.g. skip if one is already queued). This supersedes the fragile
 per-order-id matching as the primary fill-detection mechanism; keep `ORDER_TRADE_UPDATE`
 handling as enrichment.
+
+**Shipped:** `_on_account_update` registered per symbol in `_run_symbol_loop`
+(`engine/core/live_bot_manager.py`), mirroring `_on_fill`'s registration. Correction to this
+finding's premise: `_handle_account_update` (`engine/services/user_data_stream.py`) turned out to
+already dispatch to a `register_account_callback`/`_account_callbacks` mechanism, not just log —
+that plumbing existed in the repo before this session but was never invoked from
+`live_bot_manager.py` (dead infrastructure, not literally "ignored"). 21.2 registers the missing
+consumer rather than building the dispatch mechanism from scratch. Decision logic (does this
+delta disagree with the local view enough to reconcile) extracted into a standalone
+`_account_update_needs_reconcile(pos_data, has_local_position)` helper, debounce implemented via
+`self._get_symbol_lock(session_id, symbol).locked()` — skip if a reconcile is already in flight
+rather than queuing a redundant one. Tests:
+`engine/tests/test_account_update_reconcile_decision.py`. Not yet run in-container or
+live-verified — same open item as 21.1.
 
 ### A-9 · No 429/418/ban handling and no weight budgeting on signed calls · [Certain] · **Medium**
 
@@ -291,7 +355,7 @@ Documented as "predicted move… feeds the PCM edge-vs-cost veto"; grep shows it
 anywhere in the engine. The gate uses `conviction` instead. Either wire magnitude into the M-2
 formula (it's the natural edge term) or delete the field and fix the docstring.
 
-### M-4 · Trailing/breakeven stops never amend the exchange SL order · [Certain] · **Medium-High (live semantics gap)**
+### M-4 · Trailing/breakeven stops never amend the exchange SL order · [Certain] · **Medium-High (live semantics gap)** — **fixed 2026-07-17 (Plan 21.4)**
 The risk models' maintain path tightens `constraints.stop_price` every candle;
 `DefaultExecution.route()` Path 5 writes it to the **local** `s.stop_loss` only. No code path
 amends/replaces the resting `/fapi/v1/algoOrder` SL (grep: the only DELETEs are the two OUO
@@ -303,7 +367,23 @@ stay armed — compounding A-4). Between candles, only the stale wide SL protect
 pattern (freqtrade `stoploss_on_exchange` adjustment): on tighten ≥ 1 tick, cancel+replace the
 SL leg. Fix belongs with 21.4's bracket-integrity work.
 
-### M-5 · Entries proceed even when their protective stop is invalid against the fill · [Certain] · **Low-Medium**
+**Shipped:** new `LiveBotManager._maybe_amend_exchange_sl(session, session_id, strategy, symbol)`
+(`engine/core/live_bot_manager.py`), wired into `_run_symbol_loop` immediately after
+`kernel.evaluate_and_route(...)` inside the existing per-symbol lock. No-ops with no open
+position or no `stop_loss`; first pass after a fresh position records the current stop as
+`armed_sl_price` baseline without calling Binance (it's already the entry-time/restored order);
+subsequent passes compare direction-aware (`new > armed` for longs, `new < armed` for shorts) —
+only a genuine tighten cancels the old algoId and posts a new STOP_MARKET, updating
+`algo_ids["sl"]`/`armed_sl_price` on success. A widening or unchanged stop is a pure no-op (never
+pushes a wider stop to the exchange even if something upstream violated the trail-only-tightens
+invariant). The whole operation is wrapped in try/except — a failed amend logs a warning and
+leaves the old tracking intact, falling back to the engine's own candle-close wick check, never
+raises into the candle loop. Tests: `engine/tests/test_maybe_amend_exchange_sl.py` (8 cases:
+baseline-only first pass, long tighten cancels+replaces, short tighten is direction-aware,
+widening is never amended, unchanged is a no-op, no-open-position no-op, no-stop-loss no-op,
+amend failure is caught and doesn't corrupt tracking). Not yet run in-container or live-verified.
+
+### M-5 · Entries proceed even when their protective stop is invalid against the fill · [Certain] · **Low-Medium** — **fixed 2026-07-17 (Plan 21.4)**
 `LiveAdapter.execute_entry` drops an SL/TP that lands on the wrong side of the fill price
 (gap between signal close and market fill) — logs "dropping SL" and **places the entry anyway,
 naked on that leg**, and does not clear the invalid `strategy.stop_loss` tuple, so the next
@@ -311,6 +391,20 @@ candle's `check_exits` can read the wrong-side stop as instantly triggered and m
 whatever the price is (`reason="stop_loss"`, wrong bookkeeping). Industry behavior: reject the
 entry outright when the bracket is invalid vs current price (freqtrade does not enter without
 its stop). Fold into 21.4's acceptance criteria; also clear local bracket state on any drop.
+
+**Shipped:** `execute_entry`'s SL/TP validity check (`engine/core/live_bot_manager.py`) is now
+split by stakes. Invalid SL (long: `sl_price >= fill_price`; short: `sl_price <= fill_price`)
+rejects the entry outright — `strategy.buy = strategy.sell = strategy.stop_loss =
+strategy.take_profit = None`, returns `False` before any order is placed — no more bracket-less
+entries. Invalid TP stays lower-stakes: dropped (`tp_price = None`, `strategy.take_profit =
+None`) but the entry still proceeds with its valid SL, since a missed upside target isn't a naked
+risk exposure the way a missing/wrong-side stop is. Both branches clear the local tuple so next
+candle's `check_exits` can't misread a stale invalid stop/target as instantly triggered. Tests:
+`engine/tests/test_execute_entry_bracket_safety.py`
+(`test_long_invalid_sl_rejects_entry_and_places_no_order`,
+`test_short_invalid_sl_rejects_entry_and_places_no_order`,
+`test_valid_sl_invalid_tp_still_enters_with_tp_dropped`). Not yet run in-container or
+live-verified.
 
 ### M-6 · Portfolio-abstraction stubs are dead code awaiting Plan 22.6 · [Certain] · **Info**
 `TargetPortfolio.weight` is computed but consumed by nothing; `BaseStrategy.target_weight()`
@@ -321,7 +415,7 @@ rather than leaving two parallel half-abstractions.
 | Fix | Route | Why there |
 |-----|-------|-----------|
 | M-1 + M-2 + M-3 together (rewire gate to PCM config, fix dimensions, wire or delete magnitude) | **Plan 9, new step 9.11** — golden-master-gated | Activating a dead gate changes backtest outputs by definition; needs the re-baseline + sign-off protocol, and a decision: fix-and-activate at 0.05, or fix-and-default-off (opt-in). Recommendation: fix-and-default-off first (golden-master-inert), activation as its own baselined step. |
-| M-4 + M-5 (exchange SL amend-on-tighten; reject entry on invalid bracket; clear local state on drop) | **21.4** (scope extended) | Same bracket-integrity surface as the naked-position detector. |
+| M-4 + M-5 (exchange SL amend-on-tighten; reject entry on invalid bracket; clear local state on drop) | **21.4** (scope extended) — **shipped 2026-07-17** | Same bracket-integrity surface as the naked-position detector. |
 | M-6 | **22.6** | Portfolio layer either consumes or deletes the stubs. |
 
 ---
@@ -352,9 +446,9 @@ and testable; per-step engine tests against a stubbed Binance layer follow the
 | Step | Fixes | Size | Priority | Notes |
 |------|-------|------|----------|-------|
 | 21.1 | A-1 (userTrades creds), A-2 (`c` key + `str()` + unconditional reconcile), A-3 (`break` not `return`) | S | **P0** | **Shipped 2026-07-17** — three surgical diffs in `engine/core/live_bot_manager.py` (A-1, A-2 + new `_extract_fill_client_id()` helper) and `engine/services/user_data_stream.py` (A-3). Regression tests: `engine/tests/test_query_real_exit_from_user_trades.py`, `engine/tests/test_on_fill_client_id_extraction.py`, `engine/tests/test_uds_listen_key_expired_reconnect.py`. **Still open:** the container test run (no Docker access from the editing session — only a dependency-free `ast.parse` syntax check was done) and a live small-session reproduction to confirm F7's ~60s staleness symptom is gone. Do the container run + live verification before starting 21.2. |
-| 21.2 | A-8 (ACCOUNT_UPDATE-driven reconcile) | M | **P0** | Closes the ~60s window regardless of the F7 answer on algo-order `ORDER_TRADE_UPDATE`. Debounce under the per-symbol lock. |
-| 21.3 | A-4 + A-5 (cancel brackets on every close path) | M | **P1** | One `_cancel_symbol_algo_orders()` helper, four call sites. Acceptance: `openAlgoOrders` empty after any close, incl. session stop. |
-| 21.4 | A-6 + A-7 + **M-4 + M-5** (emergency-exit truth; naked-position detector/re-arm; exchange-SL amend-on-tighten; reject entry on invalid bracket + clear local state on drop) | M | **P1** | Extends 5.2's real-fill contract to the emergency path; adds the freqtrade-style missing-stop re-placement loop **and** cancel+replace on trailing tighten. Also self-heals the F7 TP-400 class. |
+| 21.2 | A-8 (ACCOUNT_UPDATE-driven reconcile) | M | **P0** | **Shipped 2026-07-17** — `_on_account_update` registered per symbol in `engine/core/live_bot_manager.py`, decision logic in `_account_update_needs_reconcile()`, debounced via the existing per-symbol lock. Tests: `engine/tests/test_account_update_reconcile_decision.py`. Container test run + live re-verification still pending (see Part A A-8). |
+| 21.3 | A-4 + A-5 (cancel brackets on every close path) | M | **P1** | **Shipped 2026-07-17** — `_cancel_symbol_algo_orders()` helper, wired into `execute_exit`, `_close_position_on_stop`, F-018 emergency-exit, reconcile Case 2. Tests: `engine/tests/test_cancel_symbol_algo_orders.py`. Container test run + live `openAlgoOrders`-empty-after-close verification still pending. |
+| 21.4 | A-6 + A-7 + **M-4 + M-5** (emergency-exit truth; naked-position detector/re-arm; exchange-SL amend-on-tighten; reject entry on invalid bracket + clear local state on drop) | M | **P1** | **Shipped 2026-07-17** — F-018 emergency-exit path rewritten with a 3-attempt retry ladder + real-fill booking (A-6); `_reconcile_exchange_state` Case 3 naked-position detector/re-arm with bounded force-close (A-7); new `_maybe_amend_exchange_sl()` cancel+replace on tighten, wired into `_run_symbol_loop` (M-4); `execute_entry`'s SL/TP validity check now rejects invalid-SL entries outright, still drop-and-continue for invalid TP (M-5). Tests: `engine/tests/test_reconcile_naked_position_rearm.py`, `engine/tests/test_maybe_amend_exchange_sl.py`, `engine/tests/test_execute_entry_bracket_safety.py`. Container test run + live re-verification still pending. |
 | 21.5 | A-9 (weight tracking, 429/418 handling, batched reconcile) | M | **P2** | Batched `positionRisk`/`openAlgoOrders` per candle wave is the big weight win for Chaos runs. |
 | 21.6 | A-10 (automatic session-drawdown kill-switch) | S–M | **Merged→22.1** | Absorbed by Plan 22's Session Risk Governor (`22_risk-management-industry-standard.md`) — same scope, better home. Do not implement twice. |
 | 21.7 | A-11/A-12/A-13/A-14 (risk-inflation logging, data-provenance decision, wick-check dedup, slippage guard) | S each | P3 | A-12 and A-13 need a decision note in DECISIONS.md more than code. |

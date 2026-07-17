@@ -7,13 +7,14 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
-## 2026-07-17 — Plan 21.1 shipped: the three F7-root-cause fixes (A-1, A-2, A-3) — CODE COMPLETE, VERIFICATION PENDING ⏸️
+## 2026-07-17 — Plan 21.1–21.4 shipped: F7-root-cause fixes + bracket-integrity hardening — CODE COMPLETE, VERIFICATION PENDING ⏸️
 
 **Goal:** ship Plan 21 step 21.1 — the three surgical diffs identified by the 2026-07-16 audit as
 the likely root causes of F7 (algo-order fill detection lag): A-1 (broken userTrades credentials),
 A-2 (`_on_fill` AttributeError killing the event-driven fill path), A-3 (`LISTEN_KEY_EXPIRED`
 killing the user-data stream permanently). Per `0_tracker.md`'s "Next session" pointer, this was
-the top P0 item and a prerequisite for a meaningful F7 reproduction.
+the top P0 item and a prerequisite for a meaningful F7 reproduction. Same session, continued into
+**21.2** (A-8, ACCOUNT_UPDATE-driven reconcile) per 21.1's own "next session" pointer below.
 
 **Done:**
 - **A-1** (`engine/core/live_bot_manager.py`, `_query_real_exit_from_user_trades()`): the
@@ -49,39 +50,169 @@ the top P0 item and a prerequisite for a meaningful F7 reproduction.
   ~60s-staleness entry corrected to reflect the code fix), `algo-trading/SPEC.md` ("Open issues
   found in a live Chaos run" item 1).
 
-**NOT done — do not treat 21.1 as fully closed:**
-1. **The engine test suite has not been run inside the Docker container.** This editing session
-   had no Docker access (sandboxed environment, no `docker` binary, no access to the user's
-   running containers) — only a dependency-free `python3 -c "import ast; ast.parse(...)"` syntax
-   check was run on the five changed/new files (all passed). Run before anything else next
-   session: `docker exec enma_trading_platform-engine-1 pytest /app/tests/` (or at minimum the
-   three new files) and fix anything that surfaces.
-2. **No live re-verification.** The original F7 symptom (BSBUSDT/ESPORTSUSDT closing on Binance in
-   single-digit seconds but showing open in Enma's UI for ~50-55s) needs to be reproduced again
-   with this fix in place — a small 1-3 symbol live/testnet session, watching for the conditional
-   SL/TP close to reflect in session state within a few seconds instead of waiting for the next
-   candle close. Also grep the resulting engine logs for the old crash signature (`'int' object
-   has no attribute 'startswith'`) — it should no longer appear.
-3. `CURRENT_STATE.md`/`algo-trading/SPEC.md`/F7's row are all written to say "code-fixed, not
-   live-verified" — do not silently upgrade that language to "confirmed fixed" without actually
-   running the session in #2.
+**Done — 21.2 (A-8, same session):**
+- **A-8** (`engine/core/live_bot_manager.py`, `_run_symbol_loop`): new `_on_account_update`
+  callback registered per symbol alongside `_on_fill`, via `_uds.register_account_callback(symbol,
+  _on_account_update)` (and unregistered in the existing `finally` block). Reconciles immediately
+  under the per-symbol lock whenever a Binance `ACCOUNT_UPDATE` `P[]` position delta disagrees with
+  the local `strategy.position` open/flat state — event-type-agnostic, so it closes the staleness
+  window independent of whatever A-2's `ORDER_TRADE_UPDATE`/`tpsl_` fix does or doesn't catch.
+  Debounced by checking `self._get_symbol_lock(session_id, symbol).locked()` first — skip rather
+  than queue if a reconcile is already in flight (candle loop or `_on_fill`), since it'll observe
+  the same fresh exchange state. Decision logic (does this delta actually disagree with the local
+  view) extracted into `_account_update_needs_reconcile(pos_data, has_local_position)` for direct
+  unit testing, same pattern as A-2's `_extract_fill_client_id()`.
+- **Correction to the original A-8 finding while implementing it:** the audit's "`_handle_account_
+  update` only logs" claim was stale — `engine/services/user_data_stream.py` already had a
+  `register_account_callback`/`_account_callbacks`/dispatch mechanism (added sometime before this
+  session, per `git log` — not by this session, and not reflected in any tracker entry) that
+  `_handle_account_update` already called into. It just had zero registered consumers. 21.2
+  registered the missing consumer rather than building new UDS-side plumbing — smaller diff than
+  the audit implied.
+- **Tests:** `engine/tests/test_account_update_reconcile_decision.py` (6 tests — both disagreement
+  directions trigger reconcile, both agreement directions don't, negative `pa` for shorts handled
+  correctly, missing/malformed `pa` degrades to flat rather than crashing).
+- Docs updated: `0_tracker.md` (Plan 21 row + Notes), `0_fixes-queue.md` (F7 entry),
+  `21_live-algo-industry-standard-audit.md` (status header, A-8 finding, Part C 21.2 row),
+  `CURRENT_STATE.md`, `algo-trading/SPEC.md`.
 
-**Files changed:** `engine/core/live_bot_manager.py` (A-1, A-2, new `_extract_fill_client_id()`),
-`engine/services/user_data_stream.py` (A-3); new `engine/tests/test_query_real_exit_from_user_trades.py`,
-new `engine/tests/test_on_fill_client_id_extraction.py`, new
-`engine/tests/test_uds_listen_key_expired_reconnect.py`; docs: `0_tracker.md`, `0_fixes-queue.md`,
+**Done — 21.3 (A-4/A-5, same session, continued unattended per user instruction — see below):**
+- New `LiveBotManager._cancel_symbol_algo_orders(session, symbol, algo_ids=None)`
+  (`engine/core/live_bot_manager.py`): cancels tracked SL/TP algo ids directly via `DELETE
+  /fapi/v1/algoOrder` if `algo_ids` has at least one non-None value; otherwise discovers open
+  algo orders via `GET /fapi/v1/openAlgoOrders` and cancels everything found. Best-effort — a
+  cancel failure is logged (info-level for "already gone", warning for a failed discovery GET)
+  and never raised, since the position is already closed by the time this runs.
+- Wired into all four close paths the finding named: `execute_exit`'s success path (captures
+  `algo_ids` before popping `open_positions`), `_close_position_on_stop` (passes `_pos_info`'s
+  tracked ids, falls back to discovery for symbols the engine never fully tracked),
+  the F-018 emergency-exit path in `execute_entry` (defensive — nothing is actually resting there
+  today given SL-before-TP placement order, but kept so a future reordering can't silently reopen
+  the gap), and reconcile Case 2 in `_reconcile_exchange_state` (A-5's specific finding: section
+  6's existing OUO peer-cancel is guarded by `has_exchange_position`, which is false by definition
+  in Case 2, so it structurally never fires there — Case 2 now captures and cancels the tracked
+  ids itself before dropping local tracking).
+- Tests: `engine/tests/test_cancel_symbol_algo_orders.py` (7 cases, driving the real method
+  directly — it's a proper `LiveBotManager` method, not an embedded closure, so no extraction
+  workaround needed): tracked-ids-direct-cancel, partial-tracked-ids, both-None-triggers-fallback,
+  discovery-fallback, no-credentials-noop, one-DELETE-failure-doesn't-block-the-other,
+  GET-failure-caught-not-raised.
+- Docs: `0_tracker.md` (Plan 21 row + Notes), `21_live-algo-industry-standard-audit.md` (A-4/A-5
+  fixed headers + Shipped notes + Part C 21.3 row), `algo-trading/SPEC.md` (new bullet in "SL/TP &
+  OCO Safety").
+
+**Done — 21.4 (A-6/A-7 + M-4/M-5, same session, continued unattended per user instruction — see
+below):**
+- **A-6** (`execute_entry`'s F-018 emergency-exit block, `engine/core/live_bot_manager.py`): the
+  emergency MARKET close (fires when entry filled but SL placement failed) now retries up to 3
+  attempts with `1s × attempt` backoff instead of a single try. On success, books the trade at the
+  REAL fill price (`_extract_fill_price()` → `_query_real_fill_price()` fallback ladder, identical
+  to `execute_exit`'s existing contract) instead of the old fabricated `exit_price = fill_price`
+  (entry price, which manufactured exactly `-fee` as PnL regardless of the actual close). On total
+  failure across all 3 attempts, records nothing and leaves `strategy.position` exactly as it was
+  (still `None` at this point in the entry flow) rather than falsely marking a still-open, still-
+  naked position as closed — matches Plan 5.2's real-fills-not-fabricated-closes invariant, now
+  extended to the emergency path. Also folds in A-4: calls `_cancel_symbol_algo_orders` defensively
+  after the emergency-close attempts regardless of outcome.
+- **A-7** (`_reconcile_exchange_state` Case 3, same file): new naked-position detector — whenever
+  `strategy.stop_loss` is set but no live SL-looking order (`type` containing `STOP` or
+  `clientOrderId` ending in `sl`) rests on the exchange, attempts a direction-aware re-arm via the
+  same rounding path `execute_entry` uses. Tracks consecutive failures per symbol
+  (`session["_naked_position_rearm_attempts"]`); after `_NAKED_POSITION_MAX_REARM_ATTEMPTS` (3)
+  consecutive failures across separate reconcile passes, force-closes via `execute_exit` instead of
+  letting the position run naked indefinitely (mirrors freqtrade's per-iteration missing-stoploss
+  re-placement, bounded). Success or a live SL both reset the counter.
+- **M-4** (new `LiveBotManager._maybe_amend_exchange_sl(session, session_id, strategy, symbol)`,
+  wired into `_run_symbol_loop` right after `kernel.evaluate_and_route(...)`): the risk models'
+  trailing/breakeven/Chandelier maintain path (`DefaultExecution.route()` Path 5) tightens
+  `strategy.stop_loss` locally every candle, but previously never pushed that to the resting
+  exchange SL order — it stayed at its original, widest trigger for the position's entire life.
+  This method now cancels+replaces the exchange SL whenever the new stop is a genuine
+  direction-aware tighten; records a first-pass baseline (`armed_sl_price`) without calling Binance
+  on a fresh/restored position; is a pure no-op on a widening or unchanged stop; and catches+logs
+  any amend failure without corrupting the tracked `algo_ids`/falling back to the engine's own
+  wick-check.
+- **M-5** (`execute_entry`'s SL/TP validity check, same file): an SL that lands on the wrong side
+  of the reference price (long: `sl_price >= fill_price`; short: `sl_price <= fill_price`) now
+  rejects the entry outright — `strategy.buy`/`sell`/`stop_loss`/`take_profit` all cleared, returns
+  `False`, no order ever placed — instead of the old silent-drop-and-enter-naked behavior with no
+  future re-check. TP-invalid stays lower-stakes: dropped, entry still proceeds on its valid SL.
+- **Tests:** `engine/tests/test_reconcile_naked_position_rearm.py` (5 cases, driving the real
+  `_reconcile_exchange_state` method directly), `engine/tests/test_maybe_amend_exchange_sl.py` (8
+  cases, driving the real `_maybe_amend_exchange_sl` method directly), `engine/tests/
+  test_execute_entry_bracket_safety.py` (7 cases, driving the real `LiveAdapter.execute_entry`
+  against a stubbed Binance layer, same harness shape as `test_execute_flip_idempotency.py`: both
+  invalid-SL-rejection directions, valid-SL/invalid-TP drop-and-enter, emergency-close success on
+  first try, retry-then-succeed, total-failure records nothing, A-4 cancel-integration). All three
+  new files syntax-checked cleanly via `ast.parse` (new files, unaffected by this session's
+  bash-sandbox stale-cache bug — see the note further down).
+- Docs: `0_tracker.md` (Plan 21 row + Notes), `21_live-algo-industry-standard-audit.md` (status
+  header + A-6/A-7/M-4/M-5 fixed headers + Shipped paragraphs + Part C 21.4 row + remediation
+  table), `CURRENT_STATE.md` (new Known-Debt bullet summarizing 21.3+21.4, TP-400 item annotated
+  with the A-7 self-heal note), `algo-trading/SPEC.md` (F-018 bullet rewritten, new bullets for
+  naked-position re-arm, exchange-SL amend-on-tighten, and invalid-SL rejection).
+
+**Files changed:** `engine/core/live_bot_manager.py` (A-1, A-2, A-4, A-5, A-6, A-7, A-8, M-4, M-5,
+new `_extract_fill_client_id()`, `_account_update_needs_reconcile()`,
+`_cancel_symbol_algo_orders()`, `_maybe_amend_exchange_sl()`,
+`_NAKED_POSITION_MAX_REARM_ATTEMPTS`), `engine/services/user_data_stream.py` (A-3); new
+`engine/tests/test_query_real_exit_from_user_trades.py`, new
+`engine/tests/test_on_fill_client_id_extraction.py`, new
+`engine/tests/test_uds_listen_key_expired_reconnect.py`, new
+`engine/tests/test_account_update_reconcile_decision.py`, new
+`engine/tests/test_cancel_symbol_algo_orders.py`, new
+`engine/tests/test_reconcile_naked_position_rearm.py`, new
+`engine/tests/test_maybe_amend_exchange_sl.py`, new
+`engine/tests/test_execute_entry_bracket_safety.py`; docs: `0_tracker.md`, `0_fixes-queue.md`,
 `21_live-algo-industry-standard-audit.md`, `workspace/docs/state/CURRENT_STATE.md`,
 `workspace/docs/features/algo-trading/SPEC.md`, `handoff.md`.
 
-**Next session:** (1) run the container test suite — fix any failures before trusting this fix is
-real; (2) run the small live-session reproduction described above; (3) once both pass, flip 21.1's
-status language from "code-shipped, pending verification" to "shipped" in `0_tracker.md`,
-`0_fixes-queue.md`'s F7 row, and the two doc files, and close F7's item 1 properly (it currently
-stays open per its own "answered, escalated, NOT closed" convention until the fix is verified, not
-just written). Then move to **21.2** (ACCOUNT_UPDATE-driven reconcile, closes the ~60s window
-regardless of Binance's algo-order event semantics) — it's next on the P0 live-correctness track
-per `0_tracker.md`'s Execution order, ahead of 22.1's Session Risk Governor which explicitly
-depends on 21.1–21.4 landing first.
+**Session note:** the user stepped away mid-session and explicitly instructed continuing
+unattended through the rest of the P0 track — use the plan's own recommended next step at each
+point, hold anything genuinely requiring a user decision rather than guessing, and keep working on
+adjacent tasks instead of idling. All of 21.1–21.4 shipped code-side under that instruction; 21.5
+(A-9) is next on the same basis.
+
+**NOT done — do not treat 21.1–21.4 as fully closed:**
+1. **The engine test suite has not been run inside the Docker container**, for any of 21.1–21.4.
+   This editing session never had Docker access. All eight new/changed test files got a
+   dependency-free `python3 -c "import ast; ast.parse(...)"` check and were manually re-read via
+   the Read tool for logical correctness, but none have executed against real pytest fixtures or
+   the actual `Position`/`round_price`/`clamp_and_round_qty` implementations at runtime. **Run
+   before trusting any of this:** `docker exec enma_trading_platform-engine-1 pytest /app/tests/`
+   and fix anything that surfaces — a plausible failure class is a signature mismatch between the
+   test harness's fake strategy/session shapes and what the real code actually reads.
+2. **No live re-verification** of any of 21.1–21.4's behavioral claims — the F7 ~60s staleness
+   symptom, the `openAlgoOrders`-empty-after-close acceptance criterion (21.3), the naked-position
+   re-arm/force-close path (A-7), the exchange-SL amend-on-tighten (M-4), or the emergency-close
+   retry ladder (A-6) — none have been exercised against a real Binance Testnet session yet.
+3. `CURRENT_STATE.md`/`algo-trading/SPEC.md`/`0_tracker.md` are all written to say "code-shipped,
+   pending verification" — do not silently upgrade that language to "confirmed fixed" without
+   actually running #1 and #2.
+4. **This session hit a bash-sandbox file-caching bug** (unrelated to the engine code): the bash
+   tool's mounted view of this repo intermittently serves stale, frozen copies of files that were
+   just edited heavily in-place (`0_tracker.md`, `handoff.md`, and `live_bot_manager.py` all hit
+   this — `stat` showed mtimes frozen well before the actual last edit time). The Read/Write/Edit
+   file tools were unaffected and always showed correct content. If a future session sees a git
+   diff or `ast.parse` failure that looks like truncation/corruption on a heavily-edited file,
+   check the file via the Read tool before assuming real data loss — cross-reference `stat` mtime
+   against the actual edit time first. New files are unaffected — this bug only hit files edited
+   repeatedly in place within the same session.
+
+**Next session (or continuing unattended):** (1) run the container test suite — fix any failures
+before trusting any of 21.1–21.4; (2) run the small live-session reproduction described in the
+21.1 section above, now also checking `GET /fapi/v1/openAlgoOrders` is empty after closes (21.3),
+a tightened trailing stop actually shows up as a replaced order on Binance (M-4), and a
+deliberately-broken SL placement (e.g. temporarily feeding an absurd trigger price) exercises the
+A-6 retry ladder and A-7 re-arm/force-close path; (3) once both pass, flip 21.1–21.4's status
+language from "code-shipped, pending verification" to "shipped" across `0_tracker.md`,
+`0_fixes-queue.md`'s F7 row, and the doc files, and close F7's item 1 properly. Then **21.5** (A-9:
+`X-MBX-USED-WEIGHT-1M` tracking, 429/418/Retry-After handling, batched `positionRisk`/
+`openAlgoOrders` reconcile per candle wave instead of per-symbol) — next on the P0 live-correctness
+track per `0_tracker.md`'s Execution order, ahead of 22.1's Session Risk Governor which explicitly
+depends on 21.1–21.4 landing first (now true). Also still pending: retry the git commit for the
+accumulated 21.2–21.4 work (lock-file-rename workaround; verify `live_bot_manager.py` isn't stale
+in bash before trusting `git add` — re-read via the Read tool first as a sanity check).
 
 ---
 ## 2026-07-16 — Live algo industry-standard audit (Plan 21) + risk-management plan (Plan 22), docs-only — COMPLETE ✅

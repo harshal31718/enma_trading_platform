@@ -24,7 +24,7 @@ Anything failing one of these lives in **§ Not in this queue** below with the r
 
 ## The queue (work top-down)
 
-### F7 — Algo/conditional fill detection: fix the now-identified root causes · Plan 21 (21.1–21.2) · **21.1 code-shipped 2026-07-17, live verification pending; 21.2 unstarted**
+### F7 — Algo/conditional fill detection: fix the now-identified root causes · Plan 21 (21.1–21.2) · **21.1+21.2 code-shipped 2026-07-17, live verification pending**
 - **History:** F7 began as "confirm `ORDER_TRADE_UPDATE` emits for algo orders". The 2026-07-16
   live Chaos run answered it (fills NOT reliably caught — ~50-55s UI/state staleness until the
   next candle's REST poll) and surfaced two more bugs (TP-placement 400s, FXSUSDT stuck open
@@ -53,9 +53,17 @@ Anything failing one of these lives in **§ Not in this queue** below with the r
     /app/tests/test_uds_listen_key_expired_reconnect.py` plus the full suite before treating 21.1
     as verified. A fresh small (1-3 symbol) live session against Binance Testnet is also needed to
     confirm the ~60s staleness is actually gone, per this queue's acceptance criterion below.
-- **Then 21.2** (ACCOUNT_UPDATE-driven reconcile — closes the ~60s window regardless of Binance's
-  algo-order event semantics) — unstarted.
-- **Acceptance:** 21.1's diffs shipped + tested (code done, container test run + live session
+- **21.2 shipped 2026-07-17** (ACCOUNT_UPDATE-driven reconcile — closes the ~60s window regardless
+  of Binance's algo-order event semantics): `_on_account_update` registered per symbol in
+  `_run_symbol_loop` alongside `_on_fill`, reconciles immediately on any OPEN<->FLAT disagreement
+  between Binance's `P[]` position delta and the local `strategy.position` view, debounced via the
+  existing per-symbol lock (`.locked()` check — skip if a reconcile is already in flight). Decision
+  logic in `_account_update_needs_reconcile()`. Tests:
+  `engine/tests/test_account_update_reconcile_decision.py`. See
+  `21_live-algo-industry-standard-audit.md` A-8 for the full writeup, including a correction: the
+  UDS-side dispatch mechanism (`register_account_callback`) already existed in the repo before this
+  session but was never invoked — 21.2 registers the missing consumer, not new plumbing.
+- **Acceptance:** 21.1+21.2's diffs shipped + tested (code done, container test run + live session
   still pending); a small (1–3 symbol) live session shows a conditional SL/TP fill reflected in
   session state in seconds (not ~60s); the improved `_binance_error_detail` logging captures the
   real Binance code if the TP-400 reproduces.

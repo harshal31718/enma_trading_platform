@@ -13,7 +13,7 @@ this board no longer duplicates it).
 
 | ID | Title | Remaining scope | Status | Priority | Depends on | Updated |
 |----|-------|-----------------|--------|----------|------------|---------|
-| 21 | Live algo industry-standard audit — **fixes** | 21.2–21.5, 21.7 (21.1 shipped code-side, pending container test run + live re-verification; 21.6 → Merged→22.1) | In progress (21.1 shipped 2026-07-17) | **P0** (21.2, = F7 follow-up) / P1–P3 | — | 2026-07-17 |
+| 21 | Live algo industry-standard audit — **fixes** | 21.5, 21.7 (21.1+21.2+21.3+21.4 shipped code-side, pending container test run + live re-verification; 21.6 → Merged→22.1) | In progress (21.1–21.4 shipped 2026-07-17) | **P1** (21.5 next) / P2–P3 | — | 2026-07-17 |
 | 5  | Live-trading state integrity | 5.5 (Decimal money, golden-master sign-off), 5.6 (restart recovery / projection) | In progress | P0 | 21.1–21.2 inform 5.6 | 2026-07-16 |
 | 22 | Industry-standard risk management (Session Risk Governor) | All (22.1–22.7) | Ready (forks #2/#3 decided) | P1 (22.1–22.3) / P2 (rest) | 21 (21.1–21.4) | 2026-07-16 |
 | 9  | Backtest & optimizer correctness (quant core) | 9.7 (funding ledger), 9.8 (intrabar sim), 9.9 (stats portion), 9.10 (fill-model ladder), **9.11 (cost-gate resurrection, M-1/M-2/M-3 — Step A inert, Step B re-baselined)** | Ready | P1 | — | 2026-07-16 |
@@ -26,8 +26,9 @@ this board no longer duplicates it).
 | 23 | New strategy: high-risk/high-leverage breakout scalper ("MarginSurge") | All — backtest gates can start now; live gated on 21.1–21.4 | Draft | P2 | 21 (live phase), 22.1–22.2 (liq-buffer + governor, soft) | 2026-07-16 |
 | 24 | BestSupertrend fixes (never trades at defaults) | S-1 sizing/affordability, S-2 live HTF off-by-one, S-3 fail-loud unsatisfiable configs, S-4 `order_type` collision, S-5 docs | Ready | P1 | — (live verify after 21.1–21.2); S-1/S-2 need a cheap BestSupertrend re-baseline | 2026-07-16 |
 
-**Plus the fixes queue:** F7 (algo-fill detection — root causes now identified, fix = 21.1/21.2)
-and F8 (Redis `requirepass`, wants a full-stack-restart window) — see `0_fixes-queue.md`.
+**Plus the fixes queue:** F7 (algo-fill detection — 21.1+21.2 shipped code-side, pending container
+test run + live re-verification) and F8 (Redis `requirepass`, wants a full-stack-restart window) —
+see `0_fixes-queue.md`.
 
 ## Completed / merged (reference only — detail in each plan file)
 
@@ -57,8 +58,9 @@ authoritative "what's left".
 Three tracks, workable in parallel:
 
 1. **Live-correctness track (P0):** 21.1/21.2 (fill-path fixes, unblocks the F7 reproduction)
-   → 21.3/21.4 (bracket cancel-on-close, naked-position re-arm) → 22.1–22.3 (Session Risk
-   Governor hard checks) → 5.5/5.6 → 22.4–22.7 → then 6 → 7 unblock.
+   → 21.3/21.4 (bracket cancel-on-close, naked-position re-arm — shipped 2026-07-17) → 21.5
+   (weight tracking, 429/418 handling, batched reconcile) → 22.1–22.3 (Session Risk Governor
+   hard checks) → 5.5/5.6 → 22.4–22.7 → then 6 → 7 unblock.
 2. **Quant track:** 9.7–9.10 (each needs its own golden-master re-baseline + sign-off) and
    10 Phases 1b–4 — independent of the live track.
 3. **Feature track:** 13 → 17 — independent of both.
@@ -76,11 +78,58 @@ pipeline-touching steps) a golden-master check per Rule C.
   A-1…A-14). **21.1 shipped 2026-07-17**: broken userTrades credentials (A-1), `_on_fill`
   AttributeError killing the event-driven fill path (A-2), LISTEN_KEY_EXPIRED killing the UDS
   task (A-3) — all three fixed with regression tests (`test_query_real_exit_from_user_trades.py`,
-  `test_on_fill_client_id_extraction.py`, `test_uds_listen_key_expired_reconnect.py`). **Still
-  outstanding before 21.1 is fully closed:** run the engine test suite inside the container (no
-  Docker access from the session that made these edits) and re-run a small live session to confirm
-  F7's ~60s staleness symptom is actually gone. 21.2 (ACCOUNT_UPDATE-driven reconcile) is next.
-  21.6 merged into 22.1.
+  `test_on_fill_client_id_extraction.py`, `test_uds_listen_key_expired_reconnect.py`).
+  **21.2 shipped 2026-07-17** (A-8, ACCOUNT_UPDATE-driven reconcile): a per-symbol
+  `_on_account_update` callback registered alongside `_on_fill` (both live in `_run_symbol_loop`,
+  `engine/core/live_bot_manager.py`) — on any OPEN<->FLAT disagreement between Binance's `P[]`
+  position delta and the local `strategy.position` view, triggers `_reconcile_exchange_state`
+  immediately under the existing per-symbol lock, debounced by skipping if that lock is already
+  held (a reconcile already in flight will observe the same fresh state). This is the
+  event-type-agnostic backstop A-8 called for — it doesn't depend on Binance's algo-order
+  `ORDER_TRADE_UPDATE`/client-id semantics at all, unlike `_on_fill`. Decision logic extracted into
+  `_account_update_needs_reconcile()` for direct unit testing (repo convention — see
+  `test_account_update_reconcile_decision.py`); found and reused an already-existing but
+  never-wired `register_account_callback`/`_handle_account_update` dispatch mechanism in
+  `user_data_stream.py` (present since before this session, never invoked from
+  `live_bot_manager.py` — the audit's A-8 finding that `_handle_account_update` "only logs" was
+  stale by the time 21.2 started; it already dispatched to callbacks, just to none). **Still
+  outstanding before 21.1/21.2 are fully closed:** run the engine test suite inside the container
+  (no Docker access from the session that made these edits) and re-run a small live session to
+  confirm F7's ~60s staleness symptom is actually gone. **21.3 shipped 2026-07-17** (A-4/A-5,
+  bracket-cancel-on-close): new `LiveBotManager._cancel_symbol_algo_orders(session, symbol,
+  algo_ids)` — cancels tracked SL/TP algo ids directly if known, else discovers + cancels via
+  `GET /fapi/v1/openAlgoOrders` — wired into all four close paths: `execute_exit` success,
+  `_close_position_on_stop`, the F-018 emergency-exit path (defensive; nothing rests there today
+  given SL-before-TP placement order, but future-proofed), and reconcile Case 2 (the exchange-
+  side-SL/TP-fired case that section 6's existing OUO peer-cancel structurally can't reach, since
+  it's guarded by `has_exchange_position` which is False in Case 2 by definition — this was A-5's
+  exact finding). Tests: `test_cancel_symbol_algo_orders.py` (7 cases: tracked-id direct cancel,
+  partial-tracked, discovery fallback, both-ids-None triggers fallback, no-credentials no-op,
+  one-DELETE-failure doesn't block the other, GET-failure caught not raised). **21.4 shipped
+  2026-07-17** (A-6/A-7 + M-4/M-5): F-018 emergency-exit path rewritten with a 3-attempt retry
+  ladder (1s/2s backoff) around the emergency MARKET close, real fill price booked via
+  `_extract_fill_price` → `_query_real_fill_price` (never the fabricated entry price), and on
+  total failure records nothing and leaves `strategy.position` untouched for the next reconcile
+  pass to restore (A-6). `_reconcile_exchange_state` Case 3 gained a naked-position detector —
+  when both sides agree a position is open but no live STOP_MARKET/`*sl` algo order rests on the
+  exchange, attempts a direction-aware re-arm; after `_NAKED_POSITION_MAX_REARM_ATTEMPTS` (3)
+  consecutive failures across separate reconcile passes, force-closes the position via
+  `execute_exit` rather than leave it running naked indefinitely (A-7). New
+  `_maybe_amend_exchange_sl()` cancels+replaces the resting exchange SL algo order whenever
+  Path 5's trailing/breakeven stop tightens `strategy.stop_loss` — previously a tightened stop
+  was local-only and the exchange-side stop stayed at its original, widest trigger for the
+  position's entire life (M-4), wired into `_run_symbol_loop` right after
+  `kernel.evaluate_and_route(...)`. `execute_entry`'s SL validity check now rejects the entry
+  outright (`strategy.buy/sell/stop_loss/take_profit` all cleared, returns False) when the
+  computed SL lands on the wrong side of the reference price, instead of silently dropping the
+  SL and entering naked with no future re-check — TP-invalid stays lower-stakes (drop TP, still
+  enter) (M-5). Tests: `test_reconcile_naked_position_rearm.py` (5 cases),
+  `test_maybe_amend_exchange_sl.py` (8 cases), `test_execute_entry_bracket_safety.py` (7 cases:
+  long/short invalid-SL rejection, valid-SL/invalid-TP drop-and-enter, emergency-close success
+  first try, retry-then-succeed, total-failure records nothing, A-4 cancel-integration). All
+  three files syntax-checked via `ast.parse`; container `pytest` run and live re-verification
+  still outstanding for 21.1–21.4 as a batch (no Docker access this session). 21.6 merged
+  into 22.1. 21.5 (A-9: weight tracking, 429/418 handling, batched reconcile) is next.
 - **5** — 5.5 (Decimal) is the largest, riskiest remaining piece: needs a deliberate
   golden-master re-baseline with sign-off, never a same-day bundle. 5.6 (restart recovery)
   depends on the "LiveSession as pure projection" work 5.1 deliberately did not ship; factor
