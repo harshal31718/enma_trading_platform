@@ -3,7 +3,9 @@
 **Authority:** This is the single source of truth for what ENMA currently does.
 Read this before starting any work. If this conflicts with chat history, this document wins.
 
-Last updated: 2026-07-16 (Known Technical Debt: confirmed the algo/conditional-order
+Last updated: 2026-07-17 (Plan 22 Step 22.1 — Session Risk Governor + capital integrity gate
+shipped code-side, pending container test run + live re-verification — see Algo Trading section.
+Earlier: 2026-07-16 Known Technical Debt update confirmed the algo/conditional-order
 `ORDER_TRADE_UPDATE` gap live and logged two new open bugs from a live Chaos run — see below.
 Earlier relocation: content moved into feature SPEC docs and DECISIONS.md; see
 `workspace/plan/current_state_relocation.md` for the relocation plan and
@@ -113,6 +115,32 @@ Resilience & Stats sections) — this bullet is a pointer, not a description.
 - **DCA scale-out precision**: partial-reduce quantities are now floored to the symbol's Binance
   `stepSize` before submission (previously unclamped — a live rejection risk once any strategy
   implements `adjust_trade_position()`, none do yet).
+
+**2026-07-17 addition (Plan 22 Step 22.1 — Session Risk Governor, shipped code-side):**
+- **Session Risk Governor** (`engine/core/models/governor.py`): a new session-scoped (not
+  per-symbol) risk component, `session["risk_governor"]`, mirroring `ProtectionManager`'s
+  interface pattern. Evaluated pre-trade in `execute_entry` (after A-001/A-002/A-003, can veto an
+  entry) and periodically in `_push_stats` (can auto-transition `trading_state` to `reducing` or
+  `halted`, edge-triggered). Three fail-closed hard checks: aggregate session drawdown
+  (`max_session_dd`, default 0.20 — supersedes the old per-symbol-slice-only drawdown, Plan 21
+  finding A-10), daily realized loss limit (`max_daily_loss_pct`, off by default, UTC-midnight
+  anchor), and margin utilization ceiling (`max_margin_utilization`, default 0.8, pre-trade only).
+  Config resolves via `risk_params.max_session_dd` (existing knob) plus a new
+  `risk_params.governor` sub-object for the governor-only keys. `auto_flatten_on_halt` is opt-in,
+  default off (`DECISIONS.md` #23) — force-closes every open position via the existing
+  `_close_position_on_stop` when a `halted` transition fires and the flag is set.
+- **Capital integrity gate** (B-11/B-12): two layers. Server-side (`startSession`/`startChaos` in
+  `algo.controller.js`, via new `server/src/utils/capitalGate.js`) hard-rejects non-numeric/
+  zero/negative capital always, and warns+requires `confirmOverCommit` when
+  `requestedCapital + Σ running sessions' capital > available testnet balance` (Chaos multiplies
+  by strategy count). Engine-side (`start_session` in `live_bot_manager.py`, via
+  `_fetch_available_balance`) is a best-effort defensive backstop — clamps and logs if the server
+  check was bypassed, never blocks on a failed balance fetch.
+- **`risk_breach` webhook event**: new `Settings.webhook.events` enum value (opt-in by default).
+  `handleEngineStats` persists the new `tradingState`, emits `algo:session:update` +
+  `algo:session:log`, and dispatches the webhook.
+- Not yet shipped: 22.2 (portfolio open-risk budget + `liq_buffer_pct` wiring), 22.3 (protections
+  parity + risk-integrity events), 22.4–22.7. See `workspace/plan/22_risk-management-industry-standard.md`.
 
 ### Order History (Trade Recorder)
 - Engine writes every completed round-trip trade to MongoDB `tradeRecords` collection via `engine/services/trade_recorder.py → record_trade()` (best-effort, never blocks the position-close path). Called by both `live_bot_manager` close paths (normal close + session stop).

@@ -7,6 +7,96 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
+## 2026-07-17 — Plan 22 Step 22.1 shipped: Session Risk Governor + capital integrity gate — CODE COMPLETE, VERIFICATION PENDING ⏸️
+
+**Goal:** per the user's "ok, ask me" → six Part F/A-12/A-13 policy decisions answered via
+`AskUserQuestion` (recorded `DECISIONS.md` #23/#24/#25) → user said "proceed with reccom" →
+started Plan 22 Step 22.1 (Session Risk Governor core + capital integrity gate), the next item in
+the plan's own execution order, now unblocked by those decisions. Continued unattended per the
+session's standing "keep implementing, don't stop for input" instruction.
+
+**Done:**
+- **`engine/core/models/governor.py`** (new): `GovernorVerdict` dataclass + `SessionRiskGovernor`
+  class, structurally mirroring `ProtectionManager`/`IProtection` — takes plain numbers
+  (`equity`, `used_margin`, `now`), never reaches into session/strategy internals itself. Three
+  fail-closed hard checks: aggregate session drawdown (`max_session_dd`, default 0.20 —
+  supersedes Plan 21 finding A-10/step 21.6, now `Merged→22.1`), daily realized loss limit
+  (`max_daily_loss_pct`, off by default, UTC-midnight anchor per `DECISIONS.md` #23), margin
+  utilization ceiling (`max_margin_utilization`, default 0.8, pre-trade only). `breach_action`
+  (`"reducing"`/`"halted"`) and `auto_flatten_on_halt` (opt-in, default off) configurable.
+  Registered in `core/models/__init__.py`. **18/18 tests actually run with real pytest**
+  (`engine/tests/test_session_risk_governor.py`) — zero numpy dependency, imports standalone.
+- **`server/src/utils/capitalGate.js`** (new): pure functions `validateCapitalValue`,
+  `sumReservedCapital`, `checkCapitalAgainstBalance` (B-11/B-12). Manually verified via a 20-
+  assertion `node -e` script (no `node_modules` in the sandbox — `npm install` still times out,
+  same limitation as prior sessions); a Jest suite exists at
+  `server/src/utils/__tests__/capitalGate.test.js` but has not been run for real.
+- **`algo.controller.js`**: `startSession`/`startChaos` wired to `capitalGate.js` — hard-reject
+  non-numeric/zero/negative capital always (400); warn-and-require `confirmOverCommit` when
+  requested + reserved capital across the user's running sessions exceeds the real testnet
+  balance (409 otherwise), Chaos multiplying `capital × strategyCount` summed not sampled, per
+  `DECISIONS.md` #23 Part F Q5. New `handleEngineStats` `risk_breach` branch persists
+  `LiveSession.tradingState`, emits Socket.IO updates, dispatches the `risk_breach` webhook.
+- **`Settings.js`**: `risk_breach` added to `webhook.events` enum (opt-in by default).
+- **`live_bot_manager.py`**: `start_session` instantiates `session["risk_governor"]` (reusing
+  `risk_params.max_session_dd` + new `risk_params.governor` sub-object) and defensively clamps
+  configured capital against a live-fetched balance (`_fetch_available_balance`, best-effort,
+  never blocks); `execute_entry` gained a pre-trade governor veto after A-001/A-002/A-003;
+  `_push_stats` gained an edge-triggered periodic governor check (via new
+  `_compute_session_equity_and_margin` static method, which also now derives `total_pnl`,
+  replacing the old inline per-symbol sum) that calls new `_apply_governor_breach` on a breach
+  (sets `trading_state`, notifies Node, auto-flattens via the existing
+  `_close_position_on_stop` if `auto_flatten_on_halt`); `record_realized_pnl` wired into all
+  four PnL-booking sites (F-018 emergency exit, `execute_exit`, `_close_position_on_stop`,
+  `_reconcile_exchange_state` Case 2). Verified via `py_compile`/`ast.parse` + manual review of
+  variable scoping — a full `import core.live_bot_manager` was attempted (successfully installed
+  `httpx`/`pytest` quickly this session, unlike prior sessions) but still blocked on
+  `websockets`/`motor`/`asyncpg`, which timed out installing, same sandbox limitation as always.
+- Docs: `0_tracker.md` (Plan 21 row's 21.6 already `Merged→22.1`; Plan 22 row updated to "In
+  progress, 22.1 shipped code-side"), `22_risk-management-industry-standard.md` (22.1 section
+  gained a "Status: shipped code-side" block), `CURRENT_STATE.md` (new 2026-07-17 addition under
+  Algo Trading + "Last updated" line), `algo-trading/SPEC.md` (new "Session Risk Governor" H2
+  section before REST Endpoints).
+
+**Files changed:** new `engine/core/models/governor.py`; `engine/core/models/__init__.py`
+(export); `engine/core/live_bot_manager.py` (governor import + instantiation + wiring at 6
+call sites, `_fetch_available_balance`, `_compute_session_equity_and_margin`,
+`_apply_governor_breach`); new `engine/tests/test_session_risk_governor.py`; new
+`engine/tests/test_fetch_available_balance.py` (ast.parse-only); new
+`server/src/utils/capitalGate.js`; new `server/src/utils/__tests__/capitalGate.test.js` (not
+run); `server/src/controllers/algo.controller.js` (capital gate wiring + `risk_breach` branch);
+`server/src/models/Settings.js` (webhook events enum); docs: `0_tracker.md`,
+`22_risk-management-industry-standard.md`, `workspace/docs/state/CURRENT_STATE.md`,
+`workspace/docs/features/algo-trading/SPEC.md`, `handoff.md`.
+
+**NOT done — do not treat 22.1 as fully closed:**
+1. **No container test run.** All Python verification in this session was `py_compile`/
+   `ast.parse` + the standalone governor pytest run (dependency-free) — `live_bot_manager.py`
+   itself was never actually imported/exercised, since its dependency chain
+   (`websockets`/`motor`/`asyncpg`) doesn't install in this sandbox. Run
+   `docker exec enma_trading_platform-engine-1 pytest /app/tests/` before trusting the wiring.
+2. **No Jest run** for `capitalGate.test.js` or a controller-level integration test — `npm
+   install` still times out in this sandbox (recurring limitation, not new). Manual assertions
+   passed but don't replace the real suite.
+3. **No live re-verification** — the governor has never vetoed a real entry, never auto-
+   transitioned a real session's `trading_state`, never auto-flattened, and the capital gate has
+   never rejected/warned on a real over-commit attempt against a real testnet balance.
+4. **Git commit still pending** — nothing from this session (governor.py, capitalGate.js +
+   test, live_bot_manager.py wiring, algo.controller.js wiring, Settings.js, new engine tests,
+   docs) has been committed yet.
+
+**Next session:** (1) run the container test suite, fix any signature-mismatch surprises between
+`governor.py`'s design and how `live_bot_manager.py` actually calls it; (2) live-verify: start a
+small testnet session with a tight `max_session_dd` and confirm a manufactured drawdown actually
+flips `trading_state` and shows in the SessionCard/webhook; try a deliberate capital over-commit
+and confirm the 409/confirm-flow round-trips from the wizard; (3) commit this session's work; (4)
+once verified, flip 22.1's status language from "shipped code-side, pending verification" to
+"shipped" across the docs touched above; (5) the natural next step per Plan 22's own sequencing
+(Part E: `22.1 ──► 22.2 ──► 22.3`) is **22.2** (portfolio open-risk budget + `liq_buffer_pct`
+wiring) — not yet confirmed as the user's intent beyond 22.1, check in before starting it rather
+than treating "proceed with reccom" as a blank check for the rest of Plan 22.
+
+---
 ## 2026-07-17 — Plan 21.1–21.4 + 21.5a/b + 21.7 (A-11/A-14) shipped: F7-root-cause fixes, bracket-integrity hardening, rate-limit backpressure, risk/slippage observability — CODE COMPLETE, VERIFICATION PENDING ⏸️
 
 **Goal:** ship Plan 21 step 21.1 — the three surgical diffs identified by the 2026-07-16 audit as
@@ -447,178 +537,4 @@ against fiction). Then 22.1–22.3. `CURRENT_STATE.md`'s Known-Debt userTrades l
 implemented") needs correcting when 21.1 ships — the call exists but has been broken since it
 shipped. Plan 22 Part F open questions (auto-flatten opt-in, daily-loss window anchor, Chaos
 governor defaults) want user answers before 22.1 implementation, not blocking the earlier steps.
-
----
-## 2026-07-16 — Fixes queue F2–F6 shipped; F7 answered live and escalated (2 new bugs found) — IN PROGRESS ⏸️
-
-**Goal:** work the fixes queue (`0_fixes-queue.md`) top-down starting at F2.
-
-**Done — F2 (Plan 5.3 order idempotency tail), fully shipped:** `execute_flip`'s idempotency-by-
-delegation was independently verified (previously assumed-but-unchecked, per the prior entry's
-handoff) with 3 new tests in `engine/tests/test_execute_flip_idempotency.py`, driving the real
-`LiveAdapter.execute_flip` against a stubbed Binance layer: (a) an exit-leg failure returns
-`False` without the entry leg ever being attempted, position stays open in its original
-direction; (b) an ambiguous entry-leg timeout still resolves to a successful flip via
-`execute_entry`'s existing query-by-client-id guard, booking the real re-queried fill price; (c)
-a genuine entry-leg failure after a successful exit leaves the strategy flat, never half-flipped
-or silently double-entered. Concluded no new client id is needed on `execute_flip` itself — a
-comment at the call site captures the reasoning for future readers. `execute_reduce` gained its
-own deterministic `newClientOrderId` (still no retry wrapper — remains dead code, no strategy
-does DCA scale-out). Full engine suite 130/130 (127 existing + 3 new), run inside the container
-by the user. Golden master not applicable (live-adapter-only, zero backtest-path import overlap).
-Plan 5 status is now 5.1 (scoped)/5.2/5.3/5.4 shipped; only 5.5 (Decimal money) and 5.6 (restart
-recovery) remain, both correctly kept off the fixes queue (see `5_live-trading-state-integrity.md`).
-
-**Done — F3 (Plan 14, webhook notifications), fully shipped:** per-user `Settings.webhook`
-sub-schema (enabled/url/format/events/retries/timeoutMs) + new `server/src/utils/webhook.js`
-(`dispatchWebhook` — fire-and-forget, bounded retries, NEVER throws; `sendTestWebhook` — single
-attempt, surfaces errors for the test button) wired into `algo.controller.js`'s `startSession`
-(session_start) and `handleEngineStats` (entry_fill, exit_fill + conditional liquidation, session_
-error, session_stop). `settings.controller.js` validates the nested `webhook` object (same
-dot-path partial-update pattern as `limits`) and exposes `testWebhook` on `POST /api/v1/settings/
-webhook/test`. Client: Settings page gained a "Notifications" card (enable toggle, URL, format,
-retries/timeout, per-event checkboxes, Save + Send Test buttons) via `useTestWebhook` in
-`useExchangeSettings.js`. **Verified two ways:** (1) 14 new Jest tests in `server/src/utils/
-__tests__/webhook.test.js` — caught and fixed a real bug where an empty `events: []` array was
-treated as "unfiltered" instead of "opted into nothing" (fixed the filter condition); full server
-suite 63/63 green after the fix. (2) Live browser verification via Claude in Chrome against the
-actual running stack: Notifications panel renders, "Send Test" round-trips a real HTTP POST
-end-to-end (confirmed both a failure — httpbin.org 503 — and a success — postman-echo.com 200 —
-surfaced correctly as toasts), and the saved config survives a full page reload (confirmed via
-GET `/api/v1/settings/exchange`). Test config was cleaned up back to disabled/empty afterward —
-nothing left live pointing at a test URL. No golden master needed (server-only, no engine touch).
-
-**Done — F4 (Plan 15, data conversion CLI), fully shipped:** new `engine/scripts/enma_cli.py`
-(argparse, `python -m scripts.enma_cli <cmd>`, must run inside the container) — `list-data`
-(reuses `get_cached_candles_summary()` verbatim, so it's guaranteed to match `GET /candles/
-cached`), `export-candles`/`import-candles` (CSV or JSON, format inferred from the file
-extension or explicit `--format`), `export-trades` (read-only dump of `backtestTrades` for a
-`--job-id`). `import-candles` reuses `candle_importer.py`'s exact `INSERT ... ON CONFLICT DO
-NOTHING` SQL, so re-importing is always a safe no-op — genuinely local-data-only, never calls
-Binance. New `engine/scripts/_io_formats.py` holds the pure CSV/JSON <-> DB-record transforms
-(stdlib `csv`/`json` only, no new deps), kept separate so they're unit-testable without a live
-DB connection. **Verified three ways:** (1) 12 new hermetic tests in `engine/tests/
-test_cli_roundtrip.py` (fake asyncpg pool replicating the real unique index for ON CONFLICT
-semantics, fake Mongo collection for trades) — full engine suite 142/142 (130 + 12). (2) A real
-round trip against the live stack's actual TimescaleDB data: exported BTCUSDT/1d (565 rows) to
-CSV, re-imported it into the same live table, confirmed the cached-candle count stayed at
-exactly 565 (no duplication) via `list-data`. (3) `list-data`'s real output inspected directly
-against production data, confirming the acceptance criterion "matches `GET /candles/cached`"
-(same underlying function, so structurally guaranteed, but ran for real regardless). No golden
-master needed (engine-only, zero import overlap with the backtest/live-adapter paths).
-
-**Done — F5 (wire the Dashboard sparkline/calendar), fully shipped:** `Dashboard.jsx` now
-composes the three previously-unwired components with real data — `EquitySparkline`/
-`DrawdownSparkline` fed by `useBacktestResult(stats.latestRunId)`'s `equityCurve` (gated on
-`stats.latestRunId` existing, since Dashboard is a cross-strategy overview, not tied to one
-backtest), and `DashboardCalendar` fed by `useDashboardCalendar()` with a 30D/90D/All timeframe
-toggle. First attempt at the toggle used an absolute-positioned overlay — a live screenshot
-caught it visually colliding with `DashboardCalendar`'s own internal "X days" badge ("90D"
-overlapping "0 days"). Fixed properly, not with a z-index/repositioning hack: added a
-`headerActions` prop slot to `DashboardCalendar.jsx` itself (rendered in a flex row before the
-day-count badge), and pass the toggle buttons through that prop from `Dashboard.jsx`. Re-verified
-live via Claude in Chrome after the fix — toggle and badge now sit cleanly side by side, no
-overlap. `client/CLAUDE.md`'s stale "unused component" note on `DashboardCalendar.jsx` cleared.
-No client test harness exists for `Dashboard.jsx` yet, so verification was live-browser only (no
-new unit tests). No golden master needed (client-only UI composition, zero backend/engine touch).
-
-**Done — F6 (Plan 8.1, docs truth-telling pass), fully shipped:** spawned an audit subagent
-(general-purpose, since no `drift-reviewer` agent type exists in this environment) to trace the
-doc/code boundary rather than trust the plan's own originating premise. Finding: **the premise was
-wrong** — Plan 8's SYS-4 claim that "Node's internal handlers place orders" / Rule 2 is "already
-false" doesn't hold against the real call graph; `algo.controller.js`'s internal-route handlers
-only decrypt credentials and forward back to the engine via `engineClient`, never call Binance
-directly. `CLAUDE.md`/`AGENTS.md` Rule 2 was already literally true — no edit needed there beyond
-a phrasing tightening (see below). Six genuine drift items were found and fixed instead: (1)
-Binance-isolation rule phrasing didn't carve out the client's direct public WebSocket for market
-data — qualified to "no *signed/authenticated* calls" in `CLAUDE.md` and `AGENTS.md`; (2)
-`.claude/GOVERNANCE.md`'s source-of-truth hierarchy never mentioned Plan 5's `executionEvents`
-log — added a note; (3) `ARCHITECTURE.md` still said "invite-only" (Plan 1 shipped open login
-2026-07-14) — corrected, and its Mongo collection list was missing `executionEvents`; (4)
-`ARCHITECTURE.md`'s Binance Environment Model table still said Mainnet "not yet implemented" (it's
-read-only balance/verify since Plan 4/20) — corrected, `AGENTS.md` tightened to match; (5)
-`strategy-management/SPEC.md`'s "Key Invariants" section still asserted live code-editing
-validation — Plan 3.2 removed the feature 2026-07-15 but this one bullet was missed in that pass,
-now struck through with a pointer to the removal; (6) `client/CLAUDE.md` documented a stale
-`binanceWS.js` path (`/ws`/`/stream`) that doesn't match the real code (`/public/ws`, `/market/ws`)
-— corrected to match `binance-api.md`'s already-accurate reference; (7) `DECISIONS.md` §6 never
-got an entry for the invite-only→open-login transition — appended. **Not done:** the SYS-3
-named-volume-divergence documentation item — genuinely new documentation, not a truth-telling fix,
-carried forward into Plan 8 proper (not F6's scope). No golden master needed (docs-only, zero code
-touch).
-
-**Files changed:** `engine/core/live_bot_manager.py`, new `engine/tests/test_execute_flip_
-idempotency.py` (F2); `server/src/models/Settings.js`, new `server/src/utils/webhook.js`, new
-`server/src/utils/__tests__/webhook.test.js`, `server/src/controllers/settings.controller.js`,
-`server/src/routes/settings.routes.js`, `server/src/controllers/algo.controller.js`,
-`client/src/hooks/useExchangeSettings.js`, `client/src/pages/Settings.jsx` (F3); new
-`engine/scripts/enma_cli.py`, new `engine/scripts/_io_formats.py`, new `engine/tests/
-test_cli_roundtrip.py` (F4); `client/src/pages/Dashboard.jsx`,
-`client/src/features/dashboard/DashboardCalendar.jsx` (F5); `CLAUDE.md`, `AGENTS.md`,
-`.claude/GOVERNANCE.md`, `workspace/docs/core/ARCHITECTURE.md`, `workspace/docs/core/DECISIONS.md`,
-`workspace/docs/features/strategy-management/SPEC.md`, `client/CLAUDE.md` (F6); docs:
-`0_fixes-queue.md` (F2–F6 struck through, live queue now starts at F7), `0_tracker.md`,
-`5_live-trading-state-integrity.md`, `14_webhook-notifications.md`, `15_data-conversion-cli.md`,
-`8_governance-correctness-and-cleanup.md`, `engine/CLAUDE.md`, `handoff.md`.
-
-**F7 (confirm algo-order `ORDER_TRADE_UPDATE` emits live) — attempted live, answered, escalated,
-NOT closed:** user ran a live MicroScalper Chaos session (15 auto-selected symbols, 1m, 50x,
-Binance Testnet) specifically to answer this. Findings:
-
-1. **Confirmed: the event-driven fill path (F-020) does not reliably catch algo/conditional
-   TP-SL fills.** BSBUSDT and ESPORTSUSDT both closed via their conditional SL/TP within
-   single-digit seconds of opening — verified against Binance's own Order History (entry
-   `19:54:04` IST, conditional sell filled `19:54:08` for BSBUSDT; similar for ESPORTSUSDT) — but
-   Enma's session UI kept showing both as open `LONG` positions for another ~50-55 seconds, until
-   the next 1m candle-close drove `_reconcile_exchange_state()`'s per-loop REST poll, which is
-   what actually caught and closed them. This matches the fixes-queue's anticipated "falls back
-   to poll" case, but it's worse in practice than "just staleness" — the UI and the strategy's
-   own in-memory position state actively say a symbol is open when Binance has already closed it,
-   for up to ~60s. Root cause not isolated (candidate: per-symbol fill callbacks are only
-   registered once that symbol's loop starts — a registration-timing gap is plausible, needs a
-   WS-frame-level log to confirm either way).
-2. **New bug found: TP placement failing outright on some symbols with a raw `400 Bad Request`**
-   (BCHUSDT, then ETHUSDT, same run). Possibly a recurrence of the already-shipped 2026-07-03
-   stale-tick-size-cache fix (see `algo-trading/SPEC.md`) for symbols outside the original warm
-   set, or a distinct cause — **genuinely unknown**, because the failure was only ever logged as
-   httpx's generic `"Client error '400 Bad Request' for url '...'"`, discarding Binance's actual
-   `{code, msg}` error body. **Fixed same session**: added `_binance_error_detail()` to
-   `live_bot_manager.py`, wired into the entry-order, SL-placement, and TP-placement failure logs
-   (previously just `str(exc)`) — the next reproduction will show the real Binance error code
-   instead of a dead end. The underlying TP-failure cause itself is still open, pending that
-   reproduction.
-3. **New bug found: a position (FXSUSDT SHORT) stayed shown as open after the session was fully
-   stopped**, with no live PnL/qty/notional, while every other symbol correctly showed `CLOSED`.
-   Not yet investigated — candidates: the entry may never have actually filled on Binance (a
-   phantom local-only position), or `stop_session()`'s close loop skipped this one symbol.
-
-User stopped the session once #1 and #2 were confirmed rather than let it keep trading on known-buggy
-TP/SL placement. **F7 is deliberately NOT struck through as shipped** — it answered its original
-question but the answer requires real follow-up work, not a doc note. Docs updated to carry the
-open state honestly: `workspace/docs/features/algo-trading/SPEC.md` (new "Open issues found in a
-live Chaos run" section), `CURRENT_STATE.md`'s Known Technical Debt (replaced the old "unconfirmed"
-line with the confirmed finding + the two new bugs), `0_fixes-queue.md` (F7 marked "answered,
-escalated", reordered to top priority ahead of F8), `0_tracker.md`'s Plan 5 note.
-
-**Files changed (this F7 pass):** `engine/core/live_bot_manager.py` (`_binance_error_detail()`
-helper + wired into 3 failure-log call sites — logging-only change, no behavior change); docs:
-`workspace/docs/features/algo-trading/SPEC.md`, `workspace/docs/state/CURRENT_STATE.md`,
-`0_fixes-queue.md`, `0_tracker.md`, `handoff.md`.
-
-**Next session — priority order:**
-1. **Reproduce the TP-placement failure** with the new logging (`docker exec
-   enma_trading_platform-engine-1 python -c "import ast; ast.parse(open('/app/core/
-   live_bot_manager.py').read())"` to verify syntax first, then `docker compose build engine` +
-   `docker compose up -d engine` — watch alone isn't enough for a clean restart per the standing
-   lesson below). Start a small (1-3 symbol) session rather than a full Chaos run, watch for the
-   next `TP skipped`/`SL placement failed` line, and read the real Binance `code`/`msg`.
-2. **Isolate the reconciliation-lag root cause** — needs the raw WS frames logged for a fast
-   algo-order fill (does `ORDER_TRADE_UPDATE` even arrive for it, or does the engine just never
-   dispatch it correctly). This bears directly on Plan 5 Step 5.6 (restart recovery / projection
-   work) — factor it into that design rather than patching it as a one-off.
-3. **Investigate the FXSUSDT-stuck-open anomaly** from the same run once logs are available.
-4. Once F7's actual fixes are scoped and shipped, close it out properly (struck through, Shipped
-   summary in the relevant plan file) rather than leaving it as a standing "escalated" note.
-5. F8 (Redis `requirepass`) still wants a dedicated full-stack-restart window — after F7, not
-   before, since F7 is now live-trading correctness debt, not a squeeze-in item.
 

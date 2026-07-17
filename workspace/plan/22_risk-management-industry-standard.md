@@ -137,6 +137,23 @@ All live-path work is golden-master-inert **except 22.6** (allocation touches
 byte-identical). Each step independently shippable, tests per the stubbed-Binance pattern.
 
 ### 22.1 — Session Risk Governor core (aggregate drawdown, daily loss, margin ceiling) + capital integrity gate · P1 · M
+
+**Status: shipped code-side 2026-07-17** — pending container test run + live re-verification
+(same pending-verification pattern as Plan 21's steps). All pieces below are implemented:
+`engine/core/models/governor.py` (`SessionRiskGovernor`/`GovernorVerdict`, 18/18 unit tests
+passing standalone, no numpy dependency); `server/src/utils/capitalGate.js` (pure functions,
+manually verified — Jest suite written but not run, no `node_modules` in the dev sandbox);
+`algo.controller.js`'s `startSession`/`startChaos` capital-gate wiring + new `handleEngineStats`
+`risk_breach` branch; `live_bot_manager.py`'s `start_session` (governor instantiation, reusing
+`risk_params.max_session_dd` + new `risk_params.governor` sub-object), `execute_entry` pre-trade
+gate, `_push_stats` periodic check, `_apply_governor_breach`, `_compute_session_equity_and_margin`,
+and all four `record_realized_pnl` feed sites (F-018 emergency exit, `execute_exit`,
+`_close_position_on_stop`, `_reconcile_exchange_state` Case 2); `Settings.js`'s webhook `events`
+enum now includes `risk_breach` (opt-in by default alongside `exit_fill`/`liquidation`/
+`session_error`). Golden master **not** triggered (live-adapter/session-orchestration only, zero
+backtest-path overlap). Six policy decisions this step depended on are recorded in
+`DECISIONS.md` #23.
+
 Governor skeleton + the three hard checks + auto `trading_state` transition + banner/webhook.
 **Absorbs Plan 21 step 21.6** — mark it `Merged→22.1` in plan 21 when this ships.
 

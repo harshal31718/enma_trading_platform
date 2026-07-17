@@ -127,8 +127,8 @@ const settingsSchema = new mongoose.Schema(
       format:    { type: String,  enum: ['json', 'form'], default: 'json' },
       events: {
         type: [String],
-        default: ['exit_fill', 'liquidation', 'session_error'],
-        enum: ['entry_fill', 'exit_fill', 'liquidation', 'session_start', 'session_stop', 'session_error'],
+        default: ['exit_fill', 'liquidation', 'session_error', 'risk_breach'],
+        enum: ['entry_fill', 'exit_fill', 'liquidation', 'session_start', 'session_stop', 'session_error', 'risk_breach'],
       },
       retries:   { type: Number, default: 2,    min: 0,    max: 5     },
       timeoutMs: { type: Number, default: 5000, min: 1000, max: 30000 },

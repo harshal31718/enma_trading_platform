@@ -56,6 +56,10 @@ from .protections import (
     StoplossGuard,
     ProtectionManager,
 )
+from .governor import (
+    GovernorVerdict,
+    SessionRiskGovernor,
+)
 
 __all__ = [
     # Value objects
@@ -98,4 +102,7 @@ __all__ = [
     "CooldownPeriod",
     "StoplossGuard",
     "ProtectionManager",
+    # Session Risk Governor (Plan 22)
+    "GovernorVerdict",
+    "SessionRiskGovernor",
 ]

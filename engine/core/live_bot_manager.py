@@ -19,6 +19,7 @@ from core.position import Position
 from core.models import (
     DefaultPortfolioModel, LiveExecution, OrderPlan,
     CooldownPeriod, StoplossGuard, ProtectionManager,
+    SessionRiskGovernor,
 )
 from core.params import param_coerce, param_default, param_validate
 from core.pipeline import evaluate
@@ -162,6 +163,32 @@ def _binance_error_detail(exc: Exception) -> str:
     return str(exc)
 
 
+async def _fetch_available_balance(api_key: str, api_secret: str) -> float | None:
+    """Plan 22 Step 22.1 (B-11 engine backstop): query the real Binance
+    Testnet available balance once, so `start_session` can defend against a
+    configured `capital` that exceeds what the wallet actually holds — the
+    entry-time notional guard only ever checked against the *configured*
+    fiction, never the wallet, so a bot configured with far more capital than
+    the account holds sized orders too large and only ever discovered it via
+    Binance's own margin-rejection errors instead of a risk control.
+
+    Best-effort: returns None on any failure (missing creds, network error,
+    Binance error) rather than raising — this is a defensive clamp, not a
+    hard gate. The server-side gate (`startSession`/`startChaos`, Node) is
+    the primary UX; this is the backstop for sessions the engine started
+    directly or where the server check was bypassed.
+    """
+    if not api_key or not api_secret:
+        return None
+    try:
+        from services.binance_testnet import send_signed_request as _signed
+        account = await _signed("GET", "/fapi/v2/account", api_key, api_secret, mode="testnet")
+        return _safe_float(account.get("availableBalance"), None)
+    except Exception as e:
+        logger.warning(f"[AlgoBot] capital integrity backstop: balance fetch failed — {e}")
+        return None
+
+
 class LiveAdapter(ExecutionAdapter):
     def __init__(self, manager: LiveBotManager, session_id: str):
         self.manager = manager
@@ -221,6 +248,29 @@ class LiveAdapter(ExecutionAdapter):
                 strategy.buy = None
                 strategy.sell = None
                 return False
+
+            # Session Risk Governor pre-trade check (Plan 22 Step 22.1) —
+            # aggregate session drawdown, daily realized loss limit, margin
+            # utilization ceiling. Session-scoped (sees ALL symbols' state),
+            # unlike the per-symbol risk models above/below this gate.
+            risk_governor = session.get("risk_governor")
+            if risk_governor is not None:
+                _equity, _used_margin = self.manager._compute_session_equity_and_margin(session)
+                verdict = risk_governor.check_pre_trade(
+                    equity=_equity, used_margin=_used_margin, now=datetime.now(timezone.utc),
+                )
+                if not verdict.ok:
+                    logger.warning(f"[AlgoBot] {symbol}: entry blocked by risk governor — {verdict.reason}")
+                    await self.manager._notify_node(self.session_id, {
+                        "event": "log",
+                        "eventData": {
+                            "type": "warning",
+                            "message": f"{symbol}: entry blocked — risk governor ({verdict.check_name}): {verdict.reason}",
+                        },
+                    })
+                    strategy.buy = None
+                    strategy.sell = None
+                    return False
 
             # Plan 12 Step 1b: max concurrent open positions (session-level,
             # live/chaos only — mirrors freqtrade's max_open_trades). Skip
@@ -650,6 +700,8 @@ class LiveAdapter(ExecutionAdapter):
                         _rpnl_e = _pos_e.pnl - _fee_e
                         strategy.balance += _rpnl_e
                         session["pnl"] += _rpnl_e
+                        if session.get("risk_governor") is not None:
+                            session["risk_governor"].record_realized_pnl(_rpnl_e, datetime.now(timezone.utc))
                         _tr = build_trade_record(
                             source="bot",
                             executed_by=session.get("strategy_name", "unknown"),
@@ -1001,6 +1053,8 @@ class LiveAdapter(ExecutionAdapter):
         realized_pnl = pos.pnl - fee
         strategy.balance += realized_pnl
         session["pnl"] += realized_pnl
+        if session.get("risk_governor") is not None:
+            session["risk_governor"].record_realized_pnl(realized_pnl, datetime.now(timezone.utc))
 
         # Record trade close in protections (A-001)
         protection_manager = session.get("protection_manager")
@@ -1191,11 +1245,37 @@ class LiveBotManager:
             })
             return
 
+        # Plan 22 Step 22.1 (B-11 engine backstop): defensive capital-vs-wallet
+        # clamp, independent of whatever the server-side gate did or didn't
+        # catch. Best-effort — a failed balance fetch never blocks session
+        # start (see `_fetch_available_balance`'s own docstring); this is the
+        # backstop, not the primary UX (that's Node's startSession/startChaos).
+        configured_capital = float(session_config["capital"])
+        capital_to_use = configured_capital
+        available_balance = await _fetch_available_balance(api_key, api_secret)
+        if available_balance is not None and configured_capital > available_balance > 0:
+            capital_to_use = available_balance
+            logger.warning(
+                f"[AlgoBot] Session {session_id}: configured capital ${configured_capital:.2f} "
+                f"exceeds available balance ${available_balance:.2f} — clamping to the real "
+                f"balance (server-side capital gate should have caught this; this is the backstop)"
+            )
+            await self._notify_node(session_id, {
+                "event": "log",
+                "eventData": {
+                    "type": "warning",
+                    "message": (
+                        f"Configured capital ${configured_capital:.2f} exceeds available "
+                        f"balance ${available_balance:.2f} — clamped to ${available_balance:.2f}"
+                    ),
+                },
+            })
+
         # Cross-symbol capital split owned by the Portfolio Model (Phase 3).
         # Default is an equal split (byte-identical to the former
         # capital/len(symbols)); a custom PortfolioModel can re-weight here.
         allocation = DefaultPortfolioModel().allocate(
-            float(session_config["capital"]), symbols
+            capital_to_use, symbols
         )
         leverage = int(session_config.get("leverage", 1))
         fee_rate = float(session_config.get("fee_rate", 0.0005))
@@ -1236,6 +1316,18 @@ class LiveBotManager:
             window_seconds=int(rate_limit_cfg.get("window_seconds", 1)),
         )
 
+        # Session Risk Governor (Plan 22 Step 22.1): reuse the existing
+        # top-level `max_session_dd` knob (already resolved through the Zone 2
+        # cascade server-side, same as the per-symbol strategy clamp above at
+        # line ~1555) as the governor's default; a `risk_params.governor`
+        # sub-object can override it plus set the governor-only keys
+        # (max_daily_loss_pct, max_margin_utilization, breach_action,
+        # auto_flatten_on_halt). Full Zone 2 UI/schema wiring is 22.7's scope.
+        governor_cfg = dict(risk_params.get("governor", {}) or {})
+        if "max_session_dd" not in governor_cfg and risk_params.get("max_session_dd") is not None:
+            governor_cfg["max_session_dd"] = risk_params.get("max_session_dd")
+        risk_governor = SessionRiskGovernor(governor_cfg)
+
         self.sessions[session_id] = {
             "session_id": session_id,
             "user_id": user_id,
@@ -1246,7 +1338,7 @@ class LiveBotManager:
             "symbols": symbols,
             "timeframe": timeframe,
             "params": params,
-            "capital": float(session_config["capital"]),
+            "capital": capital_to_use,
             "leverage": leverage,
             "risk_params": risk_params,
             "status": "running",
@@ -1254,6 +1346,7 @@ class LiveBotManager:
             "trading_state": "active",  # A-002: active/reducing/halted
             "protection_manager": protection_manager,  # A-001
             "rate_limiter": rate_limiter,  # A-003
+            "risk_governor": risk_governor,  # Plan 22 Step 22.1
             # Plan 12 Step 1b: session-level cap on concurrent open symbols
             # (live/chaos multi-symbol only). None = unlimited (default,
             # byte-identical to pre-Plan-12 behavior).
@@ -2214,6 +2307,8 @@ class LiveBotManager:
             realized_pnl = pos.pnl - fee
             strategy.balance += realized_pnl
             session["pnl"] += realized_pnl
+            if session.get("risk_governor") is not None:
+                session["risk_governor"].record_realized_pnl(realized_pnl, datetime.now(timezone.utc))
 
             trade_record = build_trade_record(
                 source="bot",
@@ -2500,6 +2595,8 @@ class LiveBotManager:
             realized_pnl = net_realized_pnl_from_exchange if net_realized_pnl_from_exchange is not None else (pos.pnl - fee)
             strategy.balance += realized_pnl
             session["pnl"] += realized_pnl
+            if session.get("risk_governor") is not None:
+                session["risk_governor"].record_realized_pnl(realized_pnl, exit_time)
 
             event_data = {
                 "symbol": symbol,
@@ -2756,16 +2853,80 @@ class LiveBotManager:
             "open_orders": open_orders,
         }
 
+    @staticmethod
+    def _compute_session_equity_and_margin(session: dict) -> tuple[float, float]:
+        """Plan 22 Step 22.1: session-level aggregates the Session Risk
+        Governor needs — equity (allocated capital + realized + unrealized
+        PnL across ALL symbols) and total committed margin. Shared by
+        `execute_entry`'s pre-trade check and `_push_stats`'s periodic
+        check so the two never compute this differently.
+        """
+        instances = session.get("strategy_instances", {}).values()
+        total_pnl = sum(
+            strat.position.pnl if strat.position else 0.0 for strat in instances
+        ) + session.get("pnl", 0.0)
+        equity = session.get("capital", 0.0) + total_pnl
+        used_margin = sum(
+            strat.position.margin if strat.position else 0.0 for strat in instances
+        )
+        return equity, used_margin
+
+    async def _apply_governor_breach(
+        self, session_id: str, session: dict, verdict,
+    ) -> None:
+        """Plan 22 Step 22.1: apply a periodic Session Risk Governor breach —
+        edge-triggered (only fires the transition once, when trading_state is
+        still "active"; a manual reset back to active via the existing
+        update-trading-state endpoint re-arms it). Auto-flattens on `halted`
+        only if the governor's `auto_flatten_on_halt` is set (DECISIONS.md
+        #23 — opt-in, off by default). The governor itself never places
+        orders (Part C's design constraint) — this method is the caller
+        acting on its verdict, same relationship `ProtectionManager` already
+        has with `execute_entry`.
+        """
+        risk_governor = session.get("risk_governor")
+        new_state = risk_governor.breach_action if risk_governor else "reducing"
+        session["trading_state"] = new_state
+        logger.error(
+            f"[AlgoBot] Session {session_id}: RISK GOVERNOR BREACH ({verdict.check_name}) — "
+            f"{verdict.reason} — trading_state -> {new_state}"
+        )
+        await self._notify_node(session_id, {
+            "event": "risk_breach",
+            "eventData": {
+                "checkName": verdict.check_name,
+                "reason": verdict.reason,
+                "newState": new_state,
+            },
+        })
+        if new_state == "halted" and risk_governor is not None and risk_governor.auto_flatten_on_halt:
+            logger.warning(f"[AlgoBot] Session {session_id}: auto-flatten enabled — force-closing all positions")
+            for symbol in list(session.get("open_positions", {}).keys()):
+                try:
+                    await self._close_position_on_stop(
+                        session_id, symbol, session["open_positions"].get(symbol), session,
+                    )
+                except Exception as e:
+                    logger.error(f"[AlgoBot] Session {session_id}: auto-flatten close failed for {symbol}: {e}")
+
     async def _push_stats(self, session_id: str) -> None:
         """Push periodic stats update to Node including exchange-truth position
         details with mark-price PnL (F-023/A-013)."""
         session = self.sessions.get(session_id)
         if not session:
             return
-        total_pnl = sum(
-            strat.position.pnl if strat.position else 0.0
-            for strat in session.get("strategy_instances", {}).values()
-        ) + session["pnl"]
+        equity, _used_margin = self._compute_session_equity_and_margin(session)
+        total_pnl = equity - session.get("capital", 0.0)
+
+        # Session Risk Governor periodic check (Plan 22 Step 22.1) —
+        # aggregate drawdown + daily loss limit. Margin ceiling is
+        # pre-trade-only (Part C's table), not evaluated here.
+        risk_governor = session.get("risk_governor")
+        if risk_governor is not None and session.get("trading_state", "active") == "active":
+            verdict = risk_governor.check_periodic(equity=equity, now=datetime.now(timezone.utc))
+            if not verdict.ok:
+                await self._apply_governor_breach(session_id, session, verdict)
+
         # Position details with exchange-truth data for the UI (F-023)
         position_details = {}
         for sym, info in session.get("open_positions", {}).items():

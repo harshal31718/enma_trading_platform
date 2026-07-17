@@ -356,6 +356,80 @@ confirmed answer and two separate, still-open bugs:
 
 ---
 
+## Session Risk Governor (Plan 22 Step 22.1 — shipped code-side 2026-07-17)
+
+A new session-scoped risk component, separate from the per-symbol five-model pipeline's
+`AtrBracketRiskModel`/protections stack — it sees the whole session's aggregate equity/margin,
+which per-symbol models structurally cannot (Plan 21 finding A-10). One instance per live
+session, stored in `session["risk_governor"]` (`engine/core/models/governor.py`,
+`SessionRiskGovernor`/`GovernorVerdict`), instantiated in `start_session` from
+`risk_params.max_session_dd` (existing knob, reused) plus a new `risk_params.governor` sub-object
+(`max_daily_loss_pct`, `max_margin_utilization`, `breach_action`, `auto_flatten_on_halt`).
+
+**Two evaluation points:**
+- **Pre-trade** (`execute_entry`, after A-001/A-002/A-003): `check_pre_trade()` — can veto the
+  entry. Checks aggregate session drawdown, daily realized loss limit, and margin utilization
+  ceiling (pre-trade only).
+- **Periodic** (`_push_stats`, every stats tick): `check_periodic()` — checks drawdown + daily
+  loss only (margin is pre-trade-only). Edge-triggered: only fires `_apply_governor_breach()` when
+  `trading_state` is currently `"active"`, so a breach doesn't re-fire every tick. A breach
+  auto-transitions `trading_state` to `breach_action` (`"reducing"` default, or `"halted"`), logs,
+  and notifies Node with a `risk_breach` event (`{checkName, reason, newState}`). If the new state
+  is `"halted"` and `auto_flatten_on_halt` is set (opt-in, default off — `DECISIONS.md` #23), every
+  open position is force-closed via the existing `_close_position_on_stop`.
+
+**Three hard checks, all fail-closed** (cannot compute the metric → block, never silently pass):
+1. **Aggregate session drawdown** — tracks a session equity high-water mark; breach when current
+   equity has drawn down more than `max_session_dd` (default 0.20) from it. Supersedes Plan 21
+   step 21.6 (`Merged→22.1`).
+2. **Daily realized loss limit** — off by default (`max_daily_loss_pct=None`). UTC-midnight
+   anchor (`DECISIONS.md` #23). A loss *limit*, not a net-PnL floor — winning trades never offset
+   an already-accumulated daily loss (freqtrade `max_daily_loss` semantics). Fed by
+   `record_realized_pnl()`, called at all four PnL-booking sites: the F-018 emergency-exit path,
+   `execute_exit`, `_close_position_on_stop`, and `_reconcile_exchange_state`'s Case 2.
+3. **Margin utilization ceiling** — pre-trade only; vetoes an entry that would push total margin
+   committed past `max_margin_utilization` (default 0.8) of equity. Fails closed (blocks) if
+   equity ≤ 0.
+
+`_compute_session_equity_and_margin()` (static method on `LiveBotManager`) derives session-level
+`equity`/`used_margin` from `session["open_positions"]` for both call sites — `_push_stats` also
+reuses it to derive `total_pnl` (replacing the old inline per-symbol sum).
+
+**Capital integrity gate (B-11/B-12)** — two independent layers, both start-time only:
+- **Server** (`server/src/utils/capitalGate.js`, wired into `startSession`/`startChaos` in
+  `algo.controller.js`): `validateCapitalValue()` hard-rejects non-numeric/zero/negative capital
+  unconditionally (400). `checkCapitalAgainstBalance()` compares
+  `requestedCapital + Σ this user's running sessions' capital` (Chaos: `capital × strategyCount`,
+  summed not sampled) against the real testnet available balance (`/trade/account`); over-commit
+  returns 409 unless the request carries `confirmOverCommit: true` (warn-and-confirm, per
+  `DECISIONS.md` #23 Part F Q5 — mainnet would hard-reject with no confirm path, not yet relevant
+  since trading stays testnet-pinned).
+- **Engine** (`_fetch_available_balance()` + a clamp block in `start_session`,
+  `live_bot_manager.py`): best-effort defensive backstop, independent of whatever the server-side
+  gate did or didn't catch. If configured capital exceeds the real fetched balance, clamps
+  `capital_to_use` down to it, logs a warning, and notifies the session log. A failed balance
+  fetch never blocks session start — this is the backstop, not the primary UX.
+
+**Webhook**: `risk_breach` added to `Settings.webhook.events` enum (opt-in by default alongside
+`exit_fill`/`liquidation`/`session_error`). `handleEngineStats`'s new `risk_breach` branch persists
+`LiveSession.tradingState`, emits `algo:session:update` + `algo:session:log`, and dispatches the
+webhook with `{sessionId, strategy, checkName, reason, newState}`.
+
+**Not yet shipped:** 22.2 (portfolio open-risk budget + `liq_buffer_pct` wired into the governor),
+22.3 (protections parity + risk-integrity events), 22.4–22.7 (VaR/CVaR enforcement,
+correlation-aware concentration cap, and further hardening). Full Zone 2 UI/schema wiring for the
+governor's config keys is 22.7's scope — 22.1 reads them as plain engine-side defaults. See
+`workspace/plan/22_risk-management-industry-standard.md` and `DECISIONS.md` #23/#24/#25.
+**Pending container test run + live re-verification** — the governor class itself has 18/18 real
+pytest passes standalone (`engine/tests/test_session_risk_governor.py`); the wiring into
+`live_bot_manager.py` was verified via `py_compile`/`ast.parse` + manual review (the file has a
+heavy TA-Lib/numpy/motor/asyncpg dependency chain that doesn't import in a bare sandbox); the
+Node-side capital gate was verified via `node --check` + a manual assertion script (no
+`node_modules` in the dev sandbox — a Jest suite exists at
+`server/src/utils/__tests__/capitalGate.test.js` but has not been run).
+
+---
+
 ## REST Endpoints
 
 | Method | Path | Description |

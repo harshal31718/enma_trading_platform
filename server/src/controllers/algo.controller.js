@@ -13,14 +13,22 @@ const { getIO } = require('../config/socket')
 const { resolveModelParams, resolveStrategyRiskParams } = require('../utils/risk')
 const { allocateChaosSymbols } = require('../utils/chaosAllocator')
 const { dispatchWebhook } = require('../utils/webhook')
+const { validateCapitalValue, sumReservedCapital, checkCapitalAgainstBalance } = require('../utils/capitalGate')
 
 // POST /api/v1/algo/sessions
 async function startSession(req, res, next) {
   try {
-    const { strategyId, symbols, timeframe, params, capital, leverage, riskParams: riskOverride, maxOpenPositions } = req.body
+    const { strategyId, symbols, timeframe, params, capital, leverage, riskParams: riskOverride, maxOpenPositions, confirmOverCommit } = req.body
 
     if (!strategyId || !symbols || !symbols.length || !timeframe || !capital) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'strategyId, symbols, timeframe, and capital are required')
+    }
+
+    // Plan 22 Step 22.1 (B-11): hard-reject non-numeric/negative/zero capital
+    // always — no confirm flow overrides this half of the Q5 decision.
+    const capitalCheck = validateCapitalValue(capital)
+    if (!capitalCheck.valid) {
+      throw new ApiError(400, 'VALIDATION_ERROR', `Invalid capital: ${capitalCheck.error}`)
     }
 
     // 1. Strategy exists
@@ -32,6 +40,42 @@ async function startSession(req, res, next) {
     const apiKey = savedSettings.encryptedApiKey ? decrypt(savedSettings.encryptedApiKey) : ''
     const apiSecret = savedSettings.encryptedApiSecret ? decrypt(savedSettings.encryptedApiSecret) : ''
     if (!apiKey || !apiSecret) throw new ApiError(400, 'NO_CREDENTIALS', 'Binance API keys not configured. Add them in Settings.')
+
+    // Plan 22 Step 22.1 (B-11/B-12): over-commit vs the real wallet is
+    // warn-and-confirm on testnet (DECISIONS.md #23) — reject once unless the
+    // client resubmits with confirmOverCommit:true after showing the user the
+    // numbers. A failed/unknown balance fetch never blocks session start (the
+    // engine-side `_fetch_available_balance` clamp is the backstop for that).
+    if (!confirmOverCommit) {
+      const reservedCapital = sumReservedCapital(
+        await LiveSession.find(
+          { userId: req.user.id, status: { $in: ['starting', 'running', 'stopping'] } },
+          'capital'
+        ).lean()
+      )
+      let availableBalance = null
+      try {
+        const { data } = await engineClient.get('/trade/account', {
+          headers: { 'X-Binance-API-Key': apiKey, 'X-Binance-API-Secret': apiSecret, 'X-Binance-Mode': 'testnet' },
+        })
+        const parsed = Number(data?.data?.availableBalance)
+        if (Number.isFinite(parsed)) availableBalance = parsed
+      } catch (balanceErr) {
+        // Balance fetch failed — cannot make the over-commit call, don't guess.
+      }
+      const commitCheck = checkCapitalAgainstBalance({
+        requestedCapital: capitalCheck.value,
+        reservedCapital,
+        availableBalance,
+      })
+      if (commitCheck.checked && commitCheck.overCommit) {
+        throw new ApiError(409, 'CAPITAL_OVER_COMMIT',
+          `Requested capital $${capitalCheck.value.toFixed(2)} plus $${reservedCapital.toFixed(2)} already ` +
+          `reserved by your other running sessions ($${commitCheck.totalCommitted.toFixed(2)} total) exceeds ` +
+          `your available testnet balance ($${availableBalance.toFixed(2)}). Resubmit with confirmOverCommit: true ` +
+          `to proceed anyway.`)
+      }
+    }
 
     const maxSymbolsPerBot = savedSettings.limits?.testnet?.maxSymbolsPerBot ?? 15
     if (symbols.length > maxSymbolsPerBot) {
@@ -521,6 +565,39 @@ async function handleEngineStats(req, res, next) {
         }).catch(() => { })
       }
 
+      if (event === 'risk_breach' && eventData) {
+        // Plan 22 Step 22.1: Session Risk Governor breach — engine already
+        // decided the new trading_state (per DECISIONS.md #23's
+        // breach_action config) and, if applicable, auto-flattened. This
+        // block just persists/broadcasts it, mirroring setTradingState's
+        // shape so the UI's existing tradingState handling picks it up
+        // without any new client-side code.
+        const newState = ['active', 'reducing', 'halted'].includes(eventData.newState)
+          ? eventData.newState
+          : 'reducing'
+        await LiveSession.findByIdAndUpdate(id, { tradingState: newState }).catch(() => { })
+        io.to(userRoom).emit('algo:session:update', { sessionId: id, tradingState: newState })
+        const breachLog = {
+          sessionId: id,
+          timestamp: new Date().toISOString(),
+          type: 'error',
+          message: `Risk governor breach (${eventData.checkName}): ${eventData.reason} — trading state -> ${newState}`,
+        }
+        io.to(userRoom).emit('algo:session:log', breachLog)
+        await LiveSession.findByIdAndUpdate(id, {
+          $push: { logs: { $each: [{ type: breachLog.type, message: breachLog.message }], $slice: -100 } }
+        }).catch(() => { })
+
+        // Plan 14 / F3: fire-and-forget, never awaited/blocking.
+        dispatchWebhook(String(session.userId), 'risk_breach', {
+          sessionId: id,
+          strategy: session.strategyName,
+          checkName: eventData.checkName,
+          reason: eventData.reason,
+          newState,
+        })
+      }
+
       if (event === 'stopped') {
         // Plan 14 / F3: fire-and-forget, never awaited/blocking.
         dispatchWebhook(String(session.userId), 'session_stop', {
@@ -807,6 +884,44 @@ async function startChaos(req, res, next) {
     }
     const skippedForCap = activeNames.length > availableSlots ? activeNames.slice(availableSlots) : []
     activeNames = activeNames.slice(0, availableSlots)
+
+    // Plan 22 Step 22.1 (B-11/B-12): capital integrity gate. Chaos gives each
+    // launched strategy its own full `capital` — B-12's exact finding was
+    // that this multiplication (capital x strategyCount) was never checked
+    // against the wallet at all. Numeric validity is hard-rejected always;
+    // over-commit vs the wallet is warn-and-confirm on testnet, same as
+    // startSession (DECISIONS.md #23).
+    const chaosCapitalCheck = validateCapitalValue(capital)
+    if (!chaosCapitalCheck.valid) {
+      throw new ApiError(400, 'VALIDATION_ERROR', `Invalid capital: ${chaosCapitalCheck.error}`)
+    }
+    if (!body.confirmOverCommit) {
+      const requestedCapital = chaosCapitalCheck.value * activeNames.length
+      const reservedCapital = sumReservedCapital(
+        await LiveSession.find(
+          { userId: req.user.id, status: { $in: ['starting', 'running', 'stopping'] } },
+          'capital'
+        ).lean()
+      )
+      let availableBalance = null
+      try {
+        const { data } = await engineClient.get('/trade/account', {
+          headers: { 'X-Binance-API-Key': chaosApiKey, 'X-Binance-API-Secret': chaosApiSecret, 'X-Binance-Mode': 'testnet' },
+        })
+        const parsed = Number(data?.data?.availableBalance)
+        if (Number.isFinite(parsed)) availableBalance = parsed
+      } catch (balanceErr) {
+        // Balance fetch failed — cannot make the over-commit call, don't guess.
+      }
+      const commitCheck = checkCapitalAgainstBalance({ requestedCapital, reservedCapital, availableBalance })
+      if (commitCheck.checked && commitCheck.overCommit) {
+        throw new ApiError(409, 'CAPITAL_OVER_COMMIT',
+          `Chaos would commit $${chaosCapitalCheck.value.toFixed(2)} x ${activeNames.length} strategies = ` +
+          `$${requestedCapital.toFixed(2)}, plus $${reservedCapital.toFixed(2)} already reserved by your other ` +
+          `running sessions ($${commitCheck.totalCommitted.toFixed(2)} total) — exceeds your available testnet ` +
+          `balance ($${availableBalance.toFixed(2)}). Resubmit with confirmOverCommit: true to proceed anyway.`)
+      }
+    }
 
     // Build manualPicks map { strategyName: [symbols] }
     const manualPicks = {}

@@ -1,0 +1,198 @@
+"""Plan 22 Step 22.1 regression: `SessionRiskGovernor`
+(`engine/core/models/governor.py`) — the three hard checks (aggregate
+session drawdown, daily realized loss limit, margin utilization ceiling)
+that supersede Plan 21's A-10 finding (per-symbol-slice-only drawdown was
+never aggregated to session level) and B-3 (no automatic session-level
+kill-switch).
+
+Drives the real, standalone `SessionRiskGovernor` class directly — no
+session/strategy mocking needed at all, since the class deliberately takes
+plain numbers (`equity`, `used_margin`, `now`) rather than reaching into
+session/strategy internals itself (the caller, `LiveBotManager`, is
+responsible for computing those from session state — see `_push_stats` and
+`execute_entry`'s wiring).
+
+Run inside the container::
+
+    docker exec enma_trading_platform-engine-1 pytest /app/tests/test_session_risk_governor.py
+"""
+from datetime import datetime, timezone
+
+from core.models.governor import SessionRiskGovernor, GovernorVerdict
+
+
+def _dt(y=2026, m=7, d=17, h=12):
+    return datetime(y, m, d, h, tzinfo=timezone.utc)
+
+
+# ── Defaults / config parsing ───────────────────────────────────────────────
+
+def test_defaults_match_plan_c_table():
+    gov = SessionRiskGovernor()
+    assert gov.max_session_dd == 0.20
+    assert gov.max_daily_loss_pct is None  # off by default
+    assert gov.max_margin_utilization == 0.8
+    assert gov.breach_action == "reducing"
+    assert gov.auto_flatten_on_halt is False  # DECISIONS.md #23
+
+
+def test_invalid_breach_action_falls_back_to_reducing():
+    gov = SessionRiskGovernor({"breach_action": "explode"})
+    assert gov.breach_action == "reducing"
+
+
+def test_halted_and_auto_flatten_are_configurable():
+    gov = SessionRiskGovernor({"breach_action": "halted", "auto_flatten_on_halt": True})
+    assert gov.breach_action == "halted"
+    assert gov.auto_flatten_on_halt is True
+
+
+# ── Aggregate session drawdown ──────────────────────────────────────────────
+
+def test_first_check_establishes_peak_no_breach():
+    gov = SessionRiskGovernor()
+    v = gov.check_periodic(equity=1000.0, now=_dt())
+    assert v.ok is True
+
+
+def test_drawdown_within_limit_does_not_breach():
+    gov = SessionRiskGovernor({"max_session_dd": 0.20})
+    gov.check_periodic(equity=1000.0, now=_dt())  # peak = 1000
+    v = gov.check_periodic(equity=850.0, now=_dt())  # 15% dd
+    assert v.ok is True
+
+
+def test_drawdown_past_limit_breaches():
+    gov = SessionRiskGovernor({"max_session_dd": 0.20})
+    gov.check_periodic(equity=1000.0, now=_dt())  # peak = 1000
+    v = gov.check_periodic(equity=750.0, now=_dt())  # 25% dd > 20%
+    assert v.ok is False
+    assert v.check_name == "aggregate_drawdown"
+    assert "25.0%" in v.reason
+
+
+def test_new_equity_high_raises_the_peak_and_resets_effective_baseline():
+    gov = SessionRiskGovernor({"max_session_dd": 0.20})
+    gov.check_periodic(equity=1000.0, now=_dt())
+    gov.check_periodic(equity=1500.0, now=_dt())  # new peak
+    # 15% down from the NEW peak (1500 -> 1275) — within limit relative to 1500,
+    # would have been a breach relative to the old 1000 peak, proving the peak moved.
+    v = gov.check_periodic(equity=1275.0, now=_dt())
+    assert v.ok is True
+
+
+def test_drawdown_checked_on_pre_trade_too():
+    gov = SessionRiskGovernor({"max_session_dd": 0.20})
+    gov.check_periodic(equity=1000.0, now=_dt())
+    v = gov.check_pre_trade(equity=700.0, used_margin=0.0, now=_dt())
+    assert v.ok is False
+    assert v.check_name == "aggregate_drawdown"
+
+
+# ── Daily realized loss limit ───────────────────────────────────────────────
+
+def test_daily_loss_off_by_default_never_breaches():
+    gov = SessionRiskGovernor()  # max_daily_loss_pct=None
+    gov.check_periodic(equity=1000.0, now=_dt())
+    gov.record_realized_pnl(-900.0, _dt())  # huge loss
+    v = gov.check_periodic(equity=100.0, now=_dt())
+    # Drawdown at default 20% WOULD also fire here (100 vs peak 1000 = 90% dd) —
+    # use a max_session_dd wide enough to isolate the daily-loss path.
+    gov2 = SessionRiskGovernor({"max_session_dd": 0.99})
+    gov2.check_periodic(equity=1000.0, now=_dt())
+    gov2.record_realized_pnl(-900.0, _dt())
+    v2 = gov2.check_periodic(equity=100.0, now=_dt())
+    assert v2.ok is True  # daily loss limit is off — no check_name should ever fire for it
+
+
+def test_daily_loss_enabled_breaches_past_threshold():
+    gov = SessionRiskGovernor({"max_daily_loss_pct": 0.05, "max_session_dd": 0.99})
+    gov.check_periodic(equity=1000.0, now=_dt())  # peak = 1000
+    gov.record_realized_pnl(-60.0, _dt())  # 6% of peak
+    v = gov.check_periodic(equity=940.0, now=_dt())
+    assert v.ok is False
+    assert v.check_name == "daily_loss_limit"
+
+
+def test_daily_loss_within_threshold_does_not_breach():
+    gov = SessionRiskGovernor({"max_daily_loss_pct": 0.05, "max_session_dd": 0.99})
+    gov.check_periodic(equity=1000.0, now=_dt())
+    gov.record_realized_pnl(-30.0, _dt())  # 3% of peak
+    v = gov.check_periodic(equity=970.0, now=_dt())
+    assert v.ok is True
+
+
+def test_winning_trades_never_offset_the_daily_loss_accumulator():
+    """A loss LIMIT, not a net-PnL floor — freqtrade max_daily_loss semantics."""
+    gov = SessionRiskGovernor({"max_daily_loss_pct": 0.05, "max_session_dd": 0.99})
+    gov.check_periodic(equity=1000.0, now=_dt())
+    gov.record_realized_pnl(-60.0, _dt())  # 6% loss
+    gov.record_realized_pnl(+200.0, _dt())  # big win — must NOT cancel the loss
+    v = gov.check_periodic(equity=1140.0, now=_dt())
+    assert v.ok is False
+    assert v.check_name == "daily_loss_limit"
+
+
+def test_daily_loss_resets_on_utc_midnight_rollover():
+    gov = SessionRiskGovernor({"max_daily_loss_pct": 0.05, "max_session_dd": 0.99})
+    gov.check_periodic(equity=1000.0, now=_dt(d=17))
+    gov.record_realized_pnl(-60.0, _dt(d=17, h=23))  # 6% loss on day 17
+    v_same_day = gov.check_periodic(equity=940.0, now=_dt(d=17, h=23))
+    assert v_same_day.ok is False
+
+    # New UTC day — the accumulator must have reset.
+    v_next_day = gov.check_periodic(equity=940.0, now=_dt(d=18, h=1))
+    assert v_next_day.ok is True
+
+
+# ── Margin utilization ceiling (pre-trade only) ─────────────────────────────
+
+def test_margin_within_ceiling_passes():
+    gov = SessionRiskGovernor({"max_margin_utilization": 0.8})
+    v = gov.check_pre_trade(equity=1000.0, used_margin=600.0, now=_dt())
+    assert v.ok is True
+
+
+def test_margin_past_ceiling_breaches():
+    gov = SessionRiskGovernor({"max_margin_utilization": 0.8})
+    v = gov.check_pre_trade(equity=1000.0, used_margin=850.0, now=_dt())
+    assert v.ok is False
+    assert v.check_name == "margin_utilization"
+    assert "85.0%" in v.reason
+
+
+def test_margin_ceiling_fail_closed_on_zero_or_negative_equity():
+    gov = SessionRiskGovernor()
+    v = gov.check_pre_trade(equity=0.0, used_margin=100.0, now=_dt())
+    assert v.ok is False
+    assert v.check_name == "margin_utilization"
+    assert "fail-closed" in v.reason
+
+    v2 = gov.check_pre_trade(equity=-50.0, used_margin=100.0, now=_dt())
+    assert v2.ok is False
+
+
+def test_margin_check_is_pre_trade_only_not_periodic():
+    """check_periodic must never veto on margin alone — it's not in the
+    periodic half of Part C's table; margin is pre-trade-only."""
+    gov = SessionRiskGovernor({"max_margin_utilization": 0.1})  # absurdly tight
+    v = gov.check_periodic(equity=1000.0, now=_dt())
+    # Even with used_margin nowhere in scope for check_periodic, this must
+    # simply never evaluate margin at all — confirmed by check_periodic's
+    # signature not even accepting used_margin, and by this call succeeding.
+    assert v.ok is True
+
+
+# ── Ordering: standing limits checked before margin on pre-trade ───────────
+
+def test_pre_trade_checks_standing_limits_before_margin():
+    """A drawdown breach must veto before margin is even evaluated — proves
+    check_pre_trade delegates to the same standing-limits path as periodic
+    rather than duplicating/diverging logic."""
+    gov = SessionRiskGovernor({"max_session_dd": 0.20, "max_margin_utilization": 0.99})
+    gov.check_periodic(equity=1000.0, now=_dt())
+    # Drawdown breach (25%) AND margin would also be fine at 0.99 ceiling —
+    # isolate that the drawdown reason surfaces, not a margin one.
+    v = gov.check_pre_trade(equity=750.0, used_margin=10.0, now=_dt())
+    assert v.ok is False
+    assert v.check_name == "aggregate_drawdown"
