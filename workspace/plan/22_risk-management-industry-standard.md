@@ -347,7 +347,7 @@ same standing caveat as every other step this window).
   (`risk_params.governor.var_limit_pct`), so 22.7 only needs to wire the Node cascade to send them.
 
 **Tests:**
-- `engine/tests/test_portfolio_risk_shared_service.py` (11 cases) — `extract_position_notionals`
+- `engine/tests/test_portfolio_risk_shared_service.py` (7 cases) — `extract_position_notionals`
   parsing, account/price-history cache hit/miss behavior (including cache-key correctness: same
   symbol set in different order still hits, different api_key doesn't), and the acceptance-
   critical identity tests: `test_dashboard_and_governor_get_identical_values_from_one_call` (two

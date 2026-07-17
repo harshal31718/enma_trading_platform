@@ -501,13 +501,18 @@ and the batched Zone 2 UI/schema surface). Full Zone 2 UI/schema wiring for the 
 keys accumulated across 22.1–22.4 is 22.7's scope — they're read as plain engine-side defaults
 until then. See `workspace/plan/22_risk-management-industry-standard.md` and `DECISIONS.md`
 #23/#24/#25.
-**Pending container test run + live re-verification** — the governor class itself has 32/32 real
-pytest passes standalone (`engine/tests/test_session_risk_governor.py`); the wiring into
-`live_bot_manager.py` was verified via `py_compile`/`ast.parse` + manual review (the file has a
-heavy TA-Lib/numpy/motor/asyncpg dependency chain that doesn't import in a bare sandbox); the
+**Container-verified 2026-07-17** — `docker exec enma_trading_platform-engine-1 pytest
+/app/tests/` (the user's own container, not this dev sandbox) ran the full engine suite: **301/301
+passed**, covering every Plan 21 (21.1–21.7) and Plan 22 (22.1–22.4) test file including
+`test_session_risk_governor.py` (32/32) and the `live_bot_manager.py`-driving stub-injection
+suites (`test_execute_entry_*`, `test_kline_ws_url.py`, `test_portfolio_risk_shared_service.py`,
+etc.) that this dev sandbox could only `py_compile`/`ast.parse`-verify. **Pending: live
+re-verification only** — no behavioral claim above (governor vetoes, protections locks, capital
+gate rejects, VaR/CVaR breach) has been exercised against a real Binance Testnet session yet. The
 Node-side capital gate was verified via `node --check` + a manual assertion script (no
 `node_modules` in the dev sandbox — a Jest suite exists at
-`server/src/utils/__tests__/capitalGate.test.js` but has not been run).
+`server/src/utils/__tests__/capitalGate.test.js` but has not been run; this is Node-side, not
+covered by the engine's container pytest run above).
 
 ---
 

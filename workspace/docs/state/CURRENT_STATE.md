@@ -5,7 +5,8 @@ Read this before starting any work. If this conflicts with chat history, this do
 
 Last updated: 2026-07-17 (Plan 22 Steps 22.1–22.4 — Session Risk Governor, capital integrity
 gate, portfolio open-risk/liq-buffer, protections parity, and live VaR/CVaR enforcement — all
-shipped code-side, pending container test run + live re-verification — see Algo Trading section.
+shipped and container-verified (`docker exec ... pytest /app/tests/` — 301/301 passed,
+2026-07-17), pending live Testnet re-verification only — see Algo Trading section.
 Earlier: 2026-07-16 Known Technical Debt update confirmed the algo/conditional-order
 `ORDER_TRADE_UPDATE` gap live and logged two new open bugs from a live Chaos run — see below.
 Earlier relocation: content moved into feature SPEC docs and DECISIONS.md; see

@@ -104,24 +104,30 @@ event_log.py` (`risk_check` EVENT_TYPES entry); new `engine/services/portfolio_r
 `workspace/docs/features/risk-dashboard/SPEC.md`, `workspace/docs/core/binance-api.md`,
 `handoff.md`.
 
+**UPDATE (same day, 2026-07-17, immediately after this entry was written):** the user ran
+`docker exec enma_trading_platform-engine-1 pytest /app/tests/` themselves — **301/301 passed**,
+zero failures, covering every test file this window (and every prior Plan 21/22 session) added.
+Item 1 below is resolved. Docs updated accordingly (status language flipped from "shipped
+code-side, pending container test run" to "shipped, container-verified 2026-07-17" across
+`0_tracker.md`, `21_live-algo-industry-standard-audit.md`, `22_risk-management-industry-
+standard.md`, `CURRENT_STATE.md`, `algo-trading/SPEC.md`). Item 2 (live Testnet re-verification)
+is still genuinely open — a green test suite proves the code does what the tests assert, not that
+it behaves correctly against the real exchange.
+
 **NOT done — do not treat any of this as fully closed:**
-1. **No container test run for any of it.** Every test file this window was verified with real
-   `pytest` via the stub-injection technique (genuine execution, not `ast.parse`) — 100+ tests
-   green across the full touched-file surface, backtest-path regression files unaffected — but
-   this sandbox has never had Docker access. Run
-   `docker exec enma_trading_platform-engine-1 pytest /app/tests/` before trusting any of it.
+1. ~~No container test run~~ **RESOLVED 2026-07-17** — see UPDATE above.
 2. **No live re-verification** — none of A-12's mainnet feed, A-13's wick-check dedup, 22.2's
    portfolio-risk/liq-buffer veto, 22.3's new protections/risk_check events, or 22.4's VaR/CVaR
-   veto have been exercised against a real Binance Testnet session.
-3. All touched docs say "shipped code-side, pending container test run + live re-verification" —
-   do not silently upgrade that language without actually running #1 and #2.
+   veto have been exercised against a real Binance Testnet session. **This is now the single
+   remaining verification gap for all of Plan 21 + Plan 22.1–22.4.**
+3. Docs now say "shipped, container-verified 2026-07-17, pending live re-verification" — do not
+   upgrade further to unqualified "shipped"/"verified" until #2 is actually done.
 4. **Git commit status not re-confirmed at the end of this specific window** — verify `git log`/
    `git status` directly before assuming everything above is committed (this session hit the
    recurring `.git/index.lock`/`HEAD.lock` recreation bug several times; the fix each time was
    renaming the lock file and retrying, confirmed via `git log`, not via piped exit codes).
 
-**Next session:** (1) run the container test suite — single highest-leverage action outstanding
-across this entire window; (2) live-verify a small Testnet session covering the governor's
+**Next session:** (1) live-verify a small Testnet session covering the governor's
 veto/breach behavior (drawdown, portfolio-risk, liq-buffer, VaR/CVaR), the capital gate's
 over-commit rejection, and the protections' lock/unlock; (3) once verified, flip status language
 from "shipped code-side" to "shipped" across the docs touched above; (4) the natural next step per
