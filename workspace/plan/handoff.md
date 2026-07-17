@@ -126,6 +126,24 @@ genuinely decision-free, golden-master-free item — Plan 21's 21.5(c) (batched 
 concurrency restructure) and Plan 24 (BestSupertrend fixes) are both plausible candidates but
 neither was investigated this session.
 
+**UPDATE (same day, 2026-07-17, immediately after this entry was written) — partial live
+verification attempted:** user authorized live Testnet verification directly. Set Zone 2's
+`correlationCap` to `rho=0.5, maxClusterExposurePct=1` (deterministic single-entry veto — any
+first entry alone exceeds a 1% cluster cap) via the UI, then started two real sessions via the New
+Bot wizard: (1) MicroScalper/BTCUSDT/1m/$50/1x, (2) after the user asked for more symbols to
+increase order frequency, MicroScalper across 15 symbols/1m/$500/1x. **Confirmed working:** both
+sessions started cleanly with zero crashes/errors (proving the `default_risk_params` bugfix holds
+against the real Node payload end-to-end, not just in the unit test), UDS connected, per-symbol WS
+klines connected, leverage set via real Binance Testnet calls, clean stop with no orphaned locks.
+**Not confirmed:** MicroScalper (3/9 EMA crossover) did not fire a single entry signal on any of
+the ~16 symbols tried across ~10 minutes of live 1m Testnet data (174 positionRisk polls, zero
+entries) — the correlation-cap veto itself was never actually exercised, since no entry was ever
+attempted. This is a real-market-timing limitation, not a code issue on either side. Cleaned up:
+stopped both sessions, reverted `correlationCap` back to `rho` blank / `maxClusterExposurePct=40`.
+**Still the single open item across Plan 22.** A future attempt should either run much longer,
+use Chaos Mode (many strategies → far more entry attempts per minute) instead of a single strategy,
+or pick a strategy with looser entry conditions to get an actual entry to test the veto against.
+
 ---
 ## 2026-07-17 — Plan 21.7 (A-12/A-13) + Plan 22 Steps 22.1(remainder)–22.4 shipped: mainnet kline feed, armed-bracket wick-check dedup, portfolio open-risk/liq-buffer, protections parity, live VaR/CVaR — CODE COMPLETE, VERIFICATION PENDING ⏸️
 
