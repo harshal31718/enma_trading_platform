@@ -56,6 +56,74 @@ class MetricContext:
     leverage: int
 
 
+# ── QNT-14: leg-vs-round-trip trade aggregation (Plan 9 Step 9.9) ──────────────
+
+def aggregate_legs_to_round_trips(trades: list[dict]) -> list[dict]:
+    """Group a DCA/scale-out position's partial-exit legs (each recorded as
+    an independent `"scale_out"` trade by `execute_reduce`) and its final
+    closing leg into ONE synthetic round-trip record per position.
+
+    QNT-14: every trade-level statistic (totalTrades, winRate, SQN's
+    ``sqrt(N)`` term, expectancy, streaks, the returns histogram, MFE/MAE
+    scatter) otherwise counts each partial leg as an independent trade — a
+    strategy that scales out in 3 legs triples its apparent trade count and
+    mechanically inflates SQN. This is a STATISTICS-only view: the raw
+    per-leg trade list is still what gets persisted to `backtestTrades`
+    (per-leg analytics/UI need the individual legs) — this function is opt-in
+    at the call site, never mutates its input, and is a no-op for any
+    position that never scaled out (returned unchanged).
+
+    Grouping key: `(symbol, entryAt)` — every leg of one position (the
+    partial `"scale_out"` records AND the final closing record) shares the
+    same `entryAt`/`entryPrice`, set once at entry and copied verbatim by
+    `execute_reduce` onto every partial leg it records (see
+    `backtest_runner.py`'s `active_trade` dict). Two distinct positions on
+    the same symbol can never share an `entryAt` (a backtest is strictly
+    sequential — a new position only opens after the previous one on that
+    symbol has fully closed).
+
+    The synthetic round-trip record is built from the FINAL leg (its
+    non-pnl descriptive fields — `exitReason`/`exitTag`/`barsHeld`/
+    `runUpPct`/`drawdownPct` — describe the round trip as a whole, since
+    those already accumulate across legs in `_finalize_trade`/
+    `execute_reduce`), with `pnl` summed across every leg and `qty`
+    reconstructed as the position's original total size (sum of every leg's
+    qty, since each partial leg's `qty` is that leg's own reduce amount and
+    the final leg's `qty` is whatever remained at close).
+    """
+    groups: dict[tuple, list[dict]] = {}
+    order: list[tuple] = []
+    for t in trades:
+        key = (t.get("symbol", ""), t.get("entryAt", ""))
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(t)
+
+    round_trips: list[dict] = []
+    for key in order:
+        legs = groups[key]
+        if len(legs) == 1:
+            round_trips.append(legs[0])
+            continue
+
+        legs_sorted = sorted(legs, key=lambda t: t.get("_exit_dt") or t.get("exitAt") or "")
+        final = dict(legs_sorted[-1])
+        total_pnl = sum(float(l.get("pnl", 0.0)) for l in legs_sorted)
+        total_qty = sum(float(l.get("qty", 0.0)) for l in legs_sorted)
+        entry_price = float(final.get("entryPrice", 0.0))
+        leverage = float(final.get("leverage") or 1)
+
+        final["pnl"] = f"{total_pnl:.2f}"
+        final["qty"] = f"{total_qty:.8f}"
+        margin = (entry_price * total_qty / leverage) if (entry_price > 0 and leverage > 0) else 0.0
+        final["pnlPct"] = f"{(total_pnl / margin) * 100:.2f}" if margin > 0 else "0.00"
+        final["legCount"] = len(legs_sorted)
+        round_trips.append(final)
+
+    return round_trips
+
+
 # ── Base class ────────────────────────────────────────────────────────────────
 
 class Statistic:

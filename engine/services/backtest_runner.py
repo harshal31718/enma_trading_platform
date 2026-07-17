@@ -18,7 +18,7 @@ from utils.timeframes import annual_factor, required_base_candles_for_htf
 from decimal import ROUND_DOWN, ROUND_UP
 from utils.symbols import _MAX_LEVERAGE_OFFLINE_MAP, clamp_and_round_qty, round_price
 # Phase 2 — pluggable metric registry (A-012) + new metrics (A-007) + breakdown tables (A-008)
-from services.metrics import MetricContext, default_registry
+from services.metrics import MetricContext, default_registry, aggregate_legs_to_round_trips
 # Phase 2 — backtest curves: underwater (A-009), returns/MFE-MAE (A-010), rolling (A-011)
 from services.curves import (
     underwater_curve_with_timestamps,
@@ -706,6 +706,7 @@ async def run_backtest_simulation(
     user_id: str = "",
     entry_candle_exits: bool = False,
     _reprep_every_candle: bool = False,
+    round_trip_stats: bool = False,
 ) -> dict:
     # entry_candle_exits (QNT-3, Plan 9 Step 9.4): opt-in, default off. When
     # True, SL/TP/liquidation are evaluated against the same candle a
@@ -724,6 +725,17 @@ async def run_backtest_simulation(
     # look backward. A causal strategy produces an identical trade list
     # either way; one that leaks future data (indexes past self.index, or
     # normalizes over the whole series) diverges.
+    # round_trip_stats (QNT-14, Plan 9 Step 9.9): opt-in, default off. When
+    # True, trade-level STATISTICS (totalTrades/winRate/SQN/expectancy/
+    # streaks/returns histogram/MFE-MAE scatter) are computed over
+    # services.metrics.aggregate_legs_to_round_trips(combined_trades) instead
+    # of the raw per-leg list — a DCA/scale-out position's partial legs no
+    # longer each count as an independent trade. Persisted `backtestTrades`
+    # documents and `tradeCount` are UNCHANGED either way (always the raw
+    # per-leg list — per-leg analytics/UI need the individual legs). Default
+    # False is byte-identical to the pre-9.9 path. Flipping the platform
+    # default needs a deliberate golden-master re-baseline + sign-off — see
+    # workspace/plan/9_backtest-and-optimizer-correctness.md Step 9.9.
     # ── 1. Parse strategy name ──────────────────────────────────────────────
     parts = strategy_file.split("/")
     if len(parts) >= 2 and parts[0] == "strategies":
@@ -1131,6 +1143,10 @@ async def run_backtest_simulation(
     for idx, tr in enumerate(combined_trades):
         tr["id"] = f"t_{idx + 1}"
 
+    # QNT-14 (Plan 9 Step 9.9): stats_trades feeds STATISTICS ONLY — persisted
+    # backtestTrades/tradeCount always use the raw per-leg combined_trades.
+    stats_trades = aggregate_legs_to_round_trips(combined_trades) if round_trip_stats else combined_trades
+
     # Equity curve. Multi-symbol (F-017): the single shared-wallet portfolio
     # curve built during the interleaved run. Single-symbol: the per-symbol
     # curve (summing one symbol → identical to the historical behaviour).
@@ -1185,7 +1201,7 @@ async def run_backtest_simulation(
         base_candles[-1, 2] = first_close * (1.0 + avg_buy_hold_pct / 100.0)
 
     _metric_ctx = MetricContext(
-        trades=combined_trades,
+        trades=stats_trades,
         balances=balances_arr,
         equity_timestamps=combined_timestamps,
         candles_np=base_candles,
@@ -1202,10 +1218,10 @@ async def run_backtest_simulation(
     _registry = default_registry()
     metrics = _registry.compute_all(_metric_ctx)
 
-    long_trades = [t for t in combined_trades if t["type"] == "long"]
-    short_trades = [t for t in combined_trades if t["type"] == "short"]
+    long_trades = [t for t in stats_trades if t["type"] == "long"]
+    short_trades = [t for t in stats_trades if t["type"] == "short"]
     metrics["bySide"] = {
-        "all":   _compute_side_metrics(combined_trades, capital),
+        "all":   _compute_side_metrics(stats_trades, capital),
         "long":  _compute_side_metrics(long_trades, capital),
         "short": _compute_side_metrics(short_trades, capital),
     }
@@ -1235,8 +1251,8 @@ async def run_backtest_simulation(
         window_candles=50,
         max_points=EQUITY_CURVE_MAX_POINTS,
     )
-    returns_hist = returns_histogram(combined_trades, capital)
-    mfe_mae_pts  = mfe_mae_scatter(combined_trades, capital)
+    returns_hist = returns_histogram(stats_trades, capital)
+    mfe_mae_pts  = mfe_mae_scatter(stats_trades, capital)
 
     # ── 11. Write main result document to MongoDB ─────────────────────────
     db = get_database()

@@ -145,12 +145,32 @@ signals from the same data, verified mechanically, not by assertion.
   `engine/tests/test_metrics_fixes.py` (+3): fallback value unchanged on a simulated broken stat,
   the failure is logged with the stat name + message, a healthy stat produces zero log noise.
   Container suite: 377/377 passed (up from 374).
-- **Still open**: `"inf"`-string persistence (audited — currently dormant, zero client-side
-  `parseFloat`/`Number()` consumption of `profitFactor`/`expectancyRatio`/`payoffRatio` found;
-  real but not yet an active bug), leg-vs-round-trip separation (QNT-14, a larger structural
-  change — scale-out legs are currently counted as independent trades in every downstream
-  statistic including `totalTrades`/`winRate`/SQN's √N term), and the block-bootstrap Monte Carlo
-  work (absorbed by Plan 10 Phase 1).
+- **Leg-vs-round-trip separation (QNT-14) — Shipped 2026-07-17.** New
+  `services.metrics.aggregate_legs_to_round_trips(trades)` groups a DCA/scale-out position's
+  partial `"scale_out"` legs (each recorded as an independent trade by `execute_reduce`) + its
+  final closing leg into ONE synthetic round-trip record — `pnl` summed across legs, `qty`
+  reconstructed as the position's original total size, all descriptive fields
+  (`exitReason`/`exitTag`/`barsHeld`/`runUpPct`/`drawdownPct`) taken from the FINAL leg. Grouping
+  key is `(symbol, entryAt)` — every leg of one position shares the same `entryAt`, copied
+  verbatim by `execute_reduce` from `active_trade`; a backtest is strictly sequential so no two
+  distinct positions on one symbol ever share an `entryAt`. **Opt-in** via
+  `run_backtest_simulation(round_trip_stats=True)` (default `False`) — a new `stats_trades`
+  variable (`services/backtest_runner.py`) feeds `MetricContext.trades`, the `bySide` breakdown,
+  `returnsHistogram`, and the MFE/MAE scatter; **persisted `backtestTrades` documents and
+  `tradeCount` are unchanged either way** — always the raw per-leg list, since per-leg
+  analytics/UI need the individual legs, only STATISTICS get the round-trip view. Golden master
+  confirmed byte-identical (default `False`). New `engine/tests/test_round_trip_aggregation.py`
+  (9 cases): single-leg passthrough, multi-leg aggregation (pnl sum, qty reconstruction, final-leg
+  descriptive fields), pnlPct recomputed from aggregate pnl vs. original margin, distinct
+  same-symbol positions never merge, different symbols never merge even with a coincidentally
+  shared `entryAt`, insertion-order preservation, empty input, and non-mutation of the input list
+  (both single- and multi-leg). Container suite: 386/386 passed (up from 377).
+- **Still open**: `"inf"`-string persistence (re-audited 2026-07-17 — still zero client-side
+  `parseFloat`/`Number()` consumption of `profitFactor`/`expectancyRatio`/`payoffRatio` found
+  anywhere in `client/src` or `server/src`; real per the audit but genuinely dormant, deliberately
+  not fixed speculatively — see root `CLAUDE.md`'s "don't add validation for scenarios that can't
+  happen") and the block-bootstrap Monte Carlo work (absorbed by Plan 10 Phase 1, not this plan's
+  scope). **9.9 is otherwise complete within this plan's own scope.**
 
 ### 9.10 — Fill-model ladder (QNT-11) + small hardening (QNT-4/15/16)
 - Spread half-cost → volatility-scaled slippage → √-impact (cached 24h volume as ADV);

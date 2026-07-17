@@ -16,7 +16,7 @@ this board no longer duplicates it).
 | 21 | Live algo industry-standard audit — **fixes** | 21.5c (batched reconcile) (21.1–21.4 + 21.5a/b + all of 21.7 [A-11/A-12/A-13/A-14] shipped, container-verified 2026-07-17 [301/301 pytest], pending live re-verification only; 21.6 → Merged→22.1) | In progress (21.1–21.4, 21.5a/b, 21.7 all shipped + container-verified 2026-07-17) | P2 (21.5c) | — | 2026-07-17 |
 | 5  | Live-trading state integrity | 5.5 (Decimal money, golden-master sign-off), 5.6 (restart recovery / projection) | In progress | P0 | 21.1–21.2 inform 5.6 | 2026-07-16 |
 | 22 | Industry-standard risk management (Session Risk Governor) | ALL SHIPPED (22.1–22.7, container/Jest-verified 2026-07-17 [330/330 pytest, 88/88 jest], 22.6 golden-master-verified, 22.7 live-verified in-browser) — pending live Testnet re-verification only | **Done** (pending live re-verification) | — | 21 (21.1–21.4, shipped) | 2026-07-17 |
-| 9  | Backtest & optimizer correctness (quant core) | 9.7 (funding ledger), 9.8 (intrabar sim), 9.9 (inf-strings + leg/round-trip separation — fail-loud registry shipped 2026-07-17), 9.10 (fill-model ladder), **9.11 Step B — decided 2026-07-17: stay opt-in, no code change** | Ready | P1 | — | 2026-07-17 |
+| 9  | Backtest & optimizer correctness (quant core) | 9.7 (funding ledger), 9.8 (intrabar sim), 9.10 (fill-model ladder) | Ready | P1 | — | 2026-07-17 |
 | 10 | Monte Carlo Optimiser & Strategy Lab | Phases 1b–4 (job plumbing, `labResults`, UI, optimizer w/ walk-forward + Optuna) | Ready | P1 | 9 (9.1/9.3, shipped) | 2026-07-16 |
 | 13 | Informative / multi-timeframe contract (`self.htf()`) | Shipped — primitive only, no seeded strategy adopts it yet | **Done** | — | — | 2026-07-17 |
 | 17 | Recursive-formula / warmup-insufficiency analysis | Shipped — no live-vs-backtest drift risk found at w=500 for any seeded strategy | **Done** | — | — | 2026-07-17 |
@@ -209,13 +209,15 @@ pipeline-touching steps) a golden-master check per Rule C.
   byte-identical. **9.11 Step B decided 2026-07-17: user chose to leave the gate opt-in/off by
   default** — no code change, zero re-baseline risk; the gate exists and is correct (Step A) but
   stays inert unless a strategy or `risk_params.governor.min_edge_mult` explicitly opts in.
-  **9.9's fail-loud metric registry (QNT-13, one of that step's four sub-items) shipped
-  2026-07-17**: `StatisticRegistry.compute_all()` now logs any stat computation failure instead of
-  silently returning `"0.00"` indistinguishably from a legitimately-zero metric — fallback value
-  unchanged, golden-master confirmed byte-identical (no seeded strategy's stats currently throw).
-  9.9's other three sub-items (`"inf"`-string persistence — audited, currently dormant; QNT-14
-  leg-vs-round-trip separation — larger structural change; block-bootstrap MC — absorbed by Plan
-  10) remain open.
+  **9.9 shipped 2026-07-17 (within this plan's own scope)**: fail-loud metric registry
+  (`StatisticRegistry.compute_all()` now logs any stat computation failure instead of silently
+  returning `"0.00"` indistinguishably from a legitimately-zero metric — fallback value unchanged)
+  and QNT-14 leg-vs-round-trip separation (new opt-in `aggregate_legs_to_round_trips()`, wired via
+  `round_trip_stats=True` on `run_backtest_simulation`, default `False` — persisted
+  `backtestTrades`/`tradeCount` always stay per-leg; only statistics get the round-trip view when
+  opted in). Both golden-master confirmed byte-identical at default settings. `"inf"`-string
+  persistence stays open (re-audited, still genuinely dormant — zero client/server consumption);
+  block-bootstrap MC is Plan 10's scope, not this plan's.
 - **10** — MC core math is honest (Phase 1a shipped) but still behind the old synchronous
   endpoint; everything else (job queue, `labResults`, Strategy Lab UI, optimizer exposure)
   unstarted. Phase 3 absorbs plans 18/19 — build from their design notes, not their specs.
