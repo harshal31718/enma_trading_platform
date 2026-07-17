@@ -333,7 +333,14 @@ class BaseStrategy(ABC):
         """Legacy sizing: allocate ``pct`` of equity as notional (qty = equity*pct/price).
 
         Kept for strategies that intentionally want fixed-fraction notional
-        rather than risk-based sizing. Also capped by ``max_qty()``.
+        rather than risk-based sizing. Also capped by ``max_qty()`` and by
+        what's actually affordable (Plan 24 finding S-1): at ``pct=1.0`` and
+        leverage=1, the naive qty sits exactly on the equity boundary, so
+        adverse slippage + the taker fee alone push `req_margin + fee` just
+        over `free_balance` and every entry is rejected outright downstream
+        (`execute_entry`'s `EntryFill.affordable()` check). Sizing DOWN to
+        the true affordable notional (freqtrade-style stake adjustment)
+        keeps a `pct=1.0` config functional instead of structurally dead.
         """
         entry = entry_price if entry_price is not None else self.price
         if pct is None:
@@ -341,7 +348,23 @@ class BaseStrategy(ABC):
         if entry <= 0:
             return 0.0
         qty = (self.equity * pct) / entry
-        return min(qty, self.max_qty(entry))
+        qty = min(qty, self.max_qty(entry))
+
+        leverage = max(float(getattr(self, "leverage", 1.0)), 1.0)
+        fee_rate = float(getattr(self, "fee_rate", 0.0))
+        slippage_pct = float(getattr(self, "slippage_pct", 0.0))
+        free_balance = self.balance - float(getattr(self, "_external_reserved_margin", 0.0))
+        # affordability: notional/leverage + notional*fee_rate <= free_balance
+        # notional = qty * entry * (1+slippage_pct)  (conservative — same
+        # (1+slip) bound for both buy/sell sides, per adverse_fill's buy case)
+        denom = (1.0 / leverage + fee_rate) * (1.0 + slippage_pct)
+        if denom > 0 and free_balance > 0:
+            # Tiny safety margin (1e-6) so float rounding differences between
+            # this formula and the downstream real fill/fee computation can
+            # never flip an exact-boundary size back into "unaffordable".
+            affordable_qty = (free_balance / (denom * entry)) * (1.0 - 1e-6)
+            qty = min(qty, affordable_qty)
+        return max(qty, 0.0)
 
     def max_qty(self, entry_price: float | None = None) -> float:
         """Max quantity affordable: full equity at current leverage as margin."""

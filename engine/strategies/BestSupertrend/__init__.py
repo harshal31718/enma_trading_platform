@@ -106,7 +106,7 @@ class BestSupertrend(BaseStrategy):
         },
         "position_size_pct": {
             "type": "float",
-            "default": 1.0,
+            "default": 0.9,
             "min": 0.01,
             "max": 1.0,
             "label": "Position Size (% of Equity)"
