@@ -45,7 +45,7 @@ own audit — never implemented) replaced with the real `htf()` contract.
 anchor), `engine/services/backtest_runner.py` (HTF fetch + wiring), `engine/core/live_bot_manager.py`
 (HTF fetch + refresh wiring); new `engine/tests/test_informative_alignment.py`; docs:
 `workspace/docs/core/DECISIONS.md` (#26), `engine/CLAUDE.md`, `13_informative-multi-timeframe.md`,
-`0_tracker.md`, `handoff.md`. Not yet committed as of this entry — see next session note.
+`0_tracker.md`, `handoff.md`. Committed (`3ba5d32`).
 
 **NOT done — deliberately out of scope:** no seeded strategy adopts `htf()` yet; this ships the
 primitive only, not a consumer. Per the plan's own verification gate, **any real strategy that
@@ -53,11 +53,11 @@ adopts `htf()` must be run through S5 (Plan 9's lookahead sentinel,
 `engine/scripts/lookahead_sentinel.py`)** before shipping — this session's unit tests prove the
 alignment primitive itself is causal, not that a specific future strategy uses it correctly.
 
-**Next session:** commit this work (not yet committed as of this entry). Then either (a) build a
-real `htf()` consumer (e.g. Plan 17's recursive/warmup-insufficiency analysis explicitly sequences
-after 13 "so it also sweeps multi-TF indicators"), or (b) survey `0_tracker.md` fresh — Plan 9.11
-Step B (cost-gate activation decision) and Plan 9's other steps (9.7–9.10) remain open, all
-requiring a golden-master re-baseline + sign-off rather than being decision-free.
+**Next session:** either (a) build a real `htf()` consumer (e.g. Plan 17's recursive/
+warmup-insufficiency analysis explicitly sequences after 13 "so it also sweeps multi-TF
+indicators"), or (b) survey `0_tracker.md` fresh — Plan 9.11 Step B (cost-gate activation decision)
+and Plan 9's other steps (9.7–9.10) remain open, all requiring a golden-master re-baseline +
+sign-off rather than being decision-free.
 
 ## 2026-07-17 — Plan 9.11 Step A shipped: PCM edge-vs-cost gate rewired to the object it actually reads, formula fixed to quote-vs-quote, `Signal.magnitude` wired in — **golden-master-inert, no live-verification gap** ✅
 
