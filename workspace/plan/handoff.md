@@ -41,8 +41,7 @@ a path the default baseline never exercises). Container suite: **377/377 passed*
 **Files changed:** `engine/services/metrics.py` (`StatisticRegistry.compute_all`, new module
 logger); `engine/tests/test_metrics_fixes.py` (+3 cases); docs:
 `9_backtest-and-optimizer-correctness.md`, `0_tracker.md`,
-`workspace/docs/state/CURRENT_STATE.md`, `handoff.md`. Not yet committed as of this entry — see
-next session note.
+`workspace/docs/state/CURRENT_STATE.md`, `handoff.md`. Committed (`119e171`).
 
 **NOT done — audited but deliberately out of scope:** the other three 9.9 sub-items —
 `"inf"`-string persistence (`ProfitFactorStat`/`ExpectancyRatioStat`/`PayoffRatioStat` return the
@@ -55,7 +54,7 @@ Monte Carlo rework (already absorbed by Plan 10 Phase 1, not this plan's scope).
 steps — 9.7 (funding ledger), 9.8 (intrabar sim), 9.10 (fill-model ladder) — are all larger,
 new-mechanism work, not scoped this session.
 
-**Next session:** commit this work (not yet committed as of this entry). Then either (a) scope one
+**Next session:** either (a) scope one
 of 9.7/9.8/9.10 as a real design task (each needs its own golden-master re-baseline once a default
 changes, per this plan's standing protocol — larger than this session's three items), or (b)
 revisit QNT-14/inf-strings if a concrete downstream consumer appears. Plan 22/24's live Testnet
