@@ -15,7 +15,7 @@ this board no longer duplicates it).
 |----|-------|-----------------|--------|----------|------------|---------|
 | 21 | Live algo industry-standard audit — **fixes** | 21.5c (batched reconcile) (21.1–21.4 + 21.5a/b + all of 21.7 [A-11/A-12/A-13/A-14] shipped, container-verified 2026-07-17 [301/301 pytest], pending live re-verification only; 21.6 → Merged→22.1) | In progress (21.1–21.4, 21.5a/b, 21.7 all shipped + container-verified 2026-07-17) | P2 (21.5c) | — | 2026-07-17 |
 | 5  | Live-trading state integrity | 5.5 (Decimal money, golden-master sign-off), 5.6 (restart recovery / projection) | In progress | P0 | 21.1–21.2 inform 5.6 | 2026-07-16 |
-| 22 | Industry-standard risk management (Session Risk Governor) | 22.7 (22.1–22.6 shipped, container-verified 2026-07-17 [323/323 pytest]: governor core, capital integrity gate, portfolio open-risk budget, liq-buffer guard, `risk_breach` webhook, MaxDrawdown/LowProfitPairs protections, risk_check events, shared `services/portfolio_risk.py` + live VaR/CVaR enforcement, correlation-aware concentration cap, inverse-vol allocation layer (golden-master-verified) — pending live re-verification only) | In progress (22.1–22.6 shipped + container-verified 2026-07-17) | P2 (rest) | 21 (21.1–21.4, shipped) | 2026-07-17 |
+| 22 | Industry-standard risk management (Session Risk Governor) | ALL SHIPPED (22.1–22.7, container/Jest-verified 2026-07-17 [330/330 pytest, 88/88 jest], 22.6 golden-master-verified, 22.7 live-verified in-browser) — pending live Testnet re-verification only | **Done** (pending live re-verification) | — | 21 (21.1–21.4, shipped) | 2026-07-17 |
 | 9  | Backtest & optimizer correctness (quant core) | 9.7 (funding ledger), 9.8 (intrabar sim), 9.9 (stats portion), 9.10 (fill-model ladder), **9.11 (cost-gate resurrection, M-1/M-2/M-3 — Step A inert, Step B re-baselined)** | Ready | P1 | — | 2026-07-16 |
 | 10 | Monte Carlo Optimiser & Strategy Lab | Phases 1b–4 (job plumbing, `labResults`, UI, optimizer w/ walk-forward + Optuna) | Ready | P1 | 9 (9.1/9.3, shipped) | 2026-07-16 |
 | 13 | Informative / multi-timeframe contract (`self.htf()`) | All | Ready | P2 | — | 2026-07-16 |
@@ -186,7 +186,18 @@ pipeline-touching steps) a golden-master check per Rule C.
   cache via new `fetch_correlation_matrix()`. 22.6 shipped the inverse-volatility portfolio
   allocation layer (`InverseVolatilityPortfolio`, config-gated `allocation: "equal"|"inverse_vol"`,
   default unchanged) — golden-master re-run confirmed byte-identical for the default case (5/5
-  strategies). 22.7 (Zone 2 UI/schema batch) is next in the plan's own sequencing, not yet started.
+  strategies). **22.7 shipped 2026-07-17 — Plan 22 is now fully complete (22.1–22.7).** Zone 2
+  UI/schema batch for every governor field, SessionCard governor-state badge, wizard allocation
+  dropdown. Found and fixed a real bug spanning back to 22.1: `live_bot_manager.py`'s
+  `start_session` governor cascade read `risk_params` at the wrong dict level (Node sends
+  `{symbol: {...}, "default": {...}}`, not flat) — every Zone-2-configured governor knob had
+  silently never reached the governor since 22.1. Also fixed two smaller gaps: the
+  `algo:session:update` socket handler dropped `tradingState` (badge would never update live), and
+  `webhook.js`'s `VALID_EVENTS` was missing `risk_breach` (silent 400 on save). Container/Jest
+  suites: 330/330 pytest (up from 323), 88/88 jest (up from 79, also confirms `capitalGate.test.js`
+  genuinely passes). Live-verified in-browser via Claude in Chrome against the running dev stack.
+  **Only remaining item across all of Plan 22: real live Testnet re-verification** — genuinely
+  blocked, needs a human-observed session, marked pending (see `handoff.md`).
 - **9** — Remaining steps 9.7–9.10 change backtest outputs **by design** → per-step golden-master
   re-baseline with sign-off (Rule C). Who signs off is still an open question.
 - **10** — MC core math is honest (Phase 1a shipped) but still behind the old synchronous

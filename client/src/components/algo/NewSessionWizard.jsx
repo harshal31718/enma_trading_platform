@@ -277,6 +277,7 @@ export default function NewSessionWizard({ onCancel, onSuccess }) {
                 onChange={setRisk}
                 inputClassName="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-emerald-500"
                 labelClassName="block text-xs text-gray-300 mb-1"
+                showAllocation={selectedSymbols.length > 1}
               />
             </div>
           </div>

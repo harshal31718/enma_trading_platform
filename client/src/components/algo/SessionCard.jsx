@@ -18,6 +18,17 @@ const STATUS_STYLES = {
   error: 'bg-red-400/10 text-red-400 border border-red-400/20',
 }
 
+// Plan 22 Step 22.7: Session Risk Governor state badge — `session.tradingState`
+// (active/reducing/halted, set by the governor's periodic/pre-trade checks —
+// see `engine/core/models/governor.py` + `_apply_governor_breach`). Omitted
+// entirely when "active" (the common case) so it doesn't visually compete
+// with the STATUS_STYLES badge above.
+const GOVERNOR_STYLES = {
+  reducing: 'bg-amber-400/10 text-amber-400 border border-amber-400/20',
+  halted: 'bg-red-400/10 text-red-400 border border-red-400/20',
+}
+const GOVERNOR_LABELS = { reducing: 'Reducing', halted: 'Halted' }
+
 const LogIcon = ({ type }) => {
   switch (type) {
     case 'long': return <ArrowUpCircle size={13} className="text-emerald-400 shrink-0 mt-px" />
@@ -316,6 +327,15 @@ export default function SessionCard({ session, onStop, stopping }) {
             <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium shrink-0 ${STATUS_STYLES[session.status] || STATUS_STYLES.stopped}`}>
               • {session.status}
             </span>
+            {GOVERNOR_STYLES[session.tradingState] && (
+              <span
+                className={`text-[10px] px-2 py-0.5 rounded-full font-semibold shrink-0 ${GOVERNOR_STYLES[session.tradingState]}`}
+                title="Session Risk Governor state"
+              >
+                <AlertTriangle size={9} className="inline -mt-0.5 mr-0.5" />
+                {GOVERNOR_LABELS[session.tradingState]}
+              </span>
+            )}
             {session.mode === 'mainnet' ? (
               <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-red-400/10 text-red-400 border border-red-400/20 shrink-0">MAINNET</span>
             ) : (

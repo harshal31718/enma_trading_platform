@@ -87,6 +87,24 @@ const settingsSchema = new mongoose.Schema(
       maxSessionDrawdown:   { type: Number, default: 0.30,  min: 0.05, max: 0.90 },
       maxRiskPctPerTrade:   { type: Number, default: 0.05,  min: 0.001,max: 0.20 },
       cooldownPeriodHours:  { type: Number, default: 12,    min: 1,    max: 72   },
+      // Plan 22 Step 22.7: Session Risk Governor knobs (engine-side since
+      // 22.1/22.4/22.5/22.6 — this is the batched Zone 2 UI/schema surface
+      // for all of them). All optional/off by default (`null`), matching the
+      // governor's own "None = off" convention for these fields
+      // (`engine/core/models/governor.py`) — a null/absent value here means
+      // `resolveStrategyRiskParams` never sends the key, and the governor
+      // falls back to its own hardcoded default (on) or off, per field.
+      maxDailyLossPct:      { type: Number, default: null,  min: 0,    max: 1    },
+      maxMarginUtilization: { type: Number, default: null,  min: 0.01, max: 1    },
+      varLimitPct:          { type: Number, default: null,  min: 0,    max: 1    },
+      cvarLimitPct:         { type: Number, default: null,  min: 0,    max: 1    },
+      correlationCap: {
+        rho:                   { type: Number, default: null, min: 0, max: 1 },
+        maxClusterExposurePct: { type: Number, default: 0.4,  min: 0, max: 1 },
+      },
+      allocation:  { type: String,  enum: ['equal', 'inverse_vol'], default: 'equal' },
+      breachAction:      { type: String,  enum: ['reducing', 'halted'], default: 'reducing' },
+      autoFlattenOnHalt: { type: Boolean, default: false },
     },
 
     // ── Strategy-Specific Custom Rules ────────────────────────────────────────

@@ -494,12 +494,100 @@ just the isolated function) behaves correctly. Zero regression: full engine suit
 **323/323 passed** (up from 313/313 pre-22.6).
 
 ### 22.7 — Platform surface: Zone 2 fields, SessionCard risk state, docs · P2 · S–M
+
+**Status: shipped, container/Jest-verified 2026-07-17, live-verified in-browser via Claude in
+Chrome** — pending real live Testnet re-verification only, same standing caveat as every other
+step.
+
 Zone 2 UI + server validation for all new fields (`maxDailyLossPct`, `maxMarginUtilization`,
 `varLimitPct`, `correlationCap`, `allocation`, governor fail-mode toggles); SessionCard gains a
 governor state badge (OK / breach-name / reducing / halted) fed from `_push_stats`; webhook
 event docs (Plan 14 file); update `risk-dashboard/SPEC.md` ("display-only" invariant changes!),
 `algo-trading/SPEC.md`, `CURRENT_STATE.md`, DECISIONS.md (fork resolutions), `engine/CLAUDE.md`
 (new files), `ref_future-paths.md` (mark forks #2/#3 resolved, Track A/D rows updated).
+
+**Shipped:**
+- **Critical bug found and fixed while wiring this in**: `risk_params` as sent by Node
+  (`server/src/controllers/algo.controller.js`, both `startSession`/`startChaos`) is shaped
+  `{symbol: {...}, ..., "default": {...}}` — one `resolveStrategyRiskParams()` call per symbol —
+  NOT a flat dict. But `live_bot_manager.py`'s `start_session` governor_cfg cascade (added 22.1,
+  extended by every step since) read `risk_params.get("max_session_dd")` etc. directly on that
+  WRAPPER dict. Since none of those keys exist at that level, every governor knob
+  (`max_session_dd`, `max_portfolio_risk`, `var_limit_pct`, `cvar_limit_pct`, `correlation_cap`,
+  `allocation`, and this step's own new fields) had ALWAYS silently fallen through to `None` since
+  22.1 shipped — Zone 2 configuration never actually reached the governor. Fixed by introducing
+  `default_risk_params = risk_params.get("default") or {}` (mirroring the pre-existing correct
+  pattern `_setup_strategy_instance` already used: `_risk_all.get(symbol) or
+  _risk_all.get("default")`) and reading every governor/allocation field from it instead of the
+  raw wrapper. Proven with a new test driving the REAL `start_session()` against the actual
+  Node-shaped payload (`test_start_session_risk_params_shape.py`, 7 cases) — not a flattened
+  stand-in that would have hidden the same bug again.
+- **`server/src/models/Settings.js`**: `globalHardLimits` gained `maxDailyLossPct`,
+  `maxMarginUtilization`, `varLimitPct`, `cvarLimitPct`, `correlationCap: {rho,
+  maxClusterExposurePct}`, `allocation` (enum `equal`/`inverse_vol`), `breachAction` (enum
+  `reducing`/`halted`), `autoFlattenOnHalt` — all optional/null-default (off), matching the
+  governor's own conventions.
+- **`server/src/utils/risk.js`**: `resolveStrategyRiskParams()` passes these through as top-level
+  snake_case keys on its output (global-only — no strategy/symbol override tier, these are
+  account-wide circuit breakers). `allocation` is the one field that's ALSO wizard-overridable
+  (precedence: wizard override > Zone 2 global default), per 22.6's own "wizard dropdown + Chaos
+  settings" wording — every other field is Zone-2-global-only.
+- **`server/src/controllers/risk.controller.js`**: `updateRiskSettings` extended to accept/validate
+  the new fields (range checks matching the schema, `null` clears a field back to "off").
+- **Client**: `RiskDashboard.jsx` gained a "Session Risk Governor" sub-section in the Global Hard
+  Limits form (6 optional numeric inputs + allocation/breach-action selects + auto-flatten
+  checkbox, all blank-by-default = off) — live-verified via Claude in Chrome: filled a value,
+  saved, reloaded the page, confirmed it persisted through Mongo. `RiskParamsFields.jsx` (shared
+  backtest/algo component) gained an opt-in `showAllocation` prop rendering the Capital Allocation
+  dropdown; `NewSessionWizard.jsx` passes `showAllocation={selectedSymbols.length > 1}` — live-
+  verified rendering correctly after selecting 2 symbols. `SessionCard.jsx` gained a governor state
+  badge (`GOVERNOR_STYLES`/`GOVERNOR_LABELS`, amber "Reducing" / red "Halted", omitted entirely
+  when `tradingState === "active"`) reading `session.tradingState` (already present on the
+  `.lean()` `LiveSession` doc, just never rendered before this step).
+- **Second gap found and fixed**: `AlgoTrading.jsx`'s `handleSessionUpdate` (the `algo:session:
+  update` socket handler merging live updates into the TanStack Query cache) merged `status`/
+  `pnl`/`openPositions`/`symbolStats` but silently dropped `tradingState` — meaning even with the
+  new badge, a real-time governor breach (`_apply_governor_breach`'s emit, which DOES include
+  `tradingState`) would never have updated the badge live, only on the next full list refetch.
+  Fixed by adding the same merge-if-present branch for `tradingState`.
+- **Webhook event docs**: `workspace/plan/14_webhook-notifications.md`'s implementation summary
+  didn't need updating (still accurate), but found `server/src/utils/webhook.js`'s `VALID_EVENTS`
+  (used by `settings.controller.js` to validate a webhook-config PUT) was missing `risk_breach` —
+  present in `Settings.js`'s own Mongoose enum and dispatched by `algo.controller.js` since 22.1,
+  but never added to this separate validation list. A user trying to save `risk_breach` in their
+  webhook events via the UI got a silent 400. Fixed; also confirms (via real `npx jest` in the
+  server container — 79/79 then 88/88 passed across this step) that `capitalGate.test.js` — flagged
+  unverified since 22.1 (no `node_modules` in the dev sandbox at the time) — genuinely passes with
+  100% coverage.
+
+**Tests:**
+- `engine/tests/test_start_session_risk_params_shape.py` (7 cases) — the acceptance-critical proof
+  that `max_session_dd`, `max_portfolio_risk`, `var_limit_pct`/`cvar_limit_pct`, `correlation_cap`,
+  the new governor-only fields, and the `allocation` flag ALL now reach the real
+  `SessionRiskGovernor` instance from the actual Node-shaped `{symbol: {...}, "default": {...}}`
+  payload (previously they never did); a no-fields-set case proves no regression on the
+  already-working "nothing configured" path.
+- `server/src/utils/__tests__/risk.test.js` (+9 cases, run via real `npx jest` in the server
+  container) — each new governor field passes through correctly, `correlationCap` needs `rho` set
+  to activate at all, `allocation`'s wizard-override-beats-global-default precedence both
+  directions.
+- `server/src/utils/__tests__/webhook.test.js` (`VALID_EVENTS` test updated for the `risk_breach`
+  fix, now asserts 7 events not 6).
+- Zero regression: engine suite **330/330 passed** (up from 323/323 pre-22.7); server suite
+  **88/88 passed** (up from 79/79 pre-22.7) — both run for real via `docker exec ... pytest` /
+  `docker exec ... npx jest`, not `ast.parse`/manual-review stand-ins.
+- **Live-verified in-browser** (Claude in Chrome, against the user's own running
+  `docker compose watch` stack, not a mock): Dashboard/Risk Dashboard/Algo Trading pages all load
+  with zero console errors; the new Session Risk Governor form section renders and its save→reload
+  round-trip genuinely persists through MongoDB; the New Bot wizard's allocation dropdown appears
+  correctly once 2+ symbols are selected. Test values were cleared back to "off" afterward — no
+  live session was actually started.
+
+**Not done — 22.7's own scope items not attempted this session:** SessionCard `tradingState`
+badge has never been exercised against a REAL governor breach (only unit/integration-tested with
+synthetic session state) — same standing "pending live re-verification" caveat as the rest of
+Plan 22. `ref_future-paths.md`'s fork #2/#3 resolutions were already marked resolved in an earlier
+session (2026-07-16, before 22.1 even started) — verified still accurate, no further edit needed.
 
 ## Part E — Sequencing & dependencies
 

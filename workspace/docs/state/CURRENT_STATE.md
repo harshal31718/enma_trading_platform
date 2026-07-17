@@ -3,12 +3,18 @@
 **Authority:** This is the single source of truth for what ENMA currently does.
 Read this before starting any work. If this conflicts with chat history, this document wins.
 
-Last updated: 2026-07-17 (Plan 22 Steps 22.1–22.6 — Session Risk Governor, capital integrity
-gate, portfolio open-risk/liq-buffer, protections parity, live VaR/CVaR enforcement, the
-correlation-aware concentration cap, and the inverse-volatility portfolio allocation layer — all
-shipped and container-verified (`docker exec ... pytest /app/tests/` — 323/323 passed,
-2026-07-17; 22.6 additionally golden-master-verified byte-identical for the default `equal`
-allocation), pending live Testnet re-verification only — see Algo Trading section.
+Last updated: 2026-07-17 (Plan 22 — ALL STEPS 22.1–22.7 SHIPPED. Session Risk Governor, capital
+integrity gate, portfolio open-risk/liq-buffer, protections parity, live VaR/CVaR enforcement, the
+correlation-aware concentration cap, the inverse-volatility portfolio allocation layer, and the
+Zone 2 UI/schema batch — all shipped and verified (`docker exec ... pytest /app/tests/` —
+330/330 passed; `docker exec ... npx jest` — 88/88 passed; 22.6 additionally golden-master-verified
+byte-identical for the default `equal` allocation; 22.7 additionally live-verified in-browser via
+Claude in Chrome against the running dev stack), pending live Testnet re-verification only — see
+Algo Trading section. **22.7 found and fixed a real bug spanning back to 22.1**: the governor
+config cascade in `live_bot_manager.py`'s `start_session` was reading `risk_params` at the wrong
+dict level (Node sends `{symbol: {...}, "default": {...}}`, not a flat dict) — every Zone-2-
+configured governor knob had silently never reached the governor since 22.1 shipped. Fixed and
+covered by a new test driving the real payload shape.
 Earlier: 2026-07-16 Known Technical Debt update confirmed the algo/conditional-order
 `ORDER_TRADE_UPDATE` gap live and logged two new open bugs from a live Chaos run — see below.
 Earlier relocation: content moved into feature SPEC docs and DECISIONS.md; see
@@ -189,8 +195,13 @@ Resilience & Stats sections) — this bullet is a pointer, not a description.
   `backtest_runner.py` (recomputes `capital_splits` after candles load) and
   `live_bot_manager.py`'s `start_session` (fetches recent close prices via the shared
   `portfolio_risk.py` cache; falls back to equal split on any failure).
-- Not yet shipped: 22.7. See
-  `workspace/plan/22_risk-management-industry-standard.md`.
+- **Zone 2 platform surface (22.7, shipped 2026-07-17)**: `Settings.js`'s `globalHardLimits`
+  gained the Session Risk Governor knobs (`maxDailyLossPct`, `maxMarginUtilization`, `varLimitPct`,
+  `cvarLimitPct`, `correlationCap`, `allocation`, `breachAction`, `autoFlattenOnHalt`), a new
+  "Session Risk Governor" form section in the Risk Dashboard, an allocation dropdown in the New Bot
+  wizard (multi-symbol only), and a governor-state badge on `SessionCard.jsx` (Reducing/Halted,
+  fed live via the `algo:session:update` socket event). **Plan 22 is now fully shipped
+  (22.1–22.7)** — only live Testnet re-verification remains across the whole plan.
 
 ### Order History (Trade Recorder)
 - Engine writes every completed round-trip trade to MongoDB `tradeRecords` collection via `engine/services/trade_recorder.py → record_trade()` (best-effort, never blocks the position-close path). Called by both `live_bot_manager` close paths (normal close + session stop).

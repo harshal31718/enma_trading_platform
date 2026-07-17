@@ -523,25 +523,49 @@ cache; falls back to equal split on any failure, logs the resolved split at sess
 `docker exec enma_trading_platform-engine-1 python -m scripts.golden_master compare --a pre_22_6
 --b post_22_6_v2` → `GOLDEN-MASTER OK` (5/5 seeded strategies, tol 1e-6).
 
-**Not yet shipped:** 22.7 (the batched Zone 2 UI/schema surface — wizard dropdown for
-`allocation`, plus every other new field from 22.1–22.6). Full Zone 2 UI/schema wiring for the
-governor's config keys accumulated across 22.1–22.6 is 22.7's scope — they're read as plain
-engine-side defaults until then. See `workspace/plan/22_risk-management-industry-standard.md` and
-`DECISIONS.md` #23/#24/#25.
-**Container-verified 2026-07-17** — `docker exec enma_trading_platform-engine-1 pytest
-/app/tests/` (the user's own container, not this dev sandbox) ran the full engine suite: **323/323
-passed**, covering every Plan 21 (21.1–21.7) and Plan 22 (22.1–22.6) test file including
-`test_session_risk_governor.py` (40/40), `test_inverse_vol_portfolio.py` (10/10), and the
-`live_bot_manager.py`-driving stub-injection
-suites (`test_execute_entry_*`, `test_kline_ws_url.py`, `test_portfolio_risk_shared_service.py`,
-etc.) that this dev sandbox could only `py_compile`/`ast.parse`-verify. **Pending: live
-re-verification only** — no behavioral claim above (governor vetoes, protections locks, capital
-gate rejects, VaR/CVaR breach, correlation-cluster veto) has been exercised against a real Binance
-Testnet session yet. The
-Node-side capital gate was verified via `node --check` + a manual assertion script (no
-`node_modules` in the dev sandbox — a Jest suite exists at
-`server/src/utils/__tests__/capitalGate.test.js` but has not been run; this is Node-side, not
-covered by the engine's container pytest run above).
+**Zone 2 platform surface + critical fix (Plan 22 Step 22.7, shipped 2026-07-17) — Plan 22 is now
+fully shipped (22.1–22.7):** Zone 2 UI (new "Session Risk Governor" form section in
+`RiskDashboard.jsx`), server schema/validation (`Settings.js`, `risk.controller.js`), and the
+resolver (`resolveStrategyRiskParams()` in `utils/risk.js`) now cover every governor field
+accumulated across 22.1–22.6 (`maxDailyLossPct`, `maxMarginUtilization`, `varLimitPct`,
+`cvarLimitPct`, `correlationCap`, `allocation`, `breachAction`, `autoFlattenOnHalt`); the New Bot
+wizard gained an allocation dropdown (multi-symbol only) and `SessionCard.jsx` gained a governor
+state badge (Reducing/Halted, fed live via the `algo:session:update` socket handler — which itself
+needed a fix, see below).
+
+**Critical bug found and fixed while wiring this in:** `risk_params` as sent by Node is shaped
+`{symbol: {...}, "default": {...}}` (one `resolveStrategyRiskParams()` call per symbol), but
+`live_bot_manager.py`'s `start_session` governor_cfg cascade (added 22.1, extended every step
+since) read `risk_params.get("max_session_dd")` etc. directly on that wrapper dict — those keys
+never exist at that level, so EVERY governor knob had silently fallen through to `None` since 22.1
+shipped, regardless of what Zone 2 configured. Fixed via a new `default_risk_params =
+risk_params.get("default") or {}`, mirroring the pattern `_setup_strategy_instance` already used
+correctly elsewhere. Proven with `test_start_session_risk_params_shape.py` (7 cases) driving the
+real `start_session()` against the actual Node-shaped payload.
+
+**Second gap found and fixed:** `AlgoTrading.jsx`'s `algo:session:update` socket handler merged
+`status`/`pnl`/`openPositions`/`symbolStats` but silently dropped `tradingState` — so even with the
+new SessionCard badge, a real-time governor breach would never have updated it live, only on the
+next full refetch. Fixed with the same merge-if-present pattern.
+
+**Third gap found and fixed:** `server/src/utils/webhook.js`'s `VALID_EVENTS` (used to validate a
+webhook-config PUT) was missing `risk_breach` — present in `Settings.js`'s schema enum and
+dispatched since 22.1, but never added to this separate list, so saving it via the UI 400'd
+silently. Fixed.
+
+**Container/Jest-verified 2026-07-17** — `docker exec enma_trading_platform-engine-1 pytest
+/app/tests/`: **330/330 passed** (up from 323/323 pre-22.7), covering every Plan 21/22 test file
+including the new `test_start_session_risk_params_shape.py`. `docker exec
+enma_trading_platform-server-1 npx jest`: **88/88 passed** (up from 79/79) — this also confirms
+`capitalGate.test.js`, flagged unverified since 22.1 (no `node_modules` in the earlier dev
+sandbox), genuinely passes with 100% coverage. **Live-verified in-browser via Claude in Chrome**
+against the user's own running `docker compose watch` stack: Dashboard/Risk Dashboard/Algo Trading
+all load with zero console errors; the new governor form section's save→reload round-trip
+genuinely persists through MongoDB; the wizard's allocation dropdown renders correctly for 2+
+symbols. **Pending: real live Testnet re-verification only** — no behavioral claim above (governor
+vetoes, protections locks, capital gate rejects, VaR/CVaR breach, correlation-cluster veto, a real
+governor breach flipping the SessionCard badge) has been exercised against an actual running
+Binance Testnet session yet.
 
 ---
 

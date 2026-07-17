@@ -88,6 +88,34 @@ function resolveStrategyRiskParams(strategyName, symbol, savedSettings = {}, wiz
   out.max_exposure_notional = Number(symbolRules.maxExposureNotional ?? Infinity);
   out.custom_atr_mult       = strategyRules.customAtrMult != null ? Number(strategyRules.customAtrMult) : null;
 
+  // Plan 22 Step 22.7: Session Risk Governor knobs — global-only (no
+  // strategy/symbol override tier; these are account-wide circuit breakers,
+  // not per-symbol risk math like RISK_FIELDS above). Passed through as
+  // top-level snake_case keys — `live_bot_manager.py`'s `start_session`
+  // governor_cfg cascade already reads each of these as a flat fallback
+  // (22.1/22.4/22.5/22.6's own wiring), so no engine-side change is needed
+  // here. Omitted entirely when unset/null — the governor's own hardcoded
+  // default (on or off, per field) takes over, same as today.
+  if (isFinite(Number(hardLimits.maxDailyLossPct))) out.max_daily_loss_pct = Number(hardLimits.maxDailyLossPct);
+  if (isFinite(Number(hardLimits.maxMarginUtilization))) out.max_margin_utilization = Number(hardLimits.maxMarginUtilization);
+  if (isFinite(Number(hardLimits.varLimitPct))) out.var_limit_pct = Number(hardLimits.varLimitPct);
+  if (isFinite(Number(hardLimits.cvarLimitPct))) out.cvar_limit_pct = Number(hardLimits.cvarLimitPct);
+  if (isFinite(Number(hardLimits.correlationCap?.rho))) {
+    out.correlation_cap = {
+      rho: Number(hardLimits.correlationCap.rho),
+      max_cluster_exposure_pct: isFinite(Number(hardLimits.correlationCap.maxClusterExposurePct))
+        ? Number(hardLimits.correlationCap.maxClusterExposurePct) : 0.4,
+    };
+  }
+  // allocation is the one governor-adjacent field that IS wizard-overridable
+  // (Plan 22 Step 22.6's own wording: "wizard dropdown + Chaos settings"),
+  // unlike the account-wide circuit breakers above — precedence: wizard
+  // override > Zone 2 global default > "equal" (omitted).
+  const allocationChoice = normOvr.allocation ?? hardLimits.allocation;
+  if (allocationChoice === 'inverse_vol') out.allocation = 'inverse_vol';
+  if (hardLimits.breachAction === 'halted' || hardLimits.breachAction === 'reducing') out.breach_action = hardLimits.breachAction;
+  if (hardLimits.autoFlattenOnHalt === true) out.auto_flatten_on_halt = true;
+
   return out;
 }
 

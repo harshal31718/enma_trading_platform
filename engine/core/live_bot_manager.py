@@ -1509,6 +1509,19 @@ class LiveBotManager:
         timeframe = session_config["timeframe"]
         params = session_config.get("params", {})
         risk_params = session_config.get("risk_params", {}) or {}
+        # `risk_params` as sent by Node is shaped `{symbol: {...}, ...,
+        # "default": {...}}` (one `resolveStrategyRiskParams()` call per
+        # symbol, see `server/src/controllers/algo.controller.js`) — NOT a
+        # flat dict. Session-level (not per-symbol) config — the governor's
+        # knobs, `allocation` — lives inside the "default" slice, the same
+        # place `_setup_strategy_instance`'s `_risk = _risk_all.get(symbol)
+        # or _risk_all.get("default")` already reads per-symbol risk from.
+        # Found while wiring 22.7's Node cascade through: every governor_cfg
+        # fallback below (`risk_params.get("max_session_dd")` etc.) had been
+        # reading the wrong dict level since 22.1 and always fell through to
+        # None, silently making every Zone-2-configured governor knob a
+        # no-op in favor of the hardcoded default.
+        default_risk_params = risk_params.get("default") or {}
         user_id = session_config.get("user_id", "")
         api_key = session_config.get("api_key", "")
         api_secret = session_config.get("api_secret", "")
@@ -1569,7 +1582,7 @@ class LiveBotManager:
         # is acceptable. Falls back to equal split on any fetch failure
         # (InverseVolatilityPortfolio itself also degrades to equal-weight
         # when fewer than 2 symbols have a usable vol estimate).
-        if risk_params.get("allocation") == "inverse_vol":
+        if default_risk_params.get("allocation") == "inverse_vol":
             try:
                 from services.portfolio_risk import fetch_close_prices as _fetch_close_prices
                 _price_histories = await _fetch_close_prices(symbols)
@@ -1650,25 +1663,28 @@ class LiveBotManager:
         # it's the SAME field name `core/models/portfolio.py` already resolves
         # per-symbol (config compat, per the plan's own wording), just also
         # handed to the governor here for the true cross-symbol check.
-        governor_cfg = dict(risk_params.get("governor", {}) or {})
-        if "max_session_dd" not in governor_cfg and risk_params.get("max_session_dd") is not None:
-            governor_cfg["max_session_dd"] = risk_params.get("max_session_dd")
-        if "max_portfolio_risk" not in governor_cfg and risk_params.get("max_portfolio_risk") is not None:
-            governor_cfg["max_portfolio_risk"] = risk_params.get("max_portfolio_risk")
+        governor_cfg = dict(default_risk_params.get("governor", {}) or {})
+        if "max_session_dd" not in governor_cfg and default_risk_params.get("max_session_dd") is not None:
+            governor_cfg["max_session_dd"] = default_risk_params.get("max_session_dd")
+        if "max_portfolio_risk" not in governor_cfg and default_risk_params.get("max_portfolio_risk") is not None:
+            governor_cfg["max_portfolio_risk"] = default_risk_params.get("max_portfolio_risk")
         # Plan 22 Step 22.4: varLimitPct/cvarLimitPct — same reuse pattern as
-        # max_session_dd/max_portfolio_risk above. Zone 2 schema/UI for these
-        # is 22.7's scope (batched with the other new-field UI work per the
-        # plan's own sequencing); this is the engine-side plumbing so the
-        # keys are already live once 22.7 wires the Node cascade to send them.
-        if "var_limit_pct" not in governor_cfg and risk_params.get("var_limit_pct") is not None:
-            governor_cfg["var_limit_pct"] = risk_params.get("var_limit_pct")
-        if "cvar_limit_pct" not in governor_cfg and risk_params.get("cvar_limit_pct") is not None:
-            governor_cfg["cvar_limit_pct"] = risk_params.get("cvar_limit_pct")
+        # max_session_dd/max_portfolio_risk above.
+        if "var_limit_pct" not in governor_cfg and default_risk_params.get("var_limit_pct") is not None:
+            governor_cfg["var_limit_pct"] = default_risk_params.get("var_limit_pct")
+        if "cvar_limit_pct" not in governor_cfg and default_risk_params.get("cvar_limit_pct") is not None:
+            governor_cfg["cvar_limit_pct"] = default_risk_params.get("cvar_limit_pct")
         # Plan 22 Step 22.5: correlation_cap — same reuse pattern; the whole
         # sub-dict ({"rho": ..., "max_cluster_exposure_pct": ...}) is passed
         # through as-is, not flattened, since the governor reads it as a dict.
-        if "correlation_cap" not in governor_cfg and risk_params.get("correlation_cap") is not None:
-            governor_cfg["correlation_cap"] = risk_params.get("correlation_cap")
+        if "correlation_cap" not in governor_cfg and default_risk_params.get("correlation_cap") is not None:
+            governor_cfg["correlation_cap"] = default_risk_params.get("correlation_cap")
+        # Plan 22 Step 22.7: the remaining governor-only keys, sent by Zone 2's
+        # UI as top-level fields in `resolveStrategyRiskParams()`'s output —
+        # same reuse pattern as every field above.
+        for _flat_key in ("max_daily_loss_pct", "max_margin_utilization", "breach_action", "auto_flatten_on_halt"):
+            if _flat_key not in governor_cfg and default_risk_params.get(_flat_key) is not None:
+                governor_cfg[_flat_key] = default_risk_params.get(_flat_key)
         risk_governor = SessionRiskGovernor(governor_cfg)
 
         self.sessions[session_id] = {

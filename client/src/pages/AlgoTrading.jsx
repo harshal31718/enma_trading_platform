@@ -64,6 +64,11 @@ export default function AlgoTrading() {
         if (data.pnl !== undefined) next.pnl = data.pnl
         if (data.openPositions !== undefined) next.openPositions = data.openPositions
         if (data.symbolStats !== undefined) next.symbolStats = data.symbolStats
+        // Plan 22 Step 22.7: Session Risk Governor state (active/reducing/
+        // halted) — emitted alongside a `risk_breach` event's payload
+        // (algo.controller.js's handleEngineStats) so SessionCard's governor
+        // badge updates live instead of only on the next full refetch.
+        if (data.tradingState !== undefined) next.tradingState = data.tradingState
         return next
       })
     })

@@ -32,16 +32,21 @@ export function riskDefaultsFromSettings(s = {}) {
 
 // Convert display strings → server payload (camelCase fractions / ratio).
 export function riskFieldsToPayload(v = {}) {
-  return {
+  const out = {
     riskPct:            parseFloat(v.riskPct) / 100,
     riskRewardRatio:    parseFloat(v.riskReward),
     maxSessionDrawdown: parseFloat(v.maxDrawdown) / 100,
     liqBufferPct:       parseFloat(v.liqBuffer) / 100,
     minEdgeMult:        parseFloat(v.minEdgeMult || 0.0),
   }
+  // Plan 22 Step 22.6/22.7: optional per-run capital allocation override
+  // (multi-symbol only) — omitted unless explicitly set by a caller that
+  // renders the allocation dropdown (`showAllocation`, algo wizard only).
+  if (v.allocation === 'inverse_vol') out.allocation = 'inverse_vol'
+  return out
 }
 
-export default function RiskParamsFields({ values = RISK_DEFAULTS, onChange, inputClassName, labelClassName }) {
+export default function RiskParamsFields({ values = RISK_DEFAULTS, onChange, inputClassName, labelClassName, showAllocation = false }) {
   const inputCls =
     inputClassName ||
     'h-10 w-full rounded-lg border border-slate-700/50 bg-[#0a0d13] px-3 text-sm text-gray-100 focus:outline-none focus:border-emerald-500 transition-colors'
@@ -65,6 +70,21 @@ export default function RiskParamsFields({ values = RISK_DEFAULTS, onChange, inp
           <p className="text-slate-400 text-[10px]">{f.hint}</p>
         </div>
       ))}
+      {showAllocation && (
+        <div className="flex flex-col gap-1.5 col-span-2">
+          <label htmlFor="risk-param-allocation" className={labelCls}>Capital Allocation</label>
+          <select
+            id="risk-param-allocation"
+            value={values.allocation ?? 'equal'}
+            onChange={set('allocation')}
+            className={inputCls}
+          >
+            <option value="equal">Equal split (default)</option>
+            <option value="inverse_vol">Inverse-volatility (multi-symbol only)</option>
+          </select>
+          <p className="text-slate-400 text-[10px]">How capital is split across symbols — falls back to equal split with a single symbol</p>
+        </div>
+      )}
     </div>
   )
 }

@@ -52,6 +52,21 @@ export default function RiskDashboard() {
   const [maxRiskPctPerTrade, setMaxRiskPctPerTrade] = useState('5')
   const [cooldownPeriodHours, setCooldownPeriodHours] = useState('12')
 
+  // ── Session Risk Governor Form State (Plan 22 Step 22.7) ──────────────────
+  // Empty string = not configured = the governor's own hardcoded default
+  // (on or off, per field — see engine/core/models/governor.py). Percent
+  // fields are stored/edited as whole percents (5 = 5%), same convention as
+  // maxSessionDrawdown/maxRiskPctPerTrade above.
+  const [maxDailyLossPct, setMaxDailyLossPct] = useState('')
+  const [maxMarginUtilization, setMaxMarginUtilization] = useState('')
+  const [varLimitPct, setVarLimitPct] = useState('')
+  const [cvarLimitPct, setCvarLimitPct] = useState('')
+  const [correlationRho, setCorrelationRho] = useState('')
+  const [correlationMaxClusterPct, setCorrelationMaxClusterPct] = useState('40')
+  const [allocation, setAllocation] = useState('equal')
+  const [breachAction, setBreachAction] = useState('reducing')
+  const [autoFlattenOnHalt, setAutoFlattenOnHalt] = useState(false)
+
   // ── Strategy Overrides Editor State ───────────────────────────────────────
   const [selectedStrategy, setSelectedStrategy] = useState('')
   const [stratRiskPct, setStratRiskPct] = useState('')
@@ -85,6 +100,15 @@ export default function RiskDashboard() {
       setMaxSessionDrawdown(String((g.maxSessionDrawdown ?? 0.30) * 100))
       setMaxRiskPctPerTrade(String((g.maxRiskPctPerTrade ?? 0.05) * 100))
       setCooldownPeriodHours(String(g.cooldownPeriodHours ?? 12))
+      setMaxDailyLossPct(g.maxDailyLossPct != null ? String(g.maxDailyLossPct * 100) : '')
+      setMaxMarginUtilization(g.maxMarginUtilization != null ? String(g.maxMarginUtilization * 100) : '')
+      setVarLimitPct(g.varLimitPct != null ? String(g.varLimitPct * 100) : '')
+      setCvarLimitPct(g.cvarLimitPct != null ? String(g.cvarLimitPct * 100) : '')
+      setCorrelationRho(g.correlationCap?.rho != null ? String(g.correlationCap.rho) : '')
+      setCorrelationMaxClusterPct(String((g.correlationCap?.maxClusterExposurePct ?? 0.4) * 100))
+      setAllocation(g.allocation ?? 'equal')
+      setBreachAction(g.breachAction ?? 'reducing')
+      setAutoFlattenOnHalt(g.autoFlattenOnHalt ?? false)
     }
   }, [settings])
 
@@ -97,7 +121,20 @@ export default function RiskDashboard() {
         maxLeverageAllowed: Number(maxLeverageAllowed),
         maxSessionDrawdown: Number(maxSessionDrawdown) / 100,
         maxRiskPctPerTrade: Number(maxRiskPctPerTrade) / 100,
-        cooldownPeriodHours: Number(cooldownPeriodHours)
+        cooldownPeriodHours: Number(cooldownPeriodHours),
+        // Session Risk Governor (Plan 22 Step 22.7) — blank input = not
+        // configured = null (governor falls back to its own default).
+        maxDailyLossPct: maxDailyLossPct !== '' ? Number(maxDailyLossPct) / 100 : null,
+        maxMarginUtilization: maxMarginUtilization !== '' ? Number(maxMarginUtilization) / 100 : null,
+        varLimitPct: varLimitPct !== '' ? Number(varLimitPct) / 100 : null,
+        cvarLimitPct: cvarLimitPct !== '' ? Number(cvarLimitPct) / 100 : null,
+        correlationCap: {
+          rho: correlationRho !== '' ? Number(correlationRho) : null,
+          maxClusterExposurePct: Number(correlationMaxClusterPct) / 100,
+        },
+        allocation,
+        breachAction,
+        autoFlattenOnHalt,
       },
       strategyOverrides: settings.strategyOverrides || {},
       symbolOverrides: settings.symbolOverrides || {}
@@ -340,6 +377,102 @@ export default function RiskDashboard() {
                       max="72"
                       required
                     />
+                  </div>
+                </div>
+
+                <h3 className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider mt-6 mb-2">
+                  Session Risk Governor
+                </h3>
+                <p className="text-xs text-slate-400 mb-4">
+                  Live/Chaos-only enforcement (Plan 22). Blank = off — the governor's own default applies.
+                </p>
+                <div className="flex flex-col gap-4 font-mono text-xs">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-slate-200 font-semibold block mb-1 text-[10px] uppercase">Max Daily Loss %</label>
+                      <input
+                        type="number" placeholder="off"
+                        className="bg-slate-900 border border-slate-800/80 w-full px-2.5 py-1.5 text-slate-200 outline-none focus:border-emerald-500 placeholder-slate-600"
+                        value={maxDailyLossPct} onChange={(e) => setMaxDailyLossPct(e.target.value)}
+                        min="0" max="100" step="0.1"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-slate-200 font-semibold block mb-1 text-[10px] uppercase">Max Margin Utilization %</label>
+                      <input
+                        type="number" placeholder="off (80 default)"
+                        className="bg-slate-900 border border-slate-800/80 w-full px-2.5 py-1.5 text-slate-200 outline-none focus:border-emerald-500 placeholder-slate-600"
+                        value={maxMarginUtilization} onChange={(e) => setMaxMarginUtilization(e.target.value)}
+                        min="1" max="100" step="1"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-slate-200 font-semibold block mb-1 text-[10px] uppercase">VaR Limit % (95% 1D)</label>
+                      <input
+                        type="number" placeholder="off"
+                        className="bg-slate-900 border border-slate-800/80 w-full px-2.5 py-1.5 text-slate-200 outline-none focus:border-emerald-500 placeholder-slate-600"
+                        value={varLimitPct} onChange={(e) => setVarLimitPct(e.target.value)}
+                        min="0" max="100" step="0.1"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-slate-200 font-semibold block mb-1 text-[10px] uppercase">CVaR Limit %</label>
+                      <input
+                        type="number" placeholder="off"
+                        className="bg-slate-900 border border-slate-800/80 w-full px-2.5 py-1.5 text-slate-200 outline-none focus:border-emerald-500 placeholder-slate-600"
+                        value={cvarLimitPct} onChange={(e) => setCvarLimitPct(e.target.value)}
+                        min="0" max="100" step="0.1"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-slate-200 font-semibold block mb-1 text-[10px] uppercase">Correlation ρ Threshold</label>
+                      <input
+                        type="number" placeholder="off"
+                        className="bg-slate-900 border border-slate-800/80 w-full px-2.5 py-1.5 text-slate-200 outline-none focus:border-emerald-500 placeholder-slate-600"
+                        value={correlationRho} onChange={(e) => setCorrelationRho(e.target.value)}
+                        min="0" max="1" step="0.05"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-slate-200 font-semibold block mb-1 text-[10px] uppercase">Max Cluster Exposure %</label>
+                      <input
+                        type="number"
+                        className="bg-slate-900 border border-slate-800/80 w-full px-2.5 py-1.5 text-slate-200 outline-none focus:border-emerald-500 placeholder-slate-600"
+                        value={correlationMaxClusterPct} onChange={(e) => setCorrelationMaxClusterPct(e.target.value)}
+                        min="1" max="100" step="1"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-slate-200 font-semibold block mb-1 text-[10px] uppercase">Capital Allocation</label>
+                    <select
+                      className="bg-slate-900 border border-slate-800/80 w-full px-2.5 py-1.5 text-slate-200 outline-none focus:border-emerald-500"
+                      value={allocation} onChange={(e) => setAllocation(e.target.value)}
+                    >
+                      <option value="equal">Equal split</option>
+                      <option value="inverse_vol">Inverse-volatility</option>
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 items-end">
+                    <div>
+                      <label className="text-slate-200 font-semibold block mb-1 text-[10px] uppercase">On Breach</label>
+                      <select
+                        className="bg-slate-900 border border-slate-800/80 w-full px-2.5 py-1.5 text-slate-200 outline-none focus:border-emerald-500"
+                        value={breachAction} onChange={(e) => setBreachAction(e.target.value)}
+                      >
+                        <option value="reducing">Reducing (block entries)</option>
+                        <option value="halted">Halted</option>
+                      </select>
+                    </div>
+                    <label className="flex items-center gap-2 text-slate-200 text-[10px] uppercase font-semibold pb-1.5">
+                      <input
+                        type="checkbox"
+                        checked={autoFlattenOnHalt}
+                        onChange={(e) => setAutoFlattenOnHalt(e.target.checked)}
+                        className="accent-emerald-500"
+                      />
+                      Auto-flatten on Halt
+                    </label>
                   </div>
                 </div>
 

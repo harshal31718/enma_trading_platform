@@ -80,4 +80,77 @@ describe('resolveStrategyRiskParams', () => {
     const out = resolveStrategyRiskParams('MyStrat', 'BTCUSDT', {}, { risk_pct: 0.07 })
     expect(out.risk_pct).toBeCloseTo(0.07)
   })
+
+  describe('Plan 22 Step 22.7: Session Risk Governor knobs (global-only)', () => {
+    test('governor fields are omitted entirely when globalHardLimits is unset', () => {
+      const out = resolveStrategyRiskParams('MyStrat', 'BTCUSDT', {}, {})
+      expect(out.max_daily_loss_pct).toBeUndefined()
+      expect(out.max_margin_utilization).toBeUndefined()
+      expect(out.var_limit_pct).toBeUndefined()
+      expect(out.cvar_limit_pct).toBeUndefined()
+      expect(out.correlation_cap).toBeUndefined()
+      expect(out.allocation).toBeUndefined()
+      expect(out.breach_action).toBeUndefined()
+      expect(out.auto_flatten_on_halt).toBeUndefined()
+    })
+
+    test('passes through maxDailyLossPct/maxMarginUtilization/varLimitPct/cvarLimitPct as snake_case', () => {
+      const settings = {
+        globalHardLimits: {
+          maxDailyLossPct: 0.1, maxMarginUtilization: 0.75, varLimitPct: 0.05, cvarLimitPct: 0.08,
+        },
+      }
+      const out = resolveStrategyRiskParams('MyStrat', 'BTCUSDT', settings, {})
+      expect(out.max_daily_loss_pct).toBeCloseTo(0.1)
+      expect(out.max_margin_utilization).toBeCloseTo(0.75)
+      expect(out.var_limit_pct).toBeCloseTo(0.05)
+      expect(out.cvar_limit_pct).toBeCloseTo(0.08)
+    })
+
+    test('correlationCap sub-object passes through with a default maxClusterExposurePct', () => {
+      const settings = { globalHardLimits: { correlationCap: { rho: 0.8 } } }
+      const out = resolveStrategyRiskParams('MyStrat', 'BTCUSDT', settings, {})
+      expect(out.correlation_cap).toEqual({ rho: 0.8, max_cluster_exposure_pct: 0.4 })
+    })
+
+    test('correlationCap omitted entirely when rho is not set (off by default)', () => {
+      const settings = { globalHardLimits: { correlationCap: { maxClusterExposurePct: 0.5 } } }
+      const out = resolveStrategyRiskParams('MyStrat', 'BTCUSDT', settings, {})
+      expect(out.correlation_cap).toBeUndefined()
+    })
+
+    test('allocation passes through only when explicitly "inverse_vol"', () => {
+      expect(
+        resolveStrategyRiskParams('MyStrat', 'BTCUSDT', { globalHardLimits: { allocation: 'inverse_vol' } }, {}).allocation
+      ).toBe('inverse_vol')
+      expect(
+        resolveStrategyRiskParams('MyStrat', 'BTCUSDT', { globalHardLimits: { allocation: 'equal' } }, {}).allocation
+      ).toBeUndefined()
+    })
+
+    test('allocation: wizard override takes precedence over the Zone 2 global default', () => {
+      const settings = { globalHardLimits: { allocation: 'equal' } }
+      const out = resolveStrategyRiskParams('MyStrat', 'BTCUSDT', settings, { allocation: 'inverse_vol' })
+      expect(out.allocation).toBe('inverse_vol')
+    })
+
+    test('allocation: wizard override of "equal" suppresses a global "inverse_vol" default', () => {
+      const settings = { globalHardLimits: { allocation: 'inverse_vol' } }
+      const out = resolveStrategyRiskParams('MyStrat', 'BTCUSDT', settings, { allocation: 'equal' })
+      expect(out.allocation).toBeUndefined()
+    })
+
+    test('breachAction and autoFlattenOnHalt pass through', () => {
+      const settings = { globalHardLimits: { breachAction: 'halted', autoFlattenOnHalt: true } }
+      const out = resolveStrategyRiskParams('MyStrat', 'BTCUSDT', settings, {})
+      expect(out.breach_action).toBe('halted')
+      expect(out.auto_flatten_on_halt).toBe(true)
+    })
+
+    test('autoFlattenOnHalt=false is omitted, not sent as false', () => {
+      const settings = { globalHardLimits: { autoFlattenOnHalt: false } }
+      const out = resolveStrategyRiskParams('MyStrat', 'BTCUSDT', settings, {})
+      expect(out.auto_flatten_on_halt).toBeUndefined()
+    })
+  })
 })

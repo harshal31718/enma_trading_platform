@@ -42,13 +42,33 @@ async function updateRiskSettings(req, res, next) {
 
     // 1. Update Global Hard Limits
     if (globalHardLimits) {
+      const prevGovernor = settings.globalHardLimits || {}
+      // Plan 22 Step 22.7: Session Risk Governor knobs — all optional
+      // (null = not configured = the governor's own default). `!== undefined`
+      // still lets an explicit `null` in the payload clear a previously-set
+      // value back to "off", matching the client form's blank-input semantics.
+      const numOrNull = (v, prev) => (v !== undefined ? (v === null || v === '' ? null : Number(v)) : prev)
+
       settings.globalHardLimits = {
         maxLeverageAllowed: globalHardLimits.maxLeverageAllowed !== undefined ? Number(globalHardLimits.maxLeverageAllowed) : settings.globalHardLimits.maxLeverageAllowed,
         maxSessionDrawdown: globalHardLimits.maxSessionDrawdown !== undefined ? Number(globalHardLimits.maxSessionDrawdown) : settings.globalHardLimits.maxSessionDrawdown,
         maxRiskPctPerTrade: globalHardLimits.maxRiskPctPerTrade !== undefined ? Number(globalHardLimits.maxRiskPctPerTrade) : settings.globalHardLimits.maxRiskPctPerTrade,
         cooldownPeriodHours: globalHardLimits.cooldownPeriodHours !== undefined ? Number(globalHardLimits.cooldownPeriodHours) : settings.globalHardLimits.cooldownPeriodHours,
+        maxDailyLossPct: numOrNull(globalHardLimits.maxDailyLossPct, prevGovernor.maxDailyLossPct ?? null),
+        maxMarginUtilization: numOrNull(globalHardLimits.maxMarginUtilization, prevGovernor.maxMarginUtilization ?? null),
+        varLimitPct: numOrNull(globalHardLimits.varLimitPct, prevGovernor.varLimitPct ?? null),
+        cvarLimitPct: numOrNull(globalHardLimits.cvarLimitPct, prevGovernor.cvarLimitPct ?? null),
+        correlationCap: {
+          rho: numOrNull(globalHardLimits.correlationCap?.rho, prevGovernor.correlationCap?.rho ?? null),
+          maxClusterExposurePct: globalHardLimits.correlationCap?.maxClusterExposurePct !== undefined
+            ? Number(globalHardLimits.correlationCap.maxClusterExposurePct)
+            : (prevGovernor.correlationCap?.maxClusterExposurePct ?? 0.4),
+        },
+        allocation: globalHardLimits.allocation !== undefined ? globalHardLimits.allocation : (prevGovernor.allocation ?? 'equal'),
+        breachAction: globalHardLimits.breachAction !== undefined ? globalHardLimits.breachAction : (prevGovernor.breachAction ?? 'reducing'),
+        autoFlattenOnHalt: globalHardLimits.autoFlattenOnHalt !== undefined ? Boolean(globalHardLimits.autoFlattenOnHalt) : (prevGovernor.autoFlattenOnHalt ?? false),
       }
-      
+
       // Basic validations
       if (settings.globalHardLimits.maxLeverageAllowed < 1 || settings.globalHardLimits.maxLeverageAllowed > 125) {
         throw new ApiError(400, 'VALIDATION_ERROR', 'maxLeverageAllowed must be between 1 and 125')
@@ -61,6 +81,31 @@ async function updateRiskSettings(req, res, next) {
       }
       if (settings.globalHardLimits.cooldownPeriodHours < 1 || settings.globalHardLimits.cooldownPeriodHours > 72) {
         throw new ApiError(400, 'VALIDATION_ERROR', 'cooldownPeriodHours must be between 1 and 72')
+      }
+      const g = settings.globalHardLimits
+      if (g.maxDailyLossPct !== null && (g.maxDailyLossPct < 0 || g.maxDailyLossPct > 1)) {
+        throw new ApiError(400, 'VALIDATION_ERROR', 'maxDailyLossPct must be between 0 and 1')
+      }
+      if (g.maxMarginUtilization !== null && (g.maxMarginUtilization < 0.01 || g.maxMarginUtilization > 1)) {
+        throw new ApiError(400, 'VALIDATION_ERROR', 'maxMarginUtilization must be between 0.01 and 1')
+      }
+      if (g.varLimitPct !== null && (g.varLimitPct < 0 || g.varLimitPct > 1)) {
+        throw new ApiError(400, 'VALIDATION_ERROR', 'varLimitPct must be between 0 and 1')
+      }
+      if (g.cvarLimitPct !== null && (g.cvarLimitPct < 0 || g.cvarLimitPct > 1)) {
+        throw new ApiError(400, 'VALIDATION_ERROR', 'cvarLimitPct must be between 0 and 1')
+      }
+      if (g.correlationCap.rho !== null && (g.correlationCap.rho < 0 || g.correlationCap.rho > 1)) {
+        throw new ApiError(400, 'VALIDATION_ERROR', 'correlationCap.rho must be between 0 and 1')
+      }
+      if (g.correlationCap.maxClusterExposurePct < 0 || g.correlationCap.maxClusterExposurePct > 1) {
+        throw new ApiError(400, 'VALIDATION_ERROR', 'correlationCap.maxClusterExposurePct must be between 0 and 1')
+      }
+      if (!['equal', 'inverse_vol'].includes(g.allocation)) {
+        throw new ApiError(400, 'VALIDATION_ERROR', 'allocation must be "equal" or "inverse_vol"')
+      }
+      if (!['reducing', 'halted'].includes(g.breachAction)) {
+        throw new ApiError(400, 'VALIDATION_ERROR', 'breachAction must be "reducing" or "halted"')
       }
     }
 

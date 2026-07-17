@@ -44,6 +44,10 @@ GET /api/v1/risk/settings
 Server reads per-user Settings doc (upserted on first access) — no engine proxy
         ↓
 Returns: { globalHardLimits, strategyOverrides: {[strategyName]: ...}, symbolOverrides: {[symbol]: ...} }
+        (globalHardLimits also carries the Session Risk Governor knobs, Plan 22 Step 22.7 —
+        maxDailyLossPct, maxMarginUtilization, varLimitPct, cvarLimitPct, correlationCap
+        {rho, maxClusterExposurePct}, allocation, breachAction, autoFlattenOnHalt — all
+        optional/null-default, i.e. "off")
         ↓
 User edits and saves → PUT /api/v1/risk/settings
         ↓
@@ -102,6 +106,13 @@ SimulationResults renders leverage-scenario table + Monte Carlo curves
   the sole writer (`engine/services/leverage_sensitivity_runner.py`).
 - **Per-user, not per-session.** Risk Settings (Zone 2) live on the per-user `Settings` doc, same as
   Exchange Settings — not scoped per bot session or per backtest run.
+- **Zone 1's VaR/CVaR and correlation are NO LONGER display-only** (Plan 22 Steps 22.4/22.5,
+  shipped 2026-07-17) — the live Session Risk Governor consumes the exact same
+  `services/portfolio_risk.py` computation for pre-trade/periodic enforcement in live/chaos
+  sessions, opt-in via Zone 2's `varLimitPct`/`cvarLimitPct`/`correlationCap`. The dashboard number
+  and the enforced number are provably identical (same function, one shared cache) — this was the
+  single biggest invariant change of Plan 22, since every earlier session in this doc's history
+  described Zone 1 as read-only visualization.
 
 ---
 

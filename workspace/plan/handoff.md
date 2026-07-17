@@ -7,6 +7,126 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
+## 2026-07-17 — Plan 22 Steps 22.5–22.7 shipped: correlation cap, inverse-vol allocation, Zone 2 platform surface — **PLAN 22 FULLY SHIPPED (22.1–22.7)**, live Testnet re-verification still pending ⏸️
+
+**Goal:** user said "proceed non-stop... test via claude in code... if critical input required
+mark it pending and jump to a different task" while stepping away. Continued Plan 22 from where
+the prior session left off (22.1–22.4 shipped) straight through 22.5, 22.6, 22.7 without stopping
+to check in, since each was the plan's own next unblocked item. Live Testnet re-verification is
+the one genuinely blocked item (needs a human-observed session) — left explicitly pending rather
+than guessed at, per the user's own instruction.
+
+**Done — 22.5 (correlation-aware concentration cap):** `SessionRiskGovernor.
+check_correlation_concentration()` (`engine/core/models/governor.py`) — transitive-closure
+clustering (BFS) over pairwise `|correlation| > rho` among open positions + the candidate entry,
+vetoing when the cluster's combined notional exceeds `max_cluster_exposure_pct` (default 0.4) of
+equity. Off by default (`correlation_cap.rho=None`). New `services/portfolio_risk.
+fetch_correlation_matrix()` reuses the existing 60s close-price cache. Wired into `execute_entry`
+right after the 22.4 VaR/CVaR block, opt-in gated, fails open on a TimescaleDB fetch exception.
+Tests: `+8` in `test_session_risk_governor.py`, new `test_execute_entry_correlation_cap.py`
+(5 cases). Container suite: 313/313 passed.
+
+**Done — 22.6 (inverse-volatility portfolio allocation layer, golden-master-gated):**
+`InverseVolatilityPortfolio`/`compute_realized_volatility()` (`core/models/portfolio.py`) —
+weights ∝ 1/realized-vol, an **iterative clamp-and-renormalize** enforcing per-symbol floor/cap
+(found and fixed a real bug in this step's own test suite: a single clamp-then-renormalize pass
+can push a previously-capped weight back OVER the cap once freed-up mass redistributes — fixed
+with an alternating-projection loop). Config-gated via `risk_params["allocation"] ==
+"inverse_vol"` (default `"equal"`, byte-identical to prior behavior). Wired into
+`backtest_runner.py` (recomputes `capital_splits` after candles load — default path's original
+pre-candle-load call left untouched) and `live_bot_manager.py`'s `start_session` (fetches recent
+closes via the shared `portfolio_risk.py` cache). **Golden master run before/after per root
+CLAUDE.md Rule C**: `python -m scripts.golden_master compare --a pre_22_6 --b post_22_6_v2` →
+`GOLDEN-MASTER OK` (5/5 seeded strategies, tol 1e-6) — confirms zero diff for the default case.
+Tests: `test_inverse_vol_portfolio.py` (10 cases). Container suite: 323/323 passed.
+
+**Done — 22.7 (Zone 2 platform surface — the last step, Plan 22 is now fully shipped):**
+Zone 2 UI (`RiskDashboard.jsx` gained a "Session Risk Governor" form section — 6 optional numeric
+inputs + allocation/breach-action selects + auto-flatten checkbox), server schema
+(`Settings.js globalHardLimits`: `maxDailyLossPct`, `maxMarginUtilization`, `varLimitPct`,
+`cvarLimitPct`, `correlationCap`, `allocation`, `breachAction`, `autoFlattenOnHalt`), server
+validation (`risk.controller.js`), and the resolver (`resolveStrategyRiskParams()` in
+`utils/risk.js`, global-only pass-through except `allocation` which is also wizard-overridable).
+`NewSessionWizard.jsx`/`RiskParamsFields.jsx` gained an allocation dropdown (opt-in
+`showAllocation` prop, shown only for 2+ symbols). `SessionCard.jsx` gained a governor state badge
+(amber "Reducing" / red "Halted", `GOVERNOR_STYLES`/`GOVERNOR_LABELS`).
+
+**Critical bug found and fixed while wiring 22.7:** `risk_params` as sent by Node is shaped
+`{symbol: {...}, "default": {...}}` (one `resolveStrategyRiskParams()` call per symbol) — NOT a
+flat dict. But `live_bot_manager.py`'s `start_session` governor_cfg cascade (added 22.1, extended
+by every step since) read `risk_params.get("max_session_dd")` etc. directly on that WRAPPER dict.
+Those keys never exist at that level, so **every governor knob (`max_session_dd`,
+`max_portfolio_risk`, `var_limit_pct`, `cvar_limit_pct`, `correlation_cap`, `allocation`, and
+22.7's own new fields) had silently fallen through to `None` since 22.1 shipped** — Zone 2
+configuration never actually reached the governor, for the entire history of Plan 22 up to this
+point. Fixed via `default_risk_params = risk_params.get("default") or {}`, mirroring the correct
+pattern `_setup_strategy_instance` already used elsewhere in the same file. Proven with a new test
+(`test_start_session_risk_params_shape.py`, 7 cases) driving the REAL `start_session()` against
+the actual Node-shaped payload — deliberately not a flattened stand-in that would hide the same
+bug again.
+
+**Two smaller gaps also found and fixed:** (1) `AlgoTrading.jsx`'s `algo:session:update` socket
+handler merged `status`/`pnl`/`openPositions`/`symbolStats` but silently dropped `tradingState` —
+so even with the new SessionCard badge, a real-time governor breach would never have updated it
+live, only on the next full refetch; fixed with the same merge-if-present pattern. (2)
+`server/src/utils/webhook.js`'s `VALID_EVENTS` (validates a webhook-config PUT) was missing
+`risk_breach` — present in `Settings.js`'s schema enum and dispatched since 22.1, but never added
+to this separate list, so a user saving `risk_breach` via the UI got a silent 400; fixed.
+
+**Verification this session:** container pytest **330/330 passed** (up from 301/301 at session
+start); server Jest **88/88 passed** (up from the untested-in-sandbox baseline — this ALSO
+confirms `capitalGate.test.js`, flagged unverified since 22.1, genuinely passes with 100%
+coverage, since `node_modules` now exists in the server container). **Live-verified in-browser via
+Claude in Chrome** against the user's own running `docker compose watch` stack (not a mock):
+Dashboard/Risk Dashboard/Algo Trading pages all load with zero console errors; the new governor
+form section's save→reload round-trip genuinely persists through MongoDB (typed a value, saved,
+reloaded the page, confirmed it survived — then cleared it back to blank/off); the New Bot
+wizard's allocation dropdown renders correctly once 2+ symbols are selected. No real bot/session
+was started during verification.
+
+**Files changed:** `engine/core/models/governor.py` (`check_correlation_concentration`),
+`engine/core/models/portfolio.py` (`InverseVolatilityPortfolio`, `compute_realized_volatility`),
+`engine/core/models/__init__.py` (exports), `engine/services/portfolio_risk.py`
+(`fetch_correlation_matrix`), `engine/services/backtest_runner.py` (22.6 opt-in allocation
+recompute), `engine/core/live_bot_manager.py` (22.5 wiring, 22.6 wiring, the `default_risk_params`
+bug fix, 22.7's new flat-key fallbacks); new engine tests: `test_execute_entry_correlation_cap.py`,
+`test_inverse_vol_portfolio.py`, `test_start_session_risk_params_shape.py`; extended
+`test_session_risk_governor.py`; `server/src/models/Settings.js` (governor fields on
+`globalHardLimits`), `server/src/utils/risk.js` (pass-through + allocation wizard-override),
+`server/src/controllers/risk.controller.js` (validation), `server/src/utils/webhook.js`
+(`VALID_EVENTS` fix); extended `server/src/utils/__tests__/risk.test.js`,
+`server/src/utils/__tests__/webhook.test.js`; `client/src/pages/RiskDashboard.jsx` (governor form
+section), `client/src/components/RiskParamsFields.jsx` (`showAllocation`),
+`client/src/components/algo/NewSessionWizard.jsx` (allocation dropdown wiring),
+`client/src/components/algo/SessionCard.jsx` (governor badge), `client/src/pages/AlgoTrading.jsx`
+(`tradingState` socket-merge fix); docs: `22_risk-management-industry-standard.md`, `0_tracker.md`,
+`workspace/docs/state/CURRENT_STATE.md`, `workspace/docs/features/algo-trading/SPEC.md`,
+`workspace/docs/features/risk-dashboard/SPEC.md`, `handoff.md`. All committed this session (3
+commits: 22.5, 22.6, 22.7 + the webhook fix + the risk_params-shape bug fix bundled with 22.7).
+
+**NOT done — do not treat any of Plan 22 as fully closed:**
+1. **No live Testnet re-verification of ANYTHING in Plan 22** — this is now the single remaining
+   item across the entire plan (22.1–22.7). None of the governor's vetoes/breaches, the capital
+   gate's over-commit rejection, the protections' lock/unlock, the correlation-cluster veto, the
+   inverse-vol allocation's real weight computation, or a real governor breach flipping the
+   SessionCard badge live have been exercised against an actual running Binance Testnet session.
+2. Docs say "shipped, container/Jest-verified, live-verified in-browser, pending live Testnet
+   re-verification" — do not upgrade further to unqualified "shipped"/"verified" until a real
+   Testnet session is actually run and observed.
+3. The `default_risk_params` fix (item 1 above) means every PRIOR session's claim that "Zone 2
+   configuration flows into the governor" was never actually true until this session — if a past
+   handoff entry or doc line implies otherwise, this entry supersedes it.
+
+**Next session:** the only substantive Plan 22 work left is live Testnet re-verification — start a
+small session with a tight `max_session_dd`/`varLimitPct`/`correlationCap.rho` and confirm each
+governor check actually vetoes/breaches against real exchange data, confirm the SessionCard badge
+updates live on a real breach, confirm a deliberate capital over-commit round-trips the 409/confirm
+flow from the wizard. Outside Plan 22: survey `0_tracker.md`'s Active work table fresh for the next
+genuinely decision-free, golden-master-free item — Plan 21's 21.5(c) (batched reconcile,
+concurrency restructure) and Plan 24 (BestSupertrend fixes) are both plausible candidates but
+neither was investigated this session.
+
+---
 ## 2026-07-17 — Plan 21.7 (A-12/A-13) + Plan 22 Steps 22.1(remainder)–22.4 shipped: mainnet kline feed, armed-bracket wick-check dedup, portfolio open-risk/liq-buffer, protections parity, live VaR/CVaR — CODE COMPLETE, VERIFICATION PENDING ⏸️
 
 **Goal:** continue Plan 22 step by step under the session's standing "ok proceed"/"continue"
@@ -225,299 +345,3 @@ once verified, flip 22.1's status language from "shipped code-side, pending veri
 (Part E: `22.1 ──► 22.2 ──► 22.3`) is **22.2** (portfolio open-risk budget + `liq_buffer_pct`
 wiring) — not yet confirmed as the user's intent beyond 22.1, check in before starting it rather
 than treating "proceed with reccom" as a blank check for the rest of Plan 22.
-
----
-## 2026-07-17 — Plan 21.1–21.4 + 21.5a/b + 21.7 (A-11/A-14) shipped: F7-root-cause fixes, bracket-integrity hardening, rate-limit backpressure, risk/slippage observability — CODE COMPLETE, VERIFICATION PENDING ⏸️
-
-**Goal:** ship Plan 21 step 21.1 — the three surgical diffs identified by the 2026-07-16 audit as
-the likely root causes of F7 (algo-order fill detection lag): A-1 (broken userTrades credentials),
-A-2 (`_on_fill` AttributeError killing the event-driven fill path), A-3 (`LISTEN_KEY_EXPIRED`
-killing the user-data stream permanently). Per `0_tracker.md`'s "Next session" pointer, this was
-the top P0 item and a prerequisite for a meaningful F7 reproduction. Same session, continued into
-**21.2** (A-8, ACCOUNT_UPDATE-driven reconcile) per 21.1's own "next session" pointer below.
-
-**Done:**
-- **A-1** (`engine/core/live_bot_manager.py`, `_query_real_exit_from_user_trades()`): the
-  `send_signed_request` call omitted the required `api_key`/`api_secret` positionals — now passed.
-  The Plan 5.2 "reconstruct the real close from Binance's own trade history" path can now actually
-  execute instead of silently TypeError-ing and falling back to the estimate.
-- **A-2** (`engine/core/live_bot_manager.py`, `_on_fill` closure inside `_run_symbol_loop`): the
-  client-id lookup read a non-existent `clientOrderId` key and fell back to the numeric `orderId`
-  (an int), crashing `.startswith("tpsl_")` with `AttributeError` on every genuinely-delivered
-  FILLED/PARTIALLY_FILLED frame — caught by the outer per-callback try/except, so the
-  `_reconcile_exchange_state()` call at the end of `_on_fill` never ran. Extracted the fix into a
-  new module-level `_extract_fill_client_id()` helper (reads `"c"`, str-coerced, falls back to
-  `"i"`) so it's independently unit-testable without driving the whole embedded closure. Also
-  wrapped the OUO peer-cancel block in its own try/except so the reconcile call is structurally
-  unconditional — no failure earlier in the callback can skip it anymore.
-- **A-3** (`engine/services/user_data_stream.py`, `_run_ws`): `LISTEN_KEY_EXPIRED` handler did
-  `return` (exits the whole `_run_ws` coroutine — no caller re-invokes it, so the comment claiming
-  "reconnect loop picks it up" was simply wrong) — changed to `break` (exits only the inner
-  `async for`, so the outer `while self._running` reconnect loop re-enters with the refreshed
-  `ws_url`).
-- **Tests** (new files, following this repo's own convention of testing extracted/standalone units
-  rather than driving deeply-embedded methods — see `test_symbol_state_lock.py`'s precedent):
-  `engine/tests/test_query_real_exit_from_user_trades.py` (3 tests — creds reach the signed call,
-  a multi-fill response is genuinely consumed into avg price/net PnL, exceptions still degrade to
-  `None`), `engine/tests/test_on_fill_client_id_extraction.py` (5 tests on the new
-  `_extract_fill_client_id()` helper, including the exact int-orderId-`.startswith()` crash
-  shape), `engine/tests/test_uds_listen_key_expired_reconnect.py` (2 tests driving the real
-  `_run_ws` against a fake `websockets.connect` — confirms a second connection attempt happens
-  with the refreshed key, proving the old `return` would have prevented it).
-- Docs updated per Plan 21's own "docs to update when steps ship" list: `0_tracker.md` (Plan 21 row
-  + Notes), `0_fixes-queue.md` (F7 entry), `21_live-algo-industry-standard-audit.md` (status
-  header + Part C 21.1 row), `CURRENT_STATE.md` (both the userTrades Known-Debt line and the F7
-  ~60s-staleness entry corrected to reflect the code fix), `algo-trading/SPEC.md` ("Open issues
-  found in a live Chaos run" item 1).
-
-**Done — 21.2 (A-8, same session):**
-- **A-8** (`engine/core/live_bot_manager.py`, `_run_symbol_loop`): new `_on_account_update`
-  callback registered per symbol alongside `_on_fill`, via `_uds.register_account_callback(symbol,
-  _on_account_update)` (and unregistered in the existing `finally` block). Reconciles immediately
-  under the per-symbol lock whenever a Binance `ACCOUNT_UPDATE` `P[]` position delta disagrees with
-  the local `strategy.position` open/flat state — event-type-agnostic, so it closes the staleness
-  window independent of whatever A-2's `ORDER_TRADE_UPDATE`/`tpsl_` fix does or doesn't catch.
-  Debounced by checking `self._get_symbol_lock(session_id, symbol).locked()` first — skip rather
-  than queue if a reconcile is already in flight (candle loop or `_on_fill`), since it'll observe
-  the same fresh exchange state. Decision logic (does this delta actually disagree with the local
-  view) extracted into `_account_update_needs_reconcile(pos_data, has_local_position)` for direct
-  unit testing, same pattern as A-2's `_extract_fill_client_id()`.
-- **Correction to the original A-8 finding while implementing it:** the audit's "`_handle_account_
-  update` only logs" claim was stale — `engine/services/user_data_stream.py` already had a
-  `register_account_callback`/`_account_callbacks`/dispatch mechanism (added sometime before this
-  session, per `git log` — not by this session, and not reflected in any tracker entry) that
-  `_handle_account_update` already called into. It just had zero registered consumers. 21.2
-  registered the missing consumer rather than building new UDS-side plumbing — smaller diff than
-  the audit implied.
-- **Tests:** `engine/tests/test_account_update_reconcile_decision.py` (6 tests — both disagreement
-  directions trigger reconcile, both agreement directions don't, negative `pa` for shorts handled
-  correctly, missing/malformed `pa` degrades to flat rather than crashing).
-- Docs updated: `0_tracker.md` (Plan 21 row + Notes), `0_fixes-queue.md` (F7 entry),
-  `21_live-algo-industry-standard-audit.md` (status header, A-8 finding, Part C 21.2 row),
-  `CURRENT_STATE.md`, `algo-trading/SPEC.md`.
-
-**Done — 21.3 (A-4/A-5, same session, continued unattended per user instruction — see below):**
-- New `LiveBotManager._cancel_symbol_algo_orders(session, symbol, algo_ids=None)`
-  (`engine/core/live_bot_manager.py`): cancels tracked SL/TP algo ids directly via `DELETE
-  /fapi/v1/algoOrder` if `algo_ids` has at least one non-None value; otherwise discovers open
-  algo orders via `GET /fapi/v1/openAlgoOrders` and cancels everything found. Best-effort — a
-  cancel failure is logged (info-level for "already gone", warning for a failed discovery GET)
-  and never raised, since the position is already closed by the time this runs.
-- Wired into all four close paths the finding named: `execute_exit`'s success path (captures
-  `algo_ids` before popping `open_positions`), `_close_position_on_stop` (passes `_pos_info`'s
-  tracked ids, falls back to discovery for symbols the engine never fully tracked),
-  the F-018 emergency-exit path in `execute_entry` (defensive — nothing is actually resting there
-  today given SL-before-TP placement order, but kept so a future reordering can't silently reopen
-  the gap), and reconcile Case 2 in `_reconcile_exchange_state` (A-5's specific finding: section
-  6's existing OUO peer-cancel is guarded by `has_exchange_position`, which is false by definition
-  in Case 2, so it structurally never fires there — Case 2 now captures and cancels the tracked
-  ids itself before dropping local tracking).
-- Tests: `engine/tests/test_cancel_symbol_algo_orders.py` (7 cases, driving the real method
-  directly — it's a proper `LiveBotManager` method, not an embedded closure, so no extraction
-  workaround needed): tracked-ids-direct-cancel, partial-tracked-ids, both-None-triggers-fallback,
-  discovery-fallback, no-credentials-noop, one-DELETE-failure-doesn't-block-the-other,
-  GET-failure-caught-not-raised.
-- Docs: `0_tracker.md` (Plan 21 row + Notes), `21_live-algo-industry-standard-audit.md` (A-4/A-5
-  fixed headers + Shipped notes + Part C 21.3 row), `algo-trading/SPEC.md` (new bullet in "SL/TP &
-  OCO Safety").
-
-**Done — 21.4 (A-6/A-7 + M-4/M-5, same session, continued unattended per user instruction — see
-below):**
-- **A-6** (`execute_entry`'s F-018 emergency-exit block, `engine/core/live_bot_manager.py`): the
-  emergency MARKET close (fires when entry filled but SL placement failed) now retries up to 3
-  attempts with `1s × attempt` backoff instead of a single try. On success, books the trade at the
-  REAL fill price (`_extract_fill_price()` → `_query_real_fill_price()` fallback ladder, identical
-  to `execute_exit`'s existing contract) instead of the old fabricated `exit_price = fill_price`
-  (entry price, which manufactured exactly `-fee` as PnL regardless of the actual close). On total
-  failure across all 3 attempts, records nothing and leaves `strategy.position` exactly as it was
-  (still `None` at this point in the entry flow) rather than falsely marking a still-open, still-
-  naked position as closed — matches Plan 5.2's real-fills-not-fabricated-closes invariant, now
-  extended to the emergency path. Also folds in A-4: calls `_cancel_symbol_algo_orders` defensively
-  after the emergency-close attempts regardless of outcome.
-- **A-7** (`_reconcile_exchange_state` Case 3, same file): new naked-position detector — whenever
-  `strategy.stop_loss` is set but no live SL-looking order (`type` containing `STOP` or
-  `clientOrderId` ending in `sl`) rests on the exchange, attempts a direction-aware re-arm via the
-  same rounding path `execute_entry` uses. Tracks consecutive failures per symbol
-  (`session["_naked_position_rearm_attempts"]`); after `_NAKED_POSITION_MAX_REARM_ATTEMPTS` (3)
-  consecutive failures across separate reconcile passes, force-closes via `execute_exit` instead of
-  letting the position run naked indefinitely (mirrors freqtrade's per-iteration missing-stoploss
-  re-placement, bounded). Success or a live SL both reset the counter.
-- **M-4** (new `LiveBotManager._maybe_amend_exchange_sl(session, session_id, strategy, symbol)`,
-  wired into `_run_symbol_loop` right after `kernel.evaluate_and_route(...)`): the risk models'
-  trailing/breakeven/Chandelier maintain path (`DefaultExecution.route()` Path 5) tightens
-  `strategy.stop_loss` locally every candle, but previously never pushed that to the resting
-  exchange SL order — it stayed at its original, widest trigger for the position's entire life.
-  This method now cancels+replaces the exchange SL whenever the new stop is a genuine
-  direction-aware tighten; records a first-pass baseline (`armed_sl_price`) without calling Binance
-  on a fresh/restored position; is a pure no-op on a widening or unchanged stop; and catches+logs
-  any amend failure without corrupting the tracked `algo_ids`/falling back to the engine's own
-  wick-check.
-- **M-5** (`execute_entry`'s SL/TP validity check, same file): an SL that lands on the wrong side
-  of the reference price (long: `sl_price >= fill_price`; short: `sl_price <= fill_price`) now
-  rejects the entry outright — `strategy.buy`/`sell`/`stop_loss`/`take_profit` all cleared, returns
-  `False`, no order ever placed — instead of the old silent-drop-and-enter-naked behavior with no
-  future re-check. TP-invalid stays lower-stakes: dropped, entry still proceeds on its valid SL.
-- **Tests:** `engine/tests/test_reconcile_naked_position_rearm.py` (5 cases, driving the real
-  `_reconcile_exchange_state` method directly), `engine/tests/test_maybe_amend_exchange_sl.py` (8
-  cases, driving the real `_maybe_amend_exchange_sl` method directly), `engine/tests/
-  test_execute_entry_bracket_safety.py` (7 cases, driving the real `LiveAdapter.execute_entry`
-  against a stubbed Binance layer, same harness shape as `test_execute_flip_idempotency.py`: both
-  invalid-SL-rejection directions, valid-SL/invalid-TP drop-and-enter, emergency-close success on
-  first try, retry-then-succeed, total-failure records nothing, A-4 cancel-integration). All three
-  new files syntax-checked cleanly via `ast.parse` (new files, unaffected by this session's
-  bash-sandbox stale-cache bug — see the note further down).
-- Docs: `0_tracker.md` (Plan 21 row + Notes), `21_live-algo-industry-standard-audit.md` (status
-  header + A-6/A-7/M-4/M-5 fixed headers + Shipped paragraphs + Part C 21.4 row + remediation
-  table), `CURRENT_STATE.md` (new Known-Debt bullet summarizing 21.3+21.4, TP-400 item annotated
-  with the A-7 self-heal note), `algo-trading/SPEC.md` (F-018 bullet rewritten, new bullets for
-  naked-position re-arm, exchange-SL amend-on-tighten, and invalid-SL rejection).
-
-**Files changed:** `engine/core/live_bot_manager.py` (A-1, A-2, A-4, A-5, A-6, A-7, A-8, M-4, M-5,
-new `_extract_fill_client_id()`, `_account_update_needs_reconcile()`,
-`_cancel_symbol_algo_orders()`, `_maybe_amend_exchange_sl()`,
-`_NAKED_POSITION_MAX_REARM_ATTEMPTS`), `engine/services/user_data_stream.py` (A-3); new
-`engine/tests/test_query_real_exit_from_user_trades.py`, new
-`engine/tests/test_on_fill_client_id_extraction.py`, new
-`engine/tests/test_uds_listen_key_expired_reconnect.py`, new
-`engine/tests/test_account_update_reconcile_decision.py`, new
-`engine/tests/test_cancel_symbol_algo_orders.py`, new
-`engine/tests/test_reconcile_naked_position_rearm.py`, new
-`engine/tests/test_maybe_amend_exchange_sl.py`, new
-`engine/tests/test_execute_entry_bracket_safety.py`; docs: `0_tracker.md`, `0_fixes-queue.md`,
-`21_live-algo-industry-standard-audit.md`, `workspace/docs/state/CURRENT_STATE.md`,
-`workspace/docs/features/algo-trading/SPEC.md`, `handoff.md`.
-
-**Done — 21.5a/b (A-9, same session, continued unattended per user instruction):**
-- **A-9 (a)+(b)** (`engine/services/binance_testnet.py`): `send_signed_request` now tracks
-  `X-MBX-USED-WEIGHT-1M` per base_url (`_record_used_weight`) and defers any non-order-critical
-  call (raises `BinanceBackpressureError` *before* dispatching) once the last-seen weight is
-  at/above a 1800 (75% of the shared 2400/min) soft limit, only while that reading is still inside
-  a 60s freshness window. On an actual 429/418, `_handle_rate_limit_response` reads `Retry-After`
-  (60s default if absent) and pauses non-order-critical calls on that base_url until it expires.
-  `/fapi/v1/order` and `/fapi/v1/algoOrder` are exempt from both guards by design — a skipped
-  stop-loss/emergency-close is worse than a rate-limit warning.
-- **Not shipped — 21.5(c)**: batching `positionRisk`/`openAlgoOrders` into one un-parametered call
-  per session per candle wave (instead of one per symbol) needs a session-level fan-out/fan-in
-  restructure of `_run_symbol_loop` — today each symbol is an independent `asyncio` task. Materially
-  larger and riskier than (a)/(b) without a way to live-verify it this session; deliberately left
-  as 21.5's remaining scope rather than rushed.
-- **Found and fixed A-15 (new, High) while wiring backpressure in:**
-  `_reconcile_exchange_state`'s Case 2 ("exchange has no position, close locally") derived
-  `has_exchange_position` purely from `exchange_amt`, which defaulted to `0.0` whenever the
-  `positionRisk` query *failed* for any reason — network blip, timeout, missing credentials, or
-  now a deliberate A-9 backpressure defer — and read that identically to a confirmed-flat
-  exchange, fabricating a real close on a position that might still be open. This is the same
-  real-fills-not-fabricated-closes invariant A-6 already fixed for the emergency-exit path,
-  just via the query-failure route. A-9's backpressure defers would have made this measurably
-  more likely to fire, so it had to be fixed as part of shipping A-9. Fix: new
-  `position_query_ok` flag, set `True` only when the `positionRisk` call itself returns without
-  raising; Case 2 now requires `has_local_position and not has_exchange_position and
-  position_query_ok`. An unconfirmed query falls into a new branch that logs and leaves local
-  state untouched, retrying next candle. Case 1 (restore) and Case 3 (both open) were already
-  safe by construction — both require `exchange_pos` to have actually been populated.
-- **Tests:** `engine/tests/test_binance_backpressure.py` (18 cases: weight parsing, soft-limit
-  defer, stale-reading-doesn't-gate, order-critical-paths-exempt, 429/418 pause + `Retry-After`
-  parsing + default fallback, non-rate-limit statuses don't pause, pause-expiry, plus
-  `send_signed_request` end-to-end against a fake httpx client). **These were actually executed
-  with real `pytest` in this session's sandbox** (a venv with `pytest`+`httpx` installed) — not
-  just `ast.parse` — since `binance_testnet.py` has no TA-Lib/numpy dependency chain, unlike the
-  rest of the engine test suite. All 18 passed. (Attempted the same for the other new test files
-  by installing `numpy` too, but the sandbox's `pip install numpy` consistently timed out —
-  those remain `ast.parse`-only + manual-review verified, same as 21.1–21.4.)
-- Docs: `0_tracker.md` (Plan 21 row + Notes), `21_live-algo-industry-standard-audit.md` (status
-  header, A-9 partial-fix + new A-15 finding, Part C 21.5 row), `CURRENT_STATE.md` (new Known-Debt
-  bullet), `algo-trading/SPEC.md` (new bullets in Reconciliation and SL/TP sections).
-
-**Files changed (21.5 additions):** `engine/services/binance_testnet.py` (weight tracking,
-`BinanceBackpressureError`, `_check_backpressure`, `_record_used_weight`,
-`_handle_rate_limit_response`, `_is_order_critical_path`), `engine/core/live_bot_manager.py`
-(A-15: `position_query_ok` flag + gated Case 2); new
-`engine/tests/test_binance_backpressure.py`.
-
-**Done — 21.7 code portion (A-11 + A-14, same session, continued unattended):** both logging-only,
-matching Plan 21's own no-golden-master scope. **A-11**: `clamp_and_round_qty`
-(`engine/utils/symbols.py`) now logs a `warning` with the effective multiplier whenever its
-minNotional bump-up actually inflates a sized quantity (silently-inflated risk-per-trade,
-previously unlogged); skipped trades and `reduce_only` calls correctly never warn. **A-14**:
-`execute_entry` now measures `|fill_price - ref_price| / ref_price` on every entry — `info` below
-1%, `warning` + a session notification at/above it. Neither changes any returned value, rejects an
-entry, or touches backtest output. A-12/A-13 intentionally NOT started — both are framed by the
-audit itself as needing a `DECISIONS.md`-style product decision, not code (data-provenance choice;
-wick-check-dedup-while-brackets-armed choice) — held per the user's "hold critical decisions"
-instruction rather than guessed at. Tests: `engine/tests/test_clamp_qty_risk_inflation_log.py` (5
-cases, **actually run with real pytest**, no TA-Lib/numpy dependency) and
-`engine/tests/test_execute_entry_slippage_log.py` (3 cases, `ast.parse`-only — needs
-`core.live_bot_manager`'s numpy chain). Docs: `0_tracker.md`, `21_live-algo-industry-standard-audit.md`
-(A-11/A-14 fixed + Shipped notes, Part C 21.7 row, status header), `CURRENT_STATE.md`,
-`algo-trading/SPEC.md`.
-
-**Files changed (21.7 additions):** `engine/utils/symbols.py` (A-11 warning log in
-`clamp_and_round_qty`), `engine/core/live_bot_manager.py` (A-14 slippage log +
-`_SLIPPAGE_ALERT_THRESHOLD_PCT`); new `engine/tests/test_clamp_qty_risk_inflation_log.py`, new
-`engine/tests/test_execute_entry_slippage_log.py`.
-
-**Session note:** the user stepped away mid-session and explicitly instructed continuing
-unattended through the rest of the P0 track — use the plan's own recommended next step at each
-point, hold anything genuinely requiring a user decision rather than guessing, and keep working on
-adjacent tasks instead of idling. All of 21.1–21.4 and 21.5a/b shipped code-side under that
-instruction. 21.5(c) is a genuinely larger architectural decision (concurrency restructure) best
-left for a session that can live-verify it — picking up other unblocked P0/P1 work next instead of
-guessing at that redesign.
-
-**NOT done — do not treat 21.1–21.4 or 21.5a/b as fully closed:**
-1. **The engine test suite has not been run inside the Docker container**, for any of these steps.
-   This editing session never had Docker access. `test_binance_backpressure.py` (21.5) is the one
-   exception — it was actually run with real `pytest` in a sandbox venv (18/18 passed), since
-   `binance_testnet.py` has no TA-Lib/numpy dependency chain. Every other new/changed test file got
-   only a dependency-free `python3 -c "import ast; ast.parse(...)"` check plus manual Read-tool
-   review — attempted to extend real-pytest verification to those too by installing `numpy` in the
-   sandbox venv, but `pip install numpy` consistently timed out (network/sandbox limitation, not a
-   code issue). **Run before trusting any of this:**
-   `docker exec enma_trading_platform-engine-1 pytest /app/tests/` and fix anything that surfaces —
-   a plausible failure class is a signature mismatch between the test harness's fake strategy/
-   session shapes and what the real code actually reads.
-2. **No live re-verification** of any behavioral claim — the F7 ~60s staleness symptom, the
-   `openAlgoOrders`-empty-after-close acceptance criterion (21.3), the naked-position re-arm/
-   force-close path (A-7), the exchange-SL amend-on-tighten (M-4), the emergency-close retry
-   ladder (A-6), or the weight-tracking/429-pause behavior (21.5a/b) and the A-15 fix — none have
-   been exercised against a real Binance Testnet session yet.
-3. `CURRENT_STATE.md`/`algo-trading/SPEC.md`/`0_tracker.md` are all written to say "code-shipped,
-   pending verification" — do not silently upgrade that language to "confirmed fixed" without
-   actually running #1 and #2.
-4. **This session hit a bash-sandbox file-caching bug** (unrelated to the engine code): the bash
-   tool's mounted view of this repo intermittently serves stale, frozen copies of files that were
-   just edited heavily in-place (`0_tracker.md`, `handoff.md`, and `live_bot_manager.py` all hit
-   this — `stat` showed mtimes frozen well before the actual last edit time). The Read/Write/Edit
-   file tools were unaffected and always showed correct content. If a future session sees a git
-   diff or `ast.parse` failure that looks like truncation/corruption on a heavily-edited file,
-   check the file via the Read tool before assuming real data loss — cross-reference `stat` mtime
-   against the actual edit time first. New files are unaffected — this bug only hit files edited
-   repeatedly in place within the same session.
-5. **21.5(c)** (batched reconcile) genuinely not started — see the "Not shipped" note above; needs
-   a deliberate concurrency-restructure design pass, not a same-session bolt-on.
-6. **A-12/A-13 (21.7 remainder)** intentionally not started — both need a `DECISIONS.md`-style
-   product decision from the user, not code (see the 21.7 Done section above).
-
-**Next session (or continuing unattended):** (1) run the container test suite — fix any failures
-before trusting any of 21.1–21.4/21.5a/b/21.7; (2) run the small live-session reproduction
-described in the 21.1 section above, now also checking `GET /fapi/v1/openAlgoOrders` is empty
-after closes (21.3), a tightened trailing stop actually shows up as a replaced order on Binance
-(M-4), a deliberately-broken SL placement exercises the A-6 retry ladder and A-7 re-arm/
-force-close path, a 429/418 response actually pauses subsequent reconcile polls without blocking
-order placement (21.5a/b), and a minNotional-bumped entry / an abnormal-slippage fill both surface
-in the logs as expected (21.7); (3) once all pass, flip status language from "code-shipped,
-pending verification" to "shipped" across `0_tracker.md`, `0_fixes-queue.md`'s F7 row, and the doc
-files, and close F7's item 1 properly. **Everything code-shippable on the P0/P1 live-correctness
-track without a user decision is now done** — remaining Plan 21 items (21.5c, A-12/A-13) either
-need a design pass or a product decision; Plan 22's 22.1–22.3 (Session Risk Governor) is
-**NOT actually unblocked** despite landing after 21.1–21.4 in the execution order — Part F of
-`22_risk-management-industry-standard.md` has open questions (auto-flatten opt-in, daily-loss
-window anchor, Chaos governor defaults, reject-vs-warn on capital over-commit) that want user
-answers before implementation, per that plan's own text. A genuinely unblocked next candidate for
-a future unattended session: **Plan 24** (BestSupertrend fixes) S-5 (docs-drift-only, no code risk)
-— S-1/S-2 need a golden-master re-baseline this sandbox cannot run (no Docker), so hold those; or
-survey `0_tracker.md`'s Active work table fresh for anything else genuinely decision-free and
-golden-master-free. Git commit for 21.5/21.7's `binance_testnet.py` + `live_bot_manager.py` +
-`utils/symbols.py` + new test file changes is still pending as of this handoff entry — same
-lock-file-rename workaround as before, verify files aren't stale in bash before trusting `git add`.
-
