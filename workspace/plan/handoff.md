@@ -52,17 +52,16 @@ post_9_11_stepA` → `GOLDEN-MASTER OK` (5/5 seeded strategies, tol 1e-6). Conta
 `engine/services/backtest_runner.py` (injection site), `engine/core/live_bot_manager.py`
 (injection site); new `engine/tests/test_edge_beats_cost_gate.py`; docs:
 `9_backtest-and-optimizer-correctness.md`, `21_live-algo-industry-standard-audit.md` (M-1/M-2/M-3
-marked fixed), `0_tracker.md`, `handoff.md`. Not yet committed — see next session note.
+marked fixed), `0_tracker.md`, `handoff.md`. Committed (`8454072`).
 
 **NOT done:** Step B (deciding whether to activate the gate at `min_edge_mult=0.05` by default) is
 untouched — the plan's own text requires this be a separate, re-baselined product decision, not
 bundled with Step A. The gate exists and is correct now, but is still opt-in/inert by default.
 
-**Next session:** commit this work (not yet committed as of this entry). Then either (a) bring
-Step B to the user as an explicit product decision (activate at 0.05 default-on vs. leave opt-in),
-or (b) continue surveying `0_tracker.md` — Plan 13 (multi-timeframe `htf()` contract, P2,
-self-contained) remains a plausible next candidate, not yet investigated beyond the initial survey
-this session.
+**Next session:** either (a) bring Step B to the user as an explicit product decision (activate at
+0.05 default-on vs. leave opt-in), or (b) continue surveying `0_tracker.md` — Plan 13
+(multi-timeframe `htf()` contract, P2, self-contained) remains a plausible next candidate, not yet
+investigated beyond the initial survey this session.
 
 ---
 ## 2026-07-17 — Plan 24 (S-1 through S-5) shipped: BestSupertrend "never trades at defaults" fixed — **PLAN 24 FULLY SHIPPED**, live Testnet re-verification still pending ⏸️
