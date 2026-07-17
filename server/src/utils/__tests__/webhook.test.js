@@ -154,10 +154,13 @@ describe('sendTestWebhook', () => {
 })
 
 describe('VALID_EVENTS', () => {
-  test('exports the six lifecycle events the plan defines', () => {
+  test('exports the six Plan 14 lifecycle events plus Plan 22.1 risk_breach', () => {
     expect(VALID_EVENTS).toEqual(
-      expect.arrayContaining(['entry_fill', 'exit_fill', 'liquidation', 'session_start', 'session_stop', 'session_error'])
+      expect.arrayContaining([
+        'entry_fill', 'exit_fill', 'liquidation', 'session_start', 'session_stop', 'session_error',
+        'risk_breach',
+      ])
     )
-    expect(VALID_EVENTS).toHaveLength(6)
+    expect(VALID_EVENTS).toHaveLength(7)
   })
 })

@@ -8,6 +8,13 @@ const Settings = require('../models/Settings')
 // handleEngineStats, which is the natural emit point.
 const VALID_EVENTS = [
   'entry_fill', 'exit_fill', 'liquidation', 'session_start', 'session_stop', 'session_error',
+  // Plan 22 Step 22.1: Session Risk Governor breach notifications. Must stay
+  // in sync with Settings.js's `webhook.events` enum — that schema already
+  // included this (and defaults to opt-in), but this module's own
+  // VALID_EVENTS (used by settings.controller.js to validate a PUT) had
+  // drifted, silently rejecting a user trying to save it (found in Plan 22
+  // Step 22.7's doc pass).
+  'risk_breach',
 ]
 
 function _buildBody(eventType, payload) {
