@@ -14,7 +14,7 @@ from core.models import BacktestExecution
 from core.pipeline import evaluate
 from core.params import param_coerce, param_validate
 from services.candle_manager import ensure_candles_available
-from utils.timeframes import annual_factor
+from utils.timeframes import annual_factor, required_base_candles_for_htf
 from decimal import ROUND_DOWN, ROUND_UP
 from utils.symbols import _MAX_LEVERAGE_OFFLINE_MAP, clamp_and_round_qty, round_price
 # Phase 2 — pluggable metric registry (A-012) + new metrics (A-007) + breakdown tables (A-008)
@@ -905,6 +905,26 @@ async def run_backtest_simulation(
                 strategy.validate_params()
             except ValueError as e:
                 raise RuntimeError(f"PARAM_ERROR: {e}")
+
+            # Plan 24 finding S-3(a): a strategy using a higher-timeframe
+            # supertrend (duck-typed via `tf`/`pd` attrs — e.g. BestSupertrend)
+            # can be structurally unable to ever form `pd+2` completed HTF
+            # buckets within the chosen date range (e.g. tf="weekly" needs
+            # ~12 weeks of history; a short backtest window silently produces
+            # zero trades with no indication why). Log-only, not a hard
+            # failure — a short warmup is a valid (if pointless) backtest
+            # config, and the fix must never change simulation output.
+            _strat_tf = getattr(strategy, "tf", None)
+            _strat_pd = getattr(strategy, "pd", None)
+            if isinstance(_strat_pd, int) and isinstance(_strat_tf, str):
+                _required_candles = required_base_candles_for_htf(_strat_tf, _strat_pd, timeframe)
+                if _required_candles is not None and len(candles_np) < _required_candles:
+                    logger.error(
+                        f"[{job_id}] {sym}: only {len(candles_np)} {timeframe} candles loaded, "
+                        f"need ~{_required_candles} for tf={_strat_tf!r} (pd={_strat_pd}) to ever "
+                        f"form a completed HTF supertrend bucket — this strategy will show zero "
+                        f"trades for the whole run. Widen the date range or lower tf."
+                    )
 
             # One-time vectorized indicator pre-computation
             try:

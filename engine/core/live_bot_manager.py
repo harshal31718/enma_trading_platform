@@ -2030,16 +2030,44 @@ class LiveBotManager:
             strategy.candles = np.empty((0, 6), dtype=np.float64)
 
         # Fetch HTF candles if strategy uses a higher timeframe (e.g. BestSupertrend tf param)
+        # Plan 24 finding S-3: a failed fetch previously only logged a debug-level
+        # warning, then prepare() silently fell back to resampling the live
+        # rolling candle window — which can NEVER form enough completed HTF
+        # buckets for tf="weekly"/"monthly" (12 weekly buckets alone needs
+        # ~2,016 hourly candles, far past any live rolling-window cap). The
+        # strategy then produces zero trades forever with no visible cause.
+        # Both the fetch failure AND an on-success-but-insufficient-data case
+        # are now session-visible errors (c), and a required-candle estimate
+        # is logged so the gap is diagnosable instead of a silent zero-trade
+        # strategy (a).
         htf_tf = getattr(strategy, 'tf', None)
         if htf_tf is not None:
             htf_interval = _TF_TO_BINANCE.get(htf_tf.lower())
             if htf_interval and htf_interval != timeframe:
+                _pd = getattr(strategy, "pd", None)
+                _required = (_pd + 2) if isinstance(_pd, int) else None
                 try:
                     htf_candles = await self._fetch_htf_candles(symbol, htf_interval, 50)
                     strategy._htf_candles = htf_candles
                     logger.info(f"[AlgoBot] {symbol}: HTF ({htf_interval}) candles loaded: {len(htf_candles)}")
+                    if _required is not None and len(htf_candles) < _required:
+                        _msg = (
+                            f"{symbol}: only {len(htf_candles)} {htf_interval} HTF candles available, "
+                            f"need {_required} (tf={htf_tf}, pd={_pd}) — this strategy will not trade "
+                            f"until enough history exists"
+                        )
+                        logger.error(f"[AlgoBot] {_msg}")
+                        await self._notify_node(session_id, {
+                            "event": "log",
+                            "eventData": {"type": "error", "message": _msg},
+                        })
                 except Exception as e:
-                    logger.warning(f"[AlgoBot] {symbol}: HTF candle fetch failed — {e}")
+                    _msg = f"{symbol}: HTF ({htf_interval}) candle fetch failed — {e}. Falling back to live-window resampling, which may never accumulate enough buckets for tf={htf_tf!r}."
+                    logger.error(f"[AlgoBot] {_msg}")
+                    await self._notify_node(session_id, {
+                        "event": "log",
+                        "eventData": {"type": "error", "message": _msg},
+                    })
 
         # Register user data stream callback for event-driven fill detection
         # (F-020).  Triggers immediate reconciliation when an order fills
@@ -2262,6 +2290,42 @@ class LiveBotManager:
                                 # O(≤500) per candle (~once/hr), no drift.
                                 strategy.index = len(strategy.candles) - 1
                                 strategy.prepare(strategy.candles)
+
+                                # Plan 24 finding S-3(b): a strategy whose HTF
+                                # value structurally never resolves (e.g. an
+                                # unsatisfiable tf/timeframe combo the startup
+                                # check at session-start missed — impossible
+                                # to fully rule out in advance, e.g. daily-tf
+                                # data-quality gaps) silently produces zero
+                                # trades forever with nothing in the session
+                                # log. Once the live rolling candle window
+                                # hits its cap (500 — see the `candles[-500:]`
+                                # trim below), it can never get any better, so
+                                # fire ONE persistent warning, not a debug log.
+                                if (
+                                    htf_tf is not None
+                                    and hasattr(strategy, "_htf_st_at")
+                                    and len(strategy.candles) >= 500
+                                ):
+                                    _htf_warned = session.setdefault("_htf_not_ready_warned_symbols", set())
+                                    if symbol not in _htf_warned:
+                                        try:
+                                            _htf_val = strategy._htf_st_at(strategy.index)
+                                        except Exception:
+                                            _htf_val = None
+                                        if _htf_val is None:
+                                            _htf_warned.add(symbol)
+                                            _msg = (
+                                                f"{symbol}: HTF supertrend still not ready after "
+                                                f"{len(strategy.candles)} candles (tf={htf_tf}) — this "
+                                                f"strategy cannot generate signals until enough HTF "
+                                                f"history exists; check the tf/timeframe combo"
+                                            )
+                                            logger.warning(f"[AlgoBot] {_msg}")
+                                            await self._notify_node(session_id, {
+                                                "event": "log",
+                                                "eventData": {"type": "warning", "message": _msg},
+                                            })
 
                                 # Plan 5 Step 5.4 (ENG-3): serialize against
                                 # _on_fill's reconcile call above — see its
