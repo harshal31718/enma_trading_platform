@@ -50,7 +50,17 @@ class BestSupertrend(BaseStrategy):
     }
 
     PARAMS = {
-        "order_type": {
+        # Plan 24 finding S-4: renamed from "order_type" — that name collided
+        # with `OrderPlan.order_type` (`core/models/base.py`), and
+        # `DefaultExecution.route()` builds `OrderPlan(order_type=getattr(s,
+        # "order_type", "market"))`, so every BestSupertrend OrderPlan
+        # silently carried "Longs+Shorts" instead of "market". Decorative
+        # today (both adapters hardcode MARKET) but would detonate the
+        # moment any consumer honors `OrderPlan.order_type` (e.g. a future
+        # limit-order path). Old saved configs using "order_type" are
+        # rejected by F-016's unknown-param validation — the desired loud
+        # failure, not a silent revert to the default filter.
+        "direction_filter": {
             "type": "str",
             "default": "Longs+Shorts",
             "options": ["Longs+Shorts", "LongsOnly", "ShortsOnly"],
@@ -115,7 +125,7 @@ class BestSupertrend(BaseStrategy):
 
     def __init__(self):
         super().__init__()
-        self.order_type: str       = self.PARAMS["order_type"]["default"]
+        self.direction_filter: str = self.PARAMS["direction_filter"]["default"]
         self.fast_length: int      = self.PARAMS["fast_length"]["default"]
         self.slow_length: int      = self.PARAMS["slow_length"]["default"]
         self.factor: float         = self.PARAMS["factor"]["default"]
@@ -395,21 +405,21 @@ class BestSupertrend(BaseStrategy):
 
         if self.is_long:
             if long_exit:
-                if self.order_type != "LongsOnly" and bear:
+                if self.direction_filter != "LongsOnly" and bear:
                     return Signal(direction=-1, conviction=1.0, ref_price=self.price)
                 return Signal(direction=0, ref_price=self.price)  # close
             return Signal(direction=1, conviction=1.0, ref_price=self.price)
 
         if self.is_short:
             if short_exit:
-                if self.order_type != "ShortsOnly" and bull:
+                if self.direction_filter != "ShortsOnly" and bull:
                     return Signal(direction=1, conviction=1.0, ref_price=self.price)
                 return Signal(direction=0, ref_price=self.price)  # close
             return Signal(direction=-1, conviction=1.0, ref_price=self.price)
 
         # Flat
-        if self.order_type != "ShortsOnly" and bull:
+        if self.direction_filter != "ShortsOnly" and bull:
             return Signal(direction=1, conviction=1.0, ref_price=self.price)
-        if self.order_type != "LongsOnly" and bear:
+        if self.direction_filter != "LongsOnly" and bear:
             return Signal(direction=-1, conviction=1.0, ref_price=self.price)
         return Signal(direction=0, ref_price=self.price)
