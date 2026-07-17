@@ -97,6 +97,14 @@ Socket.IO emits algo:session:stopped → client sets status to 'stopped'
   unconditionally, before any exit/entry decision — self-healing when the engine wrongly believes it
   is flat. Handles 3 cases: restores orphan positions, closes stale local state, updates unrealised
   PnL from exchange mark price.
+- **Case 2 requires a CONFIRMED-flat query, not just a failed one (Plan 21.5, A-15, shipped
+  2026-07-17)**: before this fix, Case 2 ("engine has a position, exchange doesn't → close
+  locally") fired whenever `positionRisk` reported zero exposure — including when the query itself
+  had just *failed* (network error, timeout, missing credentials, or a deliberate A-9 backpressure
+  defer), since a failure defaulted to the same "no position found" state as a genuine flat. A new
+  `position_query_ok` flag now gates Case 2 to only the confirmed-flat case; an unconfirmed query
+  leaves local state untouched and retries next candle instead of fabricating a close on a position
+  that may still be open on Binance.
 - **Orphan-position restore (I-07)**: rebuilds a lost-track position with exchange-truth `leverage`
   / `isolatedWallet` / `liquidationPrice` from `positionRisk` (not a bare `leverage=1` guess) and
   re-arms `stop_loss`/`take_profit` + `algo_ids` from the open algo orders, so a restored position is
@@ -113,6 +121,17 @@ Socket.IO emits algo:session:stopped → client sets status to 'stopped'
   back to local calc with mark price, then last price.
 - **Direct Binance Placement (F-003)**: algo order placement calls `send_signed_request()` directly
   from the engine for entry, exit, and stop-close — no engine→Node→engine→Binance hop chain.
+- **Weight budgeting + 429/418 backpressure (Plan 21.5, A-9, shipped 2026-07-17 — partial)**:
+  `send_signed_request` (`engine/services/binance_testnet.py`) tracks `X-MBX-USED-WEIGHT-1M` per
+  base_url and defers any non-order-critical call (`BinanceBackpressureError`) once the last-seen
+  weight is at/above a 1800 (75% of the shared 2400/min) soft limit, as long as that reading is
+  still inside its 60s freshness window. On an actual 429/418 it reads `Retry-After` (60s default
+  if absent) and pauses all non-order-critical calls on that base_url until it expires.
+  `/fapi/v1/order` and `/fapi/v1/algoOrder` (entries, exits, SL/TP placement/cancel) are exempt
+  from both guards — never deferred, since a skipped stop-loss is worse than a rate-limit warning.
+  **Not yet shipped**: batching `positionRisk`/`openAlgoOrders` into one call per session per
+  candle wave instead of one per symbol — the big weight win for large Chaos runs — deferred as a
+  larger `_run_symbol_loop` concurrency restructure.
 - **Mark-Price PnL Fallback Chain (F-023/A-013)**: primary source is exchange-reported
   `unRealizedProfit`. Mark price is parsed as optional (not coerced to `0`), fallback chain
   `markPrice` → cached 24h last price → engine last close. `price_missing` is set only when no

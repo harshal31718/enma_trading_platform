@@ -7,7 +7,7 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
-## 2026-07-17 — Plan 21.1–21.4 shipped: F7-root-cause fixes + bracket-integrity hardening — CODE COMPLETE, VERIFICATION PENDING ⏸️
+## 2026-07-17 — Plan 21.1–21.4 + 21.5a/b shipped: F7-root-cause fixes, bracket-integrity hardening, rate-limit backpressure — CODE COMPLETE, VERIFICATION PENDING ⏸️
 
 **Goal:** ship Plan 21 step 21.1 — the three surgical diffs identified by the 2026-07-16 audit as
 the likely root causes of F7 (algo-order fill detection lag): A-1 (broken userTrades credentials),
@@ -167,25 +167,78 @@ new `_extract_fill_client_id()`, `_account_update_needs_reconcile()`,
 `21_live-algo-industry-standard-audit.md`, `workspace/docs/state/CURRENT_STATE.md`,
 `workspace/docs/features/algo-trading/SPEC.md`, `handoff.md`.
 
+**Done — 21.5a/b (A-9, same session, continued unattended per user instruction):**
+- **A-9 (a)+(b)** (`engine/services/binance_testnet.py`): `send_signed_request` now tracks
+  `X-MBX-USED-WEIGHT-1M` per base_url (`_record_used_weight`) and defers any non-order-critical
+  call (raises `BinanceBackpressureError` *before* dispatching) once the last-seen weight is
+  at/above a 1800 (75% of the shared 2400/min) soft limit, only while that reading is still inside
+  a 60s freshness window. On an actual 429/418, `_handle_rate_limit_response` reads `Retry-After`
+  (60s default if absent) and pauses non-order-critical calls on that base_url until it expires.
+  `/fapi/v1/order` and `/fapi/v1/algoOrder` are exempt from both guards by design — a skipped
+  stop-loss/emergency-close is worse than a rate-limit warning.
+- **Not shipped — 21.5(c)**: batching `positionRisk`/`openAlgoOrders` into one un-parametered call
+  per session per candle wave (instead of one per symbol) needs a session-level fan-out/fan-in
+  restructure of `_run_symbol_loop` — today each symbol is an independent `asyncio` task. Materially
+  larger and riskier than (a)/(b) without a way to live-verify it this session; deliberately left
+  as 21.5's remaining scope rather than rushed.
+- **Found and fixed A-15 (new, High) while wiring backpressure in:**
+  `_reconcile_exchange_state`'s Case 2 ("exchange has no position, close locally") derived
+  `has_exchange_position` purely from `exchange_amt`, which defaulted to `0.0` whenever the
+  `positionRisk` query *failed* for any reason — network blip, timeout, missing credentials, or
+  now a deliberate A-9 backpressure defer — and read that identically to a confirmed-flat
+  exchange, fabricating a real close on a position that might still be open. This is the same
+  real-fills-not-fabricated-closes invariant A-6 already fixed for the emergency-exit path,
+  just via the query-failure route. A-9's backpressure defers would have made this measurably
+  more likely to fire, so it had to be fixed as part of shipping A-9. Fix: new
+  `position_query_ok` flag, set `True` only when the `positionRisk` call itself returns without
+  raising; Case 2 now requires `has_local_position and not has_exchange_position and
+  position_query_ok`. An unconfirmed query falls into a new branch that logs and leaves local
+  state untouched, retrying next candle. Case 1 (restore) and Case 3 (both open) were already
+  safe by construction — both require `exchange_pos` to have actually been populated.
+- **Tests:** `engine/tests/test_binance_backpressure.py` (18 cases: weight parsing, soft-limit
+  defer, stale-reading-doesn't-gate, order-critical-paths-exempt, 429/418 pause + `Retry-After`
+  parsing + default fallback, non-rate-limit statuses don't pause, pause-expiry, plus
+  `send_signed_request` end-to-end against a fake httpx client). **These were actually executed
+  with real `pytest` in this session's sandbox** (a venv with `pytest`+`httpx` installed) — not
+  just `ast.parse` — since `binance_testnet.py` has no TA-Lib/numpy dependency chain, unlike the
+  rest of the engine test suite. All 18 passed. (Attempted the same for the other new test files
+  by installing `numpy` too, but the sandbox's `pip install numpy` consistently timed out —
+  those remain `ast.parse`-only + manual-review verified, same as 21.1–21.4.)
+- Docs: `0_tracker.md` (Plan 21 row + Notes), `21_live-algo-industry-standard-audit.md` (status
+  header, A-9 partial-fix + new A-15 finding, Part C 21.5 row), `CURRENT_STATE.md` (new Known-Debt
+  bullet), `algo-trading/SPEC.md` (new bullets in Reconciliation and SL/TP sections).
+
+**Files changed (21.5 additions):** `engine/services/binance_testnet.py` (weight tracking,
+`BinanceBackpressureError`, `_check_backpressure`, `_record_used_weight`,
+`_handle_rate_limit_response`, `_is_order_critical_path`), `engine/core/live_bot_manager.py`
+(A-15: `position_query_ok` flag + gated Case 2); new
+`engine/tests/test_binance_backpressure.py`.
+
 **Session note:** the user stepped away mid-session and explicitly instructed continuing
 unattended through the rest of the P0 track — use the plan's own recommended next step at each
 point, hold anything genuinely requiring a user decision rather than guessing, and keep working on
-adjacent tasks instead of idling. All of 21.1–21.4 shipped code-side under that instruction; 21.5
-(A-9) is next on the same basis.
+adjacent tasks instead of idling. All of 21.1–21.4 and 21.5a/b shipped code-side under that
+instruction. 21.5(c) is a genuinely larger architectural decision (concurrency restructure) best
+left for a session that can live-verify it — picking up other unblocked P0/P1 work next instead of
+guessing at that redesign.
 
-**NOT done — do not treat 21.1–21.4 as fully closed:**
-1. **The engine test suite has not been run inside the Docker container**, for any of 21.1–21.4.
-   This editing session never had Docker access. All eight new/changed test files got a
-   dependency-free `python3 -c "import ast; ast.parse(...)"` check and were manually re-read via
-   the Read tool for logical correctness, but none have executed against real pytest fixtures or
-   the actual `Position`/`round_price`/`clamp_and_round_qty` implementations at runtime. **Run
-   before trusting any of this:** `docker exec enma_trading_platform-engine-1 pytest /app/tests/`
-   and fix anything that surfaces — a plausible failure class is a signature mismatch between the
-   test harness's fake strategy/session shapes and what the real code actually reads.
-2. **No live re-verification** of any of 21.1–21.4's behavioral claims — the F7 ~60s staleness
-   symptom, the `openAlgoOrders`-empty-after-close acceptance criterion (21.3), the naked-position
-   re-arm/force-close path (A-7), the exchange-SL amend-on-tighten (M-4), or the emergency-close
-   retry ladder (A-6) — none have been exercised against a real Binance Testnet session yet.
+**NOT done — do not treat 21.1–21.4 or 21.5a/b as fully closed:**
+1. **The engine test suite has not been run inside the Docker container**, for any of these steps.
+   This editing session never had Docker access. `test_binance_backpressure.py` (21.5) is the one
+   exception — it was actually run with real `pytest` in a sandbox venv (18/18 passed), since
+   `binance_testnet.py` has no TA-Lib/numpy dependency chain. Every other new/changed test file got
+   only a dependency-free `python3 -c "import ast; ast.parse(...)"` check plus manual Read-tool
+   review — attempted to extend real-pytest verification to those too by installing `numpy` in the
+   sandbox venv, but `pip install numpy` consistently timed out (network/sandbox limitation, not a
+   code issue). **Run before trusting any of this:**
+   `docker exec enma_trading_platform-engine-1 pytest /app/tests/` and fix anything that surfaces —
+   a plausible failure class is a signature mismatch between the test harness's fake strategy/
+   session shapes and what the real code actually reads.
+2. **No live re-verification** of any behavioral claim — the F7 ~60s staleness symptom, the
+   `openAlgoOrders`-empty-after-close acceptance criterion (21.3), the naked-position re-arm/
+   force-close path (A-7), the exchange-SL amend-on-tighten (M-4), the emergency-close retry
+   ladder (A-6), or the weight-tracking/429-pause behavior (21.5a/b) and the A-15 fix — none have
+   been exercised against a real Binance Testnet session yet.
 3. `CURRENT_STATE.md`/`algo-trading/SPEC.md`/`0_tracker.md` are all written to say "code-shipped,
    pending verification" — do not silently upgrade that language to "confirmed fixed" without
    actually running #1 and #2.
@@ -198,21 +251,25 @@ adjacent tasks instead of idling. All of 21.1–21.4 shipped code-side under tha
    check the file via the Read tool before assuming real data loss — cross-reference `stat` mtime
    against the actual edit time first. New files are unaffected — this bug only hit files edited
    repeatedly in place within the same session.
+5. **21.5(c)** (batched reconcile) genuinely not started — see the "Not shipped" note above; needs
+   a deliberate concurrency-restructure design pass, not a same-session bolt-on.
 
 **Next session (or continuing unattended):** (1) run the container test suite — fix any failures
-before trusting any of 21.1–21.4; (2) run the small live-session reproduction described in the
-21.1 section above, now also checking `GET /fapi/v1/openAlgoOrders` is empty after closes (21.3),
-a tightened trailing stop actually shows up as a replaced order on Binance (M-4), and a
-deliberately-broken SL placement (e.g. temporarily feeding an absurd trigger price) exercises the
-A-6 retry ladder and A-7 re-arm/force-close path; (3) once both pass, flip 21.1–21.4's status
-language from "code-shipped, pending verification" to "shipped" across `0_tracker.md`,
-`0_fixes-queue.md`'s F7 row, and the doc files, and close F7's item 1 properly. Then **21.5** (A-9:
-`X-MBX-USED-WEIGHT-1M` tracking, 429/418/Retry-After handling, batched `positionRisk`/
-`openAlgoOrders` reconcile per candle wave instead of per-symbol) — next on the P0 live-correctness
-track per `0_tracker.md`'s Execution order, ahead of 22.1's Session Risk Governor which explicitly
-depends on 21.1–21.4 landing first (now true). Also still pending: retry the git commit for the
-accumulated 21.2–21.4 work (lock-file-rename workaround; verify `live_bot_manager.py` isn't stale
-in bash before trusting `git add` — re-read via the Read tool first as a sanity check).
+before trusting any of 21.1–21.4/21.5a/b; (2) run the small live-session reproduction described in
+the 21.1 section above, now also checking `GET /fapi/v1/openAlgoOrders` is empty after closes
+(21.3), a tightened trailing stop actually shows up as a replaced order on Binance (M-4), a
+deliberately-broken SL placement exercises the A-6 retry ladder and A-7 re-arm/force-close path,
+and (if feasible to simulate) that a 429/418 response actually pauses subsequent reconcile polls
+without blocking order placement (21.5a/b); (3) once both pass, flip status language from
+"code-shipped, pending verification" to "shipped" across `0_tracker.md`, `0_fixes-queue.md`'s F7
+row, and the doc files, and close F7's item 1 properly. Then either **21.5(c)** (batched reconcile
+— needs its own design pass for the `_run_symbol_loop` concurrency restructure) or **22.1–22.3**
+(Session Risk Governor, unblocked now that 21.1–21.4 have landed) — whichever the next session
+judges lower-risk to start cold; `0_tracker.md`'s Execution order currently has 22.1–22.3 ahead of
+21.5c/21.7 since those are P2/P3 and don't gate the P0 chain. Git commit for 21.5's binance_testnet.py
++ live_bot_manager.py (A-15) + new test file changes is still pending as of this handoff entry —
+same lock-file-rename workaround as before, verify files aren't stale in bash before trusting
+`git add`.
 
 ---
 ## 2026-07-16 — Live algo industry-standard audit (Plan 21) + risk-management plan (Plan 22), docs-only — COMPLETE ✅

@@ -13,7 +13,7 @@ this board no longer duplicates it).
 
 | ID | Title | Remaining scope | Status | Priority | Depends on | Updated |
 |----|-------|-----------------|--------|----------|------------|---------|
-| 21 | Live algo industry-standard audit — **fixes** | 21.5, 21.7 (21.1+21.2+21.3+21.4 shipped code-side, pending container test run + live re-verification; 21.6 → Merged→22.1) | In progress (21.1–21.4 shipped 2026-07-17) | **P1** (21.5 next) / P2–P3 | — | 2026-07-17 |
+| 21 | Live algo industry-standard audit — **fixes** | 21.5c (batched reconcile), 21.7 (21.1–21.4 + 21.5a/b shipped code-side, pending container test run + live re-verification; 21.6 → Merged→22.1) | In progress (21.1–21.4 shipped, 21.5a/b shipped 2026-07-17) | P2 (21.5c) / P3 (21.7) | — | 2026-07-17 |
 | 5  | Live-trading state integrity | 5.5 (Decimal money, golden-master sign-off), 5.6 (restart recovery / projection) | In progress | P0 | 21.1–21.2 inform 5.6 | 2026-07-16 |
 | 22 | Industry-standard risk management (Session Risk Governor) | All (22.1–22.7) | Ready (forks #2/#3 decided) | P1 (22.1–22.3) / P2 (rest) | 21 (21.1–21.4) | 2026-07-16 |
 | 9  | Backtest & optimizer correctness (quant core) | 9.7 (funding ledger), 9.8 (intrabar sim), 9.9 (stats portion), 9.10 (fill-model ladder), **9.11 (cost-gate resurrection, M-1/M-2/M-3 — Step A inert, Step B re-baselined)** | Ready | P1 | — | 2026-07-16 |
@@ -58,9 +58,10 @@ authoritative "what's left".
 Three tracks, workable in parallel:
 
 1. **Live-correctness track (P0):** 21.1/21.2 (fill-path fixes, unblocks the F7 reproduction)
-   → 21.3/21.4 (bracket cancel-on-close, naked-position re-arm — shipped 2026-07-17) → 21.5
-   (weight tracking, 429/418 handling, batched reconcile) → 22.1–22.3 (Session Risk Governor
-   hard checks) → 5.5/5.6 → 22.4–22.7 → then 6 → 7 unblock.
+   → 21.3/21.4 (bracket cancel-on-close, naked-position re-arm — shipped 2026-07-17) → 21.5a/b
+   (weight tracking, 429/418 handling — shipped 2026-07-17) → 22.1–22.3 (Session Risk Governor
+   hard checks) → 5.5/5.6 → 22.4–22.7 → then 6 → 7 unblock. 21.5c (batched reconcile) and 21.7
+   are P2/P3, workable any time after but not gating the P0 chain.
 2. **Quant track:** 9.7–9.10 (each needs its own golden-master re-baseline + sign-off) and
    10 Phases 1b–4 — independent of the live track.
 3. **Feature track:** 13 → 17 — independent of both.
@@ -129,7 +130,20 @@ pipeline-touching steps) a golden-master check per Rule C.
   first try, retry-then-succeed, total-failure records nothing, A-4 cancel-integration). All
   three files syntax-checked via `ast.parse`; container `pytest` run and live re-verification
   still outstanding for 21.1–21.4 as a batch (no Docker access this session). 21.6 merged
-  into 22.1. 21.5 (A-9: weight tracking, 429/418 handling, batched reconcile) is next.
+  into 22.1. **21.5 (A-9) partially shipped 2026-07-17**: `engine/services/binance_testnet.py`
+  tracks `X-MBX-USED-WEIGHT-1M` per base_url and defers non-order-critical signed calls
+  (`BinanceBackpressureError`) once at/above a 1800 (75% of 2400/min) soft limit while the reading
+  is fresh; on 429/418 it honors `Retry-After` (60s default fallback) and pauses non-order-critical
+  calls until it expires. `/fapi/v1/order`/`/fapi/v1/algoOrder` are exempt from both guards.
+  Found and fixed **A-15** while wiring this in: `_reconcile_exchange_state`'s Case 2 was
+  fabricating a close on ANY `positionRisk` query failure, not just a confirmed-flat exchange — a
+  new `position_query_ok` flag gates Case 2 so an unconfirmed query leaves local state untouched
+  instead. 21.5's part (c), batching `positionRisk`/`openAlgoOrders` into one call per session per
+  candle wave, is deliberately deferred — needs a session-level fan-out/fan-in restructure of
+  `_run_symbol_loop` (today each symbol is an independent `asyncio` task), materially larger than
+  (a)/(b), left as remaining scope. Tests: `engine/tests/test_binance_backpressure.py` (18 cases)
+  — **actually executed with real pytest in-session** (not just `ast.parse`), since
+  `binance_testnet.py` has no TA-Lib/numpy dependency chain, unlike the rest of the suite.
 - **5** — 5.5 (Decimal) is the largest, riskiest remaining piece: needs a deliberate
   golden-master re-baseline with sign-off, never a same-day bundle. 5.6 (restart recovery)
   depends on the "LiveSession as pure projection" work 5.1 deliberately did not ship; factor

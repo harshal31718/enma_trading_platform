@@ -249,6 +249,23 @@ detail (commands, per-phase byte-equivalence, issue-by-issue fix list) moved to
   to the exchange via cancel+replace instead of staying local-only for the position's entire life
   (M-4); (5) an entry whose SL lands on the wrong side of the fill price is now rejected outright
   instead of silently entering naked on that leg (M-5).
+- **Partially fixed 2026-07-17 (Plan 21.5, A-9 + A-15)** — `send_signed_request`
+  (`engine/services/binance_testnet.py`) had no awareness of Binance's shared 2400-weight/min
+  budget and no 429/418 handling. Now tracks `X-MBX-USED-WEIGHT-1M` per base_url and defers
+  non-order-critical calls once at/above a 1800 (75%) soft limit while the reading is fresh; on an
+  actual 429/418 it honors `Retry-After` and pauses non-order-critical calls until it expires.
+  `/fapi/v1/order`/`/fapi/v1/algoOrder` are exempt from both guards. **Not shipped:** batching
+  `positionRisk`/`openAlgoOrders` into one call per session per candle wave instead of
+  N-per-symbol — needs a larger concurrency restructure of `_run_symbol_loop`, deferred. **Found
+  and fixed while shipping this (A-15, High):** `_reconcile_exchange_state`'s Case 2 was
+  fabricating a real position close whenever the `positionRisk` query merely *failed* (network
+  blip, timeout, missing credentials, or now a deliberate A-9 backpressure defer) — it read the
+  failure's `0.0` default the same as a confirmed-flat exchange. A `position_query_ok` flag now
+  gates Case 2 so an unconfirmed query leaves local state untouched, retrying next candle, instead
+  of falsely closing a position that may still be open. Tests:
+  `engine/tests/test_binance_backpressure.py` (18 cases — actually run with real pytest this
+  session against a fake httpx client, not just syntax-checked, since this module has no
+  TA-Lib/numpy dependency chain).
 - **OPEN 2026-07-16 — a position (`FXSUSDT SHORT`) stayed shown as open after a full session stop**,
   same live run. Not yet investigated. Candidates: the entry may never have actually filled on
   Binance (phantom local-only position), or `stop_session()`'s close loop skipped this symbol.

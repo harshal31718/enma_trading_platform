@@ -2252,6 +2252,15 @@ class LiveBotManager:
 
         exchange_pos = None
         open_orders = []
+        # A-15 fix (Plan 21.5): Case 2 below ("exchange has no position, close
+        # locally") must only fire when we actually CONFIRMED the exchange is
+        # flat — not whenever the positionRisk query merely failed (network
+        # blip, timeout, or the new A-9 backpressure defer). Before this flag,
+        # ANY query failure defaulted exchange_amt to 0.0, which Case 2 read as
+        # "confirmed closed" and fabricated a real close on a position that may
+        # still be open. Extends Plan 5.2 / A-6's real-fills-not-fabricated-
+        # closes invariant to the query-failure case.
+        position_query_ok = False
 
         if _api_key and _api_secret:
             try:
@@ -2261,6 +2270,7 @@ class LiveBotManager:
                     params={"symbol": symbol},
                     mode="testnet",
                 )
+                position_query_ok = True
                 if isinstance(pos_data, list):
                     for p in pos_data:
                         if p.get("symbol") == symbol:
@@ -2404,7 +2414,10 @@ class LiveBotManager:
             })
 
         # ── 4. Case 2 — position locally but not on exchange (closed) ───────
-        elif has_local_position and not has_exchange_position:
+        # A-15: gated on position_query_ok — an unconfirmed (failed/deferred)
+        # positionRisk query must never fabricate a close (see the flag's
+        # definition above in step 1).
+        elif has_local_position and not has_exchange_position and position_query_ok:
             logger.warning(f"[AlgoBot] {symbol}: reconciled — exchange has no position, closing local state")
             pos = strategy.position
             sl_price = strategy.stop_loss[1] if strategy.stop_loss else None
@@ -2512,6 +2525,16 @@ class LiveBotManager:
                 "event": "position:close",
                 "eventData": event_data,
             })
+
+        elif has_local_position and not has_exchange_position and not position_query_ok:
+            # A-15: query failed/deferred (e.g. A-9 backpressure) and we have a
+            # local position — do NOT guess either way. Leave local state
+            # exactly as-is and try again next candle; this mirrors 5.2's
+            # "ambiguous → leave open, don't fabricate" invariant.
+            logger.info(
+                f"[AlgoBot] {symbol}: reconcile skipped — positionRisk query unconfirmed "
+                f"(failed or deferred), local position left untouched pending next pass"
+            )
 
         # ── 5. Case 3 — both have a position: update PnL from exchange mark price ──
         elif has_local_position and has_exchange_position:

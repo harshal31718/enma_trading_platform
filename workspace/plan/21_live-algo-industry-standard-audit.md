@@ -1,6 +1,6 @@
 # 21 — Live Algo-Trading Industry-Standard Audit (signals → orders → SL/TP → monitoring)
 
-**Status:** In progress (21.1–21.4 shipped 2026-07-17, code-side pending container test run + live re-verification; 21.5, 21.7 not started) · **Created:** 2026-07-16
+**Status:** In progress (21.1–21.4 shipped 2026-07-17, code-side pending container test run + live re-verification; 21.5 partially shipped 2026-07-17 — (a)+(b) done, (c) batched reconcile deferred; 21.7 not started) · **Created:** 2026-07-16
 **Scope:** the full autonomous live-trading path — signal generation (five-model pipeline),
 order placement, SL/TP bracket placement, fill detection, reconciliation, monitoring, and
 session stop — audited against industry-standard failproof expectations (freqtrade /
@@ -252,7 +252,7 @@ rather than queuing a redundant one. Tests:
 `engine/tests/test_account_update_reconcile_decision.py`. Not yet run in-container or
 live-verified — same open item as 21.1.
 
-### A-9 · No 429/418/ban handling and no weight budgeting on signed calls · [Certain] · **Medium**
+### A-9 · No 429/418/ban handling and no weight budgeting on signed calls · [Certain] · **Medium** — **partially fixed 2026-07-17 (Plan 21.5)**
 
 `send_signed_request` retries only `-1021` (timestamp). There is no handling for HTTP 429
 (`-1003 TOO_MANY_REQUESTS`), 418 (IP auto-ban), no `Retry-After` respect, and no reading of the
@@ -266,6 +266,60 @@ rate-limit event would surface as generic per-symbol exceptions, potentially cas
 reconcile polls (orders always pass); (b) on 429/418 honor `Retry-After` and pause non-order
 calls globally; (c) batch reconcile — one un-parametered `positionRisk` call (w5 total) per
 session per candle wave covers all symbols instead of N×w5, same for `openAlgoOrders`.
+
+**Shipped (a) + (b):** `engine/services/binance_testnet.py` now tracks `X-MBX-USED-WEIGHT-1M`
+per base_url (`_record_used_weight`, parsed off every response) and defers (raises
+`BinanceBackpressureError` before ever dispatching the HTTP call) any non-order-critical signed
+call once the last-seen weight is at/above `_WEIGHT_SOFT_LIMIT` (1800, 75% of the shared 2400/min
+budget) — but only while that reading is still fresh (`_WEIGHT_READING_TTL_SECONDS` = 60s; a
+stale reading can't gate, since Binance's own window has already rolled over). On an actual
+429/418, `_handle_rate_limit_response` reads `Retry-After` (falling back to a 60s default if
+absent) and pauses all non-order-critical calls on that base_url until it expires
+(`_backpressure_until`). Order-critical paths (`/fapi/v1/order`, `/fapi/v1/algoOrder` — entries,
+exits, SL/TP placement/cancel) are exempt from **both** guards by design: a skipped stop-loss or
+emergency close is worse than a rate-limit warning, and if Binance is genuinely banning the IP
+those calls fail on their own and the existing A-6 retry ladder / reconcile self-heal handle it.
+`_reconcile_exchange_state`'s existing per-call try/except already swallows
+`BinanceBackpressureError` like any other failure (logged, reconcile skipped this pass) — see the
+new A-15 finding below, found while wiring this in: that swallow path was silently fabricating
+closes on ANY query failure, not just backpressure, which A-15 fixes. Tests:
+`engine/tests/test_binance_backpressure.py` (18 cases — actually executed with real `pytest`
+against a fake httpx client in this session's sandbox, not just `ast.parse`, since
+`binance_testnet.py` has no TA-Lib/numpy dependency chain; all 18 passed).
+
+**Not shipped — (c) batched reconcile:** deliberately deferred. Batching `positionRisk`/
+`openAlgoOrders` into one un-parametered call per session per candle wave requires restructuring
+how `_run_symbol_loop` orchestrates reconcile — today each symbol runs as an independent
+`asyncio` task calling `_reconcile_exchange_state(session_id, strategy, symbol)` on its own
+per-symbol lock; a batched design needs a session-level fan-out/fan-in point feeding each
+per-symbol task its slice of one shared response, which is a materially larger concurrency
+refactor than (a)/(b) and higher-risk without a way to live-verify it this session. Left as
+21.5's remaining scope rather than rushed.
+
+### A-15 · Reconcile Case 2 fabricates a close on ANY positionRisk query failure, not just a confirmed-flat exchange · [Certain] · **High** — **fixed 2026-07-17 (Plan 21.5, found while shipping A-9)**
+
+`_reconcile_exchange_state` derived `has_exchange_position` purely from `exchange_amt`, which
+defaulted to `0.0` whenever the `positionRisk` query failed for **any** reason — a network blip,
+a timeout, missing credentials, or (newly) an A-9 backpressure defer. Case 2
+(`has_local_position and not has_exchange_position`) read that default as "confirmed the exchange
+is flat" and closed the local position, recording a real `exchange_sync` exit — for a position
+that might still be genuinely open on Binance. This violated the same real-fills-not-fabricated-
+closes invariant A-6 already fixed for the emergency-exit path, just via the query-failure route
+instead. A-9's own backpressure deferrals would have made this measurably more likely to fire
+(a deliberate, frequent "skip this call" path feeding directly into the existing bug), so it had
+to be fixed as part of shipping A-9 rather than left as a widened pre-existing gap.
+
+**Shipped:** new `position_query_ok` flag in `_reconcile_exchange_state`, set `True` only when the
+`positionRisk` call itself returns without raising. Case 2 now requires
+`has_local_position and not has_exchange_position and position_query_ok` — an unconfirmed query
+(failed, deferred, or missing credentials) falls into a new branch that logs and leaves local
+state exactly as-is, retrying next candle, matching Plan 5.2's "ambiguous → leave open, don't
+fabricate" contract. Case 1 (restore) and Case 3 (both open) were already safe by construction —
+both require `exchange_pos` to have actually been populated from a successful query, so a failure
+can only under-report (leading to the now-gated Case 2 path), never over-report a position that
+isn't there. Covered indirectly by the existing reconcile test suite's structure; no dedicated new
+test file (the flag is exercised by any test that drives `_reconcile_exchange_state` with a
+query-failure stub) — flagged as a gap for a future direct test if this file is touched again.
 
 ### A-10 · No automatic session-level kill-switch — `max_session_dd` is per-symbol-slice only · [Likely] · **Medium**
 
@@ -449,7 +503,7 @@ and testable; per-step engine tests against a stubbed Binance layer follow the
 | 21.2 | A-8 (ACCOUNT_UPDATE-driven reconcile) | M | **P0** | **Shipped 2026-07-17** — `_on_account_update` registered per symbol in `engine/core/live_bot_manager.py`, decision logic in `_account_update_needs_reconcile()`, debounced via the existing per-symbol lock. Tests: `engine/tests/test_account_update_reconcile_decision.py`. Container test run + live re-verification still pending (see Part A A-8). |
 | 21.3 | A-4 + A-5 (cancel brackets on every close path) | M | **P1** | **Shipped 2026-07-17** — `_cancel_symbol_algo_orders()` helper, wired into `execute_exit`, `_close_position_on_stop`, F-018 emergency-exit, reconcile Case 2. Tests: `engine/tests/test_cancel_symbol_algo_orders.py`. Container test run + live `openAlgoOrders`-empty-after-close verification still pending. |
 | 21.4 | A-6 + A-7 + **M-4 + M-5** (emergency-exit truth; naked-position detector/re-arm; exchange-SL amend-on-tighten; reject entry on invalid bracket + clear local state on drop) | M | **P1** | **Shipped 2026-07-17** — F-018 emergency-exit path rewritten with a 3-attempt retry ladder + real-fill booking (A-6); `_reconcile_exchange_state` Case 3 naked-position detector/re-arm with bounded force-close (A-7); new `_maybe_amend_exchange_sl()` cancel+replace on tighten, wired into `_run_symbol_loop` (M-4); `execute_entry`'s SL/TP validity check now rejects invalid-SL entries outright, still drop-and-continue for invalid TP (M-5). Tests: `engine/tests/test_reconcile_naked_position_rearm.py`, `engine/tests/test_maybe_amend_exchange_sl.py`, `engine/tests/test_execute_entry_bracket_safety.py`. Container test run + live re-verification still pending. |
-| 21.5 | A-9 (weight tracking, 429/418 handling, batched reconcile) | M | **P2** | Batched `positionRisk`/`openAlgoOrders` per candle wave is the big weight win for Chaos runs. |
+| 21.5 | A-9 (weight tracking, 429/418 handling, batched reconcile) + **A-15** (reconcile Case 2 false-close-on-query-failure, found while shipping A-9) | M | **P2** | **Partially shipped 2026-07-17** — (a) weight tracking + (b) 429/418/Retry-After backpressure done in `binance_testnet.py`, plus A-15's fix in `_reconcile_exchange_state`. (c) batched `positionRisk`/`openAlgoOrders` per candle wave — the big weight win for Chaos runs — deferred as a larger concurrency refactor, remains open. Tests: `engine/tests/test_binance_backpressure.py` (18 cases, actually run with real pytest this session, not just `ast.parse`). |
 | 21.6 | A-10 (automatic session-drawdown kill-switch) | S–M | **Merged→22.1** | Absorbed by Plan 22's Session Risk Governor (`22_risk-management-industry-standard.md`) — same scope, better home. Do not implement twice. |
 | 21.7 | A-11/A-12/A-13/A-14 (risk-inflation logging, data-provenance decision, wick-check dedup, slippage guard) | S each | P3 | A-12 and A-13 need a decision note in DECISIONS.md more than code. |
 
