@@ -204,9 +204,20 @@ class BestSupertrend(BaseStrategy):
         if len(R) > 0:
             self._htf_tsl = self._calculate_supertrend(R)
         if self._htf_is_constant:
+            # Plan 24 finding S-2: `_htf_candles` (the live path's `R`) already
+            # excludes the in-progress HTF bar (`_fetch_htf_candles`'s
+            # `raw[:-1]`), so `R[-1]` — and therefore `self._htf_tsl[-1]` — IS
+            # the last COMPLETED HTF bar. Reading `[-2]` here (as before)
+            # skipped one full HTF bar further back than backtest's bucket
+            # path (`htf_tsl[k-1]`, which correctly resolves to the last
+            # completed bucket), so live traded against stale-by-one-bar
+            # supertrend values (e.g. two days ago instead of yesterday's, at
+            # the default tf="daily"). The `pd+2` warmup gate is unchanged —
+            # same total-buckets-required semantics as the backtest bucket
+            # path (S-3) — only the trailing-index depth needed (1, not 2).
             self._htf_constant_val = (
-                float(self._htf_tsl[-2])
-                if len(R) >= self.pd + 2 and len(self._htf_tsl) >= 2 else None
+                float(self._htf_tsl[-1])
+                if len(R) >= self.pd + 2 and len(self._htf_tsl) >= 1 else None
             )
 
     def _resample_with_map(self, candles: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
