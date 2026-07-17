@@ -13,9 +13,9 @@ this board no longer duplicates it).
 
 | ID | Title | Remaining scope | Status | Priority | Depends on | Updated |
 |----|-------|-----------------|--------|----------|------------|---------|
-| 21 | Live algo industry-standard audit — **fixes** | 21.5c (batched reconcile), A-12/A-13 (need a user decision note, not code) (21.1–21.4 + 21.5a/b + 21.7's A-11/A-14 shipped code-side, pending container test run + live re-verification; 21.6 → Merged→22.1) | In progress (21.1–21.4, 21.5a/b, 21.7 A-11/A-14 shipped 2026-07-17) | P2 (21.5c) | — | 2026-07-17 |
+| 21 | Live algo industry-standard audit — **fixes** | 21.5c (batched reconcile), A-12+A-13 implementation (decided 2026-07-17, `DECISIONS.md` #24/#25 — code not yet written) (21.1–21.4 + 21.5a/b + 21.7's A-11/A-14 shipped code-side, pending container test run + live re-verification; 21.6 → Merged→22.1) | In progress (21.1–21.4, 21.5a/b, 21.7 A-11/A-14 shipped 2026-07-17) | P2 (21.5c) / P2 (A-12/A-13 impl) | — | 2026-07-17 |
 | 5  | Live-trading state integrity | 5.5 (Decimal money, golden-master sign-off), 5.6 (restart recovery / projection) | In progress | P0 | 21.1–21.2 inform 5.6 | 2026-07-16 |
-| 22 | Industry-standard risk management (Session Risk Governor) | All (22.1–22.7) | Ready (forks #2/#3 decided) | P1 (22.1–22.3) / P2 (rest) | 21 (21.1–21.4) | 2026-07-16 |
+| 22 | Industry-standard risk management (Session Risk Governor) | All (22.1–22.7) | **Ready — Part F decisions landed 2026-07-17 (`DECISIONS.md` #23), 22.1–22.3 unblocked** | P1 (22.1–22.3) / P2 (rest) | 21 (21.1–21.4, shipped) | 2026-07-17 |
 | 9  | Backtest & optimizer correctness (quant core) | 9.7 (funding ledger), 9.8 (intrabar sim), 9.9 (stats portion), 9.10 (fill-model ladder), **9.11 (cost-gate resurrection, M-1/M-2/M-3 — Step A inert, Step B re-baselined)** | Ready | P1 | — | 2026-07-16 |
 | 10 | Monte Carlo Optimiser & Strategy Lab | Phases 1b–4 (job plumbing, `labResults`, UI, optimizer w/ walk-forward + Optuna) | Ready | P1 | 9 (9.1/9.3, shipped) | 2026-07-16 |
 | 13 | Informative / multi-timeframe contract (`self.htf()`) | All | Ready | P2 | — | 2026-07-16 |

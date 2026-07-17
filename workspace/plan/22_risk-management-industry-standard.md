@@ -229,18 +229,20 @@ event docs (Plan 14 file); update `risk-dashboard/SPEC.md` ("display-only" invar
   per-symbol checks). A backtest-side governor for validation parity is a candidate follow-up —
   record as an open question, don't scope-creep it in.
 
-## Part F — Open questions
+## Part F — Open questions — **1, 2, 3, 5 decided 2026-07-17 (see `DECISIONS.md` #23)**
 
-1. Auto-flatten on `halted` (force-close all) — opt-in default off. Confirm the user wants the
-   option at all, or whether `reducing` + manual stop is the ceiling of automation.
-2. Daily-loss window anchor: UTC midnight vs session start vs rolling 24h. Proposal: UTC day
-   (freqtrade convention), configurable later if needed.
-3. Should Chaos runs get stricter governor defaults than normal sessions (it's a stress tool)?
-   Proposal: same defaults, but Chaos wizard surfaces the governor block prominently.
+1. ~~Auto-flatten on `halted`~~ — **Decided: add it, opt-in default off.**
+2. ~~Daily-loss window anchor~~ — **Decided: UTC midnight.**
+3. ~~Chaos governor defaults~~ — **Decided: same defaults as normal sessions, surfaced prominently
+   in the wizard.**
 4. VaR method for enforcement: current Zone 1 historical-simulation VaR is fine for v1; variance
-   scaling / EWMA refinements only if breach behavior proves too twitchy in practice.
-5. Capital over-commit (B-11/B-12): hard reject at start, or warn-and-confirm in the wizard?
-   Proposal: hard reject on non-numeric/negative/zero always; over-commit vs wallet = warn with
-   explicit confirm on testnet (it's fake money and users stress-test deliberately), hard reject
-   the day mainnet is ever considered. Also: does the reservation ledger count a stopped-but-
-   unconfirmed session's capital (see Plan 21 A-4/stop-path issues) as still committed?
+   scaling / EWMA refinements only if breach behavior proves too twitchy in practice. **Not asked
+   — no decision needed to start 22.1; ships as-is, revisit later if needed.**
+5. ~~Capital over-commit (B-11/B-12)~~ — **Decided: hard reject on non-numeric/negative/zero
+   always; over-commit vs wallet is warn-with-explicit-confirm on testnet, hard reject the day
+   mainnet is ever considered.** Sub-question still open (implementation detail, not policy): does
+   the reservation ledger count a stopped-but-unconfirmed session's capital (see Plan 21 A-4/
+   stop-path issues) as still committed? — resolve during 22.1's build.
+
+**22.1–22.3 are now unblocked** — all policy decisions needed to start implementation are recorded
+in `DECISIONS.md` #23.

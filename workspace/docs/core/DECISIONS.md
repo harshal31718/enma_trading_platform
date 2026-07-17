@@ -355,3 +355,59 @@ restart — each restart re-probes and re-discovers the same ~60 symbols once ea
 already-logged 400 per symbol, not a repeating storm). Not persisted to MongoDB/Redis; if this needs to
 survive restarts a follow-up could write it to a small collection, but the current per-restart rediscovery
 cost is one API call per previously-known-bad symbol, which is cheap enough not to warrant it yet.
+
+## 23. Session Risk Governor policy decisions (Plan 22 Part F, decided 2026-07-17)
+**Decision:** four open questions from `22_risk-management-industry-standard.md` Part F, answered
+by the user, all matching the plan's own proposed defaults:
+- **Auto-flatten on `halted`:** add the capability (force-close all positions when the aggregate
+  drawdown kill-switch trips), but **off by default** — opt-in per session/wizard. A halted
+  session with auto-flatten off still blocks new entries; existing positions require a manual stop.
+- **Capital over-commit:** hard-reject non-numeric/negative/zero capital always. Configured capital
+  exceeding the real wallet balance is a **warn-and-confirm** on testnet (users deliberately
+  stress-test with oversized paper capital) — becomes a hard reject the day mainnet is ever
+  considered.
+- **Daily-loss window anchor:** **UTC midnight** (freqtrade convention, matches Binance's own
+  daily-stats boundary) — not session-start-relative, not a rolling 24h window.
+- **Chaos governor defaults:** **same defaults as normal sessions** — Chaos is not exempted or
+  given stricter limits; the wizard should surface the governor block prominently instead so users
+  understand what they're launching into.
+- **Still open (not asked, no action needed now):** VaR enforcement method — current Zone 1
+  historical-simulation VaR ships as-is for v1; only revisit (variance scaling / EWMA) if breach
+  behavior proves too twitchy in practice. The Q5 sub-question ("does the reservation ledger count
+  a stopped-but-unconfirmed session's capital as still committed?") is an implementation detail for
+  22.1, not a policy call — resolve it during that build.
+**Rationale:** All four align with the plan's own pre-analyzed proposals (freqtrade precedent for
+the daily-loss anchor; testnet-appropriate risk tolerance for the warn-vs-reject split; visibility
+over restriction for Chaos). Unblocks Plan 22 Step 22.1 (capital integrity gate) implementation.
+
+## 24. A-12 — live signal candles sourced from mainnet WS instead of testnet's own feed (decided 2026-07-17)
+**Decision:** live trading's indicator/signal price series will be sourced from Binance mainnet's
+public WebSocket (`wss://fstream.binance.com`, same pattern the client already uses for its own
+public market-data connection) instead of testnet's `fstream.binancefuture.com` kline stream —
+while order **execution** stays on testnet. This removes the discontinuity found in the Plan 21
+audit (A-12): warmup/HTF candles were already mainnet-sourced (TimescaleDB importer + REST
+fallback), but live candles came from testnet's own feed, so on illiquid testnet symbols the price
+series could step discontinuously at the splice point and produce spurious signals.
+**Rationale:** User chose the larger-effort fix over "accept and document" — trades signal-path
+correctness for implementation cost, on the reasoning that a discontinuous price series is a
+real correctness bug (spurious signals), not just a cosmetic testnet quirk, and is worth fixing
+properly rather than carrying as documented debt. **Not yet implemented** — this decision record
+unblocks the work; see Plan 21's A-12 finding (`21_live-algo-industry-standard-audit.md`) for the
+implementation pointer (client's existing `binanceWS.js` pattern) once scheduled.
+
+## 25. A-13 — skip engine-side wick-check exits while exchange brackets are confirmed armed (decided 2026-07-17)
+**Decision:** once a live position's exchange-side SL/TP conditional orders are confirmed armed
+(tracked `algo_ids` + confirmed resting via reconcile), the engine's own candle-close wick-check
+exit (`kernel.check_exits`) will be skipped for that symbol — the exchange conditional is trusted
+as the sole trigger. The engine-side check remains as an automatic fallback whenever brackets are
+missing (Plan 21.4's A-7 naked-position detector is what makes "missing" a precisely-defined,
+actively-monitored state now, which is what makes this safe to do).
+**Rationale:** Removes the double-execution overlap the Plan 21 audit flagged (A-13) — both paths
+could independently close the same position, producing double-execution semantics and occasional
+spurious close attempts booked with `exit_reason="stop_loss"` at a different price than the
+exchange's own MARK_PRICE-triggered fill. Safe specifically because A-7 (shipped 2026-07-17)
+already guarantees a naked position gets re-armed or force-closed within
+`_NAKED_POSITION_MAX_REARM_ATTEMPTS` — so "skip the engine check when brackets are armed" no
+longer means "silently unprotected if reconcile's armed-check itself is wrong," the way it would
+have before A-7 existed. **Not yet implemented** — see Plan 21's A-13 finding for the
+implementation pointer once scheduled.
