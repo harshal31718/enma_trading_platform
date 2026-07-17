@@ -80,7 +80,7 @@ limit-order path). Fix: rename the param to `direction_filter` (PARAMS key chang
 the strategy INDEX; saved configs with the old key will be rejected by F-016 unknown-param
 validation, which is the desired loud failure).
 
-## S-5 · Docs drift · [Certain, minor]
+## S-5 · Docs drift · [Certain, minor] — **docs-drift half already resolved (checked 2026-07-17)**
 
 `engine/CLAUDE.md` ("Built-in strategies" / model-variant notes) and `MODELS`-adjacent docs
 describe BestSupertrend as bound to `SignalExitRiskModel`; the code binds `AtrBracketRiskModel`
@@ -88,6 +88,17 @@ describe BestSupertrend as bound to `SignalExitRiskModel`; the code binds `AtrBr
 match code (code wins). Also carry the code's own TODO: weekly resample (`W-MON`,
 right-labeled) has a known off-by-one bucket edge — fold into S-3's start-time validation
 rather than fixing resample semantics blind.
+
+**Checked while surveying for decision-free/golden-master-free work (2026-07-17):** grepped the
+whole repo for `SignalExitRiskModel` — `workspace/docs/features/strategy-management/SPEC.md`
+(row 110) and `workspace/docs/strategies/BestSupertrend.md` ("Risk Model" section) both already
+correctly say `AtrBracketRiskModel` + `NotionalPortfolio` and explicitly note "(replaced the
+earlier `SignalExitRiskModel`)" — some prior session already fixed this half, not reflected as
+struck-through here. `engine/CLAUDE.md` and `workspace/docs/core/MODELS.md` never actually made
+the stale binding claim in the first place (both just list model variants generically, no
+per-strategy binding assertion). **Remaining under S-5: only the weekly-resample TODO**, which is
+correctly scoped to fold into S-3 (needs a golden-master re-baseline this environment can't run —
+no Docker access) rather than being fixed standalone.
 
 ## Sequencing / verification
 
