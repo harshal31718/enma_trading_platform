@@ -178,6 +178,15 @@ Socket.IO emits algo:session:stopped → client sets status to 'stopped'
   cleared, returns `False`, no order placed) — freqtrade does not enter without its stop. An invalid
   TP stays lower-stakes: dropped, but the entry still proceeds on its valid SL. Tests:
   `engine/tests/test_execute_entry_bracket_safety.py`.
+- **Risk-inflation + slippage observability (Plan 21.7, A-11 + A-14, shipped 2026-07-17)**:
+  `clamp_and_round_qty` (`utils/symbols.py`) can bump a sized quantity up (by up to +30%, F-013)
+  to satisfy Binance's minNotional filter — SL distance is unchanged, so a bump silently inflates
+  realized risk-per-trade by the same factor. It now logs a `warning` with the effective
+  multiplier whenever a genuine bump occurs (A-11). Separately, `execute_entry` now measures
+  `|fill_price - ref_price| / ref_price` on every entry and logs it — routine `info` below 1%,
+  `warning` + a session `log` notification at/above it (A-14). Both are logging-only: neither
+  changes a returned quantity, rejects an entry, or alters backtest output. Tests:
+  `engine/tests/test_clamp_qty_risk_inflation_log.py`, `engine/tests/test_execute_entry_slippage_log.py`.
 - **OUO Partial-Fill Peer-Cancel (F-019)**: SL/TP algo order IDs are tracked in
   `session["open_positions"][symbol]["algo_ids"]`. Two safety nets: (1) the user-data-stream `_on_fill`
   callback cancels the peer leg (`DELETE /fapi/v1/algoOrder`) immediately when a tracked `tpsl_*`

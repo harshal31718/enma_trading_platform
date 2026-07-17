@@ -39,6 +39,15 @@ WARMUP_CANDLES = 200
 # than letting it run unprotected indefinitely.
 _NAKED_POSITION_MAX_REARM_ATTEMPTS = 3
 
+# A-14 (Plan 21.7): entries are MARKET at next-tick after candle close with no
+# max-deviation check between the closed-candle ref_price and the real fill.
+# Every fill's slippage is now logged (data is already booked — real fill vs
+# ref); this threshold only controls whether it escalates to a `warning` +
+# session-log notification instead of a routine `info` line. Low urgency on
+# testnet (this is what informational logging is for); required reading
+# before any mainnet conversation per the audit.
+_SLIPPAGE_ALERT_THRESHOLD_PCT = 0.01  # 1%
+
 # Maps strategy tf param values to Binance interval strings (case-sensitive: "1M" = monthly)
 _TF_TO_BINANCE = {
     "1h": "1h",
@@ -457,6 +466,35 @@ class LiveAdapter(ExecutionAdapter):
                     f"@ {entry_result.get('avgPrice', fill_price)} orderId={order_id} "
                     f"clientOrderId={entry_client_order_id}"
                 )
+
+                # A-14 fix (Plan 21.7): log slippage between the closed-candle
+                # ref_price used to size/route the entry and the real fill —
+                # previously never measured at all. ref_price > 0 always holds
+                # here (a candle close price); guarded anyway to never let
+                # logging raise into the entry path.
+                if ref_price and ref_price > 0:
+                    _slippage_pct = abs(fill_price - ref_price) / ref_price
+                    if _slippage_pct >= _SLIPPAGE_ALERT_THRESHOLD_PCT:
+                        logger.warning(
+                            f"[AlgoBot] {symbol}: entry slippage {_slippage_pct * 100:.2f}% "
+                            f"(ref={ref_price}, fill={fill_price}) exceeds "
+                            f"{_SLIPPAGE_ALERT_THRESHOLD_PCT * 100:.0f}% alert threshold"
+                        )
+                        await self.manager._notify_node(self.session_id, {
+                            "event": "log",
+                            "eventData": {
+                                "type": "warning",
+                                "message": (
+                                    f"{symbol}: entry slippage {_slippage_pct * 100:.2f}% "
+                                    f"(ref ${ref_price} -> fill ${fill_price})"
+                                ),
+                            },
+                        })
+                    else:
+                        logger.info(
+                            f"[AlgoBot] {symbol}: entry slippage {_slippage_pct * 100:.3f}% "
+                            f"(ref={ref_price}, fill={fill_price})"
+                        )
 
                 # Step 2: Best-effort SL/TP placement (orders placed directly,
                 # no separate hop).  Failure here does not revert the entry.

@@ -13,7 +13,7 @@ this board no longer duplicates it).
 
 | ID | Title | Remaining scope | Status | Priority | Depends on | Updated |
 |----|-------|-----------------|--------|----------|------------|---------|
-| 21 | Live algo industry-standard audit — **fixes** | 21.5c (batched reconcile), 21.7 (21.1–21.4 + 21.5a/b shipped code-side, pending container test run + live re-verification; 21.6 → Merged→22.1) | In progress (21.1–21.4 shipped, 21.5a/b shipped 2026-07-17) | P2 (21.5c) / P3 (21.7) | — | 2026-07-17 |
+| 21 | Live algo industry-standard audit — **fixes** | 21.5c (batched reconcile), A-12/A-13 (need a user decision note, not code) (21.1–21.4 + 21.5a/b + 21.7's A-11/A-14 shipped code-side, pending container test run + live re-verification; 21.6 → Merged→22.1) | In progress (21.1–21.4, 21.5a/b, 21.7 A-11/A-14 shipped 2026-07-17) | P2 (21.5c) | — | 2026-07-17 |
 | 5  | Live-trading state integrity | 5.5 (Decimal money, golden-master sign-off), 5.6 (restart recovery / projection) | In progress | P0 | 21.1–21.2 inform 5.6 | 2026-07-16 |
 | 22 | Industry-standard risk management (Session Risk Governor) | All (22.1–22.7) | Ready (forks #2/#3 decided) | P1 (22.1–22.3) / P2 (rest) | 21 (21.1–21.4) | 2026-07-16 |
 | 9  | Backtest & optimizer correctness (quant core) | 9.7 (funding ledger), 9.8 (intrabar sim), 9.9 (stats portion), 9.10 (fill-model ladder), **9.11 (cost-gate resurrection, M-1/M-2/M-3 — Step A inert, Step B re-baselined)** | Ready | P1 | — | 2026-07-16 |
@@ -144,6 +144,16 @@ pipeline-touching steps) a golden-master check per Rule C.
   (a)/(b), left as remaining scope. Tests: `engine/tests/test_binance_backpressure.py` (18 cases)
   — **actually executed with real pytest in-session** (not just `ast.parse`), since
   `binance_testnet.py` has no TA-Lib/numpy dependency chain, unlike the rest of the suite.
+  **21.7's A-11 + A-14 shipped 2026-07-17** (both logging-only, no golden master needed):
+  `clamp_and_round_qty` (`utils/symbols.py`) logs a warning with the effective risk multiplier
+  when its minNotional bump-up actually inflates qty (A-11); `execute_entry` logs slippage
+  (`|fill-ref|/ref`) on every entry, escalating to a warning + session notification at/above 1%
+  (A-14). Neither changes any returned/booked value — observability only. Tests:
+  `test_clamp_qty_risk_inflation_log.py` (5 cases, actually run with real pytest) and
+  `test_execute_entry_slippage_log.py` (3 cases, `ast.parse`-only — needs `core.live_bot_manager`'s
+  numpy chain the sandbox couldn't install). A-12/A-13 remain: both need a DECISIONS.md-style
+  product decision (data-provenance choice; wick-check-dedup-while-brackets-armed choice) rather
+  than code, left for the user.
 - **5** — 5.5 (Decimal) is the largest, riskiest remaining piece: needs a deliberate
   golden-master re-baseline with sign-off, never a same-day bundle. 5.6 (restart recovery)
   depends on the "LiveSession as pure projection" work 5.1 deliberately did not ship; factor

@@ -266,6 +266,14 @@ detail (commands, per-phase byte-equivalence, issue-by-issue fix list) moved to
   `engine/tests/test_binance_backpressure.py` (18 cases — actually run with real pytest this
   session against a fake httpx client, not just syntax-checked, since this module has no
   TA-Lib/numpy dependency chain).
+- **Fixed 2026-07-17 (Plan 21.7, A-11 + A-14)** — both logging-only additions, no golden master
+  needed: `clamp_and_round_qty` (`engine/utils/symbols.py`) now warns when its minNotional
+  bump-up actually inflates a trade's quantity (and therefore realized risk) beyond target,
+  logging the effective multiplier; `execute_entry` now measures and logs slippage between the
+  closed-candle `ref_price` and the real fill on every entry, escalating to a warning + session
+  notification at/above a 1% threshold. Neither changes any returned value or trading decision.
+  A-12 (mainnet/testnet data-provenance splice) and A-13 (engine-side wick-check vs armed exchange
+  brackets) remain open — both need a product decision recorded in `DECISIONS.md`, not code.
 - **OPEN 2026-07-16 — a position (`FXSUSDT SHORT`) stayed shown as open after a full session stop**,
   same live run. Not yet investigated. Candidates: the entry may never have actually filled on
   Binance (phantom local-only position), or `stop_session()`'s close loop skipped this symbol.

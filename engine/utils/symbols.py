@@ -448,6 +448,22 @@ def clamp_and_round_qty(
     if qty_dec > Decimal(str(qty)) * Decimal("1.30"):
         return 0.0
 
+    # A-11 fix (Plan 21.7): the minNotional bump-up above can silently inflate
+    # the *realized* risk-per-trade above the risk model's intended risk_pct —
+    # SL distance is unchanged, so a bumped qty means a proportionally larger
+    # loss if the stop is hit, up to the +30% tolerance this function already
+    # allows. This was previously undocumented at runtime (only in
+    # DECISIONS-adjacent docs); log it so a session quietly running e.g. 1.25x
+    # its configured risk on a small-notional symbol is visible, not silent.
+    # Logging only — does not change the returned quantity, so this cannot
+    # affect backtest output (no golden-master re-baseline needed).
+    if qty > 0 and float(qty_dec) > qty * 1.001:  # tiny epsilon — ignore stepSize-rounding noise
+        effective_multiplier = float(qty_dec) / qty
+        logger.warning(
+            f"clamp_and_round_qty: {symbol} minNotional bump inflated qty "
+            f"{qty:.8f} -> {float(qty_dec):.8f} ({effective_multiplier:.2f}x target risk)"
+        )
+
     return float(qty_dec)
 
 

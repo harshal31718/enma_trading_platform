@@ -1,6 +1,6 @@
 # 21 — Live Algo-Trading Industry-Standard Audit (signals → orders → SL/TP → monitoring)
 
-**Status:** In progress (21.1–21.4 shipped 2026-07-17, code-side pending container test run + live re-verification; 21.5 partially shipped 2026-07-17 — (a)+(b) done, (c) batched reconcile deferred; 21.7 not started) · **Created:** 2026-07-16
+**Status:** In progress (21.1–21.4 shipped 2026-07-17, code-side pending container test run + live re-verification; 21.5 partially shipped 2026-07-17 — (a)+(b) done, (c) batched reconcile deferred; 21.7 partially shipped 2026-07-17 — A-11+A-14 done, A-12/A-13 need a user decision) · **Created:** 2026-07-16
 **Scope:** the full autonomous live-trading path — signal generation (five-model pipeline),
 order placement, SL/TP bracket placement, fill detection, reconciliation, monitoring, and
 session stop — audited against industry-standard failproof expectations (freqtrade /
@@ -335,7 +335,7 @@ drawdown from session peak crosses `max_session_dd` → auto-set `trading_state 
 `halted`), notify + webhook. This is the freqtrade `max_drawdown` protection at session scope —
 the protections framework already exists, it's just not wired at this level.
 
-### A-11 · minNotional bump-up silently inflates risk up to +30% · [Certain] · **Low**
+### A-11 · minNotional bump-up silently inflates risk up to +30% · [Certain] · **Low** — **fixed 2026-07-17 (Plan 21.7)**
 
 `clamp_and_round_qty` rounds quantity UP to satisfy minNotional and accepts up to a +30%
 inflation (F-013) before skipping. SL distance is unchanged, so the realized risk-per-trade can
@@ -343,6 +343,18 @@ exceed the risk model's `risk_pct` by the same factor, unlogged. Documented beha
 industry practice is skip-or-log: either lower the tolerance for risk-sized entries, or log a
 `warning` with the effective risk multiplier so sessions aren't quietly running 1.3x risk on
 small accounts / low-priced symbols.
+
+**Shipped:** took the log option (lower urgency than a behavior change, and the "log" side of the
+audit's own skip-or-log framing). `clamp_and_round_qty` (`engine/utils/symbols.py`) now logs a
+`warning` with the effective multiplier (`bumped_qty / original_qty`) whenever the minNotional
+bump-up actually inflates the quantity beyond a small stepSize-rounding epsilon — the returned
+value is unchanged, so this cannot affect backtest output (no golden-master re-baseline needed,
+matching Plan 21's own "zero backtest-path overlap" scope note — this function is shared with
+backtest sizing, but a log line is not a data-path change). Skipped trades (bump exceeds +30%
+tolerance, returns `0.0`) and `reduce_only` calls correctly never warn (nothing was actually
+inflated in either case). Tests: `engine/tests/test_clamp_qty_risk_inflation_log.py` (5 cases) —
+**actually executed with real pytest this session** (not just `ast.parse`), since
+`utils/symbols.py` has no TA-Lib/numpy dependency chain; all 5 passed.
 
 ### A-12 · Indicator series splices mainnet history onto testnet live candles · [Likely] · **Low (document at minimum)**
 
@@ -364,13 +376,23 @@ but it produces double-execution semantics, occasional spurious close attempts, 
 brackets are armed and confirmed open, skip the engine-side SL/TP wick-check (keep it as
 fallback when brackets are missing — which A-7's detector makes explicit).
 
-### A-14 · No slippage guard on market entries · [Certain] · **Info / improvement**
+### A-14 · No slippage guard on market entries · [Certain] · **Info / improvement** — **fixed 2026-07-17 (Plan 21.7)**
 
 Entries are MARKET at next-tick after candle close with `ref_price` = closed candle's close; no
 max-deviation check between `ref_price` and fill, no order-book depth consult (book-ticker cache
 exists and is already used by SpreadFilter). Standard practice: log slippage per fill (data is
 already booked — real fill vs ref), and optionally reject/alert when |fill−ref|/ref exceeds a
 configurable bound. Low urgency on testnet; required before any mainnet conversation.
+
+**Shipped:** the log-only half (no reject — that's the mainnet-gated half the audit itself flags
+as not-yet-urgent). `execute_entry` (`engine/core/live_bot_manager.py`) now computes
+`|fill_price - ref_price| / ref_price` right after the real fill price is known and logs it —
+`info` below `_SLIPPAGE_ALERT_THRESHOLD_PCT` (1%), `warning` + a session `log` notification
+at/above it, so an abnormal fill is visible in both the engine log and the session UI instead of
+never being measured at all. Purely observational — never rejects or alters the entry. Tests:
+`engine/tests/test_execute_entry_slippage_log.py` (3 cases: routine slippage stays info-only,
+large slippage warns + notifies, a favorable-direction gap is measured by magnitude not signed
+direction).
 
 ---
 
@@ -505,7 +527,7 @@ and testable; per-step engine tests against a stubbed Binance layer follow the
 | 21.4 | A-6 + A-7 + **M-4 + M-5** (emergency-exit truth; naked-position detector/re-arm; exchange-SL amend-on-tighten; reject entry on invalid bracket + clear local state on drop) | M | **P1** | **Shipped 2026-07-17** — F-018 emergency-exit path rewritten with a 3-attempt retry ladder + real-fill booking (A-6); `_reconcile_exchange_state` Case 3 naked-position detector/re-arm with bounded force-close (A-7); new `_maybe_amend_exchange_sl()` cancel+replace on tighten, wired into `_run_symbol_loop` (M-4); `execute_entry`'s SL/TP validity check now rejects invalid-SL entries outright, still drop-and-continue for invalid TP (M-5). Tests: `engine/tests/test_reconcile_naked_position_rearm.py`, `engine/tests/test_maybe_amend_exchange_sl.py`, `engine/tests/test_execute_entry_bracket_safety.py`. Container test run + live re-verification still pending. |
 | 21.5 | A-9 (weight tracking, 429/418 handling, batched reconcile) + **A-15** (reconcile Case 2 false-close-on-query-failure, found while shipping A-9) | M | **P2** | **Partially shipped 2026-07-17** — (a) weight tracking + (b) 429/418/Retry-After backpressure done in `binance_testnet.py`, plus A-15's fix in `_reconcile_exchange_state`. (c) batched `positionRisk`/`openAlgoOrders` per candle wave — the big weight win for Chaos runs — deferred as a larger concurrency refactor, remains open. Tests: `engine/tests/test_binance_backpressure.py` (18 cases, actually run with real pytest this session, not just `ast.parse`). |
 | 21.6 | A-10 (automatic session-drawdown kill-switch) | S–M | **Merged→22.1** | Absorbed by Plan 22's Session Risk Governor (`22_risk-management-industry-standard.md`) — same scope, better home. Do not implement twice. |
-| 21.7 | A-11/A-12/A-13/A-14 (risk-inflation logging, data-provenance decision, wick-check dedup, slippage guard) | S each | P3 | A-12 and A-13 need a decision note in DECISIONS.md more than code. |
+| 21.7 | A-11/A-12/A-13/A-14 (risk-inflation logging, data-provenance decision, wick-check dedup, slippage guard) | S each | P3 | **A-11 + A-14 shipped 2026-07-17** (both logging-only, no golden master needed — see their Shipped notes). A-12 and A-13 still need a decision note in DECISIONS.md more than code — left for the user, not guessed at. |
 
 **Sequencing vs existing plans:** 21.1/21.2 fold naturally into the F7 follow-up (`0_fixes-queue.md`
 priority item) — they should be treated as *the* next live-trading session's work, ahead of F8.

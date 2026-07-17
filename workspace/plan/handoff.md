@@ -7,7 +7,7 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
-## 2026-07-17 — Plan 21.1–21.4 + 21.5a/b shipped: F7-root-cause fixes, bracket-integrity hardening, rate-limit backpressure — CODE COMPLETE, VERIFICATION PENDING ⏸️
+## 2026-07-17 — Plan 21.1–21.4 + 21.5a/b + 21.7 (A-11/A-14) shipped: F7-root-cause fixes, bracket-integrity hardening, rate-limit backpressure, risk/slippage observability — CODE COMPLETE, VERIFICATION PENDING ⏸️
 
 **Goal:** ship Plan 21 step 21.1 — the three surgical diffs identified by the 2026-07-16 audit as
 the likely root causes of F7 (algo-order fill detection lag): A-1 (broken userTrades credentials),
@@ -214,6 +214,28 @@ new `_extract_fill_client_id()`, `_account_update_needs_reconcile()`,
 (A-15: `position_query_ok` flag + gated Case 2); new
 `engine/tests/test_binance_backpressure.py`.
 
+**Done — 21.7 code portion (A-11 + A-14, same session, continued unattended):** both logging-only,
+matching Plan 21's own no-golden-master scope. **A-11**: `clamp_and_round_qty`
+(`engine/utils/symbols.py`) now logs a `warning` with the effective multiplier whenever its
+minNotional bump-up actually inflates a sized quantity (silently-inflated risk-per-trade,
+previously unlogged); skipped trades and `reduce_only` calls correctly never warn. **A-14**:
+`execute_entry` now measures `|fill_price - ref_price| / ref_price` on every entry — `info` below
+1%, `warning` + a session notification at/above it. Neither changes any returned value, rejects an
+entry, or touches backtest output. A-12/A-13 intentionally NOT started — both are framed by the
+audit itself as needing a `DECISIONS.md`-style product decision, not code (data-provenance choice;
+wick-check-dedup-while-brackets-armed choice) — held per the user's "hold critical decisions"
+instruction rather than guessed at. Tests: `engine/tests/test_clamp_qty_risk_inflation_log.py` (5
+cases, **actually run with real pytest**, no TA-Lib/numpy dependency) and
+`engine/tests/test_execute_entry_slippage_log.py` (3 cases, `ast.parse`-only — needs
+`core.live_bot_manager`'s numpy chain). Docs: `0_tracker.md`, `21_live-algo-industry-standard-audit.md`
+(A-11/A-14 fixed + Shipped notes, Part C 21.7 row, status header), `CURRENT_STATE.md`,
+`algo-trading/SPEC.md`.
+
+**Files changed (21.7 additions):** `engine/utils/symbols.py` (A-11 warning log in
+`clamp_and_round_qty`), `engine/core/live_bot_manager.py` (A-14 slippage log +
+`_SLIPPAGE_ALERT_THRESHOLD_PCT`); new `engine/tests/test_clamp_qty_risk_inflation_log.py`, new
+`engine/tests/test_execute_entry_slippage_log.py`.
+
 **Session note:** the user stepped away mid-session and explicitly instructed continuing
 unattended through the rest of the P0 track — use the plan's own recommended next step at each
 point, hold anything genuinely requiring a user decision rather than guessing, and keep working on
@@ -253,23 +275,31 @@ guessing at that redesign.
    repeatedly in place within the same session.
 5. **21.5(c)** (batched reconcile) genuinely not started — see the "Not shipped" note above; needs
    a deliberate concurrency-restructure design pass, not a same-session bolt-on.
+6. **A-12/A-13 (21.7 remainder)** intentionally not started — both need a `DECISIONS.md`-style
+   product decision from the user, not code (see the 21.7 Done section above).
 
 **Next session (or continuing unattended):** (1) run the container test suite — fix any failures
-before trusting any of 21.1–21.4/21.5a/b; (2) run the small live-session reproduction described in
-the 21.1 section above, now also checking `GET /fapi/v1/openAlgoOrders` is empty after closes
-(21.3), a tightened trailing stop actually shows up as a replaced order on Binance (M-4), a
-deliberately-broken SL placement exercises the A-6 retry ladder and A-7 re-arm/force-close path,
-and (if feasible to simulate) that a 429/418 response actually pauses subsequent reconcile polls
-without blocking order placement (21.5a/b); (3) once both pass, flip status language from
-"code-shipped, pending verification" to "shipped" across `0_tracker.md`, `0_fixes-queue.md`'s F7
-row, and the doc files, and close F7's item 1 properly. Then either **21.5(c)** (batched reconcile
-— needs its own design pass for the `_run_symbol_loop` concurrency restructure) or **22.1–22.3**
-(Session Risk Governor, unblocked now that 21.1–21.4 have landed) — whichever the next session
-judges lower-risk to start cold; `0_tracker.md`'s Execution order currently has 22.1–22.3 ahead of
-21.5c/21.7 since those are P2/P3 and don't gate the P0 chain. Git commit for 21.5's binance_testnet.py
-+ live_bot_manager.py (A-15) + new test file changes is still pending as of this handoff entry —
-same lock-file-rename workaround as before, verify files aren't stale in bash before trusting
-`git add`.
+before trusting any of 21.1–21.4/21.5a/b/21.7; (2) run the small live-session reproduction
+described in the 21.1 section above, now also checking `GET /fapi/v1/openAlgoOrders` is empty
+after closes (21.3), a tightened trailing stop actually shows up as a replaced order on Binance
+(M-4), a deliberately-broken SL placement exercises the A-6 retry ladder and A-7 re-arm/
+force-close path, a 429/418 response actually pauses subsequent reconcile polls without blocking
+order placement (21.5a/b), and a minNotional-bumped entry / an abnormal-slippage fill both surface
+in the logs as expected (21.7); (3) once all pass, flip status language from "code-shipped,
+pending verification" to "shipped" across `0_tracker.md`, `0_fixes-queue.md`'s F7 row, and the doc
+files, and close F7's item 1 properly. **Everything code-shippable on the P0/P1 live-correctness
+track without a user decision is now done** — remaining Plan 21 items (21.5c, A-12/A-13) either
+need a design pass or a product decision; Plan 22's 22.1–22.3 (Session Risk Governor) is
+**NOT actually unblocked** despite landing after 21.1–21.4 in the execution order — Part F of
+`22_risk-management-industry-standard.md` has open questions (auto-flatten opt-in, daily-loss
+window anchor, Chaos governor defaults, reject-vs-warn on capital over-commit) that want user
+answers before implementation, per that plan's own text. A genuinely unblocked next candidate for
+a future unattended session: **Plan 24** (BestSupertrend fixes) S-5 (docs-drift-only, no code risk)
+— S-1/S-2 need a golden-master re-baseline this sandbox cannot run (no Docker), so hold those; or
+survey `0_tracker.md`'s Active work table fresh for anything else genuinely decision-free and
+golden-master-free. Git commit for 21.5/21.7's `binance_testnet.py` + `live_bot_manager.py` +
+`utils/symbols.py` + new test file changes is still pending as of this handoff entry — same
+lock-file-rename workaround as before, verify files aren't stale in bash before trusting `git add`.
 
 ---
 ## 2026-07-16 — Live algo industry-standard audit (Plan 21) + risk-management plan (Plan 22), docs-only — COMPLETE ✅
