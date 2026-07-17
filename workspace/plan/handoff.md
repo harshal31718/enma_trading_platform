@@ -44,7 +44,7 @@ standalone diagnostic script that never touches the sim pipeline.
 
 **Files changed:** new `engine/scripts/recursive.py`, new `engine/tests/test_recursive.py`; docs:
 `17_recursive-analysis.md`, `0_tracker.md`, `workspace/docs/state/CURRENT_STATE.md`, `handoff.md`.
-Not yet committed as of this entry — see next session note.
+Committed (`0378bd5`).
 
 **NOT done — deliberately out of scope:** the report only covers the currently-cached candle range
 (1440 candles — enough for `w<=1000`; `w=2000` skipped for lack of history, script warns about
