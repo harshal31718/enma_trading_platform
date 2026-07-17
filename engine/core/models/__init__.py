@@ -43,6 +43,8 @@ from .portfolio import (
     DefaultPortfolioModel,
     RiskBudgetPortfolio,
     NotionalPortfolio,
+    InverseVolatilityPortfolio,
+    compute_realized_volatility,
 )
 from .execution import (
     DefaultExecution,
@@ -94,6 +96,8 @@ __all__ = [
     "DefaultPortfolioModel",
     "RiskBudgetPortfolio",
     "NotionalPortfolio",
+    "InverseVolatilityPortfolio",
+    "compute_realized_volatility",
     # Execution implementations
     "DefaultExecution",
     "BacktestExecution",

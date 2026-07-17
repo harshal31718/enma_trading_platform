@@ -3,11 +3,12 @@
 **Authority:** This is the single source of truth for what ENMA currently does.
 Read this before starting any work. If this conflicts with chat history, this document wins.
 
-Last updated: 2026-07-17 (Plan 22 Steps 22.1–22.5 — Session Risk Governor, capital integrity
-gate, portfolio open-risk/liq-buffer, protections parity, live VaR/CVaR enforcement, and the
-correlation-aware concentration cap — all shipped and container-verified
-(`docker exec ... pytest /app/tests/` — 313/313 passed, 2026-07-17), pending live Testnet
-re-verification only — see Algo Trading section.
+Last updated: 2026-07-17 (Plan 22 Steps 22.1–22.6 — Session Risk Governor, capital integrity
+gate, portfolio open-risk/liq-buffer, protections parity, live VaR/CVaR enforcement, the
+correlation-aware concentration cap, and the inverse-volatility portfolio allocation layer — all
+shipped and container-verified (`docker exec ... pytest /app/tests/` — 323/323 passed,
+2026-07-17; 22.6 additionally golden-master-verified byte-identical for the default `equal`
+allocation), pending live Testnet re-verification only — see Algo Trading section.
 Earlier: 2026-07-16 Known Technical Debt update confirmed the algo/conditional-order
 `ORDER_TRADE_UPDATE` gap live and logged two new open bugs from a live Chaos run — see below.
 Earlier relocation: content moved into feature SPEC docs and DECISIONS.md; see
@@ -180,7 +181,15 @@ Resilience & Stats sections) — this bullet is a pointer, not a description.
   cluster's combined notional exceeds `max_cluster_exposure_pct` (default 0.4) of equity. New
   `services/portfolio_risk.fetch_correlation_matrix()` reuses the existing 60s close-price cache.
   Fails open on a TimescaleDB fetch/compute exception.
-- Not yet shipped: 22.6–22.7. See
+- **Portfolio allocation layer (22.6, shipped 2026-07-17, golden-master-gated)**: new
+  `InverseVolatilityPortfolio`/`compute_realized_volatility()` (`core/models/portfolio.py`) —
+  weights ∝ 1/realized-vol with an iterative floor/cap clamp, config-gated via
+  `risk_params["allocation"] == "inverse_vol"` (default `"equal"`, byte-identical to pre-22.6 —
+  confirmed via `scripts/golden_master.py`, 5/5 seeded strategies unchanged). Wired into both
+  `backtest_runner.py` (recomputes `capital_splits` after candles load) and
+  `live_bot_manager.py`'s `start_session` (fetches recent close prices via the shared
+  `portfolio_risk.py` cache; falls back to equal split on any failure).
+- Not yet shipped: 22.7. See
   `workspace/plan/22_risk-management-industry-standard.md`.
 
 ### Order History (Trade Recorder)

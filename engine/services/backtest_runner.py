@@ -189,10 +189,10 @@ def _safe_float(val, default):
 
 try:
     from engine.core.kernel import ExecutionAdapter, ExecutionKernel
-    from engine.core.models import DefaultPortfolioModel
+    from engine.core.models import DefaultPortfolioModel, InverseVolatilityPortfolio, compute_realized_volatility
 except ImportError:
     from core.kernel import ExecutionAdapter, ExecutionKernel
-    from core.models import DefaultPortfolioModel
+    from core.models import DefaultPortfolioModel, InverseVolatilityPortfolio, compute_realized_volatility
 
 
 class BacktestAdapter(ExecutionAdapter):
@@ -799,6 +799,23 @@ async def run_backtest_simulation(
             [r["volume"] for r in rows],
         ]).astype(np.float64)
         candles_np_by_sym[sym] = candles_np
+
+    # Plan 22 Step 22.6: opt-in inverse-volatility allocation, config-gated
+    # via risk_params["allocation"] == "inverse_vol" (default "equal" — the
+    # capital_splits computed above at step 3, BEFORE candles existed, is
+    # left completely untouched in the default case, so the golden-master
+    # path has zero diff). Only when opted in do we recompute capital_splits
+    # here, now that warmup candle data is available, using each symbol's
+    # first INVERSE_VOL_LOOKBACK closes (pure rule-based realized vol, no
+    # fitted/GARCH models — fork #2's scope decision).
+    _INVERSE_VOL_LOOKBACK = 30
+    if (risk_params or {}).get("allocation") == "inverse_vol":
+        _close_histories = {
+            sym: candles_np_by_sym[sym][:_INVERSE_VOL_LOOKBACK, 2] for sym in symbols
+        }
+        _vols = compute_realized_volatility(_close_histories)
+        capital_splits = InverseVolatilityPortfolio().allocate(capital, symbols, volatilities=_vols)
+        logger.info(f"[{job_id}] inverse_vol allocation: {capital_splits}")
 
     # ── 5. Setup Redis connection ───────────────────────────────────────────
     redis_url = os.getenv("REDIS_URL", "redis://redis:6379")

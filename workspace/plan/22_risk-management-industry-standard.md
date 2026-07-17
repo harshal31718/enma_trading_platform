@@ -429,6 +429,10 @@ is vetoed (test with canned return series); uncorrelated entry passes.
   /app/tests/` — **313/313 passed** (up from 301/301 pre-22.5).
 
 ### 22.6 — Portfolio allocation layer (fork #3) · P2 · M — **golden-master-gated**
+
+**Status: shipped, golden-master-verified 2026-07-17** — pending live re-verification, same
+standing caveat as every other Plan 21/22 step.
+
 `InverseVolatilityPortfolio` variant of `PortfolioModel.allocate()` (weights ∝ 1/realized-vol
 over a configurable lookback, from warmup candles; pure rule-based per fork #2). Config-gated:
 `allocation: "equal" | "inverse_vol"` on session start (wizard dropdown + Chaos settings);
@@ -439,6 +443,55 @@ if inverse-vol proves insufficient (keeps the Adopt decision reversible).
 Acceptance: golden master unchanged with `equal`; `inverse_vol` weights sum to 1, respect a
 per-symbol floor/cap, and are logged at session start; backtest supports the same flag for
 apples-to-apples validation.
+
+**Shipped:**
+- **`InverseVolatilityPortfolio`** + **`compute_realized_volatility()`** (new,
+  `engine/core/models/portfolio.py`) — `compute_realized_volatility(close_prices)` is a pure
+  function (stdev of log returns per symbol, dropping NaN/non-positive/insufficient-data symbols
+  rather than raising); `InverseVolatilityPortfolio.allocate(total_capital, symbols,
+  volatilities=None, floor_pct=0.05, cap_pct=0.5)` weights ∝ 1/vol, then applies an **iterative
+  clamp-and-renormalize** (alternating projection onto the simplex ∩ box[floor_pct, cap_pct] —
+  a single clamp-then-renormalize pass can push a previously-capped weight back OVER the cap once
+  freed-up mass is redistributed; found by this step's own test suite, not by inspection). A
+  symbol missing a volatility estimate (e.g. newly listed) gets the MEAN of the known weights, not
+  zero. Degrades to the base class's equal-weight `allocate()` whenever fewer than 2 symbols have
+  a usable estimate.
+- **`backtest_runner.py`**: capital_splits is still computed via the untouched
+  `DefaultPortfolioModel().allocate()` call at its original pre-candle-load location (step 3) —
+  **zero diff for the default case**, which is what the golden-master run below actually proves.
+  Only when `risk_params["allocation"] == "inverse_vol"` does a NEW block (placed after candles
+  load, since realized vol needs price data) recompute `capital_splits` using each symbol's first
+  30 warmup closes, overwriting the equal-split value before it's used downstream.
+- **`live_bot_manager.py`'s `start_session`**: same opt-in gate — on `inverse_vol`, fetches recent
+  close-price history via the shared `services/portfolio_risk.fetch_close_prices` (60s-cached,
+  same service 22.4/22.5 already use — a session start is a one-time cost, not a hot path) and
+  computes the split; any fetch/compute exception falls back to the equal split rather than
+  failing session start over an allocation-layer problem. Logged at session start
+  (`logger.info(...inverse_vol allocation: {allocation}...)`) per this step's own acceptance
+  criterion.
+- Zone 2 wizard dropdown / Chaos settings UI: deliberately deferred to 22.7 (same batching
+  precedent as `varLimitPct`/`correlationCap`) — the engine-side `risk_params["allocation"]` key
+  is live now, 22.7 only needs to wire the Node cascade + UI control to send it.
+
+**Golden master (root `CLAUDE.md` Rule C, this step's own explicit gate):**
+`docker exec enma_trading_platform-engine-1 python -m scripts.golden_master run --label pre_22_6`
+captured **before** any code change; re-run **after** (`post_22_6`, then again `post_22_6_v2` after
+the water-filling clamp fix) and compared:
+`python -m scripts.golden_master compare --a pre_22_6 --b post_22_6_v2` →
+**`GOLDEN-MASTER OK — pre_22_6 == post_22_6_v2 within tol=1e-06 (5 strategies)`**. Confirms the
+default `allocation == "equal"` path is byte-identical, satisfying this step's own acceptance
+criterion directly.
+
+**Tests:** `engine/tests/test_inverse_vol_portfolio.py` (10 cases) — `compute_realized_volatility`
+correctness (low-vol < high-vol, drops NaN/non-positive/insufficient-data symbols), `allocate()`
+degrades to equal-weight with no/insufficient volatility data, weights inversely proportional to
+volatility, weights sum to `total_capital` (the acceptance-critical "sum to 1" check, in dollar
+terms), **floor/cap respected even in an extreme 5000x-volatility-ratio case that exposed the
+single-pass clamp bug**, a missing symbol gets the mean known weight not zero, empty symbol list
+returns `{}`. Also manually driven end-to-end against synthetic multi-symbol candle arrays shaped
+exactly like `backtest_runner.py`'s `candles_np_by_sym` slicing, confirming the wiring itself (not
+just the isolated function) behaves correctly. Zero regression: full engine suite —
+**323/323 passed** (up from 313/313 pre-22.6).
 
 ### 22.7 — Platform surface: Zone 2 fields, SessionCard risk state, docs · P2 · S–M
 Zone 2 UI + server validation for all new fields (`maxDailyLossPct`, `maxMarginUtilization`,

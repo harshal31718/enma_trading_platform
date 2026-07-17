@@ -17,7 +17,8 @@ import websockets
 from config.timescale import get_pool
 from core.position import Position
 from core.models import (
-    DefaultPortfolioModel, LiveExecution, OrderPlan,
+    DefaultPortfolioModel, InverseVolatilityPortfolio, compute_realized_volatility,
+    LiveExecution, OrderPlan,
     CooldownPeriod, StoplossGuard, MaxDrawdownProtection, LowProfitPairsProtection,
     ProtectionManager,
     SessionRiskGovernor,
@@ -1559,9 +1560,34 @@ class LiveBotManager:
         # Cross-symbol capital split owned by the Portfolio Model (Phase 3).
         # Default is an equal split (byte-identical to the former
         # capital/len(symbols)); a custom PortfolioModel can re-weight here.
-        allocation = DefaultPortfolioModel().allocate(
-            capital_to_use, symbols
-        )
+        # Plan 22 Step 22.6: opt-in inverse-volatility variant, config-gated
+        # via risk_params["allocation"] == "inverse_vol" (default "equal").
+        # Fetches recent close-price history via the shared
+        # `services/portfolio_risk.fetch_close_prices` (60s-cached, same
+        # service 22.4/22.5 already use) — a live session start is a
+        # one-time cost, not a hot per-candle path, so the extra round trip
+        # is acceptable. Falls back to equal split on any fetch failure
+        # (InverseVolatilityPortfolio itself also degrades to equal-weight
+        # when fewer than 2 symbols have a usable vol estimate).
+        if risk_params.get("allocation") == "inverse_vol":
+            try:
+                from services.portfolio_risk import fetch_close_prices as _fetch_close_prices
+                _price_histories = await _fetch_close_prices(symbols)
+                _vols = compute_realized_volatility(_price_histories)
+                allocation = InverseVolatilityPortfolio().allocate(
+                    capital_to_use, symbols, volatilities=_vols,
+                )
+                logger.info(f"[AlgoBot] Session {session_id}: inverse_vol allocation: {allocation}")
+            except Exception as _alloc_e:
+                logger.warning(
+                    f"[AlgoBot] Session {session_id}: inverse_vol allocation failed, "
+                    f"falling back to equal split — {_alloc_e}"
+                )
+                allocation = DefaultPortfolioModel().allocate(capital_to_use, symbols)
+        else:
+            allocation = DefaultPortfolioModel().allocate(
+                capital_to_use, symbols
+            )
         leverage = int(session_config.get("leverage", 1))
         fee_rate = float(session_config.get("fee_rate", 0.0005))
 

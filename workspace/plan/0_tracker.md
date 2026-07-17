@@ -15,7 +15,7 @@ this board no longer duplicates it).
 |----|-------|-----------------|--------|----------|------------|---------|
 | 21 | Live algo industry-standard audit — **fixes** | 21.5c (batched reconcile) (21.1–21.4 + 21.5a/b + all of 21.7 [A-11/A-12/A-13/A-14] shipped, container-verified 2026-07-17 [301/301 pytest], pending live re-verification only; 21.6 → Merged→22.1) | In progress (21.1–21.4, 21.5a/b, 21.7 all shipped + container-verified 2026-07-17) | P2 (21.5c) | — | 2026-07-17 |
 | 5  | Live-trading state integrity | 5.5 (Decimal money, golden-master sign-off), 5.6 (restart recovery / projection) | In progress | P0 | 21.1–21.2 inform 5.6 | 2026-07-16 |
-| 22 | Industry-standard risk management (Session Risk Governor) | 22.6–22.7 (22.1–22.5 shipped, container-verified 2026-07-17 [313/313 pytest]: governor core, capital integrity gate, portfolio open-risk budget, liq-buffer guard, `risk_breach` webhook, MaxDrawdown/LowProfitPairs protections, risk_check events, shared `services/portfolio_risk.py` + live VaR/CVaR enforcement, correlation-aware concentration cap — pending live re-verification only) | In progress (22.1–22.5 shipped + container-verified 2026-07-17) | P2 (rest) | 21 (21.1–21.4, shipped) | 2026-07-17 |
+| 22 | Industry-standard risk management (Session Risk Governor) | 22.7 (22.1–22.6 shipped, container-verified 2026-07-17 [323/323 pytest]: governor core, capital integrity gate, portfolio open-risk budget, liq-buffer guard, `risk_breach` webhook, MaxDrawdown/LowProfitPairs protections, risk_check events, shared `services/portfolio_risk.py` + live VaR/CVaR enforcement, correlation-aware concentration cap, inverse-vol allocation layer (golden-master-verified) — pending live re-verification only) | In progress (22.1–22.6 shipped + container-verified 2026-07-17) | P2 (rest) | 21 (21.1–21.4, shipped) | 2026-07-17 |
 | 9  | Backtest & optimizer correctness (quant core) | 9.7 (funding ledger), 9.8 (intrabar sim), 9.9 (stats portion), 9.10 (fill-model ladder), **9.11 (cost-gate resurrection, M-1/M-2/M-3 — Step A inert, Step B re-baselined)** | Ready | P1 | — | 2026-07-16 |
 | 10 | Monte Carlo Optimiser & Strategy Lab | Phases 1b–4 (job plumbing, `labResults`, UI, optimizer w/ walk-forward + Optuna) | Ready | P1 | 9 (9.1/9.3, shipped) | 2026-07-16 |
 | 13 | Informative / multi-timeframe contract (`self.htf()`) | All | Ready | P2 | — | 2026-07-16 |
@@ -183,8 +183,10 @@ pipeline-touching steps) a golden-master check per Rule C.
   dashboard and the governor's new `check_var()`) and live VaR/CVaR enforcement, account-wide by
   design, 10s/60s cached. 22.5 shipped the correlation-aware concentration cap (transitive-closure
   clustering over pairwise correlation, pre-trade only, off by default) reusing 22.4's price-history
-  cache via new `fetch_correlation_matrix()`. 22.6 (portfolio allocation layer, golden-master-gated)
-  is next in the plan's own sequencing, not yet started.
+  cache via new `fetch_correlation_matrix()`. 22.6 shipped the inverse-volatility portfolio
+  allocation layer (`InverseVolatilityPortfolio`, config-gated `allocation: "equal"|"inverse_vol"`,
+  default unchanged) — golden-master re-run confirmed byte-identical for the default case (5/5
+  strategies). 22.7 (Zone 2 UI/schema batch) is next in the plan's own sequencing, not yet started.
 - **9** — Remaining steps 9.7–9.10 change backtest outputs **by design** → per-step golden-master
   re-baseline with sign-off (Rule C). Who signs off is still an open question.
 - **10** — MC core math is honest (Phase 1a shipped) but still behind the old synchronous

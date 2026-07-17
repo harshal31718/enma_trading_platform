@@ -135,3 +135,108 @@ class NotionalPortfolio(DefaultPortfolioModel):
         conviction = max(0.0, min(float(sig.conviction), 1.0))
         pct = float(getattr(s, "position_size_pct", 0.1))
         return s.size_by_notional(pct) * conviction
+
+
+def compute_realized_volatility(close_prices: "dict[str, list[float] | object]") -> dict[str, float]:
+    """Plan 22 Step 22.6: per-symbol realized volatility (stdev of log
+    returns) over whatever warmup window the caller hands in — pure
+    rule-based (fork #2: no fitted/GARCH models), used only to weight
+    `InverseVolatilityPortfolio.allocate()`.
+
+    `close_prices` maps symbol -> a sequence of closing prices (already
+    sliced to the desired lookback by the caller — this function has no
+    opinion on lookback length, backtest and live each own that decision
+    separately since backtest has upfront warmup candles and live has to
+    fetch history). A symbol with fewer than 2 usable prices (after
+    dropping NaN) is simply omitted from the result — the caller's
+    allocate() degrades a missing symbol to equal-weight among the rest.
+    """
+    import numpy as np
+
+    vols: dict[str, float] = {}
+    for sym, prices in close_prices.items():
+        arr = np.asarray(prices, dtype=float)
+        arr = arr[~np.isnan(arr)]
+        if len(arr) < 2 or np.any(arr <= 0):
+            continue
+        returns = np.diff(np.log(arr))
+        if len(returns) < 1:
+            continue
+        vol = float(np.std(returns))
+        if vol > 0:
+            vols[sym] = vol
+    return vols
+
+
+class InverseVolatilityPortfolio(DefaultPortfolioModel):
+    """Plan 22 Step 22.6 (fork #3): weights symbols ∝ 1/realized-volatility
+    instead of the base class's equal split. `construct()` is inherited
+    unchanged from `DefaultPortfolioModel` — only cross-symbol capital
+    ALLOCATION differs, not per-candle position sizing.
+
+    Config-gated at the call site (`backtest_runner.py`/`live_bot_manager.py`)
+    via `risk_params["allocation"] == "inverse_vol"`; default `"equal"` keeps
+    using the plain `DefaultPortfolioModel`/base `allocate()`, byte-identical
+    to pre-22.6 behavior (golden-master requirement).
+    """
+
+    def allocate(
+        self,
+        total_capital: float,
+        symbols: list[str],
+        volatilities: dict[str, float] | None = None,
+        floor_pct: float = 0.05,
+        cap_pct: float = 0.5,
+    ) -> dict[str, float]:
+        """Weight ∝ 1/vol, then clamp each symbol's weight to [floor_pct,
+        cap_pct] and renormalize so weights still sum to 1 (a clamp alone can
+        leave the sum off — freqtrade/risk-parity implementations
+        renormalize post-clamp, so do the same here). Symbols missing from
+        `volatilities` (no usable price history — e.g. a newly-listed
+        symbol) fall back to the mean of the KNOWN weights, not zero — a
+        symbol we simply have no vol estimate for shouldn't be starved of
+        capital outright.
+
+        Degrades to the equal-weight base-class behavior when `volatilities`
+        is empty/None or fewer than 2 symbols have a usable estimate (no
+        meaningful "inverse" weighting possible with 0-1 data points).
+        """
+        n = len(symbols)
+        if n == 0:
+            return {}
+        vols = volatilities or {}
+        known = {sym: vols[sym] for sym in symbols if sym in vols and vols[sym] > 0}
+        if len(known) < 2:
+            return super().allocate(total_capital, symbols)
+
+        inv = {sym: 1.0 / v for sym, v in known.items()}
+        inv_sum = sum(inv.values())
+        raw_weights = {sym: w / inv_sum for sym, w in inv.items()}
+        mean_known_weight = sum(raw_weights.values()) / len(raw_weights)
+        weights = {sym: raw_weights.get(sym, mean_known_weight) for sym in symbols}
+
+        # Iterative clamp-and-renormalize (alternating projection onto the
+        # simplex ∩ box[floor_pct, cap_pct]): a single clamp-then-renormalize
+        # pass can push a previously-capped weight back OVER the cap once
+        # the freed-up mass is redistributed (e.g. two symbols simultaneously
+        # hit the floor while a third hits the cap — fixing all three in one
+        # shot leaves 1-Σfixed unaccounted for). Repeatedly clamp then
+        # renormalize the WHOLE set until stable; converges whenever
+        # `floor_pct * n <= 1 <= cap_pct * n` (always true for this method's
+        # own defaults with n>=2, since `known` requires >=2 entries).
+        final_weights = dict(weights)
+        for _ in range(200):
+            total = sum(final_weights.values())
+            if total <= 0:
+                return super().allocate(total_capital, symbols)
+            normalized = {sym: w / total for sym, w in final_weights.items()}
+            clamped = {sym: min(max(w, floor_pct), cap_pct) for sym, w in normalized.items()}
+            if max(abs(clamped[sym] - normalized[sym]) for sym in clamped) < 1e-12:
+                final_weights = normalized
+                break
+            final_weights = clamped
+        else:
+            total = sum(final_weights.values())
+            final_weights = {sym: w / total for sym, w in final_weights.items()} if total > 0 else weights
+
+        return {sym: total_capital * w for sym, w in final_weights.items()}

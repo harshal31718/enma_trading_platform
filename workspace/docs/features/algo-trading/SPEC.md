@@ -510,14 +510,29 @@ TimescaleDB load beyond what 22.4 already introduced. Wired into `execute_entry`
 an external data source). Zone 2 schema/UI deferred to 22.7, same batching precedent as
 `varLimitPct`.
 
-**Not yet shipped:** 22.6–22.7 (portfolio allocation layer, and the batched Zone 2 UI/schema
-surface). Full Zone 2 UI/schema wiring for the governor's config keys accumulated across 22.1–22.5
-is 22.7's scope — they're read as plain engine-side defaults until then. See
-`workspace/plan/22_risk-management-industry-standard.md` and `DECISIONS.md` #23/#24/#25.
+**Portfolio allocation layer (Plan 22 Step 22.6, shipped 2026-07-17, golden-master-gated):** new
+`InverseVolatilityPortfolio`/`compute_realized_volatility()` (`core/models/portfolio.py`) — weights
+∝ 1/realized-vol (stdev of log returns), an iterative clamp-and-renormalize enforcing a per-symbol
+floor/cap (0.05/0.5 default), missing-data symbols fall back to the mean known weight not zero.
+Config-gated via `risk_params["allocation"] == "inverse_vol"` (default `"equal"`) in both
+`backtest_runner.py` (recomputes `capital_splits` once warmup candles are loaded — the default
+path's original pre-candle-load equal-split call is left completely untouched) and
+`live_bot_manager.py`'s `start_session` (fetches recent closes via the shared `portfolio_risk.py`
+cache; falls back to equal split on any failure, logs the resolved split at session start).
+**Golden-master confirmed byte-identical for the default case**:
+`docker exec enma_trading_platform-engine-1 python -m scripts.golden_master compare --a pre_22_6
+--b post_22_6_v2` → `GOLDEN-MASTER OK` (5/5 seeded strategies, tol 1e-6).
+
+**Not yet shipped:** 22.7 (the batched Zone 2 UI/schema surface — wizard dropdown for
+`allocation`, plus every other new field from 22.1–22.6). Full Zone 2 UI/schema wiring for the
+governor's config keys accumulated across 22.1–22.6 is 22.7's scope — they're read as plain
+engine-side defaults until then. See `workspace/plan/22_risk-management-industry-standard.md` and
+`DECISIONS.md` #23/#24/#25.
 **Container-verified 2026-07-17** — `docker exec enma_trading_platform-engine-1 pytest
-/app/tests/` (the user's own container, not this dev sandbox) ran the full engine suite: **313/313
-passed**, covering every Plan 21 (21.1–21.7) and Plan 22 (22.1–22.5) test file including
-`test_session_risk_governor.py` (40/40) and the `live_bot_manager.py`-driving stub-injection
+/app/tests/` (the user's own container, not this dev sandbox) ran the full engine suite: **323/323
+passed**, covering every Plan 21 (21.1–21.7) and Plan 22 (22.1–22.6) test file including
+`test_session_risk_governor.py` (40/40), `test_inverse_vol_portfolio.py` (10/10), and the
+`live_bot_manager.py`-driving stub-injection
 suites (`test_execute_entry_*`, `test_kline_ws_url.py`, `test_portfolio_risk_shared_service.py`,
 etc.) that this dev sandbox could only `py_compile`/`ast.parse`-verify. **Pending: live
 re-verification only** — no behavioral claim above (governor vetoes, protections locks, capital
