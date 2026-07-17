@@ -14,7 +14,7 @@ from core.models import BacktestExecution
 from core.pipeline import evaluate
 from core.params import param_coerce, param_validate
 from services.candle_manager import ensure_candles_available
-from utils.timeframes import annual_factor, required_base_candles_for_htf
+from utils.timeframes import annual_factor, required_base_candles_for_htf, to_ms
 from decimal import ROUND_DOWN, ROUND_UP
 from utils.symbols import _MAX_LEVERAGE_OFFLINE_MAP, clamp_and_round_qty, round_price
 # Phase 2 — pluggable metric registry (A-012) + new metrics (A-007) + breakdown tables (A-008)
@@ -707,6 +707,7 @@ async def run_backtest_simulation(
     entry_candle_exits: bool = False,
     _reprep_every_candle: bool = False,
     round_trip_stats: bool = False,
+    intrabar_detail: bool = False,
 ) -> dict:
     # entry_candle_exits (QNT-3, Plan 9 Step 9.4): opt-in, default off. When
     # True, SL/TP/liquidation are evaluated against the same candle a
@@ -736,6 +737,13 @@ async def run_backtest_simulation(
     # False is byte-identical to the pre-9.9 path. Flipping the platform
     # default needs a deliberate golden-master re-baseline + sign-off — see
     # workspace/plan/9_backtest-and-optimizer-correctness.md Step 9.9.
+    # intrabar_detail (QNT-3 residual / ENG-18, Plan 9 Step 9.8): opt-in,
+    # default off. When True, fetches 1m candles for the same date range and
+    # resolves the "both SL and TP wicks hit this candle" ambiguity via
+    # ExecutionKernel._resolve_intrabar_winner() instead of the default
+    # SL-first assumption. Default False is byte-identical to the pre-9.8
+    # path (no 1m fetch happens at all). See
+    # workspace/plan/9_backtest-and-optimizer-correctness.md Step 9.8.
     # ── 1. Parse strategy name ──────────────────────────────────────────────
     parts = strategy_file.split("/")
     if len(parts) >= 2 and parts[0] == "strategies":
@@ -775,6 +783,12 @@ async def run_backtest_simulation(
         tf for tf in (getattr(strategy_class, "informative_timeframes", []) or [])
         if tf != timeframe
     ]
+    # Plan 9 Step 9.8: 1m detail candles per symbol, whole backtest range,
+    # fed to ExecutionKernel for the opt-in intrabar SL/TP-ordering
+    # resolution. Only fetched when intrabar_detail=True AND the base
+    # timeframe isn't already 1m (nothing to resolve at 1m granularity) —
+    # default False means this loop never runs, zero fetch cost.
+    detail_candles_by_sym: dict = {}
 
     for sym in symbols:
         candles_available = await ensure_candles_available(
@@ -855,6 +869,37 @@ async def run_backtest_simulation(
                 [r["low"]    for r in htf_rows],
                 [r["volume"] for r in htf_rows],
             ]).astype(np.float64) if htf_rows else np.empty((0, 6), dtype=np.float64)
+
+        if intrabar_detail and timeframe != "1m":
+            _detail_ok = await ensure_candles_available(
+                job_id=job_id, exchange=exchange, symbol=sym, timeframe="1m",
+                start_date=start_date, end_date=end_date,
+            )
+            if not _detail_ok:
+                logger.error(
+                    f"[{job_id}] {sym}: failed to fetch 1m detail candles — intrabar SL/TP "
+                    f"ordering will fall back to the SL-first default for every ambiguous candle"
+                )
+                detail_candles_by_sym[sym] = np.empty((0, 6), dtype=np.float64)
+            else:
+                async with pool.acquire() as conn:
+                    detail_rows = await conn.fetch(
+                        """
+                        SELECT time, open, close, high, low, volume
+                        FROM candles
+                        WHERE exchange = $1 AND symbol = $2 AND timeframe = '1m' AND time >= $3 AND time < $4
+                        ORDER BY time ASC
+                        """,
+                        exchange, sym, start_dt, end_dt,
+                    )
+                detail_candles_by_sym[sym] = np.column_stack([
+                    [r["time"].timestamp() * 1000 for r in detail_rows],
+                    [r["open"]   for r in detail_rows],
+                    [r["close"]  for r in detail_rows],
+                    [r["high"]   for r in detail_rows],
+                    [r["low"]    for r in detail_rows],
+                    [r["volume"] for r in detail_rows],
+                ]).astype(np.float64) if detail_rows else np.empty((0, 6), dtype=np.float64)
 
     # Plan 22 Step 22.6: opt-in inverse-volatility allocation, config-gated
     # via risk_params["allocation"] == "inverse_vol" (default "equal" — the
@@ -1035,7 +1080,12 @@ async def run_backtest_simulation(
                 elif algo_type == "iceberg":
                     exec_algo = IcebergAlgorithm(strategy, sym, algo_params)
 
-            kernel = ExecutionKernel(adapter, exec_algo, entry_candle_exits=entry_candle_exits)
+            kernel = ExecutionKernel(
+                adapter, exec_algo, entry_candle_exits=entry_candle_exits,
+                intrabar_detail=intrabar_detail,
+                detail_candles_by_symbol={sym: detail_candles_by_sym.get(sym, np.empty((0, 6), dtype=np.float64))},
+                base_timeframe_ms=to_ms(timeframe) if intrabar_detail else None,
+            )
 
             warmup_period = max(strategy.MIN_WARMUP_CANDLES, min(50, len(rows) - 2))
             warmup_periods[sym] = warmup_period

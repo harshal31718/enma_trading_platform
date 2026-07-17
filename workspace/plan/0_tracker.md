@@ -16,7 +16,7 @@ this board no longer duplicates it).
 | 21 | Live algo industry-standard audit — **fixes** | 21.5c (batched reconcile) (21.1–21.4 + 21.5a/b + all of 21.7 [A-11/A-12/A-13/A-14] shipped, container-verified 2026-07-17 [301/301 pytest], pending live re-verification only; 21.6 → Merged→22.1) | In progress (21.1–21.4, 21.5a/b, 21.7 all shipped + container-verified 2026-07-17) | P2 (21.5c) | — | 2026-07-17 |
 | 5  | Live-trading state integrity | 5.5 (Decimal money, golden-master sign-off), 5.6 (restart recovery / projection) | In progress | P0 | 21.1–21.2 inform 5.6 | 2026-07-16 |
 | 22 | Industry-standard risk management (Session Risk Governor) | ALL SHIPPED (22.1–22.7, container/Jest-verified 2026-07-17 [330/330 pytest, 88/88 jest], 22.6 golden-master-verified, 22.7 live-verified in-browser) — pending live Testnet re-verification only | **Done** (pending live re-verification) | — | 21 (21.1–21.4, shipped) | 2026-07-17 |
-| 9  | Backtest & optimizer correctness (quant core) | 9.7 (funding ledger), 9.8 (intrabar sim); 9.10's fill-model ladder shipped — liquidation fee needs a DECISIONS.md call, warmup fail-loud deferred to Plan 8 | Ready | P1 | — | 2026-07-17 |
+| 9  | Backtest & optimizer correctness (quant core) | 9.7 (funding ledger); 9.10's fill-model ladder shipped — liquidation fee needs a DECISIONS.md call, warmup fail-loud deferred to Plan 8 | Ready | P1 | — | 2026-07-17 |
 | 10 | Monte Carlo Optimiser & Strategy Lab | Phases 1b–4 (job plumbing, `labResults`, UI, optimizer w/ walk-forward + Optuna) | Ready | P1 | 9 (9.1/9.3, shipped) | 2026-07-16 |
 | 13 | Informative / multi-timeframe contract (`self.htf()`) | Shipped — primitive only, no seeded strategy adopts it yet | **Done** | — | — | 2026-07-17 |
 | 17 | Recursive-formula / warmup-insufficiency analysis | Shipped — no live-vs-backtest drift risk found at w=500 for any seeded strategy | **Done** | — | — | 2026-07-17 |
@@ -223,7 +223,15 @@ pipeline-touching steps) a golden-master check per Rule C.
   construction (no seeded strategy assigns it). Liquidation fee (QNT-4) deliberately NOT
   implemented — contradicts a documented `engine/CLAUDE.md` contract, needs a `DECISIONS.md` call
   from the user, not a mechanical fix. Warmup-insufficiency fail-loud (QNT-16) deferred to
-  coordinate with Plan 8 per this step's own text.
+  coordinate with Plan 8 per this step's own text. **9.8's intrabar detail resolution shipped
+  2026-07-17**: `ExecutionKernel` gained opt-in `intrabar_detail`/`detail_candles_by_symbol`/
+  `base_timeframe_ms` — when both SL and TP wicks hit one base candle (the genuinely ambiguous
+  case), scans 1m sub-candles in time order to find which level actually triggered first, instead
+  of the code-order SL-first default. `check_exits()` refactored to a candidate-then-decide
+  structure, behavior-preserving by construction for the default (off) path — golden master
+  confirmed byte-identical. `backtest_runner.py` fetches 1m candles only when opted in and the
+  base timeframe isn't already 1m (zero fetch cost by default). No 1m-fetch size guardrail added
+  — a long backtest opting in would fetch a very large candle set, left as a known limitation.
 - **10** — MC core math is honest (Phase 1a shipped) but still behind the old synchronous
   endpoint; everything else (job queue, `labResults`, Strategy Lab UI, optimizer exposure)
   unstarted. Phase 3 absorbs plans 18/19 — build from their design notes, not their specs.

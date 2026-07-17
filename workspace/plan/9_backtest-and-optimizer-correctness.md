@@ -126,8 +126,39 @@ signals from the same data, verified mechanically, not by assertion.
 - Import `/fapi/v1/fundingRate` into TimescaleDB (idempotent, candle-importer pattern);
   charge boundary-priced signed funding in backtest; keep flat-rate as explicit fallback.
 
-### 9.8 — Detail-timeframe intrabar simulation (ENG-18, QNT-3 residual)
+### 9.8 — Detail-timeframe intrabar simulation (ENG-18, QNT-3 residual) — **Shipped 2026-07-17**
 - Opt-in sub-candle loop (1m detail) inside `check_exits` for SL/TP ordering. Re-baseline.
+- **Done.** `ExecutionKernel.__init__` gained `intrabar_detail: bool = False`,
+  `detail_candles_by_symbol: dict | None = None`, `base_timeframe_ms: int | None = None`, and a
+  new `_resolve_intrabar_winner()` method. `check_exits()`'s long/short branches now compute
+  `sl_hit`/`tp_hit` candidates first; when BOTH are true within one base candle (the genuinely
+  ambiguous case — previously always resolved SL-first by code-order alone), the ambiguity is
+  resolved via `_resolve_intrabar_winner()` (opt-in) — scans 1m sub-candles within that base
+  candle's `[open, open+timeframe)` window in chronological order, returning whichever level's
+  wick genuinely triggers first, falling back to the SL-first default when detail data isn't
+  available/doesn't cover the window (a gap in 1m history is never a hard failure). Refactor is
+  behavior-preserving by construction for the default path (`intrabar_detail=False`):
+  `_resolve_intrabar_winner()` short-circuits to `None` immediately, so `winner = None or
+  "stop_loss"` reproduces the exact prior structural bias.
+- **Wiring** (`services/backtest_runner.py`): new `intrabar_detail: bool = False` param on
+  `run_backtest_simulation`. When `True` and the base timeframe isn't already `1m`, fetches 1m
+  candles for the same date range via the existing `ensure_candles_available()` single entry
+  point (same pattern as Plan 13's HTF fetch) into a new `detail_candles_by_sym` dict, passed to
+  each symbol's `ExecutionKernel` alongside `base_timeframe_ms = utils.timeframes.to_ms(timeframe)`.
+  Default `False` means this fetch never runs at all — zero cost, not just zero behavior change.
+  **Not implemented: 1m-fetch cost/size guardrails** — a long multi-year backtest opting into this
+  would fetch a very large 1m candle set (e.g. a 1-year 1h backtest needs ~525k 1m candles); no
+  warning or cap was added this session, left as a known limitation for whoever activates this in
+  practice.
+- **Verification:** golden master confirmed byte-identical (Rule C — both the refactored
+  `kernel.py` exit-check logic and the new backtest_runner.py wiring, default settings). New
+  `engine/tests/test_intrabar_detail_resolution.py` (10 cases): default-off preserves the
+  SL-first bias; opt-in correctly resolves TP-hit-first and SL-hit-first from synthetic 1m data;
+  graceful fallback when detail data is missing for the symbol, doesn't cover the window, or
+  (defensively) doesn't actually confirm either level; the non-ambiguous single-level case is
+  unaffected by the flag either way; short-side resolution; `_resolve_intrabar_winner()`'s own
+  None-returning guards (flag off, `base_timeframe_ms` unset). Container suite: 407/407 passed
+  (up from 397).
 
 ### 9.9 — Monte Carlo & statistics honesty (QNT-7, QNT-13, QNT-14) — **MC portion absorbed by Plan 10 (Phase 1); statistics portion stays here**
 - Block bootstrap, 5–10k runs, percentile bands, configurable ruin threshold, exclude

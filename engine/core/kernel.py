@@ -70,7 +70,11 @@ class ExecutionAdapter(ABC):
 class ExecutionKernel:
     """Unified execution kernel orchestrating exit checks, indicators and evaluations."""
 
-    def __init__(self, adapter: ExecutionAdapter, exec_algo=None, entry_candle_exits: bool = False) -> None:
+    def __init__(
+        self, adapter: ExecutionAdapter, exec_algo=None, entry_candle_exits: bool = False,
+        intrabar_detail: bool = False, detail_candles_by_symbol: dict | None = None,
+        base_timeframe_ms: int | None = None,
+    ) -> None:
         self.adapter = adapter
         self.exec_algo = exec_algo
         # QNT-3 (Plan 9 Step 9.4), opt-in, default off: backtest normally skips
@@ -80,6 +84,54 @@ class ExecutionKernel:
         # entry fill there. Default False keeps the existing golden-master
         # behavior; flip only with a deliberate re-baseline + sign-off.
         self.entry_candle_exits = entry_candle_exits
+        # QNT-3 residual / ENG-18 (Plan 9 Step 9.8), opt-in, default off: when
+        # BOTH SL and TP wicks are hit within the same base candle, the
+        # default (intrabar_detail=False) keeps the existing conservative
+        # bias — SL assumed first (engine/CLAUDE.md's documented contract).
+        # When True, `detail_candles_by_symbol` (1m candles per symbol, whole
+        # backtest range, fetched by backtest_runner.py) is scanned within the
+        # ambiguous base candle's [open, open+timeframe) window in
+        # chronological order — whichever level's wick genuinely triggers
+        # first at 1m granularity wins. Falls back to the SL-first default
+        # when detail data isn't available for that window (gap in 1m
+        # history) — never a hard failure. Live is never affected (armed_legs
+        # normally resolves this via the exchange's own trigger order; this
+        # is a backtest-only refinement).
+        self.intrabar_detail = intrabar_detail
+        self.detail_candles_by_symbol = detail_candles_by_symbol or {}
+        self.base_timeframe_ms = base_timeframe_ms
+
+    def _resolve_intrabar_winner(
+        self, symbol: str, is_long: bool, sl_price: float, tp_price: float, bucket_start_ms: float,
+    ) -> str | None:
+        """Scan 1m detail candles within one base candle's [open, open+tf)
+        window, in time order, returning "stop_loss"/"take_profit" for
+        whichever level's wick genuinely triggers first — or None if detail
+        data isn't available/covers this window, or neither level actually
+        triggers within it (caller falls back to the SL-first default)."""
+        if not self.intrabar_detail or self.base_timeframe_ms is None:
+            return None
+        detail = self.detail_candles_by_symbol.get(symbol)
+        if detail is None or len(detail) == 0:
+            return None
+        bucket_end_ms = bucket_start_ms + self.base_timeframe_ms
+        ts = detail[:, 0]
+        lo = np.searchsorted(ts, bucket_start_ms, side="left")
+        hi = np.searchsorted(ts, bucket_end_ms, side="left")
+        window = detail[lo:hi]
+        for row in window:
+            d_high, d_low = row[3], row[4]
+            if is_long:
+                if d_low <= sl_price:
+                    return "stop_loss"
+                if d_high >= tp_price:
+                    return "take_profit"
+            else:
+                if d_high >= sl_price:
+                    return "stop_loss"
+                if d_low <= tp_price:
+                    return "take_profit"
+        return None
 
     async def execute_pending(self, strategy, symbol: str, candle: np.ndarray, index_t: int, time_t: datetime) -> None:
         """Simulates next-open fills for orders placed on the previous candle (backtest only)."""
@@ -274,53 +326,80 @@ class ExecutionKernel:
             if strategy.is_long:
                 sl = strategy.stop_loss
                 tp = strategy.take_profit
-                if sl is not None and not _sl_armed:
-                    _, sl_price = sl
-                    if low_t <= sl_price:
-                        exit_reason = "stop_loss"
-                        closed = True
-                        if not is_live:
-                            gap_price = gap_through_stop_price(
-                                is_long=True,
-                                stop_price=sl_price,
-                                candle_open=open_t,
-                                candle_low=low_t,
-                                candle_high=high_t,
-                            )
-                            exit_price = gap_price if gap_price is not None else sl_price
-                        else:
-                            exit_price = sl_price
-                if not closed and tp is not None and not _tp_armed:
-                    _, tp_price = tp
-                    if high_t >= tp_price:
-                        exit_price = tp_price
-                        exit_reason = "take_profit"
-                        closed = True
+                sl_price = sl[1] if (sl is not None and not _sl_armed) else None
+                tp_price = tp[1] if (tp is not None and not _tp_armed) else None
+                sl_hit = sl_price is not None and low_t <= sl_price
+                tp_hit = tp_price is not None and high_t >= tp_price
+
+                winner = None
+                if sl_hit and tp_hit:
+                    # QNT-3 residual (Plan 9 Step 9.8): both wicks hit this
+                    # candle — ambiguous ordering. Default: SL first
+                    # (conservative, unchanged). Opt-in: resolve via 1m detail.
+                    winner = self._resolve_intrabar_winner(
+                        symbol, is_long=True, sl_price=sl_price, tp_price=tp_price,
+                        bucket_start_ms=candle[0],
+                    ) or "stop_loss"
+                elif sl_hit:
+                    winner = "stop_loss"
+                elif tp_hit:
+                    winner = "take_profit"
+
+                if winner == "stop_loss":
+                    exit_reason = "stop_loss"
+                    closed = True
+                    if not is_live:
+                        gap_price = gap_through_stop_price(
+                            is_long=True,
+                            stop_price=sl_price,
+                            candle_open=open_t,
+                            candle_low=low_t,
+                            candle_high=high_t,
+                        )
+                        exit_price = gap_price if gap_price is not None else sl_price
+                    else:
+                        exit_price = sl_price
+                elif winner == "take_profit":
+                    exit_price = tp_price
+                    exit_reason = "take_profit"
+                    closed = True
             elif strategy.is_short:
                 sl = strategy.stop_loss
                 tp = strategy.take_profit
-                if sl is not None and not _sl_armed:
-                    _, sl_price = sl
-                    if high_t >= sl_price:
-                        exit_reason = "stop_loss"
-                        closed = True
-                        if not is_live:
-                            gap_price = gap_through_stop_price(
-                                is_long=False,
-                                stop_price=sl_price,
-                                candle_open=open_t,
-                                candle_low=low_t,
-                                candle_high=high_t,
-                            )
-                            exit_price = gap_price if gap_price is not None else sl_price
-                        else:
-                            exit_price = sl_price
-                if not closed and tp is not None and not _tp_armed:
-                    _, tp_price = tp
-                    if low_t <= tp_price:
-                        exit_price = tp_price
-                        exit_reason = "take_profit"
-                        closed = True
+                sl_price = sl[1] if (sl is not None and not _sl_armed) else None
+                tp_price = tp[1] if (tp is not None and not _tp_armed) else None
+                sl_hit = sl_price is not None and high_t >= sl_price
+                tp_hit = tp_price is not None and low_t <= tp_price
+
+                winner = None
+                if sl_hit and tp_hit:
+                    winner = self._resolve_intrabar_winner(
+                        symbol, is_long=False, sl_price=sl_price, tp_price=tp_price,
+                        bucket_start_ms=candle[0],
+                    ) or "stop_loss"
+                elif sl_hit:
+                    winner = "stop_loss"
+                elif tp_hit:
+                    winner = "take_profit"
+
+                if winner == "stop_loss":
+                    exit_reason = "stop_loss"
+                    closed = True
+                    if not is_live:
+                        gap_price = gap_through_stop_price(
+                            is_long=False,
+                            stop_price=sl_price,
+                            candle_open=open_t,
+                            candle_low=low_t,
+                            candle_high=high_t,
+                        )
+                        exit_price = gap_price if gap_price is not None else sl_price
+                    else:
+                        exit_price = sl_price
+                elif winner == "take_profit":
+                    exit_price = tp_price
+                    exit_reason = "take_profit"
+                    closed = True
 
         if closed:
             await self.adapter.execute_exit(
