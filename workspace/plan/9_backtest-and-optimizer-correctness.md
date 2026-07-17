@@ -149,7 +149,7 @@ signals from the same data, verified mechanically, not by assertion.
   the default golden-master run at all — zero risk to the existing baseline; full suite 88/88.
   Fill-model ladder + liquidation fee + warmup fail-loud remain undone.
 
-### 9.11 — Cost-gate resurrection: rewire, fix dimensions, wire-or-delete `magnitude` (M-1/M-2/M-3, added 2026-07-16)
+### 9.11 — Cost-gate resurrection: rewire, fix dimensions, wire-or-delete `magnitude` (M-1/M-2/M-3, added 2026-07-16) — **Step A Shipped 2026-07-17**
 - **Source:** Plan 21's five-model audit addendum (`21_live-algo-industry-standard-audit.md`
   Part A2). Three `[Certain]` findings: **M-1** — the "default-on" cost gate never fires because
   `live_bot_manager.py:1262`/`backtest_runner.py:905` inject `min_edge_mult=0.05` onto
@@ -169,6 +169,27 @@ signals from the same data, verified mechanically, not by assertion.
   golden-master re-baseline + sign-off, per this plan's standing protocol. Do not bundle with
   Step A. `CURRENT_STATE.md`'s Risk-Model bullet already carries the 2026-07-16 correction;
   update it again when A/B land.
+- **Step A shipped 2026-07-17.** `DefaultPortfolioModel._edge_beats_cost()`
+  (`core/models/portfolio.py`) now reads a `min_edge_mult` that's actually set on the right
+  object: both injection sites (`backtest_runner.py`, `live_bot_manager.py`) write
+  `strategy.portfolio_model.min_edge_mult` instead of the dead `strategy.cost_model.min_edge_mult`
+  (M-1), and both now default to `0.0` (was `0.05` — but since the old value never reached the
+  gate, this is a no-op change, not a behavior change). The gate formula is now quote-vs-quote:
+  `edge_total = edge_frac × risk_per_unit × qty_est × rrr` where `qty_est =
+  min(budget/risk_per_unit, max_notional/price)` — the same quantity the Cost Model used to
+  produce `cost.total` — instead of comparing a bare per-unit price distance against a
+  whole-position quote cost (M-2). `edge_frac` uses `sig.magnitude` when the alpha model provides
+  one (nonzero), falling back to `abs(sig.conviction)` (M-3) — `Signal.magnitude`'s docstring was
+  already accurate, it was simply unread until now. New `engine/tests/test_edge_beats_cost_gate.py`
+  (5 cases) proves: gate-off passes regardless of cost; a scaled-edge boundary case flips on
+  cost; the veto boundary is **price-level invariant** (identical relative setup on a BTC-priced
+  and a sub-cent symbol gives the identical verdict — the concrete regression test for M-2);
+  magnitude overrides conviction when provided; the alpha-level veto still short-circuits.
+  **Golden master re-run before/after per root CLAUDE.md Rule C**: `compare --a pre_9_11_stepA
+  --b post_9_11_stepA` → `GOLDEN-MASTER OK` (5/5 seeded strategies, tol 1e-6) — confirms the
+  default-off gate produces byte-identical output. Container suite: 358/358 passed (up from 353).
+  Step B (deciding whether to activate the gate at 0.05 by default) is untouched — genuinely a
+  product decision needing its own re-baseline + sign-off, not bundled here.
 
 ## Acceptance criteria (phase)
 

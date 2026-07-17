@@ -88,6 +88,19 @@ class DefaultPortfolioModel(PortfolioModel):
 
         Default min_edge_mult=0.0 → always True (never veto). Override in a
         subclass or set on an instance to opt in to the cost gate.
+
+        Both sides are quote currency (Plan 9.11 M-2 fix): edge is scaled by the
+        same qty_est the Cost Model used to estimate `cost.total`
+        (min(budget/risk_per_unit, max_notional/price) — recomputed here rather
+        than threaded through CostEstimate, since both call sites already have
+        the constraints that produced it). Previously edge was a bare per-unit
+        price distance compared against a whole-position quote cost, making the
+        gate a function of the symbol's absolute price level.
+
+        Edge strength (Plan 9.11 M-3 fix): uses `sig.magnitude` when the alpha
+        model provides one (predicted move as a fraction of price), falling
+        back to `abs(sig.conviction)` otherwise — previously `magnitude` was
+        documented as feeding this gate but was read by nothing.
         """
         # Always honor strategy cost vetoes
         if not s.alpha_beats_cost(float(sig.direction)):
@@ -96,9 +109,16 @@ class DefaultPortfolioModel(PortfolioModel):
         mult = float(getattr(self, "min_edge_mult", 0.0))
         if mult <= 0.0:
             return True
-        rrr  = float(getattr(s, "rrr", 2.0))
-        edge = abs(sig.conviction) * constraints.risk_per_unit * rrr
-        return edge >= mult * cost.total
+        if constraints.risk_per_unit <= 0 or s.price <= 0:
+            return True
+        rrr = float(getattr(s, "rrr", 2.0))
+        edge_frac = abs(sig.magnitude) if sig.magnitude else abs(sig.conviction)
+        qty_est = min(
+            constraints.budget / constraints.risk_per_unit if constraints.risk_per_unit > 0 else 0.0,
+            constraints.max_notional / s.price,
+        )
+        edge_total = edge_frac * constraints.risk_per_unit * qty_est * rrr
+        return edge_total >= mult * cost.total
 
 
 class RiskBudgetPortfolio(DefaultPortfolioModel):

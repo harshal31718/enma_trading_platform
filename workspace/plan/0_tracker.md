@@ -16,7 +16,7 @@ this board no longer duplicates it).
 | 21 | Live algo industry-standard audit — **fixes** | 21.5c (batched reconcile) (21.1–21.4 + 21.5a/b + all of 21.7 [A-11/A-12/A-13/A-14] shipped, container-verified 2026-07-17 [301/301 pytest], pending live re-verification only; 21.6 → Merged→22.1) | In progress (21.1–21.4, 21.5a/b, 21.7 all shipped + container-verified 2026-07-17) | P2 (21.5c) | — | 2026-07-17 |
 | 5  | Live-trading state integrity | 5.5 (Decimal money, golden-master sign-off), 5.6 (restart recovery / projection) | In progress | P0 | 21.1–21.2 inform 5.6 | 2026-07-16 |
 | 22 | Industry-standard risk management (Session Risk Governor) | ALL SHIPPED (22.1–22.7, container/Jest-verified 2026-07-17 [330/330 pytest, 88/88 jest], 22.6 golden-master-verified, 22.7 live-verified in-browser) — pending live Testnet re-verification only | **Done** (pending live re-verification) | — | 21 (21.1–21.4, shipped) | 2026-07-17 |
-| 9  | Backtest & optimizer correctness (quant core) | 9.7 (funding ledger), 9.8 (intrabar sim), 9.9 (stats portion), 9.10 (fill-model ladder), **9.11 (cost-gate resurrection, M-1/M-2/M-3 — Step A inert, Step B re-baselined)** | Ready | P1 | — | 2026-07-16 |
+| 9  | Backtest & optimizer correctness (quant core) | 9.7 (funding ledger), 9.8 (intrabar sim), 9.9 (stats portion), 9.10 (fill-model ladder), **9.11 Step B (cost-gate activation decision, re-baselined — Step A shipped 2026-07-17)** | Ready | P1 | — | 2026-07-17 |
 | 10 | Monte Carlo Optimiser & Strategy Lab | Phases 1b–4 (job plumbing, `labResults`, UI, optimizer w/ walk-forward + Optuna) | Ready | P1 | 9 (9.1/9.3, shipped) | 2026-07-16 |
 | 13 | Informative / multi-timeframe contract (`self.htf()`) | All | Ready | P2 | — | 2026-07-16 |
 | 17 | Recursive-formula / warmup-insufficiency analysis | All | Ready | P2 | 13 (sequence after) | 2026-07-16 |
@@ -199,7 +199,15 @@ pipeline-touching steps) a golden-master check per Rule C.
   **Only remaining item across all of Plan 22: real live Testnet re-verification** — genuinely
   blocked, needs a human-observed session, marked pending (see `handoff.md`).
 - **9** — Remaining steps 9.7–9.10 change backtest outputs **by design** → per-step golden-master
-  re-baseline with sign-off (Rule C). Who signs off is still an open question.
+  re-baseline with sign-off (Rule C). Who signs off is still an open question. **9.11 Step A
+  shipped 2026-07-17**: fixed M-1 (the injected `min_edge_mult` now lands on
+  `strategy.portfolio_model`, the object `_edge_beats_cost()` actually reads, not the dead
+  `strategy.cost_model`), M-2 (formula is now quote-vs-quote, scaled by the same `qty_est` the
+  Cost Model uses — previously price-level-dependent), and M-3 (`Signal.magnitude` now feeds the
+  gate when provided, falling back to conviction). Both injection sites default to `0.0` (was
+  `0.05`, but the old value never reached the gate, so this is a no-op) — golden-master confirmed
+  byte-identical. Step B (deciding whether to activate at 0.05 by default) remains a separate,
+  re-baselined product decision.
 - **10** — MC core math is honest (Phase 1a shipped) but still behind the old synchronous
   endpoint; everything else (job queue, `labResults`, Strategy Lab UI, optimizer exposure)
   unstarted. Phase 3 absorbs plans 18/19 — build from their design notes, not their specs.

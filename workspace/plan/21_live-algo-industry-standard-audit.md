@@ -451,7 +451,7 @@ plus M-4 below). **Cost/TCM** — fill/fee math sound; the predictive gate is br
 (Plan 22 B-8). **Execution** — `route()` five-path diff sound; live bracket maintenance has a
 real gap (M-4/M-5).
 
-### M-1 · The "default-on" cost gate is dead — wired to the wrong model object · [Certain] · **High (doc+code defect)**
+### M-1 · The "default-on" cost gate is dead — wired to the wrong model object · [Certain] · **High (doc+code defect)** — **fixed 2026-07-17 (Plan 9.11 Step A)**
 `live_bot_manager.py:1262` and `backtest_runner.py:905` both set
 `strategy.cost_model.min_edge_mult = 0.05` ("active by default" per `CURRENT_STATE.md`). But the
 gate that actually runs is `DefaultPortfolioModel._edge_beats_cost()` (`portfolio.py:96`), which
@@ -461,7 +461,7 @@ strategy overrides it). The only consumer of `cost_model.min_edge_mult` is the d
 fired, live or backtest.** `CURRENT_STATE.md`'s "default cost gate (min_edge_mult=0.05) active
 by default" claim is false (corrected same day with a pointer here).
 
-### M-2 · The edge-vs-cost formula is dimensionally inconsistent · [Certain] · **Medium (latent — activates if M-1 is naively fixed)**
+### M-2 · The edge-vs-cost formula is dimensionally inconsistent · [Certain] · **Medium (latent — activates if M-1 is naively fixed)** — **fixed 2026-07-17 (Plan 9.11 Step A)**
 `edge = |conviction| × risk_per_unit × rrr` is a **per-unit price distance**;
 `cost.total` is the **whole-position quote-currency cost** (fee+slippage on full estimated
 notional). Comparing them makes the gate a function of the symbol's absolute price level:
@@ -471,7 +471,7 @@ the gate would systematically block low-priced symbols. Correct form: multiply t
 the same `qty_est` the estimate uses (both sides in quote currency):
 `edge_total = |conviction| × risk_per_unit × qty_est × rrr ≥ mult × cost.total`.
 
-### M-3 · `Signal.magnitude` is a dead field with a lying docstring · [Certain] · **Low**
+### M-3 · `Signal.magnitude` is a dead field with a lying docstring · [Certain] · **Low** — **fixed 2026-07-17 (Plan 9.11 Step A)**
 Documented as "predicted move… feeds the PCM edge-vs-cost veto"; grep shows it is never read
 anywhere in the engine. The gate uses `conviction` instead. Either wire magnitude into the M-2
 formula (it's the natural edge term) or delete the field and fix the docstring.

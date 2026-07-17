@@ -1926,7 +1926,7 @@ class LiveBotManager:
         strategy.rrr               = _safe_float(_risk.get("rrr"),            strategy.rrr)
         strategy.liq_buffer_pct    = _safe_float(_risk.get("liq_buffer_pct"), strategy.liq_buffer_pct)
         strategy.max_session_dd    = min(_safe_float(_risk.get("max_session_dd"), strategy.max_session_dd), 0.90)
-        strategy.cost_model.min_edge_mult = _safe_float(_risk.get("min_edge_mult"),     0.05)
+        strategy.portfolio_model.min_edge_mult = _safe_float(_risk.get("min_edge_mult"), 0.0)
         strategy.max_portfolio_risk       = _safe_float(_risk.get("max_portfolio_risk"), 0.06)
         
         strategy.volatility_multiplier = _safe_float(_risk.get("volatility_multiplier"), 1.0)
