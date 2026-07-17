@@ -5,7 +5,7 @@ Deprecated aliases: RiskFrame, Cost, Target (remove in Phase 6)
 Interfaces: RiskModel, TransactionCostModel (= CostModel), PortfolioModel, ExecutionModel
 Implementations:
   Risk      — DefaultRiskModel, AtrBracketRiskModel, ChandelierRiskModel, SignalExitRiskModel
-  TCM       — DefaultTransactionCostModel (= DefaultCostModel)
+  TCM       — DefaultTransactionCostModel (= DefaultCostModel), LadderedTransactionCostModel
   Portfolio — DefaultPortfolioModel, RiskBudgetPortfolio, NotionalPortfolio
   Execution — DefaultExecution, BacktestExecution, LiveExecution
 """
@@ -38,6 +38,7 @@ from .risk import (
 from .cost import (
     DefaultTransactionCostModel,
     DefaultCostModel,   # alias for DefaultTransactionCostModel
+    LadderedTransactionCostModel,
 )
 from .portfolio import (
     DefaultPortfolioModel,
@@ -92,6 +93,7 @@ __all__ = [
     # TCM implementations
     "DefaultTransactionCostModel",
     "DefaultCostModel",
+    "LadderedTransactionCostModel",
     # Portfolio implementations
     "DefaultPortfolioModel",
     "RiskBudgetPortfolio",

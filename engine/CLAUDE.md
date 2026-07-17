@@ -398,7 +398,7 @@ TA-Lib is built from source inside the engine Docker container. It is **not** in
 - **Decision Pipeline**: Decisions are evaluated via `evaluate(s, current_holding)` in `engine/core/pipeline.py`, which executes Alpha `forecast()` → Risk `assess()` → TCM `estimate()` → PCM `construct()` → Execution `route()` every candle unconditionally (no early return for open positions).
 - **Custom Models**: Subclass from base models in `engine/core/models/base.py` and assign custom instances in the strategy's `__init__` constructor.
 - **Alpha contract**: Override `forecast() -> Signal` to return a `Signal(direction: int, conviction: float, ref_price: float)`. Alpha must not read account state or write orders — those are Risk/PCM/Execution responsibilities.
-- **Model variants available** (`engine/core/models/`): `AtrBracketRiskModel`, `ChandelierRiskModel`, `SignalExitRiskModel`; `RiskBudgetPortfolio`, `NotionalPortfolio`; `DefaultTransactionCostModel`; `DefaultExecution`.
+- **Model variants available** (`engine/core/models/`): `AtrBracketRiskModel`, `ChandelierRiskModel`, `SignalExitRiskModel`; `RiskBudgetPortfolio`, `NotionalPortfolio`; `DefaultTransactionCostModel`, `LadderedTransactionCostModel` (opt-in fill-model ladder — volatility-scaled slippage + √-impact, Plan 9 Step 9.10); `DefaultExecution`.
 - **Boundary enforcement**: `engine/tests/test_boundaries.py` checks all 5 seeded strategies at test time.
 
 ---

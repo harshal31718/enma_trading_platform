@@ -185,7 +185,39 @@ signals from the same data, verified mechanically, not by assertion.
   identical `bisect_left` ranks — spot-checked directly, and by construction). `atr_percentile_min`
   defaults to `0.0` (filter disabled) for every seeded strategy, so this path doesn't execute in
   the default golden-master run at all — zero risk to the existing baseline; full suite 88/88.
-  Fill-model ladder + liquidation fee + warmup fail-loud remain undone.
+- **Fill-model ladder — Shipped 2026-07-17.** New `LadderedTransactionCostModel`
+  (`core/models/cost.py`, exported from `core/models/__init__.py`) — layers volatility-scaled
+  slippage (`vol_slip_mult * ATR%`, via the strategy's own `_atr()` helper) and a square-root
+  market-impact term (`impact_mult * sqrt(notional / ADV)`, ADV approximated as trailing ~24h
+  `sum(volume * close)` from the strategy's own candle window — the numpy candles array only
+  carries base-asset `volume`, not the DB's separate `quote_volume` column) on top of the base
+  `slippage_pct`. **Spread half-cost (the ladder's first rung) deliberately NOT modeled** —
+  backtesting has zero historical bid/ask spread data (TimescaleDB's `candles` table is
+  OHLCV-only, unlike live's ticker cache); inventing spread data would be worse than omitting it.
+  Required widening `DefaultTransactionCostModel.adverse_fill()`'s signature with an optional
+  `qty: float | None = None` param (both `execution.py` call sites — `entry_fill`/`exit_fill` —
+  already had `qty` in scope, now pass it through; the base model ignores it, byte-identical).
+  **Opt-in only**: a strategy assigns `self.cost_model = LadderedTransactionCostModel()` in its
+  own `__init__` — none of the 5 seeded strategies do, so this is golden-master-safe by
+  construction, not merely by a default-off flag. Golden master confirmed byte-identical anyway
+  (Rule C). New `engine/tests/test_laddered_cost_model.py` (11 cases): base model unaffected by
+  the new `qty` param; zero ATR + zero qty reduces to base-slippage-only; higher ATR widens the
+  fill; ATR-read failures/zero-price degrade to 0.0 (never crash); no impact term when `qty` isn't
+  passed; larger `qty` produces larger impact; zero ADV disables impact (no divide-by-zero); ADV
+  window sizing for an hourly timeframe; empty-candles ADV degrades to 0.0; sell side widens
+  downward symmetrically. Container suite: 397/397 passed (up from 386).
+- **Liquidation fee (QNT-4) — deliberately NOT implemented.** `execute_exit`'s liquidation branch
+  caps loss at exactly `-margin` (no fee/slippage on top) — but `engine/CLAUDE.md`'s own Backtest
+  Engine Rules section documents this as the INTENDED contract ("a liquidation forfeits exactly
+  the isolated margin... no exit fee or slippage is added on top"), not an oversight. Changing it
+  contradicts a documented design decision and needs its own `DECISIONS.md` entry (is the
+  liquidation-fee omission an accepted simplification, given the trader's real-world loss is
+  already capped at their margin under Binance's own isolated-margin model regardless of the
+  fee's accounting treatment? or should backtest model it explicitly?) — a product call, not a
+  mechanical audit-finding fix, left for the user.
+- **Warmup-insufficiency fail-loud (QNT-16) — deliberately deferred.** This step's own text ties
+  it to Plan 8 / ENG-8 coordination; not attempted here to avoid touching Plan 8's scope
+  unilaterally.
 
 ### 9.11 — Cost-gate resurrection: rewire, fix dimensions, wire-or-delete `magnitude` (M-1/M-2/M-3, added 2026-07-16) — **Step A Shipped 2026-07-17**
 - **Source:** Plan 21's five-model audit addendum (`21_live-algo-industry-standard-audit.md`

@@ -39,7 +39,7 @@ class DefaultExecution(ExecutionModel):
                    side: str) -> EntryFill:
         """Opening market fill. Slippage and fee come from s.cost_model.
         Byte-identical to the runner's former inline fill arithmetic."""
-        fill_price = s.cost_model.adverse_fill(s, ref_price, side)
+        fill_price = s.cost_model.adverse_fill(s, ref_price, side, qty=qty)
         notional   = qty * fill_price
         return EntryFill(
             fill_price=fill_price,
@@ -50,7 +50,7 @@ class DefaultExecution(ExecutionModel):
 
     def exit_fill(self, s, ref_price: float, qty: float, side: str) -> ExitFill:
         """Closing market fill. side is the exit direction ("sell" for long exit)."""
-        fill_price = s.cost_model.adverse_fill(s, ref_price, side)
+        fill_price = s.cost_model.adverse_fill(s, ref_price, side, qty=qty)
         return ExitFill(fill_price=fill_price, fee=s.cost_model.fee(s, qty * fill_price))
 
     # ── Primary contract: route target → order state ──────────────────────────
