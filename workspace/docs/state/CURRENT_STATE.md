@@ -3,7 +3,32 @@
 **Authority:** This is the single source of truth for what ENMA currently does.
 Read this before starting any work. If this conflicts with chat history, this document wins.
 
-Last updated: 2026-07-17 (Plan 24 — ALL STEPS S-1–S-5 SHIPPED: BestSupertrend's "never trades at
+Last updated: 2026-07-17 (Plan 17 — recursive-formula / warmup-insufficiency analysis tool
+shipped: `engine/scripts/recursive.py` sweeps each seeded strategy's `prepare()`-computed
+indicators across warmup sizes [200, 400, 500, 1000, 2000] and reports pct-drift vs. a full-history
+baseline at a fixed anchor candle — the operationally important question is whether live's rolling
+500-candle re-prepare window (workstream #1, P7) is long enough for every strategy's recursive
+indicators (EMA/RSI/SuperTrend) to have converged. **Result: no column drifts beyond 0.01% at
+w=500 for any of the 5 seeded strategies** — including AdaptiveTrend's `_trend_ema_seq`
+(EMA(200) trend filter), which shows real -2.56% drift at w=200 but has already converged to
+-0.0007% by w=500. Live's 500-candle warmup is sufficient for every seeded strategy today; no
+`live_bot_manager.py` warmup-length change needed. New `engine/tests/test_recursive.py` (10 cases)
+self-tests the tool itself (EMA(50) drifts >1% at w=60, converges <0.01% by w=250, ~0% by w=500;
+SMA(50) is exactly stable at any w>=50 — the plan's own verification gate). Container suite:
+374/374 passed (up from 364).
+Earlier: 2026-07-17 Plan 13 — informative/multi-timeframe contract shipped:
+`BaseStrategy.informative_timeframes` + `self.htf(tf)`, an as-of aligned, lookahead-safe
+higher-timeframe OHLCV array (freqtrade `merge_informative_pair` ffill+shift pattern), wired into
+both `backtest_runner.py` and `live_bot_manager.py`. Default `[]` is a no-op — no seeded strategy
+adopts it yet (primitive only). Golden master byte-identical; container suite 364/364.
+Earlier: 2026-07-17 Plan 9 Step 9.11-A — the PCM edge-vs-cost veto (`min_edge_mult`) rewired to
+the object it actually reads (`portfolio_model`, not `cost_model`), formula fixed to quote-vs-quote
+(scaled by the same `qty_est` the Cost Model uses, not a bare per-unit price distance), and
+`Signal.magnitude` wired in as the edge term. Both injection sites now default to `0.0` (was
+`0.05`, a no-op since the old value never reached the gate). Golden master byte-identical;
+container suite 358/358. Gate remains opt-in/inert by default — activating it at 0.05 is a
+separate Step B product decision, not yet made.
+Earlier: 2026-07-17 (Plan 24 — ALL STEPS S-1–S-5 SHIPPED: BestSupertrend's "never trades at
 default settings" bug fixed — `size_by_notional()` now sizes down to the true affordable notional
 instead of the runner rejecting every entry (S-1); live HTF supertrend was one bar more stale than
 backtest, fixed (S-2); structurally unsatisfiable tf/timeframe combos now fail loud instead of

@@ -7,6 +7,59 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
+## 2026-07-17 — Plan 17 shipped: recursive-formula / warmup-insufficiency analysis (`engine/scripts/recursive.py`) — **no live-vs-backtest drift risk found at w=500 for any seeded strategy**
+
+**Goal:** user said "ok proceed with it" after Plan 13 shipped — Plan 13's own tracker note named
+Plan 17 as the natural next step ("sequences after 13 so it also sweeps multi-TF indicators"),
+fully scoped and self-contained per the plan doc, so proceeded without re-surveying from scratch.
+
+**Done:** `engine/scripts/recursive.py` — for each seeded strategy, picks a fixed anchor candle,
+runs `prepare()` once over the full available history (baseline) and once per warmup size in
+`[200, 400, 500, 1000, 2000]`, diffs every `prepare()`-computed indicator column's value at the
+anchor (`pct_change = (partial - full) / full * 100`), and flags any column still drifting beyond
+`0.01%` at `w=500` — live's rolling re-prepare window cap (workstream #1, P7) — as an operational
+live-vs-backtest drift risk. Columns are discovered **generically**: any float `ndarray` on the
+strategy instance whose length matches the window, since there's no shared naming convention
+across the 5 seeded strategies (`_trend_ema_seq`, `_rsi`, `_ph`/`_pl`, `_sma_fast`/`_sma_slow`).
+Int/bool arrays excluded via dtype check (loop-index bookkeeping, boolean cross signals aren't
+"recursive value" candidates). `_load_candles()` reuses `ensure_candles_available()`, never
+bypasses it.
+
+**Real finding (run against all 5 seeded strategies, BTCUSDT/1h, 1440 cached candles):** **no
+column drifts beyond 0.01% at w=500 for any strategy.** AdaptiveTrend's `_trend_ema_seq`
+(`EMA(200)` trend filter — the exact case this plan's own audit flagged as high-relevance) shows
+real recursive drift: `-2.56%` at `w=200`, but has already converged to `-0.0007%` by `w=500`.
+**Live's 500-candle rolling warmup is sufficient for every seeded strategy today — no
+`live_bot_manager.py` warmup-length change needed.** Recorded in `CURRENT_STATE.md`.
+
+**Verification:** new `engine/tests/test_recursive.py` (10 cases) — the plan's own self-test gate,
+using the real TA-Lib backend over synthetic sinusoidal+trend data (discovered while building this
+that a straight-line series converges too fast to exercise seed-bias at all): `EMA(50)` drifts
+`>1%` at `w=60`, converges to `<0.01%` by `w=250` (`~5x` period), `~0%` by `w=500`; `SMA(50)` is
+exactly stable (`<1e-6%`) at any `w>=50` — proving the tool itself correctly distinguishes
+recursive from non-recursive formulas. Plus unit coverage for the near-zero-baseline guard,
+both-NaN/one-sided-NaN cases, and column discovery's shape/dtype filtering. Container suite:
+**374/374 passed** (up from 364/364 at session start). No golden-master check needed — a
+standalone diagnostic script that never touches the sim pipeline.
+
+**Files changed:** new `engine/scripts/recursive.py`, new `engine/tests/test_recursive.py`; docs:
+`17_recursive-analysis.md`, `0_tracker.md`, `workspace/docs/state/CURRENT_STATE.md`, `handoff.md`.
+Not yet committed as of this entry — see next session note.
+
+**NOT done — deliberately out of scope:** the report only covers the currently-cached candle range
+(1440 candles — enough for `w<=1000`; `w=2000` skipped for lack of history, script warns about
+this explicitly rather than silently truncating). Not required since `w=500`, the operationally
+important threshold, was already fully exercised. This tool is diagnostic-only — it doesn't gate
+anything in CI (unlike the golden master / S5 lookahead sentinel); re-run it manually whenever a
+new strategy or a live warmup-length change is considered.
+
+**Next session:** all three of this session's plans (9.11-A, 13, 17) are now shipped. Survey
+`0_tracker.md` fresh — Plan 9.11 Step B (cost-gate activation decision, needs explicit user
+sign-off) and Plan 9's other steps (9.7–9.10, funding ledger / intrabar sim / stats / fill-model
+ladder) remain open, all requiring a golden-master re-baseline rather than being decision-free like
+this session's three items. Plan 22/24's live Testnet re-verification also remain the standing
+genuinely-blocked items across the whole plan set.
+
 ## 2026-07-17 — Plan 13 shipped: informative/multi-timeframe contract (`informative_timeframes` + `self.htf()`) — **primitive shipped, no seeded strategy adopts it yet**
 
 **Goal:** user said "move to plan 13" after Plan 9.11 Step A shipped — implement the plan as
@@ -114,90 +167,4 @@ bundled with Step A. The gate exists and is correct now, but is still opt-in/ine
 0.05 default-on vs. leave opt-in), or (b) continue surveying `0_tracker.md` — Plan 13
 (multi-timeframe `htf()` contract, P2, self-contained) remains a plausible next candidate, not yet
 investigated beyond the initial survey this session.
-
----
-## 2026-07-17 — Plan 24 (S-1 through S-5) shipped: BestSupertrend "never trades at defaults" fixed — **PLAN 24 FULLY SHIPPED**, live Testnet re-verification still pending ⏸️
-
-**Goal:** with Plan 22 fully shipped (see the entry below) and a partial live-verification attempt
-made, user asked to proceed to the next plan with my recommendations. Surveyed `0_tracker.md`'s
-Active work table and recommended Plan 24 (BestSupertrend fixes) over Plan 9 (larger,
-open-ended quant-core work) and Plan 5 (Decimal-money migration, needs a design pass) — Plan 24 is
-fully scoped, decision-free, and fixes a real trust bug (a seeded strategy silently never trades at
-its own default settings). User agreed implicitly by not redirecting; proceeded through all five
-findings (S-1 → S-2 → S-3 → S-4 → S-5) in the plan's own stated order.
-
-**Done — S-1 (root cause, `size_by_notional()` in `core/strategy.py`):** at `position_size_pct=1.0`
-(strategy default) and `leverage=1` (platform default), the naive `qty = equity*pct/price` sits
-exactly on the equity boundary, so adverse slippage + the taker fee alone push
-`req_margin + fee` just over `free_balance`, rejecting every entry (`backtest_runner.py`'s
-`EntryFill.affordable()` check) with only a debug log line. Fixed: `size_by_notional()` now sizes
-DOWN to the true affordable notional (accounting for leverage/slippage/fee headroom, with a tiny
-1e-6 safety margin against float-rounding at the exact boundary) instead of letting the runner
-reject the entry outright. Also dropped `position_size_pct` default 1.0→0.9 (belt and braces).
-**Golden master re-baselined**: checked the actual `golden_master.py` baseline first (per the
-plan's own instruction) — it runs at `leverage=3` (not the platform's `leverage=1` default), so
-BestSupertrend already had 61 non-zero trades in the baseline; the fix's diff is entirely from the
-`position_size_pct` default change (same 61 trades, same win/loss counts, PnL scaled ~10% smaller),
-confirming the fix doesn't touch already-affordable entries. Other 4 strategies byte-identical
-(`size_by_notional` has no other caller). New `test_size_by_notional_affordability.py` (7 cases)
-exercises the actual bug scenario (leverage=1) the golden-master harness never touches.
-
-**Done — S-2 (live HTF one bar too stale):** `prepare()`'s live/constant path read
-`self._htf_tsl[-2]`, but `_fetch_htf_candles` (`live_bot_manager.py`) already excludes the
-in-progress HTF bar, so the injected `_htf_candles` array's last row IS the last completed bar —
-`[-1]` is correct, matching backtest's bucket path (`htf_tsl[k-1]`). Fixed; warmup guard loosened
-from requiring 2 trailing elements to 1. New parity test (5 cases) drives the real class through
-both paths against the same underlying supertrend series. Golden master confirmed byte-identical
-(live-only branch, never exercised by backtest).
-
-**Done — S-3 (unsatisfiable tf/timeframe combos fail loud):** new
-`required_base_candles_for_htf()` (`engine/utils/timeframes.py`) estimates the base-candle count
-needed for `pd+2` completed HTF buckets. Wired into `backtest_runner.py` (logs an error, log-only,
-zero simulation-output change) and `live_bot_manager.py` (HTF-fetch failure and
-on-success-but-insufficient-data are both now session-visible errors, not just a debug-level
-warning; a new one-time warning fires once the live rolling candle window hits its 500-candle cap
-with the HTF value still unresolved). 8 new unit tests for the shared helper. Golden master
-confirmed byte-identical (log-only additions).
-
-**Done — S-4 (`order_type` param collision):** renamed to `direction_filter` — the old name
-collided with `OrderPlan.order_type` (`DefaultExecution.route()` builds
-`OrderPlan(order_type=getattr(s, "order_type", "market"))`), silently carrying the filter string
-instead of `"market"`. Decorative today (both adapters hardcode MARKET) but would have detonated
-the moment any consumer honored `OrderPlan.order_type`. Renamed the PARAMS key and all 4 usage
-sites; confirmed via direct instantiation that `BaseStrategy`'s own `order_type="market"` default
-now shows through correctly. 3 new tests. Golden master confirmed byte-identical (same default
-value under a new key name).
-
-**Done — S-5 (docs):** the `SignalExitRiskModel` doc-drift half was already fixed in an earlier
-session (confirmed while surveying, before this window started). Updated
-`workspace/docs/strategies/BestSupertrend.md` for all of S-1/S-2/S-3/S-4's user-visible changes
-(param rename, new default, `tsl[-1]` correction, tf/timeframe warmup note). The weekly-resample
-(`W-MON`) off-by-one TODO is intentionally left as a documentation comment only, per the plan's own
-instruction — S-3's generic warmup-sufficiency check covers it without touching resample math.
-
-**Files changed:** `engine/core/strategy.py` (`size_by_notional`), `engine/strategies/
-BestSupertrend/__init__.py` (S-1 default, S-2 index fix, S-4 rename — all sites), new
-`engine/services/backtest_runner.py`/`engine/core/live_bot_manager.py` S-3 wiring, new
-`engine/utils/timeframes.py` (`required_base_candles_for_htf`); new test files:
-`test_size_by_notional_affordability.py`, `test_bestsupertrend_htf_parity.py`,
-`test_required_base_candles_for_htf.py`, `test_bestsupertrend_direction_filter_rename.py`; docs:
-`24_bestsupertrend-fixes.md`, `0_tracker.md`, `CURRENT_STATE.md`,
-`workspace/docs/strategies/BestSupertrend.md`, `handoff.md`. All committed (4 commits, one per
-step S-1–S-4; S-5 folded into this doc-update pass).
-
-**Verification:** container suite **353/353 passed** (up from 337/337 at the start of Plan 24's
-work this session). Golden master run before every code change and re-compared after each step —
-only S-1 shows an expected, reviewed diff (BestSupertrend only); S-2/S-3/S-4 all byte-identical.
-
-**NOT done — the one item left across Plan 24:** live Testnet re-verification (the plan's own
-"Sequencing / verification" section: one 1-symbol testnet session at leverage 2–3, default params,
-confirming ≥1 real entry and HTF-value parity against a parallel backtest window). Same standing
-"needs a human-observed session" caveat as every other live-verification item across this
-codebase's plans (Plan 21, Plan 22) — genuinely blocked, not attempted this session.
-
-**Next session:** live-verify Plan 24 per the paragraph above, OR continue surveying
-`0_tracker.md` for the next unblocked item — Plan 9 (backtest/optimizer correctness, P1, larger
-and more open-ended) and Plan 13 (multi-timeframe `self.htf()` contract, P2, self-contained) are
-both plausible next candidates; neither was investigated this session beyond the initial survey
-that picked Plan 24.
 

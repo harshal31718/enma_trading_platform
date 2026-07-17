@@ -1,6 +1,42 @@
 # Plan 17 — Recursive-Formula Analysis
 
-**Status:** Ready · **Priority:** P2 · **Phase:** 9 · **Depends on:** 11, 13 · **Related:** 16
+**Status:** Shipped 2026-07-17 · **Priority:** P2 · **Phase:** 9 · **Depends on:** 11, 13 · **Related:** 16
+
+## Shipped summary (2026-07-17)
+
+Implemented as designed: `engine/scripts/recursive.py` — for each seeded strategy, picks a fixed
+anchor candle, runs `prepare()` once over the full available history (baseline) and once per
+warmup size in `[200, 400, 500, 1000, 2000]`, and diffs every `prepare()`-computed indicator
+column's value at the anchor. Columns are discovered **generically** (any float `ndarray` on the
+strategy instance whose length matches the candles window) rather than by a per-strategy naming
+convention — audited the 5 seeded strategies while building this and confirmed there isn't one
+(`_trend_ema_seq`, `_rsi`, `_ph`/`_pl`, `_sma_fast`/`_sma_slow` — no shared suffix). Int/bool
+arrays (loop-index bookkeeping, boolean cross signals) are excluded via a `np.floating` dtype
+check. `_load_candles()` reuses `ensure_candles_available()` (never bypasses the single entry
+point). Reports a table of `column × warmup → pct_change`, flags any column still drifting beyond
+`0.01%` at `w=500` (live's rolling re-prepare window cap) as a live-vs-backtest drift risk.
+
+**Real finding (run against all 5 seeded strategies, BTCUSDT/1h, 1440 cached candles):** no column
+drifts beyond `0.01%` at `w=500` for any strategy. AdaptiveTrend's `_trend_ema_seq` (`EMA(200)`
+trend filter — the exact case flagged as high-relevance in this plan's own audit) shows real
+recursive drift: `-2.56%` at `w=200`, but already converged to `-0.0007%` by `w=500`. **Live's
+500-candle rolling warmup is sufficient for every seeded strategy today — no
+`live_bot_manager.py` warmup-length change is needed.** Recorded in `CURRENT_STATE.md`.
+
+**Verification:** new `engine/tests/test_recursive.py` (10 cases) — the plan's own self-test gate,
+using the real TA-Lib backend over synthetic sinusoidal+trend data (a straight line converges too
+fast to exercise seed-bias, discovered while building this): `EMA(50)` drifts `>1%` at `w=60`,
+converges to `<0.01%` by `w=250` (`~5x` period), `~0%` by `w=500`; `SMA(50)` is exactly stable
+(`<1e-6%`) at any `w>=50`. Plus unit coverage for the near-zero-baseline guard, the
+both-NaN/one-sided-NaN cases, and column discovery's shape/dtype filtering. Container suite:
+**374/374 passed** (up from 364). No golden-master check needed — a standalone diagnostic script,
+never touches the sim pipeline.
+
+**Not done — deliberately out of scope:** the report only covers the currently-cached candle range
+(1440 candles for BTCUSDT/1h in this environment — enough to test up to `w=1000`, `w=2000` skipped
+for lack of history). A wider cached range would let the sweep include `w=2000` too; not required
+since the operationally important threshold (`w=500`, live's actual rolling window) was already
+fully exercised.
 
 **Goal:** Detect indicators whose **latest value depends on how much history was loaded** (recursive
 formulas like EMA, RSI/Wilder, SuperTrend). If the most-recent indicator value drifts when you change
