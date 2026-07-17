@@ -54,6 +54,8 @@ from .protections import (
     IProtection,
     CooldownPeriod,
     StoplossGuard,
+    MaxDrawdownProtection,
+    LowProfitPairsProtection,
     ProtectionManager,
 )
 from .governor import (
@@ -101,6 +103,8 @@ __all__ = [
     "IProtection",
     "CooldownPeriod",
     "StoplossGuard",
+    "MaxDrawdownProtection",
+    "LowProfitPairsProtection",
     "ProtectionManager",
     # Session Risk Governor (Plan 22)
     "GovernorVerdict",

@@ -31,6 +31,8 @@ EVENT_TYPES = frozenset({
     "fill",                  # entry, add (DCA), or exit — see payload["side"]
     "close_failed",          # close order failed/raised; position stays open
     "reconcile_adjustment",  # exchange-truth reconciliation forced a state change
+    "risk_check",            # Plan 22 Step 22.3: per-entry risk snapshot — resolved
+                             # limits, computed sizing, and any minNotional resize.
 })
 
 # Monotonic seq counters, keyed by (session_id, symbol). Reset on engine

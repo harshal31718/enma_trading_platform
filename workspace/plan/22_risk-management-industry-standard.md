@@ -226,6 +226,9 @@ container-only `test_execute_entry_bracket_safety.py` (21.4) runnable for real i
 since the stubs land in `sys.modules` once and persist for the whole pytest process.
 
 ### 22.3 — Protections parity + risk-integrity events · P1 · S–M
+
+**Status: shipped code-side 2026-07-17** — pending container test run + live re-verification.
+
 Add `MaxDrawdown` and `LowProfitPairs` protections (freqtrade semantics) to
 `core/models/protections.py`, config via the existing `risk_params.protections` block; wire the
 protections stack into **Chaos** sessions (currently live-only wiring — verify and close).
@@ -234,6 +237,60 @@ recording resolved limits, computed values, and any resize (incl. B-9's minNotio
 factor — plus a warning log when realized risk > 1.1× intended).
 Acceptance: protections lock/unlock visible in session log; every entry has a queryable risk
 snapshot; inflation ≥ 1.1× emits a warning.
+
+**Shipped:**
+- **`MaxDrawdownProtection`** (`core/models/protections.py`) — global halt when the realized-PnL
+  equity curve's max drawdown over `lookback_period` exceeds `max_allowed_drawdown` (default
+  0.20), evaluated only once at least `trade_limit` closed trades (default 2) exist in the
+  window. Distinct from the Session Risk Governor's own aggregate-drawdown check (22.1, which
+  watches live equity every stats tick): this watches realized-only trade-close history and
+  issues a time-boxed lock, freqtrade's own semantics. Opt-in, default off
+  (`risk_params.protections.max_drawdown.enabled`) — avoids double-jeopardy with the governor
+  for existing sessions that never configured this.
+- **`LowProfitPairsProtection`** — per-pair halt when a pair's summed realized profit over
+  `lookback_period` falls below `required_profit` (default 0.0), once `trade_limit` (default 2)
+  closed trades exist on that pair. Operates on the same realized-dollar `profit` unit
+  `StoplossGuard`/`record_trade_close` already use throughout this codebase (not freqtrade's true
+  profit-*ratio* semantics — no call site computes a ratio today; documented in the module
+  docstring as a caveat for later Zone 2 wiring). Also opt-in, default off.
+- **`ProtectionManager.record_trade_close`** now dispatches to both new protections on EVERY
+  close (not gated on `exit_reason`, unlike the existing `StoplossGuard` branch) — an equity
+  curve or summed-profit signal is diluted, not just incomplete, if winning closes are excluded.
+- **Found and fixed while wiring this in:** `record_trade_close` was only ever called from
+  `execute_exit` (the strategy-driven exit path) — the F-018 emergency-exit path, `_close_
+  position_on_stop` (session-stop force-close), and `_reconcile_exchange_state`'s Case 2
+  (exchange-side close reconcile) never fed the protections stack at all. This is a real gap:
+  since A-13 (21.7) made exchange brackets the sole trigger while armed, Case 2 is now the path
+  MOST real stoploss closes go through — `StoplossGuard` was structurally blind to them. Wired
+  `record_trade_close` into all three additional sites. Case 2 books the outward notification as
+  the generic `exitReason="exchange_sync"` (Binance's raw trade history doesn't carry a reason
+  label) — added new `_classify_exchange_sync_exit_reason()` for internal protections bookkeeping
+  only (best-effort: a STOP_MARKET/TAKE_PROFIT_MARKET fill lands very close to its trigger price,
+  so proximity to the tracked SL/TP within a small tolerance classifies it; the outward
+  notification's label is unchanged).
+- **Chaos wiring verified, no gap found:** traced `startChaos` (`algo.controller.js`) end to end —
+  it calls the exact same `POST /algo/sessions` → engine `start_session` path as regular
+  `startSession`, once per launched strategy (Chaos "sessions" are just N parallel ordinary
+  sessions under the hood). `ProtectionManager` is built unconditionally in `start_session`, so
+  Chaos already had full protections coverage; this plan's own text calling it "live-only wiring"
+  was a stale assumption, not a traced finding — corrected here rather than adding redundant code.
+- **Risk snapshot on every entry:** new `risk_check` `EVENT_TYPES` entry (`services/event_log.py`);
+  `execute_entry` appends one via `append_event` right after the entry's `fill` event (only for an
+  entry that actually placed — a rejected entry, e.g. M-5's invalid-SL reject, gets no snapshot),
+  recording `resolved_limits` (risk_pct, rrr, max_session_dd, max_portfolio_risk, liq_buffer_pct,
+  leverage) and `computed` values (direction, pre/post-clamp qty, the minNotional inflation
+  factor, entry/SL/TP price, notional). The inflation factor is recomputed from the qty
+  `clamp_and_round_qty` returns vs. what was passed in (that function itself only returns the
+  final qty, not the multiplier — A-11 already logs it engine-side from the same computation).
+  When the factor exceeds 1.1×, a session-visible `log` notification fires (distinct from A-11's
+  always-on engine-only log) — satisfies this step's acceptance criterion directly.
+
+Tests: `engine/tests/test_protections_max_drawdown_low_profit.py` (16 cases, real pytest, zero
+dependency — `protections.py` has no external deps at all) and new `engine/tests/
+test_execute_entry_risk_check_event.py` (4 cases: event appended on success, NOT appended on a
+rejected entry, no warning when unbumped, warning fires past 1.1×) — both via the same
+stub-injection technique as 22.1/22.2's execute_entry tests. Zero regression across the full
+touched-file test surface (79 tests, `test_execute_entry_bracket_safety.py` included).
 
 ### 22.4 — Live VaR/CVaR enforcement · P2 · M
 Extract Zone 1 math into `services/portfolio_risk.py` (shared dashboard + governor); add

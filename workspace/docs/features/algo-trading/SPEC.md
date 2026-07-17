@@ -448,11 +448,33 @@ previously decorative — zero pipeline call sites) — computes the actual liqu
 `core/margin.py` for the veto log (not just the bool), fails *open* on an unexpected exception in
 the check itself (distinct from an actual computed violation, which vetoes).
 
-**Not yet shipped:** 22.3 (protections parity + risk-integrity events), 22.4–22.7 (VaR/CVaR
-enforcement, correlation-aware concentration cap, and further hardening). Full Zone 2 UI/schema
-wiring for the governor's config keys is 22.7's scope — 22.1/22.2 read them as plain engine-side
-defaults. See `workspace/plan/22_risk-management-industry-standard.md` and `DECISIONS.md`
-#23/#24/#25.
+**Protections parity + risk-integrity events (Plan 22 Step 22.3, shipped 2026-07-17):** new
+`MaxDrawdownProtection` (global halt on realized-PnL equity-curve drawdown over a rolling window
+— distinct from the governor's own live-equity drawdown check) and `LowProfitPairsProtection`
+(per-pair halt on summed realized profit below a threshold), both freqtrade-inspired, both
+opt-in/default-off in `risk_params.protections`. `ProtectionManager.record_trade_close` now
+dispatches to both on every close (win or loss), and — a real gap found and fixed while wiring
+this in — now actually gets CALLED from all four close paths instead of just `execute_exit`: the
+F-018 emergency-exit path, `_close_position_on_stop`, and `_reconcile_exchange_state`'s Case 2
+were silently never feeding the protections stack at all. Since A-13 made exchange brackets the
+sole trigger while armed, Case 2 is now the dominant real-world stoploss path, so `StoplossGuard`
+was structurally blind to most real stoplosses before this fix. Case 2's outward notification
+still books the generic `exitReason="exchange_sync"` (Binance's raw trade history carries no
+reason label); a new `_classify_exchange_sync_exit_reason()` helper does a best-effort proximity
+classification (fill near the tracked SL/TP price) for the protections' internal bookkeeping only.
+Chaos sessions were traced end-to-end and confirmed to already have full protections coverage —
+`startChaos` launches through the exact same `start_session` engine path as regular sessions, so
+there's no separate Chaos code path lacking this (the plan's own "live-only wiring" caution was a
+stale assumption, corrected rather than duplicated). New `risk_check` event type
+(`services/event_log.py`'s `EVENT_TYPES`) — `execute_entry` appends one to `executionEvents` for
+every entry that actually places (not a rejected one), recording resolved risk limits and computed
+sizing including the minNotional inflation factor; a session-visible warning fires when that
+factor exceeds 1.1×.
+
+**Not yet shipped:** 22.4–22.7 (VaR/CVaR enforcement, correlation-aware concentration cap, and
+further hardening). Full Zone 2 UI/schema wiring for the governor's config keys is 22.7's scope —
+22.1–22.3 read them as plain engine-side defaults. See
+`workspace/plan/22_risk-management-industry-standard.md` and `DECISIONS.md` #23/#24/#25.
 **Pending container test run + live re-verification** — the governor class itself has 18/18 real
 pytest passes standalone (`engine/tests/test_session_risk_governor.py`); the wiring into
 `live_bot_manager.py` was verified via `py_compile`/`ast.parse` + manual review (the file has a

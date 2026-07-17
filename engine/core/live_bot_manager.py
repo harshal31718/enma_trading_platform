@@ -18,7 +18,8 @@ from config.timescale import get_pool
 from core.position import Position
 from core.models import (
     DefaultPortfolioModel, LiveExecution, OrderPlan,
-    CooldownPeriod, StoplossGuard, ProtectionManager,
+    CooldownPeriod, StoplossGuard, MaxDrawdownProtection, LowProfitPairsProtection,
+    ProtectionManager,
     SessionRiskGovernor,
 )
 from core.params import param_coerce, param_default, param_validate
@@ -95,6 +96,34 @@ TRADING_STATES = ("active", "reducing", "halted")
 
 
 from utils.rate_limiter import OrderRateLimiter
+
+
+def _classify_exchange_sync_exit_reason(
+    exit_price: float, sl_price: float | None, tp_price: float | None, tolerance_pct: float = 0.005,
+) -> str:
+    """Plan 22 Step 22.3: `_reconcile_exchange_state`'s Case 2 books every
+    exchange-side close as the generic `exit_reason="exchange_sync"` — it
+    can't ask Binance's raw trade history "was this the SL or the TP", so
+    the notification/UI contract deliberately keeps that generic label
+    (unchanged by this function). But `StoplossGuard`/`MaxDrawdown` need to
+    know whether a close was actually a protective stop to work at all, and
+    since A-13 exchange brackets are now the SOLE trigger while armed, Case 2
+    is the path most real stoploss closes go through — feeding it "exchange_
+    sync" unconditionally would make those protections nearly blind.
+
+    Best-effort classification for internal protections bookkeeping ONLY
+    (never for the outward notification): a STOP_MARKET/TAKE_PROFIT_MARKET
+    order fills very close to its trigger price (mark-price-triggered,
+    immediate MARKET fill) — if the actual/estimated exit price lands within
+    `tolerance_pct` of the strategy's tracked stop or target, classify it as
+    that. Otherwise falls back to the generic "exchange_sync" (e.g. a manual
+    close on the exchange, or session-stop force-close reconciled here).
+    """
+    if sl_price is not None and sl_price > 0 and abs(exit_price - sl_price) <= tolerance_pct * sl_price:
+        return "stop_loss"
+    if tp_price is not None and tp_price > 0 and abs(exit_price - tp_price) <= tolerance_pct * tp_price:
+        return "take_profit"
+    return "exchange_sync"
 
 
 def _get_min_candles_required(strategy) -> int:
@@ -319,7 +348,14 @@ class LiveAdapter(ExecutionAdapter):
         sl_pct = abs(fill_price - sl_raw) / fill_price if sl_raw else None
 
         exchange_name = "Binance Futures"
+        # Plan 22 Step 22.3: capture the pre-clamp qty so the risk_check event
+        # below can record the same minNotional inflation factor A-11 already
+        # logs (clamp_and_round_qty itself only returns the final qty, not
+        # the multiplier — recomputed here from the before/after values
+        # rather than changing that function's signature).
+        _pre_clamp_qty = qty
         qty = clamp_and_round_qty(symbol, exchange_name, qty, fill_price, stop_loss_pct=sl_pct)
+        _qty_inflation_factor = (qty / _pre_clamp_qty) if _pre_clamp_qty > 0 else 1.0
 
         # I-11: stop rounds away from entry; take-profit rounds away the other way
         # (using the stop's mode for TP biased it toward entry — easier to hit).
@@ -805,6 +841,16 @@ class LiveAdapter(ExecutionAdapter):
                         session["pnl"] += _rpnl_e
                         if session.get("risk_governor") is not None:
                             session["risk_governor"].record_realized_pnl(_rpnl_e, datetime.now(timezone.utc))
+                        # Plan 22 Step 22.3: protections (A-001) need every real
+                        # close, not just the strategy-driven execute_exit path —
+                        # otherwise StoplossGuard/CooldownPeriod/MaxDrawdown never
+                        # see an emergency-exit stoploss at all.
+                        _protection_manager_e = session.get("protection_manager")
+                        if _protection_manager_e is not None:
+                            _protection_manager_e.record_trade_close(
+                                pair=symbol, side=direction, exit_reason="emergency_exit",
+                                profit=_rpnl_e, close_timestamp=datetime.now(timezone.utc).timestamp(),
+                            )
                         _tr = build_trade_record(
                             source="bot",
                             executed_by=session.get("strategy_name", "unknown"),
@@ -919,6 +965,52 @@ class LiveAdapter(ExecutionAdapter):
             payload={"side": "entry", "direction": direction, "qty": qty, "price": fill_price},
             client_order_id=str(order_id) if order_id else None,
         )
+
+        # Plan 22 Step 22.3: risk snapshot on every entry — resolved limits,
+        # computed sizing, and any minNotional resize (B-9's inflation
+        # factor, same computation A-11 already logs engine-side, recorded
+        # here as a queryable event too rather than log-only).
+        await append_event(
+            session_id=self.session_id,
+            symbol=symbol,
+            event_type="risk_check",
+            payload={
+                "resolved_limits": {
+                    "risk_pct": getattr(strategy, "risk_pct", None),
+                    "rrr": getattr(strategy, "rrr", None),
+                    "max_session_dd": getattr(strategy, "max_session_dd", None),
+                    "max_portfolio_risk": getattr(strategy, "max_portfolio_risk", None),
+                    "liq_buffer_pct": getattr(strategy, "liq_buffer_pct", None),
+                    "leverage": strategy.leverage,
+                },
+                "computed": {
+                    "direction": direction,
+                    "pre_clamp_qty": _pre_clamp_qty,
+                    "final_qty": qty,
+                    "qty_inflation_factor": round(_qty_inflation_factor, 4),
+                    "entry_price": fill_price,
+                    "sl_price": sl_price,
+                    "tp_price": tp_price,
+                    "notional": notional,
+                },
+            },
+            client_order_id=str(order_id) if order_id else None,
+        )
+        # Distinct from A-11's always-on engine log (any inflation >0.1%) —
+        # this is a session-visible warning specifically at the 1.1x
+        # threshold this step's acceptance criterion names, so a user
+        # actually sees it in the UI, not just the engine log.
+        if _qty_inflation_factor > 1.1:
+            await self.manager._notify_node(self.session_id, {
+                "event": "log",
+                "eventData": {
+                    "type": "warning",
+                    "message": (
+                        f"{symbol}: realized risk is {_qty_inflation_factor:.2f}x the intended size "
+                        f"(minNotional bump {_pre_clamp_qty:.8f} -> {qty:.8f}) — exceeds the 1.1x watch threshold"
+                    ),
+                },
+            })
 
         await self.manager._notify_node(self.session_id, {
             "pnl": str(round(session["pnl"], 2)),
@@ -1411,6 +1503,18 @@ class LiveBotManager:
         stoploss_cfg = prot_cfg.get("stoploss_guard", {})
         if stoploss_cfg.get("enabled", True):
             protection_manager.add(StoplossGuard(stoploss_cfg))
+        # Plan 22 Step 22.3: opt-in (default False), unlike the two above —
+        # both are new and MaxDrawdown specifically overlaps in spirit with
+        # the Session Risk Governor's own aggregate-drawdown check (22.1;
+        # see MaxDrawdownProtection's docstring for how they differ). Default
+        # off avoids surprising an existing session/user with a second,
+        # differently-tuned drawdown lockout they never opted into.
+        max_dd_cfg = prot_cfg.get("max_drawdown", {})
+        if max_dd_cfg.get("enabled", False):
+            protection_manager.add(MaxDrawdownProtection(max_dd_cfg))
+        low_profit_cfg = prot_cfg.get("low_profit_pairs", {})
+        if low_profit_cfg.get("enabled", False):
+            protection_manager.add(LowProfitPairsProtection(low_profit_cfg))
 
         # Order rate limiter (A-003): default 10 req/s per session
         rate_limit_cfg = risk_params.get("rate_limiting", {}) or {}
@@ -2435,6 +2539,18 @@ class LiveBotManager:
             if session.get("risk_governor") is not None:
                 session["risk_governor"].record_realized_pnl(realized_pnl, datetime.now(timezone.utc))
 
+            # Plan 22 Step 22.3: a session-stop force-close is a deliberate
+            # user action, not a stoploss — CooldownPeriod still applies (the
+            # symbol shouldn't be immediately re-entered by a fresh session),
+            # but this never counts toward StoplossGuard's tally (exit_reason
+            # "session_stop" isn't in its tracked set).
+            _protection_manager_s = session.get("protection_manager")
+            if _protection_manager_s is not None:
+                _protection_manager_s.record_trade_close(
+                    pair=symbol, side=pos.type, exit_reason="session_stop",
+                    profit=realized_pnl, close_timestamp=exit_time.timestamp(),
+                )
+
             trade_record = build_trade_record(
                 source="bot",
                 executed_by=executed_by,
@@ -2722,6 +2838,20 @@ class LiveBotManager:
             session["pnl"] += realized_pnl
             if session.get("risk_governor") is not None:
                 session["risk_governor"].record_realized_pnl(realized_pnl, exit_time)
+
+            # Plan 22 Step 22.3: feed protections (A-001) from this path too —
+            # see _classify_exchange_sync_exit_reason's docstring for why this
+            # matters more since A-13 (exchange brackets are now the sole
+            # trigger while armed, so most real stoploss closes land here).
+            # Internal classification only; the outward notification below
+            # keeps the generic "exchange_sync" label unchanged.
+            _protection_manager_r = session.get("protection_manager")
+            if _protection_manager_r is not None:
+                _inferred_reason = _classify_exchange_sync_exit_reason(estimated_exit, sl_price, tp_price)
+                _protection_manager_r.record_trade_close(
+                    pair=symbol, side=pos.type, exit_reason=_inferred_reason,
+                    profit=realized_pnl, close_timestamp=exit_time.timestamp(),
+                )
 
             event_data = {
                 "symbol": symbol,

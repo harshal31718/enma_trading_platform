@@ -145,7 +145,17 @@ Resilience & Stats sections) — this bullet is a pointer, not a description.
   per-symbol `DefaultPortfolioModel` check used — kept for config compat, superseded for live
   sessions specifically). `respects_liq_buffer()` (previously decorative, zero call sites) is now
   wired into `execute_entry` too, vetoing with the computed liquidation price in the log.
-- Not yet shipped: 22.3 (protections parity + risk-integrity events), 22.4–22.7. See
+- **Protections parity + risk-integrity events (22.3, shipped 2026-07-17)**: new
+  `MaxDrawdownProtection`/`LowProfitPairsProtection` (`core/models/protections.py`, opt-in,
+  freqtrade-inspired). Fixed a real gap while wiring them: `record_trade_close` previously only
+  fired from `execute_exit` — the F-018 emergency-exit path, `_close_position_on_stop`, and
+  `_reconcile_exchange_state`'s Case 2 never fed the protections stack, meaning `StoplossGuard`
+  was blind to most exchange-side stoploss closes (the path A-13 made dominant). All four close
+  paths now feed it. Chaos sessions confirmed already covered (same `start_session` path as
+  regular live — no separate Chaos plumbing exists). New per-entry `risk_check` event
+  (`executionEvents`) records resolved limits + computed sizing + the minNotional inflation
+  factor; a session-visible warning fires when that factor exceeds 1.1×.
+- Not yet shipped: 22.4–22.7. See
   `workspace/plan/22_risk-management-industry-standard.md`.
 
 ### Order History (Trade Recorder)
