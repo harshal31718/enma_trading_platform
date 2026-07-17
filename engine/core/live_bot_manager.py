@@ -21,6 +21,7 @@ from core.models import (
     CooldownPeriod, StoplossGuard, MaxDrawdownProtection, LowProfitPairsProtection,
     ProtectionManager,
     SessionRiskGovernor,
+    GovernorVerdict,
 )
 from core.params import param_coerce, param_default, param_validate
 from core.pipeline import evaluate
@@ -507,6 +508,48 @@ class LiveAdapter(ExecutionAdapter):
                             f"{symbol}: entry blocked — stop too close to liquidation "
                             f"(computed liq≈${_liq_price:.4f})"
                         ),
+                    },
+                })
+                strategy.buy = None
+                strategy.sell = None
+                strategy.stop_loss = None
+                strategy.take_profit = None
+                return False
+
+        # Plan 22 Step 22.4: account-wide VaR/CVaR budget — opt-in (only
+        # fetched/evaluated when the governor actually has var_limit_pct or
+        # cvar_limit_pct configured, to avoid an extra Binance/TimescaleDB
+        # round trip on every entry for sessions that never opted in). Same
+        # `compute_var_cvar` the Zone 1 dashboard calls (`services/
+        # portfolio_risk.py`), 10s/60s cached — see that module's docstring.
+        # Fails OPEN on a fetch/compute exception (external network call,
+        # same precedent as the liq-buffer check above); fails CLOSED only
+        # on the governor's own equity<=0 case (see `check_var`'s docstring).
+        if risk_governor is not None and (
+            risk_governor.var_limit_pct is not None or risk_governor.cvar_limit_pct is not None
+        ):
+            try:
+                from services.portfolio_risk import compute_var_cvar as _compute_var_cvar
+                _var_amount, _cvar_amount = await _compute_var_cvar(
+                    session.get("api_key", ""), session.get("api_secret", ""), mode="testnet",
+                )
+                _equity_var, _ = self.manager._compute_session_equity_and_margin(session)
+                _var_verdict = risk_governor.check_var(
+                    var_amount=_var_amount, cvar_amount=_cvar_amount, equity=_equity_var,
+                )
+            except Exception as _var_e:
+                logger.warning(
+                    f"[AlgoBot] {symbol}: VaR/CVaR check failed to compute, allowing entry — {_var_e}"
+                )
+                _var_verdict = GovernorVerdict(ok=True)
+
+            if not _var_verdict.ok:
+                logger.warning(f"[AlgoBot] {symbol}: entry blocked by risk governor — {_var_verdict.reason}")
+                await self.manager._notify_node(self.session_id, {
+                    "event": "log",
+                    "eventData": {
+                        "type": "warning",
+                        "message": f"{symbol}: entry blocked — risk governor ({_var_verdict.check_name}): {_var_verdict.reason}",
                     },
                 })
                 strategy.buy = None
@@ -1539,6 +1582,15 @@ class LiveBotManager:
             governor_cfg["max_session_dd"] = risk_params.get("max_session_dd")
         if "max_portfolio_risk" not in governor_cfg and risk_params.get("max_portfolio_risk") is not None:
             governor_cfg["max_portfolio_risk"] = risk_params.get("max_portfolio_risk")
+        # Plan 22 Step 22.4: varLimitPct/cvarLimitPct — same reuse pattern as
+        # max_session_dd/max_portfolio_risk above. Zone 2 schema/UI for these
+        # is 22.7's scope (batched with the other new-field UI work per the
+        # plan's own sequencing); this is the engine-side plumbing so the
+        # keys are already live once 22.7 wires the Node cascade to send them.
+        if "var_limit_pct" not in governor_cfg and risk_params.get("var_limit_pct") is not None:
+            governor_cfg["var_limit_pct"] = risk_params.get("var_limit_pct")
+        if "cvar_limit_pct" not in governor_cfg and risk_params.get("cvar_limit_pct") is not None:
+            governor_cfg["cvar_limit_pct"] = risk_params.get("cvar_limit_pct")
         risk_governor = SessionRiskGovernor(governor_cfg)
 
         self.sessions[session_id] = {
@@ -3208,6 +3260,28 @@ class LiveBotManager:
             verdict = risk_governor.check_periodic(equity=equity, now=datetime.now(timezone.utc))
             if not verdict.ok:
                 await self._apply_governor_breach(session_id, session, verdict)
+            elif risk_governor.var_limit_pct is not None or risk_governor.cvar_limit_pct is not None:
+                # Plan 22 Step 22.4: periodic VaR/CVaR check — same shared
+                # `compute_var_cvar` the pre-trade gate and the Zone 1
+                # dashboard use, 10s/60s cached. Best-effort: a fetch/compute
+                # failure here just skips this tick's check (logged), rather
+                # than tripping a breach on a transient network error — the
+                # standing-limit checks above already ran and are unaffected.
+                try:
+                    from services.portfolio_risk import compute_var_cvar as _compute_var_cvar
+                    _var_amount, _cvar_amount = await _compute_var_cvar(
+                        session.get("api_key", ""), session.get("api_secret", ""), mode="testnet",
+                    )
+                    _var_verdict = risk_governor.check_var(
+                        var_amount=_var_amount, cvar_amount=_cvar_amount, equity=equity,
+                    )
+                    if not _var_verdict.ok:
+                        await self._apply_governor_breach(session_id, session, _var_verdict)
+                except Exception as _var_e:
+                    logger.warning(
+                        f"[AlgoBot] Session {session_id}: periodic VaR/CVaR check failed to compute, "
+                        f"skipping this tick — {_var_e}"
+                    )
 
         # Position details with exchange-truth data for the UI (F-023)
         position_details = {}

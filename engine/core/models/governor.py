@@ -28,9 +28,13 @@ metric -> block, never silently pass):
   - Margin utilization ceiling (pre-trade only) — vetoes an entry that would
     push total margin committed past `max_margin_utilization` of equity.
 
-Portfolio open-risk budget, VaR, correlation, and liquidation-buffer checks
-are 22.2/22.4/22.5's scope — deliberately not here yet (Part D: each step
-independently shippable).
+Portfolio open-risk budget and liquidation-buffer checks shipped in 22.2.
+VaR/CVaR enforcement ships in 22.4 (`check_var`, below) — account-wide,
+sourced from `services/portfolio_risk.py`'s shared computation (same
+function the Zone 1 dashboard uses; see that module's docstring for why
+account-wide, not session-scoped). Correlation-aware concentration cap is
+22.5's scope — deliberately not here yet (Part D: each step independently
+shippable).
 
 Auto-flatten (force-close everything on `halted`) is a per-user opt-in,
 default off (DECISIONS.md #23) — `auto_flatten_on_halt` is exposed as a
@@ -68,6 +72,11 @@ class SessionRiskGovernor:
                               (config compat); here it's the TRUE cross-symbol
                               aggregate, which per-symbol construct() structurally
                               cannot compute (Plan 21 audit finding). <= 0 disables.
+      var_limit_pct          (float|None, default None = off) — 22.4: account-wide
+                              1-day 95% VaR as a fraction of equity. None/<=0 disables.
+      cvar_limit_pct         (float|None, default None = off) — 22.4: optional,
+                              same-day 95% CVaR as a fraction of equity. Independent
+                              of var_limit_pct — either alone can breach.
       breach_action           ("reducing"|"halted", default "reducing")
       auto_flatten_on_halt   (bool, default False)   — DECISIONS.md #23
     """
@@ -81,6 +90,10 @@ class SessionRiskGovernor:
         )
         self.max_margin_utilization = float(cfg.get("max_margin_utilization", 0.8))
         self.max_portfolio_risk = float(cfg.get("max_portfolio_risk", 0.06))
+        raw_var = cfg.get("var_limit_pct")
+        self.var_limit_pct: float | None = float(raw_var) if raw_var not in (None, "") else None
+        raw_cvar = cfg.get("cvar_limit_pct")
+        self.cvar_limit_pct: float | None = float(raw_cvar) if raw_cvar not in (None, "") else None
         breach_action = cfg.get("breach_action", "reducing")
         self.breach_action = breach_action if breach_action in ("reducing", "halted") else "reducing"
         # DECISIONS.md #23: opt-in, off by default. The governor never acts
@@ -234,4 +247,61 @@ class SessionRiskGovernor:
                 ),
                 check_name="portfolio_open_risk",
             )
+        return GovernorVerdict(ok=True)
+
+    def check_var(self, *, var_amount: float, cvar_amount: float, equity: float) -> GovernorVerdict:
+        """Plan 22 Step 22.4: account-wide VaR/CVaR budget — both `var_amount`
+        and `cvar_amount` are the caller-computed dollar figures from
+        `services/portfolio_risk.py`'s `compute_var_cvar` (the SAME function
+        `routers/risk.py`'s dashboard endpoint calls — see that module's
+        docstring). Called both pre-trade (`execute_entry`, after the 22.2
+        portfolio-risk/liq-buffer checks) and periodically (`_push_stats`,
+        alongside `check_periodic`'s standing-limit checks).
+
+        Both `var_limit_pct` and `cvar_limit_pct` default to `None` (off) —
+        unlike `max_portfolio_risk`'s "0 disables" convention, VaR/CVaR are
+        opt-in entirely (an account with no prior positions has undefined
+        VaR, and not every session wants this check; explicit opt-in avoids
+        surprising an existing session with a new default-on veto).
+
+        Fails closed on equity <= 0 (same convention as every other governor
+        check) — but a *failure to compute* the VaR/CVaR themselves (e.g. a
+        Binance fetch error) is the caller's concern, not this method's: this
+        method only ever sees the already-computed numbers, consistent with
+        `check_portfolio_risk`'s separation (the governor never reaches into
+        session/account internals itself).
+        """
+        if self.var_limit_pct is None and self.cvar_limit_pct is None:
+            return GovernorVerdict(ok=True)
+        if equity <= 0:
+            return GovernorVerdict(
+                ok=False,
+                reason="equity <= 0 — cannot compute VaR/CVaR budget (fail-closed)",
+                check_name="var_limit",
+            )
+
+        if self.var_limit_pct is not None and self.var_limit_pct > 0:
+            var_pct = var_amount / equity
+            if var_pct > self.var_limit_pct:
+                return GovernorVerdict(
+                    ok=False,
+                    reason=(
+                        f"account-wide 1-day 95% VaR {var_pct:.1%} exceeds var_limit_pct "
+                        f"{self.var_limit_pct:.1%} (${var_amount:.2f} VaR / equity ${equity:.2f})"
+                    ),
+                    check_name="var_limit",
+                )
+
+        if self.cvar_limit_pct is not None and self.cvar_limit_pct > 0:
+            cvar_pct = cvar_amount / equity
+            if cvar_pct > self.cvar_limit_pct:
+                return GovernorVerdict(
+                    ok=False,
+                    reason=(
+                        f"account-wide 1-day 95% CVaR {cvar_pct:.1%} exceeds cvar_limit_pct "
+                        f"{self.cvar_limit_pct:.1%} (${cvar_amount:.2f} CVaR / equity ${equity:.2f})"
+                    ),
+                    check_name="cvar_limit",
+                )
+
         return GovernorVerdict(ok=True)

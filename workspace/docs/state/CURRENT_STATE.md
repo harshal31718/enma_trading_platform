@@ -3,7 +3,8 @@
 **Authority:** This is the single source of truth for what ENMA currently does.
 Read this before starting any work. If this conflicts with chat history, this document wins.
 
-Last updated: 2026-07-17 (Plan 22 Step 22.1 — Session Risk Governor + capital integrity gate
+Last updated: 2026-07-17 (Plan 22 Steps 22.1–22.4 — Session Risk Governor, capital integrity
+gate, portfolio open-risk/liq-buffer, protections parity, and live VaR/CVaR enforcement — all
 shipped code-side, pending container test run + live re-verification — see Algo Trading section.
 Earlier: 2026-07-16 Known Technical Debt update confirmed the algo/conditional-order
 `ORDER_TRADE_UPDATE` gap live and logged two new open bugs from a live Chaos run — see below.
@@ -155,7 +156,22 @@ Resilience & Stats sections) — this bullet is a pointer, not a description.
   regular live — no separate Chaos plumbing exists). New per-entry `risk_check` event
   (`executionEvents`) records resolved limits + computed sizing + the minNotional inflation
   factor; a session-visible warning fires when that factor exceeds 1.1×.
-- Not yet shipped: 22.4–22.7. See
+- **Live VaR/CVaR enforcement (22.4, shipped 2026-07-17)**: new `engine/services/
+  portfolio_risk.py` — the single shared computation both the Zone 1 dashboard
+  (`routers/risk.py`, now a thin formatter) and the live governor use (`compute_var_cvar`,
+  wrapping the pre-existing `utils/risk_math.calculate_portfolio_var`), with 10s account-fetch /
+  60s price-history caching. Account-wide by design (not session-scoped) — Binance's real
+  margin/liquidation risk is account-wide, shared across every session on one key (Chaos runs
+  dozens per key); scoping to one session's positions would diverge from the dashboard's number.
+  `SessionRiskGovernor.check_var()` adds `var_limit_pct`/`cvar_limit_pct` (both default `None` =
+  off, fully opt-in unlike the other governor checks' "0 disables" convention), evaluated
+  pre-trade (`execute_entry`, after 22.2's checks) and periodically (`_push_stats`, alongside
+  `check_periodic`) — fails open on a fetch/compute exception (external network call, same
+  precedent as 22.2's liq-buffer check), routes a breach through the existing `risk_breach`
+  webhook (no new webhook plumbing). Zone 2 schema/UI for `varLimitPct`/`cvarLimitPct`
+  deliberately deferred to 22.7 (batched with the plan's other new-field UI work, per 22.7's own
+  scope) — engine-side config keys are live now via `risk_params.governor.var_limit_pct`.
+- Not yet shipped: 22.5–22.7. See
   `workspace/plan/22_risk-management-industry-standard.md`.
 
 ### Order History (Trade Recorder)

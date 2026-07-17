@@ -471,11 +471,37 @@ every entry that actually places (not a rejected one), recording resolved risk l
 sizing including the minNotional inflation factor; a session-visible warning fires when that
 factor exceeds 1.1×.
 
-**Not yet shipped:** 22.4–22.7 (VaR/CVaR enforcement, correlation-aware concentration cap, and
-further hardening). Full Zone 2 UI/schema wiring for the governor's config keys is 22.7's scope —
-22.1–22.3 read them as plain engine-side defaults. See
-`workspace/plan/22_risk-management-industry-standard.md` and `DECISIONS.md` #23/#24/#25.
-**Pending container test run + live re-verification** — the governor class itself has 18/18 real
+**Live VaR/CVaR enforcement (Plan 22 Step 22.4, shipped 2026-07-17):** new `engine/services/
+portfolio_risk.py` is the one shared computation path for account-wide VaR/CVaR — both the Zone 1
+dashboard endpoint (`routers/risk.py`, rewritten as a thin formatter over it) and the governor's
+new `check_var()` call the same `compute_var_cvar()` function (wrapping the pre-existing
+`utils/risk_math.calculate_portfolio_var`, itself unchanged). Deliberately account-wide, not
+session-scoped: Binance's real margin/liquidation risk is account-wide, shared across every
+session running on one API key (Chaos runs dozens per key) — scoping to "this session's positions
+only" would produce a number that diverges from the dashboard's and understates real risk when
+sessions share a key. 10s account-fetch / 60s price-history in-memory caching (per this step's own
+acceptance criterion) bounds the REST/DB weight of frequent governor polling across many
+concurrent sessions — independent of the Node-side 10s Redis cache the dashboard route already had
+(that one only helps the dashboard's own browser polling, not the engine-internal governor calls).
+`SessionRiskGovernor.check_var(var_amount, cvar_amount, equity)` adds `var_limit_pct`/
+`cvar_limit_pct` config, both defaulting to `None` (off — fully opt-in, unlike the other governor
+checks' "0 disables" convention, since an account with no trading history has undefined VaR).
+Evaluated pre-trade (`execute_entry`, right after the 22.2 checks — opt-in gated, so sessions that
+never configure either limit never pay the extra Binance/TimescaleDB round trip) and periodically
+(`_push_stats`, alongside `check_periodic`); a breach reuses the existing `risk_breach` webhook
+(`_apply_governor_breach`, no new webhook plumbing). Fails **open** on a fetch/compute exception —
+same precedent as 22.2's liquidation-buffer check, since a transient Binance outage must not
+silently halt live trading. Zone 2 schema/UI for `varLimitPct`/`cvarLimitPct` deliberately deferred
+to 22.7 (that step's own scope explicitly batches "all new fields" including `varLimitPct` into one
+UI pass) — the engine-side config keys are live now via `risk_params.governor.var_limit_pct`/
+`.cvar_limit_pct`, same reuse pattern as `max_session_dd`/`max_portfolio_risk`.
+
+**Not yet shipped:** 22.5–22.7 (correlation-aware concentration cap, portfolio allocation layer,
+and the batched Zone 2 UI/schema surface). Full Zone 2 UI/schema wiring for the governor's config
+keys accumulated across 22.1–22.4 is 22.7's scope — they're read as plain engine-side defaults
+until then. See `workspace/plan/22_risk-management-industry-standard.md` and `DECISIONS.md`
+#23/#24/#25.
+**Pending container test run + live re-verification** — the governor class itself has 32/32 real
 pytest passes standalone (`engine/tests/test_session_risk_governor.py`); the wiring into
 `live_bot_manager.py` was verified via `py_compile`/`ast.parse` + manual review (the file has a
 heavy TA-Lib/numpy/motor/asyncpg dependency chain that doesn't import in a bare sandbox); the

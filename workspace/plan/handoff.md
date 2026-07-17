@@ -7,6 +7,130 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
+## 2026-07-17 — Plan 21.7 (A-12/A-13) + Plan 22 Steps 22.1(remainder)–22.4 shipped: mainnet kline feed, armed-bracket wick-check dedup, portfolio open-risk/liq-buffer, protections parity, live VaR/CVaR — CODE COMPLETE, VERIFICATION PENDING ⏸️
+
+**Goal:** continue Plan 22 step by step under the session's standing "ok proceed"/"continue"
+pattern — each brief go-ahead authorized the next unblocked item in the plan's own sequencing
+without re-litigating scope. Closed out Plan 21.7's last two items (A-12/A-13, both previously
+held for a product decision, now unblocked by `DECISIONS.md` #24/#25 from an earlier session),
+then 22.1's remaining wiring, then 22.2, 22.3, and 22.4 in order.
+
+**Done — A-12 (mainnet kline feed for live signals):** new `_MAINNET_WS_BASE` constant +
+`_kline_ws_url(symbol, timeframe)` (`engine/core/live_bot_manager.py`) — live signal/indicator
+candles now come from Binance mainnet's public kline stream
+(`wss://fstream.binance.com/market/ws`), replacing the old testnet-sourced feed that spliced
+discontinuously against mainnet-trained strategies. Order execution stays testnet-pinned
+(unchanged). Tests: `engine/tests/test_kline_ws_url.py` (5 cases) — this file also established
+the stub-injection technique (fake `websockets`/`motor`/`asyncpg` registered into `sys.modules`
+only if the real import fails, then the REAL module is driven) reused by every test file this
+window needed it, unlocking genuine `pytest` execution instead of `ast.parse`-only.
+
+**Done — A-13 (engine wick-check defers to a confirmed-armed exchange bracket):**
+`ExecutionKernel.check_exits` (`engine/core/kernel.py`) gained `armed_legs: dict | None = None` —
+skips the engine's own SL/TP wick-check for a leg confirmed resting on the exchange
+(`open_positions[symbol]["algo_ids"]`), falling back to the wick-check when a leg is missing
+(A-7's naked-position detector makes "missing" well-defined). Default `None` preserves
+byte-identical backtest behavior — confirmed via `test_entry_candle_exits.py`/
+`test_exec_algo_slicing.py` unchanged. `_run_symbol_loop` now passes `armed_legs` computed from
+`open_positions[symbol]["algo_ids"]`. Tests: `engine/tests/test_armed_legs_wick_check_skip.py`
+(7 cases).
+
+**Done — 22.1 remainder:** `record_realized_pnl` wired into the two PnL-booking sites that
+weren't yet covered (`_close_position_on_stop`, `_reconcile_exchange_state` Case 2);
+`session["risk_governor"]` instantiated in `start_session` via a `governor_cfg` cascade reading
+`risk_params.max_session_dd`/`.governor`.
+
+**Done — 22.2 (portfolio open-risk budget + liquidation buffer):**
+`SessionRiskGovernor.check_portfolio_risk()` — the TRUE cross-symbol Σ`|entry−stop|×qty`/equity,
+superseding `DefaultPortfolioModel.construct()`'s structurally-per-symbol `max_portfolio_risk`
+check for live sessions (backtest's own check left untouched, no golden-master benefit to
+removing it). `respects_liq_buffer()` (previously decorative, zero call sites) wired into
+`execute_entry`, computing the actual liquidation price via `core/margin.py` for the veto log.
+New `_compute_open_risk_breakdown()` reads each open symbol's live `strategy.stop_loss`. Tests:
+`+6` in `test_session_risk_governor.py`, new `test_execute_entry_portfolio_risk_and_liq_buffer.py`
+(8 cases).
+
+**Done — 22.3 (protections parity + risk-integrity events):** new `MaxDrawdownProtection` +
+`LowProfitPairsProtection` (`core/models/protections.py`, opt-in/default-off). **Found and fixed a
+real gap while wiring them in:** `ProtectionManager.record_trade_close` was only ever called from
+`execute_exit` — the F-018 emergency-exit path, `_close_position_on_stop`, and
+`_reconcile_exchange_state`'s Case 2 never fed the protections stack at all, meaning
+`StoplossGuard` was structurally blind to most exchange-side stoploss closes (the path A-13 just
+made dominant). Wired into all four close paths. New `_classify_exchange_sync_exit_reason()` for
+Case 2's internal bookkeeping only (outward notification's `exitReason="exchange_sync"` label
+unchanged). Verified Chaos sessions already get full protections coverage (traced `startChaos` →
+same `start_session` path, no separate Chaos plumbing — corrected a stale plan-text assumption).
+New `risk_check` event type (`services/event_log.py`), appended by `execute_entry` on every
+successful entry with resolved limits + computed sizing including the minNotional inflation
+factor; session-visible warning above 1.1×. Tests: `test_protections_max_drawdown_low_profit.py`
+(16 cases, zero deps), new `test_execute_entry_risk_check_event.py` (4 cases).
+
+**Done — 22.4 (live VaR/CVaR enforcement):** new `engine/services/portfolio_risk.py` — the single
+shared computation both `routers/risk.py`'s Zone 1 dashboard endpoint (rewritten as a thin
+formatter) and the governor's new `check_var()` call (`compute_var_cvar()`, wrapping the
+pre-existing `utils/risk_math.calculate_portfolio_var` unchanged). **Deliberately account-wide,
+not session-scoped** — Binance's real margin/liquidation risk is account-wide, shared across every
+session on one API key (Chaos runs dozens per key); scoping to one session's positions would
+diverge from the dashboard's own number. 10s account-fetch / 60s price-history in-memory caching
+bounds REST/DB weight (this step's own acceptance criterion) — independent of the Node-side 10s
+Redis cache the dashboard route already had (that one only helps browser polling, not the
+engine-internal governor calls). `SessionRiskGovernor.check_var(var_amount, cvar_amount, equity)`
+adds `var_limit_pct`/`cvar_limit_pct`, both default `None` (fully opt-in, unlike the other
+governor checks' "0 disables" convention). Wired pre-trade (`execute_entry`, opt-in gated to avoid
+an extra Binance/TimescaleDB round trip when unconfigured) and periodically (`_push_stats`,
+reusing the existing `risk_breach` webhook via `_apply_governor_breach` — no new webhook
+plumbing). Fails **open** on a fetch/compute exception (external network call, same precedent as
+22.2's liq-buffer check). Zone 2 schema/UI deliberately deferred to 22.7 (that step's own text
+explicitly batches `varLimitPct` into its one UI pass) — engine-side config keys are live now via
+`risk_params.governor.var_limit_pct`. Tests: new `test_portfolio_risk_shared_service.py` (11
+cases, including the acceptance-critical shared-function identity test proving the dashboard and
+governor call sites get byte-identical values from ONE cached fetch, not coincidentally-equal
+independent stubs), `+8` in `test_session_risk_governor.py`, new `test_execute_entry_var_breach.py`
+(6 cases, including the acceptance-critical "breach demonstrably blocks a new entry" test).
+
+**Files changed:** `engine/core/live_bot_manager.py` (A-12, A-13 wiring, 22.1 remainder, 22.2,
+22.3, 22.4 — many call sites); `engine/core/kernel.py` (A-13's `armed_legs` param);
+`engine/core/models/governor.py` (`check_portfolio_risk`, `check_var`, new config fields); new
+`engine/core/models/protections.py` additions (`MaxDrawdownProtection`,
+`LowProfitPairsProtection`); `engine/core/models/__init__.py` (exports); `engine/services/
+event_log.py` (`risk_check` EVENT_TYPES entry); new `engine/services/portfolio_risk.py`; rewritten
+`engine/routers/risk.py`; new test files: `test_kline_ws_url.py`,
+`test_armed_legs_wick_check_skip.py`, `test_execute_entry_portfolio_risk_and_liq_buffer.py`,
+`test_protections_max_drawdown_low_profit.py`, `test_execute_entry_risk_check_event.py`,
+`test_portfolio_risk_shared_service.py`, `test_execute_entry_var_breach.py`; extended
+`test_session_risk_governor.py`; docs: `21_live-algo-industry-standard-audit.md`,
+`22_risk-management-industry-standard.md`, `0_tracker.md`, `0_fixes-queue.md`,
+`workspace/docs/state/CURRENT_STATE.md`, `workspace/docs/features/algo-trading/SPEC.md`,
+`workspace/docs/features/risk-dashboard/SPEC.md`, `workspace/docs/core/binance-api.md`,
+`handoff.md`.
+
+**NOT done — do not treat any of this as fully closed:**
+1. **No container test run for any of it.** Every test file this window was verified with real
+   `pytest` via the stub-injection technique (genuine execution, not `ast.parse`) — 100+ tests
+   green across the full touched-file surface, backtest-path regression files unaffected — but
+   this sandbox has never had Docker access. Run
+   `docker exec enma_trading_platform-engine-1 pytest /app/tests/` before trusting any of it.
+2. **No live re-verification** — none of A-12's mainnet feed, A-13's wick-check dedup, 22.2's
+   portfolio-risk/liq-buffer veto, 22.3's new protections/risk_check events, or 22.4's VaR/CVaR
+   veto have been exercised against a real Binance Testnet session.
+3. All touched docs say "shipped code-side, pending container test run + live re-verification" —
+   do not silently upgrade that language without actually running #1 and #2.
+4. **Git commit status not re-confirmed at the end of this specific window** — verify `git log`/
+   `git status` directly before assuming everything above is committed (this session hit the
+   recurring `.git/index.lock`/`HEAD.lock` recreation bug several times; the fix each time was
+   renaming the lock file and retrying, confirmed via `git log`, not via piped exit codes).
+
+**Next session:** (1) run the container test suite — single highest-leverage action outstanding
+across this entire window; (2) live-verify a small Testnet session covering the governor's
+veto/breach behavior (drawdown, portfolio-risk, liq-buffer, VaR/CVaR), the capital gate's
+over-commit rejection, and the protections' lock/unlock; (3) once verified, flip status language
+from "shipped code-side" to "shipped" across the docs touched above; (4) the natural next step per
+Plan 22's own sequencing is **22.5** (correlation-aware concentration cap, reuses this step's
+shared `portfolio_risk.py` service for the rolling-correlation computation) — check in before
+starting it rather than treating continued "proceed" as a blank check for the rest of Plan 22,
+consistent with how each step this window paused to report status first.
+
+---
 ## 2026-07-17 — Plan 22 Step 22.1 shipped: Session Risk Governor + capital integrity gate — CODE COMPLETE, VERIFICATION PENDING ⏸️
 
 **Goal:** per the user's "ok, ask me" → six Part F/A-12/A-13 policy decisions answered via
@@ -390,151 +514,4 @@ survey `0_tracker.md`'s Active work table fresh for anything else genuinely deci
 golden-master-free. Git commit for 21.5/21.7's `binance_testnet.py` + `live_bot_manager.py` +
 `utils/symbols.py` + new test file changes is still pending as of this handoff entry — same
 lock-file-rename workaround as before, verify files aren't stale in bash before trusting `git add`.
-
----
-## 2026-07-16 — Live algo industry-standard audit (Plan 21) + risk-management plan (Plan 22), docs-only — COMPLETE ✅
-
-**Goal:** audit the full autonomous algo-trading path (signal → order → SL/TP → fill detection →
-reconciliation → monitoring → stop) against industry-standard failproof expectations and mark
-required changes in `workspace/plan` (Rule D, docs only — zero code touched).
-
-**Done:** full read of `live_bot_manager.py` (all 2372 lines), `kernel.py`, `pipeline.py`,
-`user_data_stream.py`, `binance_testnet.py`, `rate_limiter.py`, targeted reads of
-`utils/symbols.py` / `models/risk.py`, cross-checked against `algo-trading/SPEC.md`,
-`binance-api.md`, `CURRENT_STATE.md`, `0_fixes-queue.md`. Deliverable:
-**`21_live-algo-industry-standard-audit.md`** — 14 findings (A-1…A-14) + 7-step remediation plan
-(21.1–21.7), wired into `0_tracker.md` (new row 21) and `0_plans.md` (catalog entry).
-
-**Headline findings — three `[Certain]` defects that are the likely F7 item-1 root causes:**
-1. **A-1 (critical):** `_query_real_exit_from_user_trades()` calls `send_signed_request` without
-   `api_key`/`api_secret` (required positionals) → TypeError swallowed → returns None → every
-   `exchange_sync` close books the estimate. Plan 5.2's userTrades path has never executed.
-2. **A-2 (critical):** `_on_fill` reads `order_data.get("clientOrderId")` (key doesn't exist —
-   Binance uses `c`), falls back to `i` (an int) → `int.startswith()` AttributeError on every
-   FILLED frame, caught upstream → the reconcile call at the end of `_on_fill` never runs. The
-   F-020 event-driven path is dead code. Check existing Chaos-run logs for
-   `callback error: 'int' object has no attribute 'startswith'` to confirm against F7.
-3. **A-3 (high):** `LISTEN_KEY_EXPIRED` handler `return`s out of `_run_ws` — kills the UDS task
-   permanently (comment claims the reconnect loop picks it up; it doesn't).
-   Also high: **A-4/A-5** — no close path cancels the resting `closePosition:true` SL/TP algo
-   orders (stale triggers can market-close future positions on the symbol, incl. after session
-   stop); **A-6/A-7** — emergency-exit fabricates its close and a failed emergency close leaves
-   a naked position that reconcile restores without any stop, no naked-position detector;
-   **A-8** — `ACCOUNT_UPDATE` is logged but unused (it's the event-type-agnostic fix for the
-   ~60s window); **A-10** — no automatic session-level drawdown kill-switch (`max_session_dd`
-   is per-symbol-slice only, `trading_state` is only ever tripped manually).
-
-**Second deliverable (same session) — Plan 22, industry-standard risk management:** reviewed
-the rest of `workspace/plan` (gap matrix §1.6, `ref_future-paths.md` Track B/D + forks,
-risk-dashboard SPEC, audit_2, plans 12/14) and consolidated the user's scattered risk plans into
-**`22_risk-management-industry-standard.md`**: an engine-side **Session Risk Governor**
-(pre-trade + periodic checks: aggregate drawdown auto-kill-switch, daily loss limit, true
-cross-symbol open-risk budget, margin ceiling, enforced VaR/CVaR, correlation concentration cap)
-plus a config-gated inverse-vol allocation layer. **User decisions recorded:** fork #3 = yes
-(portfolio layer), fork #2 = rule-based only (no GARCH/ML), VaR enforcement = yes (Zone 1
-graduates from display-only). Two new `[Certain]` findings while grounding it: `liq_buffer_pct`
-is decorative (`respects_liq_buffer()` has zero pipeline call sites — smoke-tested only), and
-`max_portfolio_risk` is per-symbol despite its name (no cross-symbol risk budget exists).
-Plan 21 step 21.6 marked `Merged→22.1`; `ref_future-paths.md` forks #2/#3 marked resolved.
-
-**Third deliverable (same session) — workspace/plan restructure, completed work factored out:**
-- `0_tracker.md` **rewritten**: split into an **Active work** table (10 rows with an explicit
-  "Remaining scope" column — 21, 5, 22, 9, 10, 13, 17, 6, 7, 8) and a **Completed/merged** table
-  (1, 2, 3, 4, 11, 12, 14, 15, 16, 18, 19, 20); fixed stale rows (14/15 said "Ready" — they
-  shipped 2026-07-16 as F3/F4); Notes trimmed to active plans only (shipped detail lives in each
-  plan file's Shipped summary, per convention); Execution order rewritten as three parallel
-  tracks with the live-correctness track (21.1→21.4→22.1-3→5.5/5.6) leading.
-- `0_fixes-queue.md` **rewritten**: struck-through F1–F6 rows dropped per the file's own
-  "drop on next edit" rule; F7 updated from "investigation" to "root-caused — fix = 21.1/21.2"
-  with the three Plan 21 findings inline; Not-in-queue table gained Plan 21-remainder and
-  Plan 22 rows.
-- `0_roadmap.md`: added a **Status snapshot** table (phase-by-phase done/partial/pending);
-  shipped/partial tags on Phase 0/1/2/3/9 headers; new **Phase 3b — Live Fill-Path Correctness
-  & Risk Governor** (Plans 21+22, the current P0 track) with its own exit gate; sequencing
-  table + mainnet gate updated (mainnet now gated on Phase 3 AND 3b).
-- `0_plans.md`: stale catalog statuses corrected (2, 3, 4, 5, 11, 14, 15).
-
-**Fourth deliverable (same session) — capital-control audit (user question: "is capital per bot
-run controlled by parameter, risk %, per-trade, per-bot, new-bot limits?"):** traced
-`algo.controller.js` (start + chaos paths), `Settings.js` limits schema, `utils/risk.js`
-resolver + its tests, and the engine's `start_session`. **Controlled and sound:** risk-% per
-trade (wizard → `utils/risk.js` clamp → Zone 2 cascade clamp → engine F-014 `min(0.20)` floor →
-`size_by_risk`); per-bot `maxSymbolsPerBot` (15); `maxConcurrentBots` (10) enforced on both
-start paths; chaos symbol caps; optional per-session `maxOpenPositions`. **NOT controlled:**
-`capital` is presence-checked only — no numeric bounds (non-numeric crashes the engine's
-`float()`), never validated against the real Binance balance (only "balance" ref in the
-controller is equity-curve math), no cross-session capital reservation (10 bots × capital each,
-unchecked), and Chaos multiplies `capital × strategyCount`. The engine's entry-time notional
-guard checks against the *configured* fiction, not the wallet. Recorded as **B-11/B-12** in
-Plan 22 Part B; 22.1 extended with a two-layer **capital integrity gate** (server validate +
-reserve across running sessions incl. the Chaos multiplier; engine wallet-clamp backstop);
-Part F gained Q5 (hard-reject vs warn-and-confirm on over-commit; proposal: warn on testnet,
-reject if mainnet ever arrives). Part A gained rows documenting the launch-limit and risk-%
-chains as audited-sound so the next reader doesn't re-audit them.
-
-**Fifth deliverable (same session) — five-model pipeline audit (user question: "do all 5 models
-work fine?"):** full read of `models/base.py`/`cost.py`/`portfolio.py`/`execution.py` (+ risk.py
-and pipeline.py from earlier). Verdict: Alpha contract sound; Risk math sound (gaps already
-filed); Portfolio sizing variants sound; Execution `route()` sound. Six new findings recorded as
-**Part A2 (M-1…M-6) in Plan 21**: **M-1 [Certain/High]** — the "default-on" cost gate has NEVER
-fired: both injection sites set `cost_model.min_edge_mult=0.05` but the live gate reads
-`portfolio_model.min_edge_mult` (0.0) — dead code, and `CURRENT_STATE.md`'s "active by default"
-claim was false (corrected same day, pointer to M-1/M-2); **M-2** — gate formula compares
-per-unit price distance to whole-position quote cost (would always-veto sub-cent symbols if
-naively activated); **M-3** — `Signal.magnitude` documented as feeding the gate, read by
-nothing; **M-4 [Certain/Med-High]** — trailing/breakeven stops never amend the exchange SL
-(local-only; exchange net stays at the original widest stop; enforcement is candle-close
-engine checks); **M-5** — entries proceed when their SL/TP is dropped as invalid-vs-fill, and
-the invalid local tuple isn't cleared (instant false stop-out risk); **M-6** —
-`TargetPortfolio.weight`/`target_weight()` are dead stubs. Fixes routed: M-1/M-2/M-3 → **new
-Plan 9 step 9.11** (Step A golden-master-inert rewire+dimension fix defaulting to 0.0, Step B
-separate re-baselined activation decision); M-4/M-5 → **21.4** (scope extended); M-6 → 22.6.
-
-**Sixth deliverable (same session) — Plan 23, user-requested high-risk strategy design:**
-`23_high-risk-leverage-strategy.md` ("MarginSurge") — the "fixed to give high returns" ask
-reframed honestly (§0: leverage scales both tails; validation gates are allowed to kill the
-strategy). Concrete design: 5m/15m compression-breakout (Donchian-20 shifted, BB-bandwidth
-squeeze, ADX≥25 rising, MFI flow, EMA-200 alignment, ATR-percentile floor), 0.75×ATR SL with a
-hard liquidation-clearance invariant, 2R TP + breakeven at 1R + 1×ATR trail + 24-candle time
-stop, leverage 20–50x **selected by** leverage-sensitivity + MC ruin curves (P(dd>50%)<10%,
-P(ruin)<2%), `risk_pct` 3–5%, margin-heavy = concurrent positions + utilization (not notional
-YOLO). Uses only existing models/indicators. Backtest gates startable now; live phase
-hard-gated on 21.1–21.4 (M-4 especially — its trailing is engine-side only until then).
-Registered in tracker + catalog. Open Q3 asks the user to pre-accept a "don't ship" verdict if
-the cost-realism/regime gates fail.
-
-**Seventh deliverable (same session) — BestSupertrend "never trades" root-caused (Plan 24):**
-user-reported; confirmed by full strategy read + arithmetic. **S-1 [Certain], the primary
-cause:** at platform defaults (`Settings.js` `defaultLeverage: 1` / `defaultBotLeverage: 1`;
-strategy `position_size_pct: 1.0`), `size_by_notional` produces notional = equity×(1+slippage)
-→ req_margin > balance at leverage 1 → `EntryFill.affordable()` rejects **every** entry
-(backtest logs one hidden warning; live gets Binance `-2019` per attempt). Chaos (50x default)
-can trade, default backtests cannot — matching the user's observation exactly. Also found:
-**S-2** live HTF constant path takes `tsl[-2]` on an array that already excludes the open bar
-(one full HTF bar staler than backtest's `htf_tsl[k-1]`); **S-3** unsatisfiable tf/timeframe
-combos (weekly/monthly on ≤4h base under the 500-candle live cap; any HTF-fetch failure on
-sub-1h base) return `None` from `_htf_st_at` forever → all signals False, silently; **S-4**
-the `order_type` param collides with `OrderPlan.order_type` via `route()`'s
-`getattr(s, "order_type", "market")` (latent until anyone honors the field); **S-5** docs say
-`SignalExitRiskModel`, code binds `AtrBracketRiskModel`. All in
-`24_bestsupertrend-fixes.md` (fix order S-1→S-5; S-1/S-2 need a cheap BestSupertrend
-re-baseline — verify the stored baseline's trade count first; live verify after 21.1–21.2).
-Registered in tracker (P1) + catalog.
-
-**Files changed (docs only):** new `21_live-algo-industry-standard-audit.md`, new
-`22_risk-management-industry-standard.md`, new `23_high-risk-leverage-strategy.md`, new
-`24_bestsupertrend-fixes.md`; rewritten `0_tracker.md`, `0_fixes-queue.md`; edited
-`0_roadmap.md`, `0_plans.md`, `ref_future-paths.md`, `9_backtest-and-optimizer-correctness.md`
-(new 9.11), `workspace/docs/state/CURRENT_STATE.md` (cost-gate correction), `handoff.md`.
-
-**Next session:** ship **21.1** (three surgical diffs: A-1 creds, A-2 `c`-key + str + reconcile
-made unconditional, A-3 break-not-return) — it is the prerequisite for a meaningful F7
-reproduction — then **21.2** (ACCOUNT_UPDATE-driven reconcile). Then re-run the small live
-session from the F7 plan with the improved logging. 21.3/21.4 (bracket-cancel-on-close,
-naked-position re-arm) next; they should land before Plan 6 decomposition and are the
-prerequisite for starting Plan 22 (a governor over a wrong-state fill path enforces limits
-against fiction). Then 22.1–22.3. `CURRENT_STATE.md`'s Known-Debt userTrades line ("not yet
-implemented") needs correcting when 21.1 ships — the call exists but has been broken since it
-shipped. Plan 22 Part F open questions (auto-flatten opt-in, daily-loss window anchor, Chaos
-governor defaults) want user answers before 22.1 implementation, not blocking the earlier steps.
 

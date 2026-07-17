@@ -130,7 +130,8 @@ SimulationResults renders leverage-scenario table + Monte Carlo curves
 | `server/src/controllers/risk.controller.js` | Settings CRUD, live-metrics proxy + Redis cache, simulation proxy |
 | `server/src/models/Settings.js` | `globalHardLimits`, `strategyOverrides`, `symbolOverrides` fields |
 | `server/src/models/BacktestLeverageScenario.js` | Read-only model for engine-written Zone 3 results |
-| `engine/routers/risk.py` | `GET /risk/live-metrics` — VaR/CVaR + correlation computation |
+| `engine/routers/risk.py` | `GET /risk/live-metrics` — thin formatter over `services/portfolio_risk.py` (Plan 22 Step 22.4) |
+| `engine/services/portfolio_risk.py` | Shared VaR/CVaR/correlation computation (Plan 22 Step 22.4) — same functions the live Session Risk Governor calls in-process for pre-trade/periodic enforcement; own 10s (account)/60s (price history) in-memory cache, independent of the Node Redis cache below (that one only helps the dashboard's own browser-facing polling — it does nothing for the engine-internal governor calls, which never go through the Node proxy) |
 | `engine/routers/leverage_sensitivity.py` | `POST /backtest/run/leverage-sensitivity` — Zone 3 simulation trigger |
 | `engine/services/monte_carlo.py` | Monte Carlo bootstrap resampling (N=2000 paths) |
 | `engine/services/leverage_sensitivity_runner.py` | Runs leverage-scenario sweeps, writes `BacktestLeverageScenario` docs |

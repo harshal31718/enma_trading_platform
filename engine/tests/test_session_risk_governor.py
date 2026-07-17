@@ -246,3 +246,67 @@ def test_portfolio_risk_fails_closed_on_zero_or_negative_equity():
 
     v2 = gov.check_portfolio_risk(open_risk=100.0, equity=-50.0)
     assert v2.ok is False
+
+
+# ── Account-wide VaR/CVaR budget (Plan 22 Step 22.4) ────────────────────────
+
+def test_var_and_cvar_off_by_default():
+    gov = SessionRiskGovernor()
+    assert gov.var_limit_pct is None
+    assert gov.cvar_limit_pct is None
+    v = gov.check_var(var_amount=999_999.0, cvar_amount=999_999.0, equity=10.0)
+    assert v.ok is True  # both off -> never evaluates, even with an absurd VaR
+
+
+def test_var_within_limit_passes():
+    gov = SessionRiskGovernor({"var_limit_pct": 0.05})
+    v = gov.check_var(var_amount=400.0, cvar_amount=400.0, equity=10_000.0)  # 4%
+    assert v.ok is True
+
+
+def test_var_past_limit_breaches():
+    gov = SessionRiskGovernor({"var_limit_pct": 0.05})
+    v = gov.check_var(var_amount=600.0, cvar_amount=600.0, equity=10_000.0)  # 6% > 5%
+    assert v.ok is False
+    assert v.check_name == "var_limit"
+    assert "6.0%" in v.reason
+
+
+def test_var_exactly_at_limit_passes():
+    gov = SessionRiskGovernor({"var_limit_pct": 0.05})
+    v = gov.check_var(var_amount=500.0, cvar_amount=500.0, equity=10_000.0)  # exactly 5%
+    assert v.ok is True
+
+
+def test_cvar_independently_breaches_when_var_is_fine():
+    """cvar_limit_pct can fire even when var_limit_pct alone would pass —
+    the two are independent budgets, either can veto."""
+    gov = SessionRiskGovernor({"var_limit_pct": 0.10, "cvar_limit_pct": 0.05})
+    v = gov.check_var(var_amount=300.0, cvar_amount=600.0, equity=10_000.0)  # var 3% ok, cvar 6% > 5%
+    assert v.ok is False
+    assert v.check_name == "cvar_limit"
+
+
+def test_var_checked_before_cvar_when_both_breach():
+    gov = SessionRiskGovernor({"var_limit_pct": 0.05, "cvar_limit_pct": 0.05})
+    v = gov.check_var(var_amount=600.0, cvar_amount=700.0, equity=10_000.0)
+    assert v.ok is False
+    assert v.check_name == "var_limit"  # var checked first
+
+
+def test_var_only_configured_ignores_cvar_entirely():
+    gov = SessionRiskGovernor({"var_limit_pct": 0.05})
+    # cvar wildly over any reasonable threshold but never configured -> ignored
+    v = gov.check_var(var_amount=100.0, cvar_amount=9_999_999.0, equity=10_000.0)
+    assert v.ok is True
+
+
+def test_var_fails_closed_on_zero_or_negative_equity():
+    gov = SessionRiskGovernor({"var_limit_pct": 0.05})
+    v = gov.check_var(var_amount=1.0, cvar_amount=1.0, equity=0.0)
+    assert v.ok is False
+    assert v.check_name == "var_limit"
+    assert "fail-closed" in v.reason
+
+    v2 = gov.check_var(var_amount=1.0, cvar_amount=1.0, equity=-10.0)
+    assert v2.ok is False

@@ -299,6 +299,76 @@ cached metric pre-trade and periodically. Breach → configurable `reducing` + w
 Acceptance: dashboard value and governor value provably identical (same function, one test);
 breach demonstrably blocks a new entry in a stubbed session; 10s/60s caching bounds REST weight.
 
+**Status: shipped code-side 2026-07-17** (pending container test run + live re-verification —
+same standing caveat as every other step this window).
+
+**Shipped:**
+- **New `engine/services/portfolio_risk.py`** — the single shared computation both call sites
+  now use. `fetch_account_positions(api_key, api_secret, mode)` (10s cache, keyed by `(api_key,
+  mode)` — sessions/dashboard polls sharing a key share the cache), `fetch_close_prices(symbols)`
+  (60s cache, keyed by the sorted symbol set — moved verbatim from `routers/risk.py`),
+  `extract_position_notionals(account_data)` (moved verbatim, one parser for both callers),
+  `compute_var_cvar(api_key, api_secret, mode, confidence_level)` (the acceptance-critical
+  function — wraps `utils/risk_math.calculate_portfolio_var`, itself untouched), and
+  `compute_full_metrics(...)` (everything the dashboard route needs in one call).
+- **Design decision: account-wide, not session-scoped.** A live "session" is an internal
+  orchestration concept; Binance's actual margin/liquidation risk is account-wide, shared across
+  every session running on one API key (Chaos runs dozens per key). Scoping VaR to "this
+  session's positions only" would diverge from the dashboard's number and understate real risk
+  when sessions share a key. The governor asks the exact same question the dashboard shows.
+- **`routers/risk.py`** rewritten as a thin formatter over `compute_full_metrics` — response shape
+  byte-identical to the pre-22.4 inline implementation (no client-visible contract change).
+- **`SessionRiskGovernor.check_var(*, var_amount, cvar_amount, equity)`** (`core/models/
+  governor.py`) — new `var_limit_pct`/`cvar_limit_pct` config fields, both default `None` (off;
+  unlike `max_portfolio_risk`'s "0 disables" convention — VaR/CVaR are opt-in entirely, since an
+  account with no prior trading history has undefined VaR and not every session wants this gate).
+  Either budget can independently breach; `var_limit_pct` checked first when both are set. Fails
+  closed only on `equity <= 0` (the governor's own arithmetic) — a fetch/compute failure is the
+  caller's concern (see below), consistent with `check_portfolio_risk`'s separation of concerns.
+- **Wired into `live_bot_manager.py`** at both points Part C's table requires:
+  - **Pre-trade** (`execute_entry`, right after the 22.2 portfolio-risk/liq-buffer block): opt-in
+    gated — only fetches/evaluates when the governor actually has `var_limit_pct` or
+    `cvar_limit_pct` configured, avoiding a wasted Binance/TimescaleDB round trip on every entry
+    for sessions that never opted in. **Fails OPEN** on a fetch/compute exception (external
+    network call, same precedent as the 22.2 liquidation-buffer check) — a transient Binance
+    outage must not silently halt live trading.
+  - **Periodic** (`_push_stats`, alongside the existing `check_periodic` standing-limit check):
+    same opt-in gating and fail-open-on-exception; a breach routes through the existing
+    `_apply_governor_breach` (transitions `trading_state`, emits the `risk_breach` webhook event —
+    no new webhook plumbing needed, this reuses 22.1's).
+  - `start_session`'s `governor_cfg` cascade extended to read `risk_params.governor.var_limit_pct`
+    / `.cvar_limit_pct` (same reuse pattern as `max_session_dd`/`max_portfolio_risk`).
+- **Zone 2 schema/UI: deliberately deferred to 22.7**, not done here — 22.7's own text
+  (`workspace/plan/22_risk-management-industry-standard.md` line ~322) explicitly lists
+  `varLimitPct` among "all new fields" batched into that step's UI work ("UI batch at end" per
+  Part E's sequencing diagram), the same precedent 22.1 set for `maxDailyLossPct`/
+  `maxMarginUtilization`. Doing partial, differently-scoped Node/UI work per-step would be
+  inconsistent with that established batching — the engine-side config keys are live now
+  (`risk_params.governor.var_limit_pct`), so 22.7 only needs to wire the Node cascade to send them.
+
+**Tests:**
+- `engine/tests/test_portfolio_risk_shared_service.py` (11 cases) — `extract_position_notionals`
+  parsing, account/price-history cache hit/miss behavior (including cache-key correctness: same
+  symbol set in different order still hits, different api_key doesn't), and the acceptance-
+  critical identity tests: `test_dashboard_and_governor_get_identical_values_from_one_call` (two
+  calls simulating the two call sites return byte-identical `(var, cvar)` AND the underlying
+  fetch stubs were each invoked exactly once — proving genuine sharing, not coincidental equal
+  stub data) and `test_compute_full_metrics_var95_matches_compute_var_cvar` (the dashboard's
+  route-level function derives its var95/cvar95 from the same call, not a parallel computation).
+- `engine/tests/test_session_risk_governor.py` (+8 cases) — `check_var` defaults/config parsing,
+  independent var/cvar breach, ordering when both breach, fail-closed on non-positive equity.
+- `engine/tests/test_execute_entry_var_breach.py` (6 cases, stub-injection technique) — no
+  governor / governor-without-var-limits both skip the Binance account call entirely (opt-in
+  proven, not just documented); within-limit enters normally; **the acceptance-critical breach
+  test** (large existing position + absurdly tight `var_limit_pct` → entry vetoed, zero order/
+  algoOrder calls ever reach the fake Binance layer, local strategy state cleared same as the
+  existing M-5/22.2 veto pattern); CVaR-only limit breaches independently of VaR; a Binance
+  account-fetch exception fails open (a real fill still completes through `execute_entry`,
+  proving the VaR check itself degraded rather than the entry accidentally succeeding for an
+  unrelated reason).
+- Zero regression: full touched-file surface (100 tests across kline/portfolio-risk/risk-check/
+  bracket-safety/governor/armed-legs/protections/backtest-path files) still green.
+
 ### 22.5 — Correlation-aware concentration cap · P2 · M
 Reuse the rolling-correlation computation (same shared service); pre-trade check per Part C.
 Cluster definition: transitive closure over pairwise ρ > threshold among open + candidate
