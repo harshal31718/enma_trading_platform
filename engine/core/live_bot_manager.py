@@ -558,6 +558,53 @@ class LiveAdapter(ExecutionAdapter):
                 strategy.take_profit = None
                 return False
 
+        # Plan 22 Step 22.5: correlation-adjusted concentration cap — opt-in
+        # (only fetched/evaluated when the governor has correlation_cap.rho
+        # configured), same gating pattern as the VaR/CVaR block above. Fails
+        # OPEN on a fetch/compute exception (external TimescaleDB call, same
+        # precedent as the liq-buffer/VaR checks); fails CLOSED only on the
+        # governor's own equity<=0 case.
+        if risk_governor is not None and risk_governor.correlation_rho is not None:
+            try:
+                _open_notionals: dict[str, float] = {}
+                for _sym, _strat in session.get("strategy_instances", {}).items():
+                    if _sym == symbol:
+                        continue
+                    _pos = _strat.position
+                    if _pos is not None and _pos.is_open:
+                        _open_notionals[_sym] = abs(_pos.entry_price * _pos.qty)
+                from services.portfolio_risk import fetch_correlation_matrix as _fetch_corr
+                _corr_matrix = await _fetch_corr(list(_open_notionals.keys()) + [symbol])
+                _equity_corr, _ = self.manager._compute_session_equity_and_margin(session)
+                _corr_verdict = risk_governor.check_correlation_concentration(
+                    candidate_symbol=symbol,
+                    candidate_notional=qty * fill_price,
+                    open_notionals=_open_notionals,
+                    correlation_matrix=_corr_matrix,
+                    equity=_equity_corr,
+                )
+            except Exception as _corr_e:
+                logger.warning(
+                    f"[AlgoBot] {symbol}: correlation concentration check failed to compute, "
+                    f"allowing entry — {_corr_e}"
+                )
+                _corr_verdict = GovernorVerdict(ok=True)
+
+            if not _corr_verdict.ok:
+                logger.warning(f"[AlgoBot] {symbol}: entry blocked by risk governor — {_corr_verdict.reason}")
+                await self.manager._notify_node(self.session_id, {
+                    "event": "log",
+                    "eventData": {
+                        "type": "warning",
+                        "message": f"{symbol}: entry blocked — risk governor ({_corr_verdict.check_name}): {_corr_verdict.reason}",
+                    },
+                })
+                strategy.buy = None
+                strategy.sell = None
+                strategy.stop_loss = None
+                strategy.take_profit = None
+                return False
+
         binance_side = "BUY" if direction == "long" else "SELL"
         sem = self.manager._order_semaphores.get(self.session_id)
 
@@ -1591,6 +1638,11 @@ class LiveBotManager:
             governor_cfg["var_limit_pct"] = risk_params.get("var_limit_pct")
         if "cvar_limit_pct" not in governor_cfg and risk_params.get("cvar_limit_pct") is not None:
             governor_cfg["cvar_limit_pct"] = risk_params.get("cvar_limit_pct")
+        # Plan 22 Step 22.5: correlation_cap — same reuse pattern; the whole
+        # sub-dict ({"rho": ..., "max_cluster_exposure_pct": ...}) is passed
+        # through as-is, not flattened, since the governor reads it as a dict.
+        if "correlation_cap" not in governor_cfg and risk_params.get("correlation_cap") is not None:
+            governor_cfg["correlation_cap"] = risk_params.get("correlation_cap")
         risk_governor = SessionRiskGovernor(governor_cfg)
 
         self.sessions[session_id] = {

@@ -3,10 +3,11 @@
 **Authority:** This is the single source of truth for what ENMA currently does.
 Read this before starting any work. If this conflicts with chat history, this document wins.
 
-Last updated: 2026-07-17 (Plan 22 Steps 22.1–22.4 — Session Risk Governor, capital integrity
-gate, portfolio open-risk/liq-buffer, protections parity, and live VaR/CVaR enforcement — all
-shipped and container-verified (`docker exec ... pytest /app/tests/` — 301/301 passed,
-2026-07-17), pending live Testnet re-verification only — see Algo Trading section.
+Last updated: 2026-07-17 (Plan 22 Steps 22.1–22.5 — Session Risk Governor, capital integrity
+gate, portfolio open-risk/liq-buffer, protections parity, live VaR/CVaR enforcement, and the
+correlation-aware concentration cap — all shipped and container-verified
+(`docker exec ... pytest /app/tests/` — 313/313 passed, 2026-07-17), pending live Testnet
+re-verification only — see Algo Trading section.
 Earlier: 2026-07-16 Known Technical Debt update confirmed the algo/conditional-order
 `ORDER_TRADE_UPDATE` gap live and logged two new open bugs from a live Chaos run — see below.
 Earlier relocation: content moved into feature SPEC docs and DECISIONS.md; see
@@ -172,7 +173,14 @@ Resilience & Stats sections) — this bullet is a pointer, not a description.
   webhook (no new webhook plumbing). Zone 2 schema/UI for `varLimitPct`/`cvarLimitPct`
   deliberately deferred to 22.7 (batched with the plan's other new-field UI work, per 22.7's own
   scope) — engine-side config keys are live now via `risk_params.governor.var_limit_pct`.
-- Not yet shipped: 22.5–22.7. See
+- **Correlation-aware concentration cap (22.5, shipped 2026-07-17)**: new
+  `SessionRiskGovernor.check_correlation_concentration()` — pre-trade only, off by default
+  (`risk_params.governor.correlation_cap.rho`, `None` = off). Transitive-closure clustering over
+  pairwise |correlation| > `rho` among open positions + the candidate entry; vetoes when the
+  cluster's combined notional exceeds `max_cluster_exposure_pct` (default 0.4) of equity. New
+  `services/portfolio_risk.fetch_correlation_matrix()` reuses the existing 60s close-price cache.
+  Fails open on a TimescaleDB fetch/compute exception.
+- Not yet shipped: 22.6–22.7. See
   `workspace/plan/22_risk-management-industry-standard.md`.
 
 ### Order History (Trade Recorder)

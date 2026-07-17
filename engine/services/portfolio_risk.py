@@ -168,6 +168,19 @@ async def compute_var_cvar(
     return calculate_portfolio_var(position_notionals, price_histories, confidence_level=confidence_level)
 
 
+async def fetch_correlation_matrix(symbols: List[str]) -> Dict[str, Dict[str, float]]:
+    """Plan 22 Step 22.5: correlation matrix for an arbitrary symbol set
+    (used by `SessionRiskGovernor.check_correlation_concentration`'s caller
+    to build the candidate's cluster — open symbols + the entry candidate,
+    NOT necessarily the whole account like `compute_full_metrics`'s matrix).
+    Reuses `fetch_close_prices`'s 60s cache — a session's own periodic tick
+    and pre-trade gate share the same cached price history the dashboard's
+    account-wide matrix would already have pulled for overlapping symbols.
+    """
+    price_histories = await fetch_close_prices(symbols)
+    return calculate_correlation_matrix(price_histories)
+
+
 async def compute_full_metrics(api_key: str, api_secret: str, mode: str = "testnet") -> dict:
     """Everything `routers/risk.py`'s `/live-metrics` endpoint needs, in one
     call — extracted so the route itself becomes a thin formatter, not a

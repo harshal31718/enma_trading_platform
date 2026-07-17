@@ -40,6 +40,13 @@ Auto-flatten (force-close everything on `halted`) is a per-user opt-in,
 default off (DECISIONS.md #23) — `auto_flatten_on_halt` is exposed as a
 config flag for the caller to read; the governor itself never places orders
 (Part C's explicit design constraint) — flattening is `LiveBotManager`'s job.
+
+Correlation-aware concentration cap (`check_correlation_concentration`) ships
+in 22.5 — pre-trade only, off by default (`correlation_cap.rho=None`). Same
+separation of concerns as `check_var`: the caller (`LiveBotManager`) fetches
+the correlation matrix + per-symbol notionals (via `services/portfolio_risk.py`,
+sharing its cached price-history fetch) and hands the governor plain numbers;
+the governor only does the cluster-formation graph walk and threshold math.
 """
 from __future__ import annotations
 
@@ -77,6 +84,14 @@ class SessionRiskGovernor:
       cvar_limit_pct         (float|None, default None = off) — 22.4: optional,
                               same-day 95% CVaR as a fraction of equity. Independent
                               of var_limit_pct — either alone can breach.
+      correlation_cap         (dict|None, default None = off) — 22.5:
+                              {"rho": 0.8, "max_cluster_exposure_pct": 0.4}.
+                              `rho` is the pairwise |correlation| threshold above
+                              which two symbols join the same concentration
+                              cluster (transitive closure); `max_cluster_exposure_pct`
+                              caps the cluster's combined notional as a fraction
+                              of equity. Missing `rho` (or the whole key absent)
+                              disables the check entirely.
       breach_action           ("reducing"|"halted", default "reducing")
       auto_flatten_on_halt   (bool, default False)   — DECISIONS.md #23
     """
@@ -94,6 +109,10 @@ class SessionRiskGovernor:
         self.var_limit_pct: float | None = float(raw_var) if raw_var not in (None, "") else None
         raw_cvar = cfg.get("cvar_limit_pct")
         self.cvar_limit_pct: float | None = float(raw_cvar) if raw_cvar not in (None, "") else None
+        corr_cfg = cfg.get("correlation_cap") or {}
+        raw_rho = corr_cfg.get("rho")
+        self.correlation_rho: float | None = float(raw_rho) if raw_rho not in (None, "") else None
+        self.max_cluster_exposure_pct = float(corr_cfg.get("max_cluster_exposure_pct", 0.4))
         breach_action = cfg.get("breach_action", "reducing")
         self.breach_action = breach_action if breach_action in ("reducing", "halted") else "reducing"
         # DECISIONS.md #23: opt-in, off by default. The governor never acts
@@ -304,4 +323,88 @@ class SessionRiskGovernor:
                     check_name="cvar_limit",
                 )
 
+        return GovernorVerdict(ok=True)
+
+    def check_correlation_concentration(
+        self,
+        *,
+        candidate_symbol: str,
+        candidate_notional: float,
+        open_notionals: dict[str, float],
+        correlation_matrix: dict[str, dict[str, float]],
+        equity: float,
+    ) -> GovernorVerdict:
+        """Plan 22 Step 22.5: correlation-adjusted concentration cap —
+        pre-trade only, off by default (`correlation_cap.rho=None`).
+
+        `open_notionals` is the caller-computed signed-or-abs notional per
+        currently-open symbol (this method only ever uses `abs()` of it);
+        `correlation_matrix` is a nested dict (symbol -> symbol -> pairwise
+        Pearson correlation of log returns), the exact shape
+        `utils/risk_math.calculate_correlation_matrix` returns — same
+        separation of concerns as `check_var`: the governor never fetches
+        data itself, only does the graph walk + threshold math on numbers
+        the caller already computed (`services/portfolio_risk.py`).
+
+        Cluster definition: transitive closure over pairwise |rho| >
+        `correlation_rho` among open symbols + the candidate. A symbol with
+        no correlation-matrix entry against anything else in the set never
+        joins a cluster larger than itself (missing data degrades to "not
+        correlated", not "block everything").
+
+        `correlation_rho is None` disables the check entirely (matches
+        `var_limit_pct`'s "None = off" convention — an account with no prior
+        return history has an undefined correlation matrix too). Fails
+        closed on `equity <= 0`, same convention as every other governor
+        check.
+        """
+        if self.correlation_rho is None:
+            return GovernorVerdict(ok=True)
+        if equity <= 0:
+            return GovernorVerdict(
+                ok=False,
+                reason="equity <= 0 — cannot compute correlation concentration cap (fail-closed)",
+                check_name="correlation_concentration",
+            )
+
+        notionals: dict[str, float] = {
+            sym: abs(val) for sym, val in open_notionals.items()
+        }
+        notionals[candidate_symbol] = abs(candidate_notional)
+
+        def _rho(a: str, b: str) -> float | None:
+            row = correlation_matrix.get(a)
+            if row is not None and b in row:
+                return row[b]
+            row = correlation_matrix.get(b)
+            if row is not None and a in row:
+                return row[a]
+            return None
+
+        visited = {candidate_symbol}
+        queue = [candidate_symbol]
+        while queue:
+            current = queue.pop()
+            for other in notionals:
+                if other in visited:
+                    continue
+                rho = _rho(current, other)
+                if rho is not None and abs(rho) > self.correlation_rho:
+                    visited.add(other)
+                    queue.append(other)
+
+        cluster_notional = sum(notionals[sym] for sym in visited)
+        cluster_pct = cluster_notional / equity
+        if cluster_pct > self.max_cluster_exposure_pct:
+            return GovernorVerdict(
+                ok=False,
+                reason=(
+                    f"candidate {candidate_symbol} joins a correlation cluster "
+                    f"({', '.join(sorted(visited))}) with combined exposure "
+                    f"{cluster_pct:.1%} of equity, exceeding max_cluster_exposure_pct "
+                    f"{self.max_cluster_exposure_pct:.1%} (rho > {self.correlation_rho}, "
+                    f"${cluster_notional:.2f} notional / equity ${equity:.2f})"
+                ),
+                check_name="correlation_concentration",
+            )
         return GovernorVerdict(ok=True)

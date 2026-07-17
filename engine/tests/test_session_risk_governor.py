@@ -310,3 +310,92 @@ def test_var_fails_closed_on_zero_or_negative_equity():
 
     v2 = gov.check_var(var_amount=1.0, cvar_amount=1.0, equity=-10.0)
     assert v2.ok is False
+
+
+# ── Plan 22 Step 22.5: correlation-adjusted concentration cap ──────────────
+
+def test_correlation_cap_off_by_default():
+    gov = SessionRiskGovernor()
+    assert gov.correlation_rho is None
+    v = gov.check_correlation_concentration(
+        candidate_symbol="BTCUSDT", candidate_notional=999_999.0,
+        open_notionals={}, correlation_matrix={}, equity=10.0,
+    )
+    assert v.ok is True  # off -> never evaluates, even with an absurd notional
+
+
+def test_correlation_cap_uncorrelated_entry_passes():
+    gov = SessionRiskGovernor({"correlation_cap": {"rho": 0.8, "max_cluster_exposure_pct": 0.4}})
+    corr = {"BTCUSDT": {"ETHUSDT": 0.9}, "ETHUSDT": {"BTCUSDT": 0.9}}
+    v = gov.check_correlation_concentration(
+        candidate_symbol="XRPUSDT", candidate_notional=1000.0,
+        open_notionals={"BTCUSDT": 1000.0, "ETHUSDT": 1000.0},
+        correlation_matrix=corr, equity=10_000.0,
+    )
+    assert v.ok is True  # XRPUSDT has no correlation entry -> cluster of itself only, 10% < 40%
+
+
+def test_correlation_cap_two_correlated_positions_at_cap_vetoes_third():
+    """Two open BTC-correlated positions already at the cluster cap; a
+    third correlated entry pushes the cluster over -> vetoed."""
+    gov = SessionRiskGovernor({"correlation_cap": {"rho": 0.8, "max_cluster_exposure_pct": 0.4}})
+    corr = {
+        "BTCUSDT": {"ETHUSDT": 0.9, "SOLUSDT": 0.85},
+        "ETHUSDT": {"BTCUSDT": 0.9, "SOLUSDT": 0.82},
+        "SOLUSDT": {"BTCUSDT": 0.85, "ETHUSDT": 0.82},
+    }
+    v = gov.check_correlation_concentration(
+        candidate_symbol="SOLUSDT", candidate_notional=2000.0,
+        open_notionals={"BTCUSDT": 2000.0, "ETHUSDT": 2000.0},
+        correlation_matrix=corr, equity=10_000.0,  # (2000+2000+2000)/10000 = 60% > 40%
+    )
+    assert v.ok is False
+    assert v.check_name == "correlation_concentration"
+    assert "BTCUSDT" in v.reason and "ETHUSDT" in v.reason and "SOLUSDT" in v.reason
+
+
+def test_correlation_cap_below_threshold_rho_passes():
+    gov = SessionRiskGovernor({"correlation_cap": {"rho": 0.8, "max_cluster_exposure_pct": 0.4}})
+    corr = {"BTCUSDT": {"ETHUSDT": 0.5}, "ETHUSDT": {"BTCUSDT": 0.5}}  # below rho threshold
+    v = gov.check_correlation_concentration(
+        candidate_symbol="ETHUSDT", candidate_notional=2000.0,
+        open_notionals={"BTCUSDT": 5000.0},
+        correlation_matrix=corr, equity=10_000.0,
+    )
+    # BTCUSDT and ETHUSDT are NOT clustered (rho 0.5 < 0.8 threshold) ->
+    # cluster = {ETHUSDT} only, 2000/10000 = 20% < 40% cap
+    assert v.ok is True
+
+
+def test_correlation_cap_transitive_closure_three_hop_chain():
+    """A-B correlated, B-C correlated, A-C NOT directly correlated — still
+    one cluster via transitive closure through B."""
+    gov = SessionRiskGovernor({"correlation_cap": {"rho": 0.8, "max_cluster_exposure_pct": 0.3}})
+    corr = {
+        "AAAUSDT": {"BBBUSDT": 0.9},
+        "BBBUSDT": {"AAAUSDT": 0.9, "CCCUSDT": 0.85},
+        "CCCUSDT": {"BBBUSDT": 0.85},
+    }
+    v = gov.check_correlation_concentration(
+        candidate_symbol="CCCUSDT", candidate_notional=1500.0,
+        open_notionals={"AAAUSDT": 1500.0, "BBBUSDT": 1500.0},
+        correlation_matrix=corr, equity=10_000.0,  # cluster = all three = 45% > 30%
+    )
+    assert v.ok is False
+    assert "AAAUSDT" in v.reason
+
+
+def test_correlation_cap_fails_closed_on_zero_or_negative_equity():
+    gov = SessionRiskGovernor({"correlation_cap": {"rho": 0.8}})
+    v = gov.check_correlation_concentration(
+        candidate_symbol="BTCUSDT", candidate_notional=1.0,
+        open_notionals={}, correlation_matrix={}, equity=0.0,
+    )
+    assert v.ok is False
+    assert v.check_name == "correlation_concentration"
+    assert "fail-closed" in v.reason
+
+
+def test_correlation_cap_default_max_cluster_exposure_pct_is_point_four():
+    gov = SessionRiskGovernor({"correlation_cap": {"rho": 0.8}})
+    assert gov.max_cluster_exposure_pct == 0.4

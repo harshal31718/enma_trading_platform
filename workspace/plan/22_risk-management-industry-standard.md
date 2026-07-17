@@ -370,11 +370,63 @@ same standing caveat as every other step this window).
   bracket-safety/governor/armed-legs/protections/backtest-path files) still green.
 
 ### 22.5 — Correlation-aware concentration cap · P2 · M
+
+**Status: shipped, container-verified 2026-07-17** — pending live re-verification, same standing
+caveat as every other Plan 21/22 step.
+
 Reuse the rolling-correlation computation (same shared service); pre-trade check per Part C.
 Cluster definition: transitive closure over pairwise ρ > threshold among open + candidate
 symbols. Config: `correlationCap: { rho: 0.8, maxClusterExposurePct: 0.4 }` in Zone 2.
 Acceptance: with two open BTC-correlated positions at the cluster cap, a third correlated entry
 is vetoed (test with canned return series); uncorrelated entry passes.
+
+**Shipped:**
+- **`SessionRiskGovernor.check_correlation_concentration(*, candidate_symbol, candidate_notional,
+  open_notionals, correlation_matrix, equity)`** (`engine/core/models/governor.py`) — new
+  `correlation_cap` config dict (`{"rho": float|None, "max_cluster_exposure_pct": float}`),
+  `rho=None` (default) disables the check entirely, `max_cluster_exposure_pct` defaults to `0.4`.
+  Same separation-of-concerns as `check_var`: the governor never fetches data itself — it takes
+  the caller-computed correlation matrix (nested dict, the exact shape
+  `utils/risk_math.calculate_correlation_matrix` returns) and per-symbol notionals, and only does
+  the cluster-formation graph walk (BFS transitive closure over pairwise `|rho| > correlation_rho`)
+  plus the threshold math. A symbol with no correlation-matrix entry against anything else in the
+  set never joins a cluster larger than itself — missing data degrades to "not correlated," not
+  "block everything." Fails closed on `equity <= 0`.
+- **`services/portfolio_risk.fetch_correlation_matrix(symbols)`** (new) — thin wrapper reusing
+  `fetch_close_prices`'s existing 60s cache + `calculate_correlation_matrix`
+  (`utils/risk_math.py`, untouched), for an arbitrary symbol set (open positions + the entry
+  candidate) — distinct from `compute_full_metrics`'s account-wide matrix (that one's for the Zone
+  1 dashboard's full correlation heatmap; this one only needs the symbols relevant to one
+  candidate entry's cluster).
+- **Wired into `execute_entry`** (`engine/core/live_bot_manager.py`), right after the 22.4 VaR/CVaR
+  block: opt-in gated (`risk_governor.correlation_rho is not None`) to avoid an extra TimescaleDB
+  round trip on every entry for sessions that never opted in. Builds `open_notionals` from
+  `session["strategy_instances"]` (every other open symbol's `abs(entry_price * qty)`,
+  excluding the candidate's own symbol — relevant for DCA scale-ins into an already-open
+  position), fetches the correlation matrix for `open symbols + candidate`, and evaluates. Fails
+  **open** on a fetch/compute exception (external TimescaleDB call, same precedent as the
+  liq-buffer/VaR checks) — a transient DB blip must not silently halt live trading.
+- `start_session`'s `governor_cfg` cascade extended to read `risk_params.governor.correlation_cap`
+  (passed through as a whole dict, not flattened — same reuse pattern as `max_session_dd`/
+  `max_portfolio_risk`/`var_limit_pct`). Zone 2 schema/UI deliberately deferred to 22.7, same
+  batching precedent as `varLimitPct`.
+
+**Tests:**
+- `engine/tests/test_session_risk_governor.py` (+8 cases) — off-by-default, uncorrelated entry
+  passes, two-correlated-positions-at-cap vetoes a third (acceptance-critical), below-threshold
+  rho passes, three-hop transitive-closure clustering (A-B-C chain, A and C not directly
+  correlated but still one cluster via B), fail-closed on non-positive equity, default
+  `max_cluster_exposure_pct` is `0.4`.
+- `engine/tests/test_execute_entry_correlation_cap.py` (5 cases, same stub-injection technique as
+  22.2/22.4's execute_entry tests) — no-governor and governor-without-correlation-cap both skip
+  the TimescaleDB fetch entirely (opt-in proven, not just documented, via an assertion-raising
+  fake `get_pool`), uncorrelated entry enters normally, **the acceptance-critical test**
+  (two open correlated positions at the cluster cap + a third correlated candidate → vetoed,
+  zero Binance order/algoOrder calls ever reach the fake signed-request layer, local strategy
+  state cleared same as the existing M-5/22.2/22.4 veto pattern), and a TimescaleDB fetch
+  exception fails open (a real fill still completes).
+- Zero regression: full engine suite `docker exec enma_trading_platform-engine-1 pytest
+  /app/tests/` — **313/313 passed** (up from 301/301 pre-22.5).
 
 ### 22.6 — Portfolio allocation layer (fork #3) · P2 · M — **golden-master-gated**
 `InverseVolatilityPortfolio` variant of `PortfolioModel.allocate()` (weights ∝ 1/realized-vol
