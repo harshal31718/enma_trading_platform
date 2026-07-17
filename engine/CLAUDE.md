@@ -179,6 +179,7 @@ class MyStrategy(BaseStrategy):
 - `self.portfolio_model` — pluggable `PortfolioModel` instance (default `DefaultPortfolioModel`)
 - `self.cost_model` — pluggable `CostModel` instance (default `DefaultCostModel`)
 - `self.execution_model` — pluggable `ExecutionModel` instance (default `DefaultExecution`)
+- `self.informative_timeframes` — opt-in list of higher timeframes (default `[]`, DECISIONS.md #26). `self.htf(tf)` — as-of aligned, lookahead-safe base-length OHLCV for a declared timeframe; call only inside `prepare()` after `super().prepare(candles)`.
 
 **Risk-based sizing & stop/target helpers (preferred over manual qty math — see DECISIONS.md #10):**
 - `self.size_by_risk(stop_price, risk_pct=None)` — qty such that hitting `stop_price` loses `risk_pct` of equity (rule #6: `(equity*riskPct)/|entry-stop|`). Defaults `risk_pct` to `self.risk_pct`. Capped by `max_qty()`.
@@ -202,9 +203,17 @@ sma = ta.sma(self.candles, period=20)
 rsi = ta.rsi(self.candles, period=14)
 upper, middle, lower = ta.bollinger_bands(self.candles, period=20)
 
-# For multi-timeframe, get_candles returns another candles array
-daily_candles = self.get_candles(self.exchange, self.symbol, '1D')
-daily_ema = ta.ema(daily_candles, period=50)
+# For multi-timeframe (Plan 13 / DECISIONS.md #26): declare informative_timeframes,
+# then call self.htf(tf) inside prepare() (after super().prepare(candles)) — returns
+# an as-of aligned, lookahead-safe base-length OHLCV array, indexable at self.index
+# exactly like self.candles.
+class MyStrategy(BaseStrategy):
+    informative_timeframes = ["1h"]
+
+    def prepare(self, candles):
+        super().prepare(candles)
+        htf = self.htf("1h")
+        self.vars["ema_1h"] = ta.ema(htf, period=50, sequential=True)
 ```
 
 Available: `ema`, `sma`, `rsi`, `atr`, `donchian`, `macd`, `bollinger_bands`, `adx`, `stochastic`, `mfi`, `obv`, `pivot_high`, `pivot_low`.

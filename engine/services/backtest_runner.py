@@ -754,6 +754,15 @@ async def run_backtest_simulation(
     candles_np_by_sym = {}
     rows_by_sym = {}
     warmup_periods = {}
+    # Plan 13: raw informative-timeframe candles per symbol, keyed by tf
+    # string — fed to strategy._htf_raw before prepare() so self.htf(tf) can
+    # as-of align them. Declared on the CLASS (informative_timeframes is a
+    # class attr, default []) since no strategy instance exists yet here.
+    htf_raw_by_sym: dict = {}
+    _informative_tfs = [
+        tf for tf in (getattr(strategy_class, "informative_timeframes", []) or [])
+        if tf != timeframe
+    ]
 
     for sym in symbols:
         candles_available = await ensure_candles_available(
@@ -799,6 +808,41 @@ async def run_backtest_simulation(
             [r["volume"] for r in rows],
         ]).astype(np.float64)
         candles_np_by_sym[sym] = candles_np
+
+        # Plan 13: fetch each declared informative timeframe over the same
+        # range. Default [] (no strategy declares any) makes this loop a
+        # no-op for every existing seeded strategy — byte-identical.
+        htf_raw_by_sym[sym] = {}
+        for tf in _informative_tfs:
+            _htf_ok = await ensure_candles_available(
+                job_id=job_id, exchange=exchange, symbol=sym, timeframe=tf,
+                start_date=start_date, end_date=end_date,
+            )
+            if not _htf_ok:
+                logger.error(
+                    f"[{job_id}] {sym}: failed to fetch informative timeframe {tf!r} "
+                    f"candles — htf({tf!r}) will return all-NaN"
+                )
+                htf_raw_by_sym[sym][tf] = np.empty((0, 6), dtype=np.float64)
+                continue
+            async with pool.acquire() as conn:
+                htf_rows = await conn.fetch(
+                    """
+                    SELECT time, open, close, high, low, volume
+                    FROM candles
+                    WHERE exchange = $1 AND symbol = $2 AND timeframe = $3 AND time >= $4 AND time < $5
+                    ORDER BY time ASC
+                    """,
+                    exchange, sym, tf, start_dt, end_dt,
+                )
+            htf_raw_by_sym[sym][tf] = np.column_stack([
+                [r["time"].timestamp() * 1000 for r in htf_rows],
+                [r["open"]   for r in htf_rows],
+                [r["close"]  for r in htf_rows],
+                [r["high"]   for r in htf_rows],
+                [r["low"]    for r in htf_rows],
+                [r["volume"] for r in htf_rows],
+            ]).astype(np.float64) if htf_rows else np.empty((0, 6), dtype=np.float64)
 
     # Plan 22 Step 22.6: opt-in inverse-volatility allocation, config-gated
     # via risk_params["allocation"] == "inverse_vol" (default "equal" — the
@@ -925,6 +969,10 @@ async def run_backtest_simulation(
                         f"form a completed HTF supertrend bucket — this strategy will show zero "
                         f"trades for the whole run. Widen the date range or lower tf."
                     )
+
+            # Plan 13: populate raw informative-timeframe candles before
+            # prepare() runs, so self.htf(tf) can as-of align them.
+            strategy._htf_raw = htf_raw_by_sym.get(sym, {})
 
             # One-time vectorized indicator pre-computation
             try:

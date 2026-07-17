@@ -2000,6 +2000,28 @@ class LiveBotManager:
         except Exception as e:
             logger.warning(f"[AlgoBot] Failed to set leverage for {symbol}: {e}")
 
+        # Plan 13: generic informative/multi-timeframe contract. Distinct from
+        # the BestSupertrend-specific `tf`/`_htf_candles` duck-typing below —
+        # this is `BaseStrategy.informative_timeframes` + `self.htf(tf)`, opt-in
+        # via a declared list (default [] is a no-op for every existing
+        # strategy). Fetched BEFORE the warmup replay below so `prepare()`
+        # already sees real HTF data during warmup, not just on the first live
+        # candle. Reuses `_fetch_htf_candles` (mainnet REST, same source as the
+        # BestSupertrend HTF fetch — Plan 21 A-12 parity).
+        strategy._htf_raw = {}
+        for _inf_tf in getattr(strategy, "informative_timeframes", []) or []:
+            if _inf_tf == timeframe:
+                continue
+            try:
+                strategy._htf_raw[_inf_tf] = await self._fetch_htf_candles(symbol, _inf_tf, 500)
+                logger.info(
+                    f"[AlgoBot] {symbol}: informative timeframe {_inf_tf!r} candles loaded: "
+                    f"{len(strategy._htf_raw[_inf_tf])}"
+                )
+            except Exception as e:
+                logger.error(f"[AlgoBot] {symbol}: informative timeframe {_inf_tf!r} fetch failed — {e}")
+                strategy._htf_raw[_inf_tf] = np.empty((0, 6), dtype=np.float64)
+
         # Fetch initial warmup candles from TimescaleDB
         try:
             candles = await self._fetch_warmup_candles(symbol, timeframe, WARMUP_CANDLES)
@@ -2280,6 +2302,22 @@ class LiveBotManager:
                                                     strategy._htf_candles = strategy._htf_candles[-100:]
                                     except Exception as _e:
                                         logger.warning(f"[AlgoBot] {symbol}: HTF candle update failed — {_e}")
+
+                            # Plan 13: refresh each declared informative timeframe on every
+                            # closed base candle, same pattern as the BestSupertrend-specific
+                            # block above but generic over `informative_timeframes`.
+                            for _inf_tf in getattr(strategy, "informative_timeframes", []) or []:
+                                if _inf_tf == timeframe:
+                                    continue
+                                try:
+                                    _new_inf = await self._fetch_htf_candles(symbol, _inf_tf, 2)
+                                    if len(_new_inf) > 0:
+                                        _cur = strategy._htf_raw.get(_inf_tf, np.empty((0, 6), dtype=np.float64))
+                                        _last_ts = _cur[-1, 0] if len(_cur) > 0 else 0
+                                        if _new_inf[-1, 0] > _last_ts:
+                                            strategy._htf_raw[_inf_tf] = self._append_candle(_cur, _new_inf[-1])
+                                except Exception as _e:
+                                    logger.warning(f"[AlgoBot] {symbol}: informative timeframe {_inf_tf!r} update failed — {_e}")
 
                             try:
                                 # Two-phase contract (live): re-run the one-time

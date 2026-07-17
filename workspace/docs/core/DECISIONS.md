@@ -411,3 +411,36 @@ already guarantees a naked position gets re-armed or force-closed within
 longer means "silently unprotected if reconcile's armed-check itself is wrong," the way it would
 have before A-7 existed. **Not yet implemented** — see Plan 21's A-13 finding for the
 implementation pointer once scheduled.
+
+## 26. Informative / multi-timeframe contract — `informative_timeframes` + `self.htf()` (Plan 13, shipped 2026-07-17)
+**Decision:** `BaseStrategy` gains an opt-in `informative_timeframes: list[str] = []` class
+attribute and a `self.htf(timeframe)` instance method. A strategy declares the higher timeframes
+it needs, fetches raw candles for them via the same `ensure_candles_available()` single entry
+point as base candles (backtest: `services/backtest_runner.py`, live:
+`core/live_bot_manager.py`'s `_fetch_htf_candles`, both populating `strategy._htf_raw[tf]` before
+`prepare()` runs), then calls `self.htf(tf)` inside `prepare()` (after `super().prepare(candles)`)
+to get a base-length, as-of aligned OHLCV array indexable at `self.index` exactly like
+`self.candles`. This extends the two-phase `prepare()`/`before()` contract (decision #19) rather
+than replacing it — `before()`/`forecast()` still only ever index precomputed arrays, never call
+`htf()` themselves.
+**Alignment rule (ported from freqtrade's `merge_informative_pair` ffill+shift):** for each base
+candle at open-time `t`, the returned row is the most recent HTF candle whose CLOSE time
+(`open + timeframe_duration`, via `utils/timeframes.to_ms()`) is `<= t`. A base candle never sees
+an HTF candle that hasn't fully closed yet — the comparison is per-timestamp, so it's causal by
+construction regardless of whether `_htf_raw` holds the whole backtest date range up front (the
+same array is safe to reuse across `_reprep_every_candle`'s truncated re-prepare calls, Plan 9
+Step 9.5's lookahead sentinel, without leaking future HTF bars).
+**Deliberately separate from BestSupertrend's existing `tf`/`pd`/`_htf_candles` mechanism**
+(Plan 24's S-2/S-3 fixes) — that's a strategy-specific duck-typed pattern predating this contract,
+left untouched rather than migrated, since migrating it isn't required for correctness and isn't
+this plan's scope.
+**Rationale:** the engine's `CLAUDE.md` had documented a `self.get_candles(exchange, symbol, '1D')`
+helper that was never implemented (aspirational-only, per Plan 13's own audit) — this ships the
+real mechanism, scoped to what backtest/live parity actually requires (a lookahead-safe as-of
+join), not a general-purpose arbitrary-candle-fetch API. Default `[]` means zero behavior change
+for any strategy that doesn't opt in — golden master confirmed byte-identical (5/5 seeded
+strategies, none declare `informative_timeframes`). New `engine/tests/test_informative_alignment.py`
+(6 cases) covers alignment correctness and no-lookahead directly; **S5 (lookahead sentinel) must
+still be run against any real strategy that adopts `htf()`**, per this plan's own verification gate
+— the unit tests here prove the primitive is causal, not that every future consumer strategy uses
+it correctly.

@@ -1,6 +1,34 @@
 # Plan 13 — Informative / Multi-Timeframe Contract
 
-**Status:** Ready · **Priority:** P2 · **Phase:** 9 · **Depends on:** 11 · **Related:** 16, 17
+**Status:** Shipped 2026-07-17 · **Priority:** P2 · **Phase:** 9 · **Depends on:** 11 · **Related:** 16, 17
+
+## Shipped summary (2026-07-17)
+
+Implemented exactly as designed below: `BaseStrategy.informative_timeframes: list[str] = []` +
+`self.htf(timeframe)` (`engine/core/strategy.py`), as-of aligned via `utils/timeframes.to_ms()`
+(HTF close time = open + duration, `searchsorted` against base timestamps), cached per timeframe
+per `prepare()` call. Wired into `services/backtest_runner.py` (fetches each declared informative
+timeframe over the same date range via `ensure_candles_available()`, alongside the existing base
+fetch, into `strategy._htf_raw` before `prepare()`) and `core/live_bot_manager.py` (fetches via
+the existing `_fetch_htf_candles` mainnet-REST helper before the warmup replay, refreshes on every
+closed base candle inside the main WS loop — same pattern as BestSupertrend's own `tf`/`_htf_candles`
+duck-typing, left untouched and separate).
+
+**Verification:** golden master byte-identical (5/5 seeded strategies — none declare
+`informative_timeframes`, so the whole feature is a no-op for existing strategies). Boundary suite
+20/20 unaffected (`htf()` is only callable from `prepare()`, never `forecast()`). New
+`engine/tests/test_informative_alignment.py` (6 cases): correct as-of pick across a single HTF
+bar's lifetime, no-lookahead across multiple HTF bars (every base candle checked against every
+HTF bar's close time), all-NaN degrade on missing/failed fetch, per-`prepare()`-call caching and
+cache invalidation on re-prepare (live rolling-window parity), and the default-`[]` no-op.
+Container suite: 364/364 passed (up from 358). DECISIONS.md #26 records the design; `engine/CLAUDE.md`'s
+previously-aspirational `get_candles()` example replaced with the real `htf()` contract.
+
+**Not done — deliberately out of scope for this step:** no seeded strategy adopts `htf()` yet
+(this ships the primitive, not a consumer). Per this plan's own verification gate, **any real
+strategy that adopts `htf()` must be run through S5 (Plan 9's lookahead sentinel,
+`engine/scripts/lookahead_sentinel.py`)** before shipping — the unit tests here prove the
+alignment primitive itself is causal, not that a specific future strategy uses it correctly.
 
 **Goal:** Let a strategy reference a higher timeframe (e.g. 1h trend filtering 5m entries) without
 lookahead, using the existing two-phase `prepare()`/`before()` contract from workstream #1.

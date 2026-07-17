@@ -18,8 +18,8 @@ this board no longer duplicates it).
 | 22 | Industry-standard risk management (Session Risk Governor) | ALL SHIPPED (22.1–22.7, container/Jest-verified 2026-07-17 [330/330 pytest, 88/88 jest], 22.6 golden-master-verified, 22.7 live-verified in-browser) — pending live Testnet re-verification only | **Done** (pending live re-verification) | — | 21 (21.1–21.4, shipped) | 2026-07-17 |
 | 9  | Backtest & optimizer correctness (quant core) | 9.7 (funding ledger), 9.8 (intrabar sim), 9.9 (stats portion), 9.10 (fill-model ladder), **9.11 Step B (cost-gate activation decision, re-baselined — Step A shipped 2026-07-17)** | Ready | P1 | — | 2026-07-17 |
 | 10 | Monte Carlo Optimiser & Strategy Lab | Phases 1b–4 (job plumbing, `labResults`, UI, optimizer w/ walk-forward + Optuna) | Ready | P1 | 9 (9.1/9.3, shipped) | 2026-07-16 |
-| 13 | Informative / multi-timeframe contract (`self.htf()`) | All | Ready | P2 | — | 2026-07-16 |
-| 17 | Recursive-formula / warmup-insufficiency analysis | All | Ready | P2 | 13 (sequence after) | 2026-07-16 |
+| 13 | Informative / multi-timeframe contract (`self.htf()`) | Shipped — primitive only, no seeded strategy adopts it yet | **Done** | — | — | 2026-07-17 |
+| 17 | Recursive-formula / warmup-insufficiency analysis | All | Ready | P2 | 13 (shipped) | 2026-07-17 |
 | 6  | Engine decomposition & exchange abstraction | All | Blocked | P2 | 5 fully shipped; 21.3/21.4 should land first | 2026-07-16 |
 | 7  | Server & client structure | All | Blocked | P2 | 2 (done), 5 | 2026-07-16 |
 | 8  | Governance, correctness & cleanup | 8.2–8.6 (8.3/8.4 golden-master; 8.6 product decision; SYS-3 doc item carried from F6) | In progress | P3 | 3 (done), 5, 6 | 2026-07-16 |
@@ -211,8 +211,13 @@ pipeline-touching steps) a golden-master check per Rule C.
 - **10** — MC core math is honest (Phase 1a shipped) but still behind the old synchronous
   endpoint; everything else (job queue, `labResults`, Strategy Lab UI, optimizer exposure)
   unstarted. Phase 3 absorbs plans 18/19 — build from their design notes, not their specs.
-- **13/17** — Independent feature work; 17 sequences after 13 so it also sweeps multi-TF
-  indicators. Gate any `htf()` adopter through the shipped 9.5 lookahead sentinel.
+- **13/17** — **13 shipped 2026-07-17**: `informative_timeframes` + `self.htf()` on `BaseStrategy`,
+  as-of aligned (freqtrade ffill+shift pattern) via `utils/timeframes.to_ms()`, wired into both
+  `backtest_runner.py` and `live_bot_manager.py`. No seeded strategy adopts it yet — this shipped
+  the primitive only. Golden master byte-identical, container suite 364/364. 17 sequences after 13
+  so it also sweeps multi-TF indicators. **Gate any future `htf()` adopter through the shipped 9.5
+  lookahead sentinel** before shipping that strategy — the primitive's own unit tests
+  (`test_informative_alignment.py`) prove it's causal, not that a specific consumer uses it right.
 - **6/7** — Blocked on Plan 5 fully shipping. Plan 6 should treat Plan 22's `governor.py` /
   `portfolio_risk.py` as already-extracted modules and land after 21.3/21.4 so correctness
   fixes move with the code.

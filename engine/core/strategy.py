@@ -37,6 +37,13 @@ class BaseStrategy(ABC):
     # enough history before the first signal fires.
     MIN_WARMUP_CANDLES: int = 50
 
+    # Plan 13: informative / multi-timeframe contract. Opt-in — declare higher
+    # timeframes here (e.g. ["1h"]) and call self.htf("1h") inside prepare()
+    # (after super().prepare(candles)) to get an as-of aligned, lookahead-safe
+    # base-length OHLCV array. Default [] is a no-op: no fetch, no alignment,
+    # byte-identical to a strategy that never touches htf() at all.
+    informative_timeframes: list[str] = []
+
     def __init__(self):
         # Candle data — set by the backtest/live engine before each call
         self.candles: np.ndarray = np.array([])
@@ -67,6 +74,15 @@ class BaseStrategy(ABC):
 
         # Custom variables — strategy can store anything here
         self.vars: dict = {}
+
+        # ── Plan 13: informative / multi-timeframe state ─────────────────────
+        # _htf_raw: raw HTF candle arrays keyed by timeframe string, populated
+        # by the runner/live manager BEFORE prepare() runs (never by the
+        # strategy itself). _htf_base_candles / _htf_aligned_cache are set by
+        # prepare() below and consumed by htf().
+        self._htf_raw: dict = {}
+        self._htf_base_candles: np.ndarray = np.array([])
+        self._htf_aligned_cache: dict = {}
 
         # Mode flags — set by engine
         self.is_backtesting: bool = False
@@ -243,8 +259,15 @@ class BaseStrategy(ABC):
         working unchanged. Index alignment: the runner sets ``self.index`` to the
         absolute index into the same array passed here, so ``self._arr[self.index]``
         is always valid.
+
+        Plan 13: also the base-class anchor for ``htf()`` — stashes ``candles``
+        as the alignment target and clears the per-call HTF cache. A subclass
+        using ``htf()`` must call ``super().prepare(candles)`` as its first
+        line (same requirement live's rolling-window re-prepare already
+        satisfies automatically, since it re-invokes the same ``prepare()``).
         """
-        pass
+        self._htf_base_candles = candles
+        self._htf_aligned_cache = {}
 
     def before(self) -> None:
         """Called before each candle. Use for updating self.vars.
@@ -312,6 +335,57 @@ class BaseStrategy(ABC):
         except ImportError:
             import indicators as ta
         return float(ta.atr(self.candles, period=period))
+
+    # ─────────────────────────────────────────
+    # Informative / multi-timeframe (Plan 13)
+    # ─────────────────────────────────────────
+
+    def htf(self, timeframe: str) -> np.ndarray:
+        """As-of aligned, lookahead-safe higher-timeframe OHLCV, base-length.
+
+        Requires ``timeframe`` in ``self.informative_timeframes`` and the
+        engine to have populated ``self._htf_raw[timeframe]`` (raw HTF
+        candles) before ``prepare()`` ran — the backtest runner and live bot
+        manager both do this for every declared timeframe. Call only from
+        ``prepare()``, after ``super().prepare(candles)``.
+
+        Alignment rule (ported from freqtrade's ``merge_informative_pair``
+        ffill+shift): for each base candle at open-time ``t``, the returned
+        row is the most recent HTF candle whose CLOSE time (``open +
+        timeframe_duration``) is ``<= t``. A base candle therefore only ever
+        sees an HTF candle that had *fully closed* at or before that base
+        candle's own open — never the in-progress HTF bar, never a bar that
+        closes later. Base candles before the first HTF close get an all-NaN
+        row (no meaningful value yet — same "not enough warmup" situation as
+        any indicator with too few candles).
+
+        Returns a ``(len(base_candles), 6)`` array in the same
+        ``[timestamp_ms, open, close, high, low, volume]`` layout as
+        ``self.candles``, so any ``ta.*(..., sequential=True)`` call indexes
+        it identically to a base-timeframe series. Cached per timeframe for
+        the lifetime of the current ``prepare()`` call — multiple indicators
+        referencing the same HTF align once, not once per call.
+        """
+        if timeframe in self._htf_aligned_cache:
+            return self._htf_aligned_cache[timeframe]
+
+        try:
+            from engine.utils.timeframes import to_ms
+        except ImportError:
+            from utils.timeframes import to_ms
+
+        base = self._htf_base_candles
+        aligned = np.full((len(base), 6), np.nan, dtype=np.float64)
+        raw = self._htf_raw.get(timeframe)
+        if raw is not None and len(raw) > 0 and len(base) > 0:
+            htf_close_times = raw[:, 0] + to_ms(timeframe)
+            base_times = base[:, 0]
+            idx = np.searchsorted(htf_close_times, base_times, side="right") - 1
+            valid = idx >= 0
+            aligned[valid] = raw[idx[valid]]
+
+        self._htf_aligned_cache[timeframe] = aligned
+        return aligned
 
     def size_by_risk(
         self, stop_price: float, risk_pct: float | None = None, entry_price: float | None = None
