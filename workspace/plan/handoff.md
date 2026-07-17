@@ -356,4 +356,51 @@ Binance Testnet) specifically to answer this. Findings:
    what actually caught and closed them. This matches the fixes-queue's anticipated "falls back
    to poll" case, but it's worse in practice than "just staleness" — the UI and the strategy's
    own in-memory position state actively say a symbol is open when Binance has already closed it,
-   for up to ~60s. Root cause not isolated (candidate: per-symbol fill 
+   for up to ~60s. Root cause not isolated (candidate: per-symbol fill callbacks are only
+   registered once that symbol's loop starts — a registration-timing gap is plausible, needs a
+   WS-frame-level log to confirm either way).
+2. **New bug found: TP placement failing outright on some symbols with a raw `400 Bad Request`**
+   (BCHUSDT, then ETHUSDT, same run). Possibly a recurrence of the already-shipped 2026-07-03
+   stale-tick-size-cache fix (see `algo-trading/SPEC.md`) for symbols outside the original warm
+   set, or a distinct cause — **genuinely unknown**, because the failure was only ever logged as
+   httpx's generic `"Client error '400 Bad Request' for url '...'"`, discarding Binance's actual
+   `{code, msg}` error body. **Fixed same session**: added `_binance_error_detail()` to
+   `live_bot_manager.py`, wired into the entry-order, SL-placement, and TP-placement failure logs
+   (previously just `str(exc)`) — the next reproduction will show the real Binance error code
+   instead of a dead end. The underlying TP-failure cause itself is still open, pending that
+   reproduction.
+3. **New bug found: a position (FXSUSDT SHORT) stayed shown as open after the session was fully
+   stopped**, with no live PnL/qty/notional, while every other symbol correctly showed `CLOSED`.
+   Not yet investigated — candidates: the entry may never have actually filled on Binance (a
+   phantom local-only position), or `stop_session()`'s close loop skipped this one symbol.
+
+User stopped the session once #1 and #2 were confirmed rather than let it keep trading on known-buggy
+TP/SL placement. **F7 is deliberately NOT struck through as shipped** — it answered its original
+question but the answer requires real follow-up work, not a doc note. Docs updated to carry the
+open state honestly: `workspace/docs/features/algo-trading/SPEC.md` (new "Open issues found in a
+live Chaos run" section), `CURRENT_STATE.md`'s Known Technical Debt (replaced the old "unconfirmed"
+line with the confirmed finding + the two new bugs), `0_fixes-queue.md` (F7 marked "answered,
+escalated", reordered to top priority ahead of F8), `0_tracker.md`'s Plan 5 note.
+
+**Files changed (this F7 pass):** `engine/core/live_bot_manager.py` (`_binance_error_detail()`
+helper + wired into 3 failure-log call sites — logging-only change, no behavior change); docs:
+`workspace/docs/features/algo-trading/SPEC.md`, `workspace/docs/state/CURRENT_STATE.md`,
+`0_fixes-queue.md`, `0_tracker.md`, `handoff.md`.
+
+**Next session — priority order:**
+1. **Reproduce the TP-placement failure** with the new logging (`docker exec
+   enma_trading_platform-engine-1 python -c "import ast; ast.parse(open('/app/core/
+   live_bot_manager.py').read())"` to verify syntax first, then `docker compose build engine` +
+   `docker compose up -d engine` — watch alone isn't enough for a clean restart per the standing
+   lesson below). Start a small (1-3 symbol) session rather than a full Chaos run, watch for the
+   next `TP skipped`/`SL placement failed` line, and read the real Binance `code`/`msg`.
+2. **Isolate the reconciliation-lag root cause** — needs the raw WS frames logged for a fast
+   algo-order fill (does `ORDER_TRADE_UPDATE` even arrive for it, or does the engine just never
+   dispatch it correctly). This bears directly on Plan 5 Step 5.6 (restart recovery / projection
+   work) — factor it into that design rather than patching it as a one-off.
+3. **Investigate the FXSUSDT-stuck-open anomaly** from the same run once logs are available.
+4. Once F7's actual fixes are scoped and shipped, close it out properly (struck through, Shipped
+   summary in the relevant plan file) rather than leaving it as a standing "escalated" note.
+5. F8 (Redis `requirepass`) still wants a dedicated full-stack-restart window — after F7, not
+   before, since F7 is now live-trading correctness debt, not a squeeze-in item.
+

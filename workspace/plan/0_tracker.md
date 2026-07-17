@@ -107,4 +107,9 @@ pipeline-touching steps) a golden-master check per Rule C.
   `portfolio_risk.py` as already-extracted modules and land after 21.3/21.4 so correctness
   fixes move with the code.
 - **8** — 8.1 shipped (F6). Remaining: 8.2–8.6 + the SYS-3 named-volume documentation item
-  carried from F6. 8.3/8.4 are gold
+  carried from F6. 8.3/8.4 are golden-master-touching; 8.6 needs a product decision
+  (multi-session same-account modelling) before code.
+- **Standing open questions** (carried from earlier sessions): golden-master re-baseline
+  sign-off ownership (9.7/9.8, 5.5); keep-or-delete `IcebergAlgorithm`; local dev sharing
+  production's MongoDB Atlas cluster (structural fix still pending); event-log store choice
+  (Mongo shipped, Timescale revisit only on volume).
