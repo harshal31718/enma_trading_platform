@@ -7,6 +7,92 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
+## 2026-07-17 — Plan 24 (S-1 through S-5) shipped: BestSupertrend "never trades at defaults" fixed — **PLAN 24 FULLY SHIPPED**, live Testnet re-verification still pending ⏸️
+
+**Goal:** with Plan 22 fully shipped (see the entry below) and a partial live-verification attempt
+made, user asked to proceed to the next plan with my recommendations. Surveyed `0_tracker.md`'s
+Active work table and recommended Plan 24 (BestSupertrend fixes) over Plan 9 (larger,
+open-ended quant-core work) and Plan 5 (Decimal-money migration, needs a design pass) — Plan 24 is
+fully scoped, decision-free, and fixes a real trust bug (a seeded strategy silently never trades at
+its own default settings). User agreed implicitly by not redirecting; proceeded through all five
+findings (S-1 → S-2 → S-3 → S-4 → S-5) in the plan's own stated order.
+
+**Done — S-1 (root cause, `size_by_notional()` in `core/strategy.py`):** at `position_size_pct=1.0`
+(strategy default) and `leverage=1` (platform default), the naive `qty = equity*pct/price` sits
+exactly on the equity boundary, so adverse slippage + the taker fee alone push
+`req_margin + fee` just over `free_balance`, rejecting every entry (`backtest_runner.py`'s
+`EntryFill.affordable()` check) with only a debug log line. Fixed: `size_by_notional()` now sizes
+DOWN to the true affordable notional (accounting for leverage/slippage/fee headroom, with a tiny
+1e-6 safety margin against float-rounding at the exact boundary) instead of letting the runner
+reject the entry outright. Also dropped `position_size_pct` default 1.0→0.9 (belt and braces).
+**Golden master re-baselined**: checked the actual `golden_master.py` baseline first (per the
+plan's own instruction) — it runs at `leverage=3` (not the platform's `leverage=1` default), so
+BestSupertrend already had 61 non-zero trades in the baseline; the fix's diff is entirely from the
+`position_size_pct` default change (same 61 trades, same win/loss counts, PnL scaled ~10% smaller),
+confirming the fix doesn't touch already-affordable entries. Other 4 strategies byte-identical
+(`size_by_notional` has no other caller). New `test_size_by_notional_affordability.py` (7 cases)
+exercises the actual bug scenario (leverage=1) the golden-master harness never touches.
+
+**Done — S-2 (live HTF one bar too stale):** `prepare()`'s live/constant path read
+`self._htf_tsl[-2]`, but `_fetch_htf_candles` (`live_bot_manager.py`) already excludes the
+in-progress HTF bar, so the injected `_htf_candles` array's last row IS the last completed bar —
+`[-1]` is correct, matching backtest's bucket path (`htf_tsl[k-1]`). Fixed; warmup guard loosened
+from requiring 2 trailing elements to 1. New parity test (5 cases) drives the real class through
+both paths against the same underlying supertrend series. Golden master confirmed byte-identical
+(live-only branch, never exercised by backtest).
+
+**Done — S-3 (unsatisfiable tf/timeframe combos fail loud):** new
+`required_base_candles_for_htf()` (`engine/utils/timeframes.py`) estimates the base-candle count
+needed for `pd+2` completed HTF buckets. Wired into `backtest_runner.py` (logs an error, log-only,
+zero simulation-output change) and `live_bot_manager.py` (HTF-fetch failure and
+on-success-but-insufficient-data are both now session-visible errors, not just a debug-level
+warning; a new one-time warning fires once the live rolling candle window hits its 500-candle cap
+with the HTF value still unresolved). 8 new unit tests for the shared helper. Golden master
+confirmed byte-identical (log-only additions).
+
+**Done — S-4 (`order_type` param collision):** renamed to `direction_filter` — the old name
+collided with `OrderPlan.order_type` (`DefaultExecution.route()` builds
+`OrderPlan(order_type=getattr(s, "order_type", "market"))`), silently carrying the filter string
+instead of `"market"`. Decorative today (both adapters hardcode MARKET) but would have detonated
+the moment any consumer honored `OrderPlan.order_type`. Renamed the PARAMS key and all 4 usage
+sites; confirmed via direct instantiation that `BaseStrategy`'s own `order_type="market"` default
+now shows through correctly. 3 new tests. Golden master confirmed byte-identical (same default
+value under a new key name).
+
+**Done — S-5 (docs):** the `SignalExitRiskModel` doc-drift half was already fixed in an earlier
+session (confirmed while surveying, before this window started). Updated
+`workspace/docs/strategies/BestSupertrend.md` for all of S-1/S-2/S-3/S-4's user-visible changes
+(param rename, new default, `tsl[-1]` correction, tf/timeframe warmup note). The weekly-resample
+(`W-MON`) off-by-one TODO is intentionally left as a documentation comment only, per the plan's own
+instruction — S-3's generic warmup-sufficiency check covers it without touching resample math.
+
+**Files changed:** `engine/core/strategy.py` (`size_by_notional`), `engine/strategies/
+BestSupertrend/__init__.py` (S-1 default, S-2 index fix, S-4 rename — all sites), new
+`engine/services/backtest_runner.py`/`engine/core/live_bot_manager.py` S-3 wiring, new
+`engine/utils/timeframes.py` (`required_base_candles_for_htf`); new test files:
+`test_size_by_notional_affordability.py`, `test_bestsupertrend_htf_parity.py`,
+`test_required_base_candles_for_htf.py`, `test_bestsupertrend_direction_filter_rename.py`; docs:
+`24_bestsupertrend-fixes.md`, `0_tracker.md`, `CURRENT_STATE.md`,
+`workspace/docs/strategies/BestSupertrend.md`, `handoff.md`. All committed (4 commits, one per
+step S-1–S-4; S-5 folded into this doc-update pass).
+
+**Verification:** container suite **353/353 passed** (up from 337/337 at the start of Plan 24's
+work this session). Golden master run before every code change and re-compared after each step —
+only S-1 shows an expected, reviewed diff (BestSupertrend only); S-2/S-3/S-4 all byte-identical.
+
+**NOT done — the one item left across Plan 24:** live Testnet re-verification (the plan's own
+"Sequencing / verification" section: one 1-symbol testnet session at leverage 2–3, default params,
+confirming ≥1 real entry and HTF-value parity against a parallel backtest window). Same standing
+"needs a human-observed session" caveat as every other live-verification item across this
+codebase's plans (Plan 21, Plan 22) — genuinely blocked, not attempted this session.
+
+**Next session:** live-verify Plan 24 per the paragraph above, OR continue surveying
+`0_tracker.md` for the next unblocked item — Plan 9 (backtest/optimizer correctness, P1, larger
+and more open-ended) and Plan 13 (multi-timeframe `self.htf()` contract, P2, self-contained) are
+both plausible next candidates; neither was investigated this session beyond the initial survey
+that picked Plan 24.
+
+---
 ## 2026-07-17 — Plan 22 Steps 22.5–22.7 shipped: correlation cap, inverse-vol allocation, Zone 2 platform surface — **PLAN 22 FULLY SHIPPED (22.1–22.7)**, live Testnet re-verification still pending ⏸️
 
 **Goal:** user said "proceed non-stop... test via claude in code... if critical input required
@@ -273,93 +359,3 @@ Plan 22's own sequencing is **22.5** (correlation-aware concentration cap, reuse
 shared `portfolio_risk.py` service for the rolling-correlation computation) — check in before
 starting it rather than treating continued "proceed" as a blank check for the rest of Plan 22,
 consistent with how each step this window paused to report status first.
-
----
-## 2026-07-17 — Plan 22 Step 22.1 shipped: Session Risk Governor + capital integrity gate — CODE COMPLETE, VERIFICATION PENDING ⏸️
-
-**Goal:** per the user's "ok, ask me" → six Part F/A-12/A-13 policy decisions answered via
-`AskUserQuestion` (recorded `DECISIONS.md` #23/#24/#25) → user said "proceed with reccom" →
-started Plan 22 Step 22.1 (Session Risk Governor core + capital integrity gate), the next item in
-the plan's own execution order, now unblocked by those decisions. Continued unattended per the
-session's standing "keep implementing, don't stop for input" instruction.
-
-**Done:**
-- **`engine/core/models/governor.py`** (new): `GovernorVerdict` dataclass + `SessionRiskGovernor`
-  class, structurally mirroring `ProtectionManager`/`IProtection` — takes plain numbers
-  (`equity`, `used_margin`, `now`), never reaches into session/strategy internals itself. Three
-  fail-closed hard checks: aggregate session drawdown (`max_session_dd`, default 0.20 —
-  supersedes Plan 21 finding A-10/step 21.6, now `Merged→22.1`), daily realized loss limit
-  (`max_daily_loss_pct`, off by default, UTC-midnight anchor per `DECISIONS.md` #23), margin
-  utilization ceiling (`max_margin_utilization`, default 0.8, pre-trade only). `breach_action`
-  (`"reducing"`/`"halted"`) and `auto_flatten_on_halt` (opt-in, default off) configurable.
-  Registered in `core/models/__init__.py`. **18/18 tests actually run with real pytest**
-  (`engine/tests/test_session_risk_governor.py`) — zero numpy dependency, imports standalone.
-- **`server/src/utils/capitalGate.js`** (new): pure functions `validateCapitalValue`,
-  `sumReservedCapital`, `checkCapitalAgainstBalance` (B-11/B-12). Manually verified via a 20-
-  assertion `node -e` script (no `node_modules` in the sandbox — `npm install` still times out,
-  same limitation as prior sessions); a Jest suite exists at
-  `server/src/utils/__tests__/capitalGate.test.js` but has not been run for real.
-- **`algo.controller.js`**: `startSession`/`startChaos` wired to `capitalGate.js` — hard-reject
-  non-numeric/zero/negative capital always (400); warn-and-require `confirmOverCommit` when
-  requested + reserved capital across the user's running sessions exceeds the real testnet
-  balance (409 otherwise), Chaos multiplying `capital × strategyCount` summed not sampled, per
-  `DECISIONS.md` #23 Part F Q5. New `handleEngineStats` `risk_breach` branch persists
-  `LiveSession.tradingState`, emits Socket.IO updates, dispatches the `risk_breach` webhook.
-- **`Settings.js`**: `risk_breach` added to `webhook.events` enum (opt-in by default).
-- **`live_bot_manager.py`**: `start_session` instantiates `session["risk_governor"]` (reusing
-  `risk_params.max_session_dd` + new `risk_params.governor` sub-object) and defensively clamps
-  configured capital against a live-fetched balance (`_fetch_available_balance`, best-effort,
-  never blocks); `execute_entry` gained a pre-trade governor veto after A-001/A-002/A-003;
-  `_push_stats` gained an edge-triggered periodic governor check (via new
-  `_compute_session_equity_and_margin` static method, which also now derives `total_pnl`,
-  replacing the old inline per-symbol sum) that calls new `_apply_governor_breach` on a breach
-  (sets `trading_state`, notifies Node, auto-flattens via the existing
-  `_close_position_on_stop` if `auto_flatten_on_halt`); `record_realized_pnl` wired into all
-  four PnL-booking sites (F-018 emergency exit, `execute_exit`, `_close_position_on_stop`,
-  `_reconcile_exchange_state` Case 2). Verified via `py_compile`/`ast.parse` + manual review of
-  variable scoping — a full `import core.live_bot_manager` was attempted (successfully installed
-  `httpx`/`pytest` quickly this session, unlike prior sessions) but still blocked on
-  `websockets`/`motor`/`asyncpg`, which timed out installing, same sandbox limitation as always.
-- Docs: `0_tracker.md` (Plan 21 row's 21.6 already `Merged→22.1`; Plan 22 row updated to "In
-  progress, 22.1 shipped code-side"), `22_risk-management-industry-standard.md` (22.1 section
-  gained a "Status: shipped code-side" block), `CURRENT_STATE.md` (new 2026-07-17 addition under
-  Algo Trading + "Last updated" line), `algo-trading/SPEC.md` (new "Session Risk Governor" H2
-  section before REST Endpoints).
-
-**Files changed:** new `engine/core/models/governor.py`; `engine/core/models/__init__.py`
-(export); `engine/core/live_bot_manager.py` (governor import + instantiation + wiring at 6
-call sites, `_fetch_available_balance`, `_compute_session_equity_and_margin`,
-`_apply_governor_breach`); new `engine/tests/test_session_risk_governor.py`; new
-`engine/tests/test_fetch_available_balance.py` (ast.parse-only); new
-`server/src/utils/capitalGate.js`; new `server/src/utils/__tests__/capitalGate.test.js` (not
-run); `server/src/controllers/algo.controller.js` (capital gate wiring + `risk_breach` branch);
-`server/src/models/Settings.js` (webhook events enum); docs: `0_tracker.md`,
-`22_risk-management-industry-standard.md`, `workspace/docs/state/CURRENT_STATE.md`,
-`workspace/docs/features/algo-trading/SPEC.md`, `handoff.md`.
-
-**NOT done — do not treat 22.1 as fully closed:**
-1. **No container test run.** All Python verification in this session was `py_compile`/
-   `ast.parse` + the standalone governor pytest run (dependency-free) — `live_bot_manager.py`
-   itself was never actually imported/exercised, since its dependency chain
-   (`websockets`/`motor`/`asyncpg`) doesn't install in this sandbox. Run
-   `docker exec enma_trading_platform-engine-1 pytest /app/tests/` before trusting the wiring.
-2. **No Jest run** for `capitalGate.test.js` or a controller-level integration test — `npm
-   install` still times out in this sandbox (recurring limitation, not new). Manual assertions
-   passed but don't replace the real suite.
-3. **No live re-verification** — the governor has never vetoed a real entry, never auto-
-   transitioned a real session's `trading_state`, never auto-flattened, and the capital gate has
-   never rejected/warned on a real over-commit attempt against a real testnet balance.
-4. **Git commit still pending** — nothing from this session (governor.py, capitalGate.js +
-   test, live_bot_manager.py wiring, algo.controller.js wiring, Settings.js, new engine tests,
-   docs) has been committed yet.
-
-**Next session:** (1) run the container test suite, fix any signature-mismatch surprises between
-`governor.py`'s design and how `live_bot_manager.py` actually calls it; (2) live-verify: start a
-small testnet session with a tight `max_session_dd` and confirm a manufactured drawdown actually
-flips `trading_state` and shows in the SessionCard/webhook; try a deliberate capital over-commit
-and confirm the 409/confirm-flow round-trips from the wizard; (3) commit this session's work; (4)
-once verified, flip 22.1's status language from "shipped code-side, pending verification" to
-"shipped" across the docs touched above; (5) the natural next step per Plan 22's own sequencing
-(Part E: `22.1 ──► 22.2 ──► 22.3`) is **22.2** (portfolio open-risk budget + `liq_buffer_pct`
-wiring) — not yet confirmed as the user's intent beyond 22.1, check in before starting it rather
-than treating "proceed with reccom" as a blank check for the rest of Plan 22.

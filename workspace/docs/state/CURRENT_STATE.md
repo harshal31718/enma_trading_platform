@@ -3,7 +3,15 @@
 **Authority:** This is the single source of truth for what ENMA currently does.
 Read this before starting any work. If this conflicts with chat history, this document wins.
 
-Last updated: 2026-07-17 (Plan 22 — ALL STEPS 22.1–22.7 SHIPPED. Session Risk Governor, capital
+Last updated: 2026-07-17 (Plan 24 — ALL STEPS S-1–S-5 SHIPPED: BestSupertrend's "never trades at
+default settings" bug fixed — `size_by_notional()` now sizes down to the true affordable notional
+instead of the runner rejecting every entry (S-1); live HTF supertrend was one bar more stale than
+backtest, fixed (S-2); structurally unsatisfiable tf/timeframe combos now fail loud instead of
+silently zero-trading forever (S-3); the colliding `order_type` param renamed to
+`direction_filter` (S-4); docs updated (S-5). Container suite 353/353 passed; golden master
+re-baselined for S-1 (only BestSupertrend diverges — same trade count/win-loss structure, other 4
+strategies byte-identical). Pending live Testnet re-verification only.
+Earlier: 2026-07-17 Plan 22 — ALL STEPS 22.1–22.7 SHIPPED. Session Risk Governor, capital
 integrity gate, portfolio open-risk/liq-buffer, protections parity, live VaR/CVaR enforcement, the
 correlation-aware concentration cap, the inverse-volatility portfolio allocation layer, and the
 Zone 2 UI/schema batch — all shipped and verified (`docker exec ... pytest /app/tests/` —
@@ -282,6 +290,25 @@ detail (commands, per-phase byte-equivalence, issue-by-issue fix list) moved to
 
 ## Known Technical Debt
 
+- **Fixed 2026-07-17 (Plan 24, S-1 through S-4) — BestSupertrend silently never traded at its own
+  default settings.** Root cause: `size_by_notional()` (`core/strategy.py`) sized to exactly
+  `equity * position_size_pct` capped only by leverage-based `max_qty()` — at the strategy's
+  default `position_size_pct=1.0` and the platform's default `leverage=1`, this always sat exactly
+  on the equity boundary, so adverse slippage + the taker fee alone pushed `req_margin + fee` just
+  over `free_balance`, rejecting **every single entry** with only a debug-level log line
+  (`"Entry rejected: margin + fee exceeds free capital"`) users never saw. Fixed: `size_by_notional()`
+  now sizes DOWN to the true affordable notional instead of letting the runner reject the entry
+  outright (S-1); `position_size_pct` default lowered 1.0→0.9 (belt and braces). Also fixed while
+  auditing the same strategy: live's HTF supertrend read one bar more stale than backtest (`tsl[-2]`
+  vs the correct `tsl[-1]` — S-2); structurally unsatisfiable `tf`/timeframe combos (e.g.
+  `tf="weekly"` on a short date range) now fail loud with a session-visible error instead of
+  silently zero-trading forever (S-3, new `required_base_candles_for_htf()` in
+  `utils/timeframes.py`); the `order_type` param was renamed to `direction_filter` after it was
+  found to collide with and silently override `OrderPlan.order_type` (S-4). Golden master
+  re-baselined for S-1 (only BestSupertrend diverges — same 61 trades/win-loss structure as
+  before, PnL scaled by the smaller position size; the other 4 seeded strategies are byte-identical
+  since `size_by_notional` has no other caller). Container suite 353/353 passed. **Not yet
+  confirmed against a real live Testnet session** — see `24_bestsupertrend-fixes.md`.
 - **Live bot PnL on exchange_sync exits — partially fixed 2026-07-17 (Plan 21.1, A-1)**: when Binance closes a position via SL/TP and the engine detects it via reconciliation, `_query_real_exit_from_user_trades()` calls `GET /fapi/v1/userTrades` to reconstruct the real exit price/PnL from Binance's own trade history. This call previously omitted its required `api_key`/`api_secret` arguments — a `TypeError` on every invocation, swallowed by the surrounding `except Exception`, always returning `None` — so every `exchange_sync` close silently fell back to the candle/SL-TP estimate. **The credentials are now passed** (see `21_live-algo-industry-standard-audit.md` A-1); regression tests added in `engine/tests/test_query_real_exit_from_user_trades.py`. Not yet confirmed against a real live session's Binance trade history — do that before closing 21.1 fully.
 - **Live bot entry fee not tracked**: `session["pnl"]` only deducts the exit fee per trade. Entry fees paid to Binance are not subtracted locally, so session PnL overstates profits by one taker fee per round-trip. Acceptable approximation for now.
 - **Resolved 2026-07-02 (see DECISIONS.md #20)**: the Trade page's `open-orders`/`positions`/`account` REST polling (previously 30s/3s/10s, dominated by an un-symbol-filtered `open-orders` call costing 480 weight/min on a budget shared across all users via the server's single outbound IP) is now backed by a per-user Binance User Data Stream (`engine/services/manual_trade_stream.py`) with REST reduced to a 90s/30s/60s safety net.

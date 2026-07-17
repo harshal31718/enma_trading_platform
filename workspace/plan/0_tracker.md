@@ -24,7 +24,7 @@ this board no longer duplicates it).
 | 7  | Server & client structure | All | Blocked | P2 | 2 (done), 5 | 2026-07-16 |
 | 8  | Governance, correctness & cleanup | 8.2–8.6 (8.3/8.4 golden-master; 8.6 product decision; SYS-3 doc item carried from F6) | In progress | P3 | 3 (done), 5, 6 | 2026-07-16 |
 | 23 | New strategy: high-risk/high-leverage breakout scalper ("MarginSurge") | All — backtest gates can start now; live gated on 21.1–21.4 | Draft | P2 | 21 (live phase), 22.1–22.2 (liq-buffer + governor, soft) | 2026-07-16 |
-| 24 | BestSupertrend fixes (never trades at defaults) | S-1 sizing/affordability, S-2 live HTF off-by-one, S-3 fail-loud unsatisfiable configs, S-4 `order_type` collision, S-5 docs | Ready | P1 | — (live verify after 21.1–21.2); S-1/S-2 need a cheap BestSupertrend re-baseline | 2026-07-16 |
+| 24 | BestSupertrend fixes (never trades at defaults) | ALL SHIPPED (S-1 through S-5, container-verified 2026-07-17 [353/353 pytest], golden-master re-baselined for S-1 — only BestSupertrend diverges, other 4 strategies byte-identical) — pending live Testnet re-verification only | **Done** (pending live re-verification) | — | — | 2026-07-17 |
 
 **Plus the fixes queue:** F7 (algo-fill detection — 21.1+21.2 shipped, container-verified
 2026-07-17, pending live re-verification) and F8 (Redis `requirepass`, wants a full-stack-restart

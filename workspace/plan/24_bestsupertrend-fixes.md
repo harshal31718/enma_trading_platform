@@ -1,8 +1,58 @@
 # 24 — BestSupertrend: why it never trades, and the fix set
 
-**Status:** Ready (audit complete 2026-07-16, fixes unstarted)
+**Status: ALL SHIPPED 2026-07-17 (S-1 through S-5), container-verified** — pending live Testnet
+re-verification only (see the plan's own "Sequencing / verification" section below).
 **Priority:** P1 (a seeded strategy that silently can't trade at default settings is a
 trust bug, not a feature gap)
+
+## Shipped summary (2026-07-17)
+
+All five findings fixed in sequence (S-1 → S-2 → S-3 → S-4 → S-5), each independently committed,
+golden-master-verified where applicable, and container-tested (`docker exec
+enma_trading_platform-engine-1 pytest /app/tests/`):
+
+- **S-1** (`engine/core/strategy.py`'s `size_by_notional()` + `position_size_pct` default 1.0→0.9):
+  now sizes DOWN to the true affordable notional (accounting for leverage, slippage, taker fee)
+  instead of letting the downstream affordability check reject the entry outright. Golden master
+  re-baselined — only BestSupertrend diverges (same 61 trades/win-loss structure, PnL scaled by
+  the smaller position size); the other 4 seeded strategies are byte-identical (no other caller of
+  `size_by_notional`). New `test_size_by_notional_affordability.py` (7 cases) proves entries are
+  now affordable at leverage=1/pct=1.0 — the actual bug scenario, which `golden_master.py`'s own
+  leverage=3 harness never exercised.
+- **S-2** (`prepare()`'s live constant path): read `self._htf_tsl[-2]` when `_fetch_htf_candles`
+  already excludes the in-progress bar, making the live path one full HTF bar more stale than
+  backtest. Fixed to `[-1]`; golden master confirmed byte-identical (live-only branch, never
+  exercised by backtest). New parity test (5 cases) drives the real class through both the live
+  constant path and the equivalent bucket-path formula, confirming they agree.
+- **S-3** (structurally unsatisfiable tf/timeframe combos): new
+  `required_base_candles_for_htf()` (`engine/utils/timeframes.py`) estimates the base-candle count
+  needed for `pd+2` completed HTF buckets. Backtest logs an error (log-only, zero simulation-output
+  change — golden master confirmed byte-identical) when the loaded window can't satisfy it; live's
+  HTF-fetch failure and on-success-but-insufficient-data are both now session-visible errors
+  (previously a warning-level log only), plus a new one-time warning once the live rolling
+  candle window hits its 500-candle cap with the HTF value still unresolved. 8 new unit tests for
+  the shared helper.
+- **S-4** (`order_type` param rename): renamed to `direction_filter` — the old name collided with
+  `OrderPlan.order_type`, silently overriding it with the filter string instead of `"market"` (decorative
+  today, would have detonated the moment any consumer honored `OrderPlan.order_type`). Golden
+  master confirmed byte-identical. 3 new tests confirm `BaseStrategy`'s own `order_type="market"`
+  default now shows through correctly.
+- **S-5** (docs drift): the `SignalExitRiskModel`→`AtrBracketRiskModel`/`NotionalPortfolio` doc
+  drift was already fixed in an earlier session (confirmed 2026-07-17 while surveying, before this
+  window started). The one remaining item — the weekly-resample (`W-MON`) off-by-one TODO comment
+  — is intentionally left as documentation only per this plan's own instruction ("fold into S-3's
+  start-time validation rather than fixing resample semantics blind"); S-3's generic warmup-
+  sufficiency check now covers it without touching the resample math itself.
+  `workspace/docs/strategies/BestSupertrend.md` updated for all of S-1/S-2/S-3/S-4's user-visible
+  changes (param rename, new default, tsl[-1] correction, tf/timeframe warmup note).
+
+**Container suite: 353/353 passed** (up from 337/337 baseline at the start of this plan's work).
+**Not done:** the live-verification step described in "Sequencing / verification" below (one
+1-symbol testnet session at leverage 2–3 confirming ≥1 real entry and HTF-value parity against a
+parallel backtest window) — requires a human-observed live session, marked pending same as every
+other live-verification item across this codebase's plans.
+
+---
 **Source:** full read of `engine/strategies/BestSupertrend/__init__.py` (404 lines) +
 `NotionalPortfolio`/`size_by_notional`/`EntryFill.affordable` + `backtest_runner.py`'s entry
 rejection path + `Settings.js` defaults. User report: "it has some flaws and never generates
