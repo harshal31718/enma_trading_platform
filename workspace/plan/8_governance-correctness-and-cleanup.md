@@ -73,13 +73,33 @@ and the smaller hardening items are done.
 - Acceptance check: invalid strategy/params surface as a visible session error; the exit-order
   policy is documented at the decision point.
 
-### Step 8.6 — Multi-session same-account modelling (issue SYS-7)
-- Decide and document how two sessions on one Binance account share real margin/positions
-  (they currently each track a local balance slice and will fight over the same symbol).
-  Options: forbid overlapping symbols across a user's sessions, or model account-level exposure
-  centrally. At minimum, detect and warn on the conflict.
+### Step 8.6 — Multi-session same-account modelling (issue SYS-7) · **✅ verified-already-shipped 2026-07-18**
+- **Correction to this step's own premise:** checked the actual code before deciding anything
+  (per the user's explicit "forbid overlapping symbols per account" choice) and found the
+  conflict this step worries about is already structurally impossible — `services/symbolLock.js`
+  wraps every symbol in an atomic Redis `SET NX` lock, and both `startSession` and `startChaos`
+  (`controllers/algo.controller.js`) already acquire it (reason `"bot"`, tagged with the owning
+  `sessionId`) before ever calling the engine, with rollback (session doc deleted, any
+  already-acquired locks released) on any failure including a `SYMBOL_LOCKED` 409 from a losing
+  concurrent attempt. A second session — same account or not — cannot acquire a symbol the first
+  already holds; the acceptance check ("starting two sessions that would trade the same symbol...
+  is prevented") was already true. **Bonus finding, out of this step's stated scope**: the lock
+  key isn't scoped by `userId` at all, so it's actually stricter than asked — it also prevents
+  two *different* users' sessions from trading the same symbol simultaneously, which has nothing
+  to do with SYS-7's actual concern (shared margin on ONE account) since different users trade
+  through different Binance accounts. Left as-is — over-restrictive-but-safe, not a correctness
+  bug, and narrowing it to per-account scoping is a separate, smaller follow-up if the UX
+  friction of it ever comes up (unlikely in practice: Chaos Mode already round-robins ~120
+  symbols across up to 10 concurrent bots per account, so real cross-user contention on a specific
+  symbol is rare).
+- **Verified:** new `server/src/services/__tests__/symbolLock.test.js` (5 cases, `ioredis-mock`)
+  — a second session cannot lock a symbol the first holds (409 `SYMBOL_LOCKED`), the lock records
+  its owning `sessionId`, a non-owning session's release call is a no-op, the symbol becomes
+  available again after the true owner releases it, and a genuine concurrent race (`Promise.
+  allSettled` on two simultaneous lock attempts) resolves to exactly one winner. Full server
+  suite: 94 → **99/99 passed**.
 - Acceptance check: starting two sessions that would trade the same symbol on one account is
-  prevented or explicitly warned.
+  prevented or explicitly warned. **Already true — no code change needed.**
 
 ### Step 8.7 — Remaining small hardening (issue SEC-8)
 - Finish any constant-time-compare / health-endpoint items not already covered by Plans 2/3
@@ -98,8 +118,9 @@ and the smaller hardening items are done.
 - Golden-master identical or explained; CI green.
 
 ## Open questions
-- 8.6 is partly a product decision (allow overlapping-symbol sessions at all?). Default
-  recommendation: forbid overlap per account until account-level exposure is modelled.
+- ~~8.6 is partly a product decision (allow overlapping-symbol sessions at all?)~~ — resolved
+  2026-07-18: the existing atomic symbol lock already forbids it; no code change needed
+  (see Step 8.6 above).
 
 ## Handoff note template
 `Next session: [steps done 8.x], [next step], [golden-master result], [files changed]`

@@ -169,9 +169,26 @@ Resilience & Stats sections) — this bullet is a pointer, not a description.
   (`engine/services/event_log.py`), engine-written at every position-mutating point (entry, DCA
   add, exit, close-failed, reconcile-adjustment), seq-ordered per `(session, symbol)`. Node's
   `handleEngineStats` rejects a stale/out-of-order seq for the same symbol. Additive — the live
-  session's in-memory state and `LiveSession` document remain the actual read path; the log is
-  not yet the source of truth (that's Plan 5 Step 5.6, unstarted). See
-  `workspace/plan/5_live-trading-state-integrity.md`.
+  session's in-memory state and `LiveSession` document remain the actual read path.
+  **2026-07-18 (Plan 5 Step 5.6, scoped):** `services/event_log.fetch_events()` +
+  `core/live_bot_manager._seed_pnl_from_event_log()` can replay a session's own event log to
+  recover realized PnL from trades that closed before a restart (currently-open positions already
+  self-heal via the existing exchange-reconcile Case 1). Wired behind an opt-in `resume: bool`
+  on the session-start request, and `server/src/services/reconciliation.js` now has a matching
+  `RESUME_SESSIONS_ON_RESTART` env toggle (default `false`/unset) that calls it for orphaned
+  `running`/`starting` sessions instead of the default stop+flatten sweep. Default is
+  unchanged/off — whether to flip that default per-deployment is left as the user's own call, not
+  made here. See `workspace/plan/5_live-trading-state-integrity.md`.
+- **2026-07-18 (Plan 5 Step 5.5, ENG-11, scoped):** money math at every RUNNING-TOTAL
+  accumulation point (`strategy.balance`, `available_capital`, cumulative fees/funding, live
+  `session["pnl"]`, Node's cross-trade-record `computeSymbolStats` aggregation) now goes through
+  Decimal (`engine/core/money.py`'s `add_money()`; Mongo's `$toDecimal`/Decimal128 instead of
+  `$toDouble`) instead of raw float `+=`/`$sum` — stops the classic compounding-float-noise drift
+  across many additions. Deliberately NOT a full float→Decimal conversion of every price/qty
+  touch point (`Position.pnl`/`.margin`, candle prices, `liquidation_price` stay float — one-shot
+  computations, no accumulation-drift problem to fix, and converting them would ripple Decimal
+  into the hot candle-replay loop for a real performance cost with no accounting benefit). See
+  `workspace/plan/5_live-trading-state-integrity.md`'s 5.5 section for the full scope rationale.
 - **Real fills, not fabricated closes**: every close/entry-booking site now reads the actual
   Binance fill (`avgPrice`) instead of a pre-trade price estimate; a failed close order leaves
   the position open instead of fabricating a close. Entry orders gained idempotency (client
@@ -442,8 +459,19 @@ detail (commands, per-phase byte-equivalence, issue-by-issue fix list) moved to
   A-12 (mainnet/testnet data-provenance splice) and A-13 (engine-side wick-check vs armed exchange
   brackets) remain open — both need a product decision recorded in `DECISIONS.md`, not code.
 - **OPEN 2026-07-16 — a position (`FXSUSDT SHORT`) stayed shown as open after a full session stop**,
-  same live run. Not yet investigated. Candidates: the entry may never have actually filled on
-  Binance (phantom local-only position), or `stop_session()`'s close loop skipped this symbol.
+  same live run. **Investigated by code read 2026-07-18** (no Docker access that session — see
+  `0_fixes-queue.md` F7's 2026-07-18 entry): `stop_session()`'s close loop and
+  `_close_position_on_stop()` are correct by inspection (force-close every session symbol against
+  live `positionRisk`, regardless of local state). **One real gap found and fixed**: `execute_entry()`
+  treated Binance's `"0.00000000"` avgPrice string as a truthy real fill, which could silently open a
+  local position never confirmed against a real Binance fill — the one order-placement site that
+  hadn't been brought under the ENG-2 "never fall back to an estimate silently" contract already
+  applied to every close path. Now re-queries by clientOrderId and rejects the entry (no local
+  position opened) if still unconfirmed. New tests: `engine/tests/test_entry_unconfirmed_fill.py`
+  (3 cases). **Not yet confirmed as the actual FXSUSDT cause** — needs a live Testnet reproduction
+  or the original session's retained logs; this is a defensible hardening fix for a real code gap,
+  not a verified match. Container pytest run and live re-verification both still pending (blocked on
+  Docker access).
 
 ---
 

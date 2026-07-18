@@ -34,6 +34,83 @@ async function _testnetHeadersFor(userId, cache) {
   return headers
 }
 
+// Plan 5 Step 5.6 (ENG-7): opt-in, default OFF (2026-07-18 user decision — see
+// workspace/plan/5_live-trading-state-integrity.md). When true, an orphaned
+// session (server/engine restarted mid-run) is resumed instead of stopped
+// and flattened — the engine rebuilds its position (exchange truth, via the
+// existing reconcile Case 1) and its realized PnL (this session's own
+// executionEvents log, via the new `resume: true` flag on POST
+// /algo/sessions) rather than losing state. Any resume failure for a given
+// session (missing credentials, engine rejects the request, network error)
+// falls through to the existing stop+flatten path for THAT session only —
+// resume is a best-effort upgrade, never a reason to leave a session's real
+// exchange positions untracked.
+const RESUME_SESSIONS_ON_RESTART = process.env.RESUME_SESSIONS_ON_RESTART === 'true'
+
+// Raw decrypted credentials (not header-shaped) for the engine's POST
+// /algo/sessions body — separate cache from _testnetHeadersFor's header
+// shape since resume needs api_key/api_secret as plain fields, plus the
+// saved taker fee rate (startSession's original call site reads this from
+// the same Settings doc; resume must reconstruct it the same way since
+// LiveSession itself never persists feeRate).
+async function _rawCredsFor(userId, cache) {
+  if (!userId) return null
+  if (cache.has(userId)) return cache.get(userId)
+
+  let creds = null
+  try {
+    const settings = await Settings.findOne({ userId }).lean()
+    const apiKey = settings?.encryptedApiKey ? decrypt(settings.encryptedApiKey) : ''
+    const apiSecret = settings?.encryptedApiSecret ? decrypt(settings.encryptedApiSecret) : ''
+    if (apiKey && apiSecret) {
+      creds = { apiKey, apiSecret, feeRate: settings?.takerFee ?? 0.0005 }
+    }
+  } catch {
+    creds = null
+  }
+
+  cache.set(userId, creds)
+  return creds
+}
+
+// Attempt to resume one orphaned session. Returns true on success (caller
+// must NOT also run the stop+flatten path for it), false on any failure
+// (caller falls through to stop+flatten as normal). Deliberately does not
+// touch Redis symbol locks either way — if Redis itself survived the
+// restart (the common case; only the server/engine process died), this
+// session's locks are already exactly where they should be. Re-acquiring
+// them here would incorrectly self-collide with the lock this same session
+// already holds. The rare double-failure case (Redis *also* lost its data)
+// is a known, undocumented-further limitation of this opt-in v1 — a new
+// session could theoretically race a resumed one for the same symbol until
+// the resumed session's own next candle-loop iteration re-establishes truth
+// via the exchange reconcile.
+async function _tryResumeSession(session, credsCache) {
+  const creds = await _rawCredsFor(session.userId, credsCache)
+  if (!creds) return false
+  try {
+    await engineClient.post('/algo/sessions', {
+      session_id: String(session._id),
+      strategy_name: session.strategyName,
+      symbols: session.symbols,
+      timeframe: session.timeframe,
+      params: session.params || {},
+      capital: String(session.capital),
+      leverage: Number(session.leverage) || 1,
+      fee_rate: creds.feeRate,
+      risk_params: session.riskParams || {},
+      user_id: String(session.userId),
+      api_key: creds.apiKey,
+      api_secret: creds.apiSecret,
+      resume: true,
+    })
+    return true
+  } catch (e) {
+    console.error(`[Startup] Resume failed for session ${session._id}, falling back to stop+flatten: ${e.message}`)
+    return false
+  }
+}
+
 // Run `task` over `items` with at most `limit` promises in flight at once.
 // Keeps startup responsive: a Chaos session can hold hundreds of symbols, and
 // firing every close-position call serially (or all at once) stalls the event
@@ -53,10 +130,49 @@ async function reconcileSymbolLocks() {
     // Per-pass cache of userId → decrypted testnet headers (from Settings).
     const headerCache = new Map()
 
-    // 1. Stop orphaned active sessions (server/engine restarted mid-run)
-    const orphanedSessions = await LiveSession.find({
+    // 1. Stop orphaned active sessions (server/engine restarted mid-run) —
+    //    OR resume them, if RESUME_SESSIONS_ON_RESTART is opted in (5.6).
+    let orphanedSessions = await LiveSession.find({
       status: { $in: ['running', 'starting', 'stopping'] }
     }).lean()
+
+    if (RESUME_SESSIONS_ON_RESTART) {
+      // A session already mid-stop when the crash happened was stopping on
+      // purpose — respect that intent, never resume it. Only running/starting
+      // sessions are resume candidates.
+      const resumeCandidates = orphanedSessions.filter(s => s.status !== 'stopping')
+      const credsCache = new Map()
+      const resumedIds = new Set()
+      for (const session of resumeCandidates) {
+        const resumed = await _tryResumeSession(session, credsCache)
+        if (resumed) {
+          resumedIds.add(String(session._id))
+          await LiveSession.findByIdAndUpdate(session._id, { status: 'running' }).catch(() => {})
+          console.log(`[Startup] Resumed session ${session._id} from event log + exchange state (RESUME_SESSIONS_ON_RESTART)`)
+        }
+      }
+      if (resumedIds.size > 0) {
+        try {
+          const io = getIO()
+          for (const session of resumeCandidates) {
+            if (resumedIds.has(String(session._id))) {
+              io.to(`user:${session.userId}`).emit('algo:session:update', {
+                sessionId: session._id,
+                status: 'running',
+                pnl: session.pnl || '0',
+                openPositions: session.openPositions || [],
+              })
+            }
+          }
+        } catch {
+          // socket may not be initialized yet, that's fine
+        }
+      }
+      // Everything NOT successfully resumed (resume off for this run, a
+      // 'stopping' session, or a resume attempt that failed) falls through
+      // to the existing stop+flatten path below, unchanged.
+      orphanedSessions = orphanedSessions.filter(s => !resumedIds.has(String(s._id)))
+    }
 
     // Resolve each owner's *actual* open positions once (a session can hold
     // hundreds of symbols; only a handful ever have a live position). Symbols
@@ -239,4 +355,4 @@ async function reconcileFullAccountPositions() {
   }
 }
 
-module.exports = { reconcileSymbolLocks, reconcileFullAccountPositions }
+module.exports = { reconcileSymbolLocks, reconcileFullAccountPositions, _tryResumeSession, _rawCredsFor }

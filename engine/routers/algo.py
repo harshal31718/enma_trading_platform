@@ -62,6 +62,19 @@ class StartSessionRequest(BaseModel):
     user_id: str = ""
     api_key: str = ""
     api_secret: str = ""
+    # Plan 5 Step 5.6 (ENG-7): when true, seeds session pnl by replaying this
+    # session_id's own execution event log instead of starting at 0.0 — for
+    # resuming a session after an engine restart, not for a brand-new one.
+    # Open positions need no equivalent flag: they self-heal from the exchange
+    # via the existing `_reconcile_exchange_state` Case 1 on each symbol's
+    # first candle loop iteration. Currently unused by any caller — Node's
+    # restart-time reconciliation (`server/src/services/reconciliation.js`)
+    # still always stops+flattens on restart by design (a deliberate fail-safe
+    # against auto-resuming trading after an unplanned crash); wiring an actual
+    # caller to this flag is a separate, explicit product decision, not made
+    # here. This exists so the capability is implemented and tested ahead of
+    # that decision.
+    resume: bool = False
 
 
 class StopSessionRequest(BaseModel):

@@ -14,22 +14,25 @@ this board no longer duplicates it).
 | ID | Title | Remaining scope | Status | Priority | Depends on | Updated |
 |----|-------|-----------------|--------|----------|------------|---------|
 | 21 | Live algo industry-standard audit — **fixes** | 21.5c (batched reconcile) (21.1–21.4 + 21.5a/b + all of 21.7 [A-11/A-12/A-13/A-14] shipped, container-verified 2026-07-17 [301/301 pytest], pending live re-verification only; 21.6 → Merged→22.1) | In progress (21.1–21.4, 21.5a/b, 21.7 all shipped + container-verified 2026-07-17) | P2 (21.5c) | — | 2026-07-17 |
-| 5  | Live-trading state integrity | 5.5 (Decimal money, golden-master sign-off), 5.6 (restart recovery / projection) | In progress | P0 | 21.1–21.2 inform 5.6 | 2026-07-16 |
+| 5  | Live-trading state integrity | ALL SHIPPED (5.1–5.6, container-verified 2026-07-18 [engine 441/441, server 112/112]) — 5.5 scoped to running-total accumulation sites (documented scope decision, not full float→Decimal); 5.6's resume capability shipped but not wired into the default restart path (explicit open decision) | **Done** | — | 21.1–21.2 informed 5.6 | 2026-07-18 |
 | 22 | Industry-standard risk management (Session Risk Governor) | ALL SHIPPED (22.1–22.7, container/Jest-verified 2026-07-17 [330/330 pytest, 88/88 jest], 22.6 golden-master-verified, 22.7 live-verified in-browser) — pending live Testnet re-verification only | **Done** (pending live re-verification) | — | 21 (21.1–21.4, shipped) | 2026-07-17 |
-| 9  | Backtest & optimizer correctness (quant core) | ALL STEPS SHIPPED (9.1–9.11, container-verified 2026-07-17 [415/415 pytest], golden-master re-confirmed for every step) — 3 deliberately deferred sub-items remain: liquidation fee (needs a DECISIONS.md product call), warmup fail-loud (needs Plan 8 coordination), `"inf"`-string persistence (dormant, no active consumer) | **Done** | — | — | 2026-07-17 |
+| 9  | Backtest & optimizer correctness (quant core) | ALL STEPS SHIPPED (9.1–9.11, container-verified 2026-07-18 [427/427 pytest]) — liquidation fee (QNT-4) shipped opt-in 2026-07-18 per user decision; 2 deliberately deferred sub-items remain: warmup fail-loud (needs Plan 8 coordination), `"inf"`-string persistence (dormant, no active consumer) | **Done** | — | — | 2026-07-18 |
 | 10 | Monte Carlo Optimiser & Strategy Lab | Phases 1b–4 (job plumbing, `labResults`, UI, optimizer w/ walk-forward + Optuna) | Ready | P1 | 9 (9.1/9.3, shipped) | 2026-07-16 |
 | 13 | Informative / multi-timeframe contract (`self.htf()`) | Shipped — primitive only, no seeded strategy adopts it yet | **Done** | — | — | 2026-07-17 |
 | 17 | Recursive-formula / warmup-insufficiency analysis | Shipped — no live-vs-backtest drift risk found at w=500 for any seeded strategy | **Done** | — | — | 2026-07-17 |
 | 6  | Engine decomposition & exchange abstraction | All | Blocked | P2 | 5 fully shipped; 21.3/21.4 should land first | 2026-07-16 |
 | 7  | Server & client structure | All | Blocked | P2 | 2 (done), 5 | 2026-07-16 |
-| 8  | Governance, correctness & cleanup | 8.2–8.6 (8.3/8.4 golden-master; 8.6 product decision; SYS-3 doc item carried from F6) | In progress | P3 | 3 (done), 5, 6 | 2026-07-16 |
+| 8  | Governance, correctness & cleanup | 8.2–8.5, 8.7 (8.3/8.4 golden-master; SYS-3 doc item carried from F6) — 8.6 verified-already-shipped 2026-07-18, no code needed | In progress | P3 | 3 (done), 5, 6 | 2026-07-18 |
 | 23 | New strategy: high-risk/high-leverage breakout scalper ("MarginSurge") | All — backtest gates can start now; live gated on 21.1–21.4 | Draft | P2 | 21 (live phase), 22.1–22.2 (liq-buffer + governor, soft) | 2026-07-16 |
 | 24 | BestSupertrend fixes (never trades at defaults) | ALL SHIPPED (S-1 through S-5, container-verified 2026-07-17 [353/353 pytest], golden-master re-baselined for S-1 — only BestSupertrend diverges, other 4 strategies byte-identical) — pending live Testnet re-verification only | **Done** (pending live re-verification) | — | — | 2026-07-17 |
 
 **Plus the fixes queue:** F7 (algo-fill detection — 21.1+21.2 shipped, container-verified
-2026-07-17, pending live re-verification) and F8 (Redis `requirepass`, wants a full-stack-restart
-window) —
-see `0_fixes-queue.md`.
+2026-07-17; 2026-07-18 added error-visibility logging + an entry-fill-confirmation hardening fix
+for the FXSUSDT anomaly, code-sound but NOT container-tested or live-verified this session — no
+Docker access — pending both) — **⚠️ FIRST PRIORITY next session: container pytest run + a small
+live/chaos Testnet reproduction (see `0_fixes-queue.md`'s F7 entry). Two sessions have now shipped
+F7 code without either — do this before any other tracker item.** — and F8 (Redis `requirepass`,
+wants a full-stack-restart window) — see `0_fixes-queue.md`.
 
 ## Completed / merged (reference only — detail in each plan file)
 
@@ -156,9 +159,18 @@ pipeline-touching steps) a golden-master check per Rule C.
   product decision (data-provenance choice; wick-check-dedup-while-brackets-armed choice) rather
   than code, left for the user.
 - **5** — 5.5 (Decimal) is the largest, riskiest remaining piece: needs a deliberate
-  golden-master re-baseline with sign-off, never a same-day bundle. 5.6 (restart recovery)
-  depends on the "LiveSession as pure projection" work 5.1 deliberately did not ship; factor
-  Plan 21's A-8 (ACCOUNT_UPDATE-driven reconcile) into 5.6's design.
+  golden-master re-baseline with sign-off, never a same-day bundle. **5.6 shipped in scoped
+  form 2026-07-18**: discovered that Plan 21.2's `_reconcile_exchange_state` Case 1 (already
+  shipped) already restores currently-open positions from exchange truth on restart — the real
+  gap was realized PnL from trades that closed *before* a restart (not on the exchange position
+  endpoint at all) always re-seeding to `0.0`. New `_seed_pnl_from_event_log()` replays the
+  session's own event log to recover it, wired behind a new opt-in `resume: bool` on
+  `StartSessionRequest` (default `False`, additive-only). **Standing open decision, not
+  attempted**: nothing calls `resume=True` yet — `reconciliation.js` still always stops+flattens
+  every running session on any server/engine restart, by design (a deliberate fail-safe against
+  auto-resuming live trading after an unattended crash). Flipping that default to "resume
+  instead of flatten" is a real product/risk decision for the user to make explicitly, separate
+  from this step's job of shipping the tested capability.
 - **22** — Scope decisions taken 2026-07-16: portfolio layer yes (fork #3), rule-based only
   (fork #2), VaR/CVaR enforced (Zone 1 graduates from display-only). Found while grounding:
   `liq_buffer_pct` is decorative (no pipeline call site) and `max_portfolio_risk` is per-symbol
@@ -264,9 +276,12 @@ pipeline-touching steps) a golden-master check per Rule C.
   `portfolio_risk.py` as already-extracted modules and land after 21.3/21.4 so correctness
   fixes move with the code.
 - **8** — 8.1 shipped (F6). Remaining: 8.2–8.6 + the SYS-3 named-volume documentation item
-  carried from F6. 8.3/8.4 are golden-master-touching; 8.6 needs a product decision
-  (multi-session same-account modelling) before code.
-- **Standing open questions** (carried from earlier sessions): golden-master re-baseline
-  sign-off ownership (9.7/9.8, 5.5); keep-or-delete `IcebergAlgorithm`; local dev sharing
-  production's MongoDB Atlas cluster (structural fix still pending); event-log store choice
-  (Mongo shipped, Timescale revisit only on volume).
+  carried from F6. 8.3/8.4 are golden-master-touching. 8.6 resolved 2026-07-18 — no code
+  needed, see Step 8.6 in the plan doc.
+- **Standing open questions** (carried from earlier sessions), **resolved 2026-07-18** unless
+  noted: golden-master re-baseline sign-off ownership for 5.5 — user will review the diff
+  personally (9.7/9.8 already shipped, moot). `IcebergAlgorithm` — keep, evaluate later, no code
+  change. Local dev sharing production's MongoDB Atlas cluster — fixed: new `mongodb` service
+  added to `docker-compose.yml`, user swaps `MONGO_URI` in their own local `.env` (root CLAUDE.md
+  forbids Claude from editing `.env` directly). **Still open**: event-log store choice (Mongo
+  shipped, Timescale revisit only on volume).

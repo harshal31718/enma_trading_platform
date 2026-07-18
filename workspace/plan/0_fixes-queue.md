@@ -70,6 +70,54 @@ Anything failing one of these lives in **§ Not in this queue** below with the r
 - **Out of F7's scope, tracked separately:** TP-400 root cause (needs the reproduction with the
   fixed logging; Plan 21's A-7 stop re-arm converts this class to self-healing) and the
   FXSUSDT-stuck-open anomaly (needs that session's engine logs).
+- **2026-07-18 — code-side investigation continued (no Docker access this session, host has no
+  Docker; all commands below need the user to run them and paste output back):**
+  - **Error-visibility logging verified sound**, `_binance_error_detail()` confirmed live and
+    correctly wired at every entry/SL/TP failure log site (`ast.parse` clean; not yet confirmed
+    inside the container — run `docker exec enma_trading_platform-engine-1 python -c "import ast;
+    ast.parse(open('/app/core/live_bot_manager.py').read())"`).
+  - **TP-400 stale-tick-size-cache hypothesis checked by code read and largely ruled out for
+    BCHUSDT/ETHUSDT specifically:** `load_exchange_rules()` (`utils/symbols.py`) fetches ALL
+    symbols from `exchangeInfo` on every call — there is no "warm set" of specific symbols, and
+    `main.py` already refreshes it on a 30-minute interval (`EXCHANGE_RULES_REFRESH_INTERVAL_S`),
+    not just once at startup (that periodic refresh was itself the 2026-07-03 fix). BCH/ETH are
+    long-listed majors that would be in `_rules_cache` from the very first startup fetch — a stale
+    cache miss on either is unlikely. More plausible candidate, not yet confirmed: a
+    `PERCENT_PRICE`/`percentPrice` filter rejection (Binance rejects a `STOP_MARKET`/
+    `TAKE_PROFIT_MARKET` `triggerPrice` too far from the current mark price) — `symbols.py`'s
+    filter parsing only handles `PRICE_FILTER`/`LOT_SIZE`/`MARKET_LOT_SIZE`/`MIN_NOTIONAL`, nothing
+    validates trigger price against `PERCENT_PRICE` before submission. **Still needs the real
+    `{code, msg}` from a live reproduction to confirm** — this is a code-read hypothesis, not a
+    verified root cause.
+  - **FXSUSDT-stuck-open: one real, code-confirmed gap found and fixed.** `stop_session()`'s close
+    loop and `_close_position_on_stop()` are correct — they force-close every session symbol against
+    live Binance `positionRisk` regardless of local state. But `execute_entry()`'s market-order fill
+    check (`if entry_result.get("avgPrice"): fill_price = float(...)`) treated Binance's own
+    `"0.00000000"` string as a truthy real fill — a non-immediately-settled or zero-fill entry
+    response would silently keep `fill_price == ref_price` (the pre-trade estimate) and open a local
+    `Position` + `open_positions` entry never confirmed against a real Binance fill. This is the one
+    order-placement site in `live_bot_manager.py` that didn't already follow the ENG-2 contract
+    (`_extract_fill_price()` + `_query_real_fill_price()` re-query, never a silent estimate) applied
+    to every close path. **Fixed**: the entry path now re-queries by `clientOrderId` when the initial
+    response's `avgPrice` isn't a real positive fill, and treats a still-unconfirmed fill as a failed
+    entry (no local position opened) instead of proceeding on a phantom fill. New regression tests:
+    `engine/tests/test_entry_unconfirmed_fill.py` (3 cases — real fill unchanged, zero-avgPrice
+    recovered via re-query, zero-avgPrice + failed re-query correctly rejects the entry). **Not a
+    confirmed match for the FXSUSDT symptom** — it's a real gap of the right shape found by code
+    read, not verified against that session's actual logs (which weren't captured with today's
+    detail). Genuinely closing this sub-item still needs either the original session's logs (if
+    retained) or a fresh reproduction.
+  - **⚠️ FIRST PRIORITY, next session — still blocking full F7 closure, needs the user's Docker
+    access:** (1) run the container syntax check above, (2) `docker exec
+    enma_trading_platform-engine-1 pytest /app/tests/` (full suite, confirm the 3 new tests + no
+    regressions), (3) a small (1-3 symbol) live/chaos session on Binance Testnet through a TP/SL
+    trigger to capture the real Binance `{code, msg}` for the TP-400 and confirm/deny the
+    `PERCENT_PRICE` hypothesis, (4) if FXSUSDT-class symptom reproduces again, check whether the new
+    entry-confirmation log line (`"entry order ... returned no confirmed fill price"`) fires for
+    that symbol. **Do this before picking up any other item in this queue or `0_tracker.md`** — two
+    sessions in a row now have shipped code-side fixes for F7 without a single container test run or
+    live reproduction; the verification debt itself is the risk at this point, not just the
+    underlying bugs.
 
 ### F8 — Redis `requirepass` · Plan 4.5 · **needs an infra window**
 - **What:** The one real infra item deferred from Plan 4 — authenticate Redis (`requirepass` + update

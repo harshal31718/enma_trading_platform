@@ -10,6 +10,7 @@ import redis.asyncio as aioredis
 from config.timescale import get_pool
 from config.mongo import get_database
 from core.position import Position
+from core.money import add_money
 from core.models import BacktestExecution
 from core.pipeline import evaluate
 from core.params import param_coerce, param_validate
@@ -200,6 +201,7 @@ class BacktestAdapter(ExecutionAdapter):
     def __init__(
         self, execution_model, fee_rate: float, slippage_pct: float, funding_enabled: bool, funding_rate: float,
         symbol: str, historical_funding_events: np.ndarray | None = None,
+        liquidation_fee_pct: float = 0.0,
     ):
         self.execution = execution_model
         self.fee_rate = fee_rate
@@ -207,6 +209,19 @@ class BacktestAdapter(ExecutionAdapter):
         self.funding_enabled = funding_enabled
         self.funding_rate = funding_rate
         self.symbol = symbol
+        # QNT-4 (Plan 9), opt-in, default 0.0: real Binance liquidations incur
+        # a clearance fee beyond the forfeited maintenance margin (the
+        # liquidation engine's execution price vs. the bankruptcy price).
+        # engine/CLAUDE.md documents "margin-only, no fee on top" as the
+        # INTENDED default contract — this stays byte-identical unless a
+        # caller explicitly opts in. When set, an extra
+        # `liquidation_fee_pct * notional_at_entry` loss is charged on top of
+        # the forfeited margin in execute_exit's "liquidation" branch. This is
+        # a documented approximation (a fixed fraction of notional), not a
+        # bankruptcy-price simulation — Binance's real clearance fee depends
+        # on the liquidation engine's actual fill vs. bankruptcy price, which
+        # isn't reconstructable from OHLCV candles alone.
+        self.liquidation_fee_pct = liquidation_fee_pct
         # QNT-5 (Plan 9 Step 9.7), opt-in, default None: real historical
         # funding events [ts_ms, signed_rate, mark_price_or_nan] for this
         # symbol, fetched via services/funding_manager.py. None (default)
@@ -253,10 +268,10 @@ class BacktestAdapter(ExecutionAdapter):
         _fill = self.execution.exit_fill(strategy, bounded_exit, qty, "sell" if was_long else "buy")
         fill_price = _fill.fill_price
         fee = _fill.fee
-        self.total_fees += fee
+        self.total_fees = add_money(self.total_fees, fee)
 
         realized_pnl = strategy.position.reduce_qty(qty, fill_price) - fee
-        strategy.balance += realized_pnl
+        strategy.balance = add_money(strategy.balance, realized_pnl)
         strategy.available_margin = strategy.balance
 
         if self.active_trade is not None:
@@ -320,8 +335,8 @@ class BacktestAdapter(ExecutionAdapter):
                     event_rate = row[1]
                     event_mark = row[2] if not np.isnan(row[2]) else close_t
                     funding = side_sign * strategy.position.qty * event_mark * event_rate
-                    self.total_funding += funding
-                    strategy.balance -= funding
+                    self.total_funding = add_money(self.total_funding, funding)
+                    strategy.balance = add_money(strategy.balance, -funding)
                 self.last_funding_dt = datetime.fromtimestamp(
                     float(events[mask][-1, 0]) / 1000.0, tz=timezone.utc,
                 )
@@ -331,8 +346,8 @@ class BacktestAdapter(ExecutionAdapter):
             boundary = _next_funding_boundary(self.last_funding_dt)
             while boundary <= time_t:
                 funding = side_sign * strategy.position.qty * close_t * self.funding_rate
-                self.total_funding += funding
-                strategy.balance -= funding
+                self.total_funding = add_money(self.total_funding, funding)
+                strategy.balance = add_money(strategy.balance, -funding)
                 self.last_funding_dt = boundary
                 boundary = _next_funding_boundary(boundary)
 
@@ -366,8 +381,8 @@ class BacktestAdapter(ExecutionAdapter):
             )
             return False
 
-        self.total_fees += fee
-        strategy.balance -= fee
+        self.total_fees = add_money(self.total_fees, fee)
+        strategy.balance = add_money(strategy.balance, -fee)
 
         if intent == "add" and strategy.position is not None and strategy.position.is_open:
             # Scale in — add to existing position (A-014)
@@ -390,7 +405,7 @@ class BacktestAdapter(ExecutionAdapter):
                 direction, qty, fill_price, strategy.leverage,
                 isolated_wallet=req_margin,
             )
-            strategy.available_capital -= req_margin
+            strategy.available_capital = add_money(strategy.available_capital, -req_margin)
             self.last_funding_dt = time_t
 
             self.active_trade = {
@@ -429,8 +444,16 @@ class BacktestAdapter(ExecutionAdapter):
         if reason == "liquidation":
             exit_fill = exit_price
             strategy.position.close(exit_fill)
-            realized_pnl = -strategy.position.margin
-            trade_pnl_pct = -100.0
+            liq_fee = 0.0
+            if self.liquidation_fee_pct:
+                notional_at_entry = abs(strategy.position.qty) * strategy.position.entry_price
+                liq_fee = notional_at_entry * self.liquidation_fee_pct
+                self.total_fees = add_money(self.total_fees, liq_fee)
+            realized_pnl = -strategy.position.margin - liq_fee
+            # -100% (exactly the margin) when the fee is off (default,
+            # byte-identical to pre-QNT-4 behavior); reflects the extra loss
+            # on margin (ROE) when opted in.
+            trade_pnl_pct = (realized_pnl / strategy.position.margin * 100.0) if strategy.position.margin > 0 else -100.0
             self.liquidations += 1
         else:
             open_t = strategy.candles[index_t, 1]
@@ -444,13 +467,13 @@ class BacktestAdapter(ExecutionAdapter):
             _fill = self.execution.exit_fill(strategy, bounded_exit, qty, "sell" if was_long else "buy")
             exit_fill = _fill.fill_price
             fee = _fill.fee
-            self.total_fees += fee
+            self.total_fees = add_money(self.total_fees, fee)
             strategy.position.close(exit_fill)
             realized_pnl = strategy.position.pnl - fee
             trade_pnl_pct = strategy.position.pnl_pct
 
-        strategy.balance += realized_pnl
-        strategy.available_capital += locked_margin + realized_pnl
+        strategy.balance = add_money(strategy.balance, realized_pnl)
+        strategy.available_capital = add_money(strategy.available_capital, locked_margin + realized_pnl)
         strategy.available_margin = strategy.balance
         self.last_funding_dt = None
 
@@ -489,10 +512,10 @@ class BacktestAdapter(ExecutionAdapter):
         _fill = self.execution.exit_fill(strategy, ref_price, old_qty, "sell" if was_long else "buy")
         exit_fill = _fill.fill_price
         fee = _fill.fee
-        self.total_fees += fee
+        self.total_fees = add_money(self.total_fees, fee)
         strategy.position.close(exit_fill)
         realized_pnl = strategy.position.pnl - fee
-        strategy.balance += realized_pnl
+        strategy.balance = add_money(strategy.balance, realized_pnl)
         strategy.available_margin = strategy.balance
         self.last_funding_dt = None
 
@@ -546,8 +569,8 @@ class BacktestAdapter(ExecutionAdapter):
             )
             return False
 
-        self.total_fees += fee
-        strategy.balance -= fee
+        self.total_fees = add_money(self.total_fees, fee)
+        strategy.balance = add_money(strategy.balance, -fee)
         strategy.position = Position(
             new_direction, new_qty, fill_price, strategy.leverage,
             isolated_wallet=req_margin,
@@ -746,6 +769,7 @@ async def run_backtest_simulation(
     round_trip_stats: bool = False,
     intrabar_detail: bool = False,
     historical_funding: bool = False,
+    liquidation_fee_pct: float = 0.0,
 ) -> dict:
     # entry_candle_exits (QNT-3, Plan 9 Step 9.4): opt-in, default off. When
     # True, SL/TP/liquidation are evaluated against the same candle a
@@ -792,6 +816,15 @@ async def run_backtest_simulation(
     # perpetual-futures mechanic; funding_manager.py raises on any other
     # exchange). See workspace/plan/9_backtest-and-optimizer-correctness.md
     # Step 9.7.
+    # liquidation_fee_pct (QNT-4, Plan 9): opt-in, default 0.0. Real Binance
+    # liquidations incur a clearance fee beyond the forfeited maintenance
+    # margin; engine/CLAUDE.md documents "margin-only, no fee on top" as the
+    # INTENDED default contract (a DECISIONS.md-level product call, not a
+    # bug) — default 0.0 is byte-identical to the pre-QNT-4 path. When > 0,
+    # charged as `liquidation_fee_pct * notional_at_entry`, added to the
+    # margin loss AND to `totalFees`. See BacktestAdapter's own docstring for
+    # why this is a documented fixed-fraction approximation, not a
+    # bankruptcy-price simulation.
     # ── 1. Parse strategy name ──────────────────────────────────────────────
     parts = strategy_file.split("/")
     if len(parts) >= 2 and parts[0] == "strategies":
@@ -1142,6 +1175,7 @@ async def run_backtest_simulation(
             adapter = BacktestAdapter(
                 execution, fee_rate, _slippage, _funding_on, _fund_rate, sym,
                 historical_funding_events=funding_events_by_sym.get(sym),
+                liquidation_fee_pct=liquidation_fee_pct,
             )
             adapters[sym] = adapter
 

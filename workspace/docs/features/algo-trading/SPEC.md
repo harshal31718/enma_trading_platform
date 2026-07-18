@@ -362,14 +362,24 @@ confirmed answer and two separate, still-open bugs:
    code instead of a dead end. Root cause still open pending that reproduction.
 3. **A position stayed shown as open after the session was fully stopped** — `FXSUSDT SHORT`
    remained in the Positions panel with no live PnL/qty/notional after `Stop` completed and every
-   other symbol showed `CLOSED`. Not yet investigated — candidates: the entry itself may have
-   failed/never actually filled on Binance (a phantom local-only position, possibly linked to the
-   same TP-failure class above if `execute_entry` proceeded without confirming the fill), or
-   `stop_session()`'s close loop skipped this one symbol for an unrelated reason. Needs the
-   engine logs for this specific symbol/session to diagnose.
+   other symbol showed `CLOSED`. **Investigated by code read 2026-07-18**: `stop_session()`'s close
+   loop and `_close_position_on_stop()` are correct by inspection — they query live Binance
+   `positionRisk` and force-close every session symbol regardless of local state, so a genuinely
+   stuck-open report from that path implies either an exception during the close call (now
+   diagnosable via `_binance_error_detail`) or the entry itself was a phantom local-only position.
+   **One real gap of the right shape found and fixed**: `execute_entry()`'s market-order fill check
+   treated Binance's `"0.00000000"` avgPrice string as a truthy real fill, silently opening a local
+   position on an unconfirmed entry — the one order-placement site that didn't follow the ENG-2
+   "never fall back to an estimate silently" contract already applied to every close path. Fixed to
+   re-query by clientOrderId and reject the entry (no local position) if still unconfirmed. See
+   `engine/tests/test_entry_unconfirmed_fill.py` and `0_fixes-queue.md`'s F7 2026-07-18 entry for
+   detail. **Not confirmed as the actual FXSUSDT cause** — that needs either the original session's
+   retained logs or a fresh reproduction; this is a defensible hardening fix for a real gap found by
+   code read, not a verified root-cause match.
 
-**Status: session stopped, not yet re-run with the improved error logging.** See `handoff.md`'s
-2026-07-16 entry for the full session trace and next steps.
+**Status: not yet re-run with the improved error logging or the entry-confirmation fix — needs a
+live Testnet reproduction (Docker access) before F7 can close.** See `handoff.md`'s most recent
+entry for the full session trace and next steps.
 
 ---
 

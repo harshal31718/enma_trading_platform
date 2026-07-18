@@ -282,15 +282,30 @@ signals from the same data, verified mechanically, not by assertion.
   passed; larger `qty` produces larger impact; zero ADV disables impact (no divide-by-zero); ADV
   window sizing for an hourly timeframe; empty-candles ADV degrades to 0.0; sell side widens
   downward symmetrically. Container suite: 397/397 passed (up from 386).
-- **Liquidation fee (QNT-4) — deliberately NOT implemented.** `execute_exit`'s liquidation branch
-  caps loss at exactly `-margin` (no fee/slippage on top) — but `engine/CLAUDE.md`'s own Backtest
-  Engine Rules section documents this as the INTENDED contract ("a liquidation forfeits exactly
-  the isolated margin... no exit fee or slippage is added on top"), not an oversight. Changing it
-  contradicts a documented design decision and needs its own `DECISIONS.md` entry (is the
-  liquidation-fee omission an accepted simplification, given the trader's real-world loss is
-  already capped at their margin under Binance's own isolated-margin model regardless of the
-  fee's accounting treatment? or should backtest model it explicitly?) — a product call, not a
-  mechanical audit-finding fix, left for the user.
+- **Liquidation fee (QNT-4) — Shipped as opt-in 2026-07-18, resolving the product-call left open
+  below.** User's decision: keep `engine/CLAUDE.md`'s documented margin-only-loss contract as the
+  default (unchanged), make an extra clearance-style fee available as an explicit opt-in for
+  users who want closer-to-real-Binance modeling. New `BacktestAdapter.liquidation_fee_pct`
+  (`services/backtest_runner.py`), threaded through as a `run_backtest_simulation` kwarg
+  (default `0.0`, same not-yet-router-exposed pattern as `historical_funding`/`round_trip_stats`/
+  `intrabar_detail` — internal-only until a UI control exists). When `> 0`, charges
+  `liquidation_fee_pct * notional_at_entry` on top of the forfeited margin in `execute_exit`'s
+  `"liquidation"` branch, added to both the realized loss and `total_fees`; `trade_pnl_pct` now
+  computes as `realized_pnl / margin * 100` instead of a hardcoded `-100.0` literal — exactly
+  `-100.00` when the fee is `0.0` (division identity: `-margin/margin` is exactly `-1.0` in
+  IEEE754 for any nonzero margin, so the formatted string is byte-identical), more negative when
+  opted in. **Documented as an approximation, not a bankruptcy-price simulation** — real Binance's
+  clearance fee depends on the liquidation engine's actual fill vs. the bankruptcy price, which
+  isn't reconstructable from OHLCV candles alone; a fixed fraction of notional is the closest
+  honest approximation without fabricating exchange internals.
+  **Verified:** 6 new tests (`engine/tests/test_liquidation_fee.py`) — default `0.0` reproduces
+  the exact pre-QNT-4 loss/pct/fees, opted-in fee adds the correct extra loss for both long and
+  short (notional-scaled), a non-liquidation exit (`take_profit`) is provably unaffected by the
+  param regardless of its value. Container suite 421 → **427/427 passed**. Golden master not run
+  via the script (a `git stash`-equivalent file swap to get a true before/after was denied by the
+  session's safety classifier per root CLAUDE.md Rule H's spirit) — relied instead on the
+  division-identity proof above plus the full container suite showing zero regressions, which
+  covers the same guarantee for every seeded strategy (none of which opt into this param).
 - **Warmup-insufficiency fail-loud (QNT-16) — deliberately deferred.** This step's own text ties
   it to Plan 8 / ENG-8 coordination; not attempted here to avoid touching Plan 8's scope
   unilaterally.

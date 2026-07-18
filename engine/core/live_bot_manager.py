@@ -16,6 +16,7 @@ import websockets
 
 from config.timescale import get_pool
 from core.position import Position
+from core.money import add_money
 from core.models import (
     DefaultPortfolioModel, InverseVolatilityPortfolio, compute_realized_volatility,
     LiveExecution, OrderPlan,
@@ -27,7 +28,7 @@ from core.models import (
 from core.params import param_coerce, param_default, param_validate
 from core.pipeline import evaluate
 from services.trade_recorder import record_trade, build_trade_record
-from services.event_log import append_event, reset_session_seq
+from services.event_log import append_event, reset_session_seq, fetch_events, fold_events
 from services.user_data_stream import UserDataStreamManager
 from services.pairlist import pairlist_from_config
 from utils.symbols import round_price, clamp_and_round_qty, clamp_leverage, get_ticker_data, is_symbol_invalid
@@ -238,6 +239,31 @@ async def _fetch_available_balance(api_key: str, api_secret: str) -> float | Non
     except Exception as e:
         logger.warning(f"[AlgoBot] capital integrity backstop: balance fetch failed — {e}")
         return None
+
+
+async def _seed_pnl_from_event_log(session_id: str, symbols: list[str]) -> float:
+    """Plan 5 Step 5.6 (ENG-7): sum each symbol's realized PnL by replaying
+    this session's own execution event log.
+
+    Used only when resuming a session after an engine restart. Currently-OPEN
+    positions self-heal for free via `_reconcile_exchange_state`'s existing
+    Case 1 (exchange is truth for what's open right now) the first time each
+    symbol's candle loop runs — no new code needed there. But PnL from trades
+    that already closed *before* the restart isn't on the exchange position
+    endpoint at all (Binance doesn't expose a running per-bot realized-PnL
+    counter), so the only place to recover it is this session's own event log.
+
+    Best-effort per symbol: a replay failure for one symbol logs and
+    contributes 0 rather than aborting the whole resume.
+    """
+    total = 0.0
+    for symbol in symbols:
+        try:
+            events = await fetch_events(session_id, symbol)
+            total += fold_events(events)["realizedPnl"]
+        except Exception as e:
+            logger.warning(f"[AlgoBot] {session_id}/{symbol}: event-log PnL replay failed — {e}")
+    return total
 
 
 class LiveAdapter(ExecutionAdapter):
@@ -739,11 +765,44 @@ class LiveAdapter(ExecutionAdapter):
                     )
                     entry_result = {"avgPrice": str(_real_fill)}
                 order_id = entry_result.get("orderId")
-                if entry_result.get("avgPrice"):
-                    fill_price = float(entry_result["avgPrice"])
+                # F7 hardening: the old `if entry_result.get("avgPrice"):` check
+                # treated any non-empty string as a real fill, including the
+                # literal "0.00000000" Binance returns when a market order's
+                # RESULT response lands before avgPrice settles (or the order
+                # genuinely filled for zero — e.g. EXPIRED on a low-liquidity
+                # symbol). `float("0.00000000")` == 0.0 is falsy-looking but the
+                # *string* is truthy, so this silently kept fill_price == ref_price
+                # (a pre-trade candle-close estimate) and opened a local Position
+                # anyway — a phantom/mispriced position never confirmed against a
+                # real Binance fill. Mirrors the ENG-2 contract already applied to
+                # every close path (_extract_fill_price + re-query, never a silent
+                # estimate fallback) but which the entry path never got.
+                _confirmed_fill = _extract_fill_price(entry_result)
+                if _confirmed_fill is None:
+                    _confirmed_fill = await _query_real_fill_price(
+                        _api_key, _api_secret, symbol, entry_client_order_id
+                    )
+                if _confirmed_fill is None:
+                    logger.error(
+                        f"[AlgoBot] {symbol}: entry order {order_id} returned no confirmed "
+                        f"fill price (avgPrice={entry_result.get('avgPrice')!r}, "
+                        f"status={entry_result.get('status')!r}) — treating as a failed entry, "
+                        f"NOT opening a local position on an unconfirmed fill"
+                    )
+                    await self.manager._notify_node(self.session_id, {
+                        "event": "log",
+                        "eventData": {
+                            "type": "error",
+                            "message": f"{symbol}: entry unconfirmed — no fill price from Binance, position not opened",
+                        },
+                    })
+                    strategy.buy = None
+                    strategy.sell = None
+                    return False
+                fill_price = _confirmed_fill
                 logger.info(
                     f"[AlgoBot] Testnet {direction} entry filled: {symbol} qty={qty} "
-                    f"@ {entry_result.get('avgPrice', fill_price)} orderId={order_id} "
+                    f"@ {fill_price} orderId={order_id} "
                     f"clientOrderId={entry_client_order_id}"
                 )
 
@@ -928,8 +987,8 @@ class LiveAdapter(ExecutionAdapter):
                         _fee_e = strategy.execution_model.exit_fee(strategy, _pos_e.qty, _real_exit_price)
                         _pos_e.close(_real_exit_price)
                         _rpnl_e = _pos_e.pnl - _fee_e
-                        strategy.balance += _rpnl_e
-                        session["pnl"] += _rpnl_e
+                        strategy.balance = add_money(strategy.balance, _rpnl_e)
+                        session["pnl"] = add_money(session["pnl"], _rpnl_e)
                         if session.get("risk_governor") is not None:
                             session["risk_governor"].record_realized_pnl(_rpnl_e, datetime.now(timezone.utc))
                         # Plan 22 Step 22.3: protections (A-001) need every real
@@ -1337,8 +1396,8 @@ class LiveAdapter(ExecutionAdapter):
         fee = strategy.execution_model.exit_fee(strategy, pos.qty, exit_price)
         pos.close(exit_price)
         realized_pnl = pos.pnl - fee
-        strategy.balance += realized_pnl
-        session["pnl"] += realized_pnl
+        strategy.balance = add_money(strategy.balance, realized_pnl)
+        session["pnl"] = add_money(session["pnl"], realized_pnl)
         if session.get("risk_governor") is not None:
             session["risk_governor"].record_realized_pnl(realized_pnl, datetime.now(timezone.utc))
 
@@ -1717,6 +1776,19 @@ class LiveBotManager:
             "open_positions": {},  # symbol -> dict with position info
             "strategy_instances": {},  # symbol -> strategy instance
         }
+
+        # Plan 5 Step 5.6 (ENG-7): resume seeds pnl from this session's own
+        # event log instead of starting at 0.0 — see `_seed_pnl_from_event_log`.
+        # Currently-open positions need no equivalent seeding here: each
+        # symbol's first candle loop iteration restores them from the exchange
+        # via the existing `_reconcile_exchange_state` Case 1.
+        if session_config.get("resume"):
+            recovered_pnl = await _seed_pnl_from_event_log(session_id, symbols)
+            self.sessions[session_id]["pnl"] = recovered_pnl
+            logger.info(
+                f"[AlgoBot] Session {session_id}: resumed — seeded pnl=${recovered_pnl:.2f} "
+                f"from event log; open positions self-heal via exchange reconcile on first candle"
+            )
 
         # Spawn one task per symbol
         for symbol in symbols:
@@ -2782,8 +2854,8 @@ class LiveBotManager:
             fee = strategy.execution_model.exit_fee(strategy, pos.qty, exit_price)
             pos.close(exit_price)
             realized_pnl = pos.pnl - fee
-            strategy.balance += realized_pnl
-            session["pnl"] += realized_pnl
+            strategy.balance = add_money(strategy.balance, realized_pnl)
+            session["pnl"] = add_money(session["pnl"], realized_pnl)
             if session.get("risk_governor") is not None:
                 session["risk_governor"].record_realized_pnl(realized_pnl, datetime.now(timezone.utc))
 
@@ -3082,8 +3154,8 @@ class LiveBotManager:
             # when we have it — it's the authoritative number, not our
             # recomputation from an average fill price.
             realized_pnl = net_realized_pnl_from_exchange if net_realized_pnl_from_exchange is not None else (pos.pnl - fee)
-            strategy.balance += realized_pnl
-            session["pnl"] += realized_pnl
+            strategy.balance = add_money(strategy.balance, realized_pnl)
+            session["pnl"] = add_money(session["pnl"], realized_pnl)
             if session.get("risk_governor") is not None:
                 session["risk_governor"].record_realized_pnl(realized_pnl, exit_time)
 

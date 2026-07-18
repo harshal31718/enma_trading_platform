@@ -88,6 +88,21 @@ async def append_event(
     return seq
 
 
+async def fetch_events(session_id: str, symbol: str | None = None) -> list[dict[str, Any]]:
+    """Fetch one session's (optionally one symbol's) events, sorted by `seq`
+    ascending — the pre-sort `fold_events()` requires. Used by Step 5.6's
+    restart recovery to replay realized PnL that isn't recoverable from the
+    exchange position endpoint (which only reflects currently-open positions,
+    not trades that already closed before the restart).
+    """
+    query: dict[str, Any] = {"sessionId": session_id}
+    if symbol is not None:
+        query["symbol"] = symbol
+    db = get_database()
+    cursor = db.executionEvents.find(query).sort("seq", 1)
+    return [doc async for doc in cursor]
+
+
 def fold_events(events: list[dict[str, Any]]) -> dict[str, Any]:
     """Pure fold: replay one session+symbol's ordered events into final
     {isOpen, entryPrice, qty, realizedPnl}. `events` must be pre-sorted by

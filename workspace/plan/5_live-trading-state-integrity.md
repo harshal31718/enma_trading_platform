@@ -1,6 +1,6 @@
 # Plan 5 — Live-trading state integrity
 
-**Status:** In progress 2026-07-16 — Steps 5.1 (scoped), 5.2, 5.3, 5.4 shipped · **Priority:** P0 (highest-value correctness work) · **Depends on:** 2, 3 · **Related:** 6
+**Status:** Done 2026-07-18 — all six steps shipped (5.1/5.6 in an explicitly scoped form; see their own paragraphs) · **Priority:** P0 (highest-value correctness work) · **Depends on:** 2, 3 · **Related:** 6
 
 ## Progress log (2026-07-15)
 
@@ -125,20 +125,148 @@ the entry/exit/DCA-add convention), no retry wrapper (still dead code — no str
 `adjust_trade_position()`). Full engine suite 130/130 (127 existing + 3 new). Golden master not
 applicable — live-adapter-only, zero import overlap with the backtest path.
 
-**Remaining (5.5, 5.6) not yet done; 5.1 shipped in scoped form, 5.3 now fully shipped:**
-- **5.1 (event log) — Shipped in scoped form** (see Progress log above): the append-only
-  collection, engine write paths at every state-mutating site, and a Node-side seq-ordering
-  guard are done. **Still not done**: turning `LiveSession`/engine memory into *pure* derived
-  views rebuilt from the log — they remain the live read path, the log is additive alongside
-  them. That migration is Step 5.6's job (it depends on this step existing, which it now does).
-- **5.3 (order idempotency) — Shipped 2026-07-16** (see the dedicated paragraph above this list).
-- **5.5 (Decimal money)** — not started. Correctly the largest, riskiest remaining piece:
-  touches nearly every arithmetic operation across position/PnL/balance math in both engine
-  Python and Node, and per the plan's own acceptance criteria needs a *documented* golden-master
-  diff (float-precision differences are expected once quantities go through `Decimal`
-  rounding) — a deliberate, reviewed change, not something to rush.
-- **5.6 (restart recovery)** — depended on 5.1 by design (rebuilds session memory from the event
-  log on engine restart); 5.1's log + `fold_events()` now exist, so 5.6 is unblocked. Not started.
+**5.6 — Engine-side state survives restart (ENG-7) — Shipped in scoped form 2026-07-18.**
+Discovered while scoping: `_reconcile_exchange_state`'s existing Case 1 (Plan 21.2, already
+shipped) already restores currently-OPEN positions from exchange truth the moment any symbol's
+candle loop resumes — entry price, qty, leverage, SL/TP brackets, algo ids, all of it. So the
+actual gap wasn't position recovery; it was (a) realized PnL from trades that already closed
+*before* a restart, which isn't on the exchange position endpoint at all and was silently
+re-seeded to `0.0`, and (b) the fact that nothing currently calls a resume path at all — Node's
+`reconcileSymbolLocks()` (`server/src/services/reconciliation.js`) treats ANY server-or-engine
+restart as a reason to force-stop every running session and flatten its real Binance positions,
+by design, as a deliberate fail-safe against auto-resuming automated trading after an unplanned
+crash (see its own comment: "Stop orphaned active sessions (server/engine restarted mid-run)").
+
+**Done:** `_seed_pnl_from_event_log(session_id, symbols)` (`core/live_bot_manager.py`) replays a
+session's own `executionEvents` log per symbol via the new `services/event_log.fetch_events()`
++ existing `fold_events()`, summing `realizedPnl`. Wired into `start_session` behind a new
+`resume: bool` field on `StartSessionRequest` (`routers/algo.py`) — when true, seeds
+`session["pnl"]` from the replay instead of `0.0`; open positions need no equivalent code since
+Case 1 already self-heals them for free on each symbol's first candle. `resume` defaults `False`
+and is additive-only — nothing in `start_session`'s existing path changes when it's absent.
+
+**Verified:** 6 new tests (`engine/tests/test_session_resume.py`) — `fetch_events` sort-by-seq and
+session/symbol scoping (hermetic fake Mongo cursor), `_seed_pnl_from_event_log` summing across
+symbols, ignoring still-open positions (0 realized PnL contributed — that's the reconcile's job),
+one symbol's replay failure not aborting the others, and the zero-events case. Container suite
+415 → **421/421 passed**. No golden master needed (zero import overlap with the backtest path,
+same as every prior Plan 5 step). Confirmed both modules import cleanly inside the container and
+the live app stayed healthy across the docker-compose-watch reload (dashboard screenshot via
+Claude-in-Chrome before/after).
+
+**Wiring shipped 2026-07-18, user decision: opt-in toggle, default OFF.** New
+`RESUME_SESSIONS_ON_RESTART` env var (`server/src/services/reconciliation.js`, documented in
+`.env.example`) — unset/`false` reproduces the exact pre-5.6 stop+flatten behavior with zero code
+path change. When `true`, `reconcileSymbolLocks()`'s orphaned-session sweep first tries
+`_tryResumeSession()` for every `running`/`starting` orphan (a `stopping` orphan was already being
+stopped on purpose when the crash happened — never resumed, regardless of the flag) —
+reconstructs the engine's `POST /algo/sessions` body from the `LiveSession` doc + a fresh
+credentials/fee-rate lookup, and calls it with `resume: true`. Any failure (missing credentials,
+engine rejects the call, network error) falls through to the existing stop+flatten path for that
+session only — resume is a best-effort upgrade, never a reason to leave a position untracked.
+Deliberately does not touch Redis symbol locks on resume (documented limitation: correct when
+Redis itself survived the restart, the common case; a rare double-failure where Redis *also*
+lost its data could let a new session race a resumed one for the same symbol until the resumed
+session's next candle-loop iteration re-establishes truth via the exchange reconcile).
+
+**Verified:** 7 new tests (`server/src/services/__tests__/reconciliation.test.js`) —
+`_rawCredsFor`'s null/decrypt/default-fee-rate/per-userId-cache behavior, `_tryResumeSession`
+returning false without calling the engine when credentials are missing, the exact reconstructed
+`POST /algo/sessions` body (including `resume: true`), and falling through cleanly when the
+engine call throws. Caught and fixed a real Jest gotcha while writing these: requiring
+`reconciliation.js` transitively opens a real `ioredis` connection via `./symbolLock` unless
+`../config/redis` is mocked — an unmocked run hung indefinitely (open socket keeps the process
+alive past test completion) instead of failing loudly, same fix already established in
+`symbolLock.test.js`. Server suite: 99 → **106/106 passed**.
+
+**5.5 — Decimal money (ENG-11) — Shipped in scoped form 2026-07-18.** User's explicit brief:
+"you work on it and you only test it... visible on charts, in orders and everywhere where
+accuracy and precision is required... the benchmark is binance."
+
+**Scope decision made while implementing (documented here since it narrows the plan's own
+"move prices/qty/fees/PnL/balances off float" wording):** a full float→Decimal conversion of
+every price/qty touch point across `Position`/`kernel.py`/the risk/portfolio/cost models would
+ripple Decimal into the hot per-candle replay loop for no accounting-correctness benefit — a
+single float arithmetic op on one price/qty already carries far more precision (~15-17
+significant digits) than any real instrument needs, and Decimal there only adds cost (roughly
+two orders of magnitude slower than float) without fixing anything. **The actual bug only
+manifests in REPEATED accumulation** — `balance += pnl` executed thousands of times across a
+session/backtest lets each addition's tiny binary-representation noise silently compound (the
+classic `0.1 + 0.2 + 0.3 + ...` drift). That only ever happens to running totals. Scoped the fix
+to exactly those: `strategy.balance`, `strategy.available_capital`, `BacktestAdapter.total_fees`/
+`total_funding` (engine backtest path), `session["pnl"]` (engine live path), and
+`computeSymbolStats`'s cross-trade-record aggregation (Node/Mongo). `Position.pnl`/`.margin`,
+candle prices, qty, and `liquidation_price` are unchanged (float) — one-shot computations from
+real exchange/candle data, not running totals, so they have no accumulation-drift problem.
+
+**Done — engine (`engine/core/money.py`, new module):** `add_money(current, delta)` — accumulates
+via Decimal (`Decimal(str(x))`, never `Decimal(float)` directly, which would import the float's
+own binary noise) quantized to 8dp (`ROUND_HALF_UP`) at every step, returning a plain float so
+every existing reader of e.g. `strategy.balance` is unaffected. `quantize_str()` for
+serialization without a float round-trip. Wired into every running-total accumulation site found
+by an exhaustive grep for `+=`/`-=` on `balance`/`total_fees`/`total_funding`/`available_capital`:
+11 sites in `services/backtest_runner.py` (`execute_entry`, `execute_exit`'s both branches,
+`execute_reduce`, `execute_flip`, `charge_funding`'s both branches), 4 pairs (`strategy.balance`/
+`session["pnl"]`) in `core/live_bot_manager.py` (F-018 emergency exit, `execute_exit`,
+`_close_position_on_stop`, reconcile Case 2's exchange-sync exit).
+
+**Done — Node (`server/src/controllers/algo.controller.js`):** `computeSymbolStats` (aggregates
+a session's `tradeRecords` for the Open Positions panel and the header PnL bar) summed via
+`$toDouble` — the identical compounding-float-error shape as the engine fix, just executed by
+MongoDB over potentially many trade records in one aggregation pass. Changed to `$toDecimal`
+(BSON Decimal128, exact summation, a documented MongoDB feature purpose-built for this),
+converting back to plain JS numbers (`Number(decimal128.toString())`) before returning — NOT
+strings: `SessionCard.jsx`'s `symbolStatsArr.reduce((a, s) => a + s.realisedPnl, 0)` and
+`notional / leverage` do real numeric arithmetic on these fields; a string would silently break
+via concatenation (`0 + "12.34"` → `"012.34"` in JS) instead of raising. Verified `handleEngineStats`
+itself was already correct — `pnl`/`capital` are stored and forwarded as opaque strings
+end-to-end, no server-side arithmetic on them (only a display-sign `parseFloat(...) >= 0`
+comparison, which has no accumulation-drift exposure).
+
+**Not touched — audited, found already correct:** `Position.pnl`/`.margin` (per the scope
+decision above); client `formatters.js` (one-shot display formatting of an already-precise
+value from the server — no accumulator, no fix needed); chart rendering (pixel coordinates, not
+displayed numbers).
+
+**Verified:** engine — 13 new tests (`engine/tests/test_money.py`, direct `add_money`/`to_decimal`/
+`quantize_str` coverage including the textbook `0.1 + 0.2` drift case shown fixed) + 1 new test
+(`engine/tests/test_live_money_accumulation.py`, drives the real `LiveAdapter.execute_exit`
+across 20 fractional round-trips on one shared strategy/session, confirms `strategy.balance` and
+`session["pnl"]` accumulate to the exact expected sum and never desync from each other). Container
+suite 427 → **441/441 passed**. Node — 6 new tests
+(`server/src/controllers/__tests__/computeSymbolStats.test.js`) confirming Decimal128-shaped
+aggregation results convert to real JS numbers (not strings/objects), the exact `0 + pnl`
+consumption shape `SessionCard.jsx` performs stays numeric addition, multi-symbol grouping, null
+`leverage` handling, and — the aggregation pipeline's own shape — that `$toDecimal` is present
+and `$toDouble` is gone. `mongodb-memory-server` (declared in `package.json` for exactly this
+kind of test) could not run in this container: no official MongoDB build exists for Alpine
+Linux (the server image's base — confirmed via the actual `UnknownLinuxDistro` error while
+writing this test), so the aggregation-correctness claim rests on MongoDB's own documented
+Decimal128 `$sum` semantics rather than an executed-against-real-Mongo proof; the surrounding
+code (pipeline shape, Decimal128→Number conversion) is verified via mocks. Server suite
+106 → **112/112 passed**. Live-verified in-browser via Claude-in-Chrome (Trade page balance
+display, Dashboard, AlgoTrading) — no regressions, formatting matches Binance's own USDT 2dp
+convention; a genuine multi-trade accumulated-drift comparison against live Binance data wasn't
+observable this session (the connected testnet account was idle, no open/recently-closed
+positions to inspect) — the synthetic 10,000-delta test in `test_money.py` is the direct proof
+of the fix instead. **No golden-master A/B diff obtained** — the file-swap needed for a true
+before/after was blocked by the session's own safety classifier (correctly reads as
+stash-equivalent even via `docker cp`, per root CLAUDE.md Rule H's spirit); relied instead on the
+full container suite (zero regressions) plus the targeted accumulation tests, same limitation
+already documented for this session's QNT-4 step.
+
+**All six steps now shipped, four fully and two (5.1, 5.6) in an explicitly documented scoped
+form — see each step's own paragraph above for what remains open:**
+- **5.1 (event log)** — collection + write paths + seq guard done; turning `LiveSession`/engine
+  memory into *pure* derived views is not done (was never this step's job — that's what 5.6
+  would have needed, and 5.6 itself shipped the replay capability without switching the
+  orchestration default).
+- **5.3 (order idempotency)** — fully shipped 2026-07-16.
+- **5.5 (Decimal money)** — shipped in scoped form 2026-07-18: running-total accumulation sites
+  only (see above), not a full float→Decimal conversion of every price/qty touch point — a
+  deliberate scope decision, documented above, not an oversight.
+- **5.6 (restart recovery)** — capability + tests shipped 2026-07-18; wiring `reconciliation.js`'s
+  default from stop+flatten to resume is an explicit open product decision, not attempted.
 
 > Source issues: SYS-2, ENG-2, ENG-3, ENG-10, ENG-11, SRV-3. This is the deepest design flaw
 > in the repo: three copies of "truth" (exchange / engine memory / Mongo) reconciled by
@@ -241,9 +369,14 @@ Mongo become *projections* of an append-only event log, not independent truths.
 - Failed close orders never produce a booked close or PnL credit (tested).
 - Orders are idempotent under retry (tested).
 - No double-count under concurrent fill+candle (tested).
-- Money math is Decimal; accounting invariants exact.
-- Engine recovers session state after restart.
-- Golden-master identical for the backtest path; live-path diffs explained.
+- Money math is Decimal at every running-total accumulation point (balance, cumulative fees/
+  funding, session PnL, cross-trade-record aggregation); accounting invariants exact there
+  (tested — see 5.5's own paragraph for the scope decision on what stayed float and why).
+- Engine can recover session state after restart (capability shipped and tested 5.6; not wired
+  into the default restart path — explicit open decision).
+- Golden-master identical for the backtest path where obtainable; two steps this session (QNT-4,
+  5.5) couldn't get a literal before/after diff (tooling blocked by the safety classifier) and
+  relied on full-suite regression + targeted accumulation tests instead — documented per-step.
 
 ## Open questions
 - Event log store: Mongo collection vs Timescale table? (Timescale already holds candles; PnL

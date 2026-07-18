@@ -339,6 +339,17 @@ async function getSessionEquity(req, res, next) {
 
 // Re-derive per-symbol aggregates for a session from the tradeRecords
 // collection (the engine is the sole writer). Returns a { symbol: {...} } map.
+// Plan 5 Step 5.5 (ENG-11): sums via $toDecimal/Decimal128, not $toDouble —
+// a session can accumulate many trade records, and summing that many IEEE-754
+// doubles in one aggregation pass is the exact same compounding-float-error
+// shape the engine-side `add_money()` fix addresses, just executed by Mongo
+// instead of Python. Decimal128 sums exactly, with no term-count-dependent
+// drift. Converted back to plain JS numbers before returning/storing —
+// deliberately NOT stringified — every existing consumer (SessionCard.jsx's
+// `a + s.realisedPnl` reduce, `notional / leverage` margin calc) does real
+// numeric arithmetic on these fields and would silently break on a string
+// (JS `0 + "12.34"` concatenates instead of adding). This is a precision fix
+// at the aggregation boundary, not a type/contract change.
 async function computeSymbolStats(sessionId) {
   const rows = await TradeRecord.aggregate([
     { $match: { sessionId: String(sessionId) } },
@@ -347,9 +358,9 @@ async function computeSymbolStats(sessionId) {
       $group: {
         _id: '$symbol',
         trades: { $sum: 1 },
-        qty: { $sum: { $toDouble: '$qty' } },
-        notional: { $sum: { $multiply: [{ $toDouble: '$qty' }, { $toDouble: '$entryPrice' }] } },
-        realisedPnl: { $sum: { $toDouble: '$netPnl' } },
+        qty: { $sum: { $toDecimal: '$qty' } },
+        notional: { $sum: { $multiply: [{ $toDecimal: '$qty' }, { $toDecimal: '$entryPrice' }] } },
+        realisedPnl: { $sum: { $toDecimal: '$netPnl' } },
         leverage: { $last: '$leverage' },
       },
     },
@@ -358,9 +369,9 @@ async function computeSymbolStats(sessionId) {
   for (const r of rows) {
     stats[r._id] = {
       trades: r.trades,
-      qty: r.qty,
-      notional: r.notional,
-      realisedPnl: r.realisedPnl,
+      qty: Number(r.qty.toString()),
+      notional: Number(r.notional.toString()),
+      realisedPnl: Number(r.realisedPnl.toString()),
       leverage: r.leverage || null,
     }
   }
@@ -1127,6 +1138,7 @@ async function requestAlgoAccess(req, res, next) {
 }
 
 module.exports = {
+  computeSymbolStats,
   startSession,
   requestAlgoAccess,
   stopSession,
