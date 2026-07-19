@@ -96,7 +96,8 @@ type WalkForwardFold = {
   skipped?: true, reason?: string,
   bestParams?: object, isMetrics?: BacktestMetric, oosMetrics?: BacktestMetric,
   oosTradeCount?: number, degradationRatio?: number | null,
-  trials: { params: object, loss: number, rank: number, metrics: object, error?: string }[],
+  trials: { params: object, loss: number | null, rank: number, metrics: object, error?: string }[],
+  // loss is null for error/ineligible combos (sanitized from inf/nan — JSON can't carry those)
   // Phase 3d: EVERY combo run_optimization scored on this fold's train window (not just
   // bestParams) — the raw material for a trials table / IS-vs-OOS scatter / param heatmap.
   // Present (possibly length 0) on both normal and `skipped` folds.

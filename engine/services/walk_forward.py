@@ -159,6 +159,23 @@ def _split_folds(times: list, n_folds: int, train_ratio: float, mode: str, timef
     return folds
 
 
+def _json_safe_trials(trials: list[dict]) -> list[dict]:
+    """`optimizer.run_optimization`'s `results` list is designed for internal
+    ranking, not JSON transport — an errored/ineligible combo carries
+    `loss=float("inf")` (optimizer.py's own error path), and Python's `json`
+    module rejects inf/-inf/nan outright (`ValueError: Out of range float
+    values are not JSON compliant`). Only `best` (already filtered to a
+    finite loss) reached the router before Phase 3d; persisting every trial
+    means every trial's loss now needs to survive serialization."""
+    safe = []
+    for t in trials:
+        loss = t.get("loss")
+        if loss is not None and not math.isfinite(loss):
+            t = {**t, "loss": None}
+        safe.append(t)
+    return safe
+
+
 def _safe_float(metrics: dict, key: str) -> float | None:
     if not metrics:
         return None
@@ -283,13 +300,13 @@ async def run_lab_walk_forward(lab_id: str, config: dict, config_hash: str) -> d
                 "testRange": [fold["testStart"], fold["testEnd"]],
                 "skipped": True,
                 "reason": "no eligible parameter combination on the train window",
-                "trials": train_result.get("results", []),
+                "trials": _json_safe_trials(train_result.get("results", [])),
             })
             continue
 
         best_params = best["params"]
         is_metrics = best.get("metrics", {})
-        trials = train_result.get("results", [])
+        trials = _json_safe_trials(train_result.get("results", []))
 
         test_job_id = f"wf_{lab_id}_fold{i}_test"
         test_result = await run_backtest_simulation(

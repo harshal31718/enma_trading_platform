@@ -51,7 +51,7 @@ client/
 │   │   │   ├── ConfigDrawer.jsx, RunWizard.jsx, WalkForwardWizard.jsx, ParamGridForm.jsx
 │   │   │   ├── HistoryRail.jsx, OptimizationHistoryRail.jsx
 │   │   │   ├── RuinCard.jsx, ExceedanceCurve.jsx, PercentileSpread.jsx, FanChart.jsx (MC tab)
-│   │   │   └── DegradationVerdict.jsx, StitchedOOSCard.jsx, FoldResultsTable.jsx, VerdictStrip.jsx (Optimizer tab)
+│   │   │   └── DegradationVerdict.jsx, StitchedOOSCard.jsx, FoldResultsTable.jsx, TrialsExplorer.jsx, VerdictStrip.jsx (Optimizer tab)
 │   │   ├── risk/        ← Risk Intelligence Dashboard visualizations
 │   │   │   ├── AggregateMarginGauge.jsx ← locked margin / free balance / leverage gauge (Zone 1)
 │   │   │   ├── CorrelationHeatmap.jsx   ← rolling 30-day close-return correlation heatmap (Zone 1)

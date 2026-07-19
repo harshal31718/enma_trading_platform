@@ -3,14 +3,17 @@
 **Authority:** This is the single source of truth for what ENMA currently does.
 Read this before starting any work. If this conflicts with chat history, this document wins.
 
-Last updated: 2026-07-19 (**Plan 10 Phases 2/3a/3c shipped, Phase 3d persistence shipped and
-live-verified** — Strategy Lab is now a real `/lab` page with two tabs: Robustness (MC, Phase 2)
+Last updated: 2026-07-19 (**Plan 10 Phases 2/3a/3c shipped, Phase 3d fully shipped (persistence +
+trials-table UI)** — Strategy Lab is now a real `/lab` page with two tabs: Robustness (MC, Phase 2)
 and Optimizer (walk-forward, Phase 3c UI over Phase 3a job plumbing). Each walk-forward fold now
-also returns every grid-search trial, not just the winner (Phase 3d persistence half; the
-trials-table/scatter/heatmap UI to consume it is not built yet). This session had real Docker
-access and verified all of it: engine 471/471, server jest 148/148, client `vite build` clean, plus
-a live end-to-end `POST /simulate/optimize` run against real cached candles. See the "Strategy Lab"
-section below and `workspace/plan/10_monte-carlo-strategy-lab.md` for full detail.)
+returns every grid-search trial, not just the winner, and `TrialsExplorer.jsx` renders it as a
+sortable trials table + 2-param loss heatmap. This session had real Docker access AND a logged-in
+browser session, so it verified by actually clicking the Optimizer wizard end-to-end — which found
+and fixed two real bugs a curl-only test wouldn't have caught: `WalkForwardWizard.jsx` never sent
+`exchange` in its submit payload (every real submission 400'd), and persisting every trial exposed
+error-combo `loss=inf` values that crashed `json.dumps()` at the FastAPI response layer (500).
+Engine 472/472, server jest 148/148, client `vite build` clean. See the "Strategy Lab" section
+below and `workspace/plan/10_monte-carlo-strategy-lab.md` for full detail.)
 Earlier: 2026-07-19 (**Plan 10 Phase 1 shipped** — job-based Monte Carlo robustness runs,
 mirroring the existing BullMQ backtest pattern: new `labResults` collection, `simulationQueue`/
 `simulation.worker.js`, engine `routers/simulate.py` (`POST /simulate/monte-carlo`), Node

@@ -1,17 +1,12 @@
-"""Walk-forward analysis tests (Plan 10 Phase 3a).
+"""Walk-forward analysis tests (Plan 10 Phase 3a/3d).
 
 Covers: the fold-split conservation property (test windows tile the OOS span
 with no gaps/overlap), anchored-vs-rolling train-window behavior, the
-stitched-OOS trade aggregate (scale_out exclusion, empty-trades default), and
-an end-to-end wiring test of `run_lab_walk_forward` against fakes for
+stitched-OOS trade aggregate (scale_out exclusion, empty-trades default), an
+end-to-end wiring test of `run_lab_walk_forward` against fakes for
 `run_optimization`/`run_backtest_simulation`/candle-time-fetch/Mongo (no real
-DB/engine dependency chain, same style as `test_lab_simulation.py`).
-
-**NOT executed this session** — the sandbox that wrote this file has no
-Docker access and no engine deps on host (`asyncpg`/TA-Lib import chain), per
-root `CLAUDE.md` Rule B. Run inside the container to confirm::
-
-    docker exec enma_trading_platform-engine-1 pytest /app/tests/test_walk_forward.py
+DB/engine dependency chain, same style as `test_lab_simulation.py`), and
+per-fold trials persistence (Phase 3d) including the inf-loss JSON-safety fix.
 """
 import asyncio
 from datetime import datetime, timedelta, timezone
@@ -284,6 +279,62 @@ def test_run_lab_walk_forward_skipped_fold_still_carries_trials(monkeypatch):
     for f in result["folds"]:
         assert f["skipped"] is True
         assert len(f["trials"]) == 1
+        # inf loss must not survive into the persisted/returned trial — Python's
+        # json module rejects inf/-inf/nan outright, and every trial's `loss`
+        # now reaches the HTTP response (Phase 3d), not just `best`.
+        assert f["trials"][0]["loss"] is None
+
+
+def test_run_lab_walk_forward_trials_are_always_json_serializable(monkeypatch):
+    """Regression test for the real bug this session's live browser exercise
+    caught: an errored/ineligible combo's `loss=float("inf")` (optimizer.py's
+    own error path) made it into `fold["trials"]` verbatim and broke
+    `json.dumps` at the FastAPI response layer with `ValueError: Out of range
+    float values are not JSON compliant` — a 500 that unit tests alone (which
+    never call `json.dumps`) couldn't have caught."""
+    import json
+
+    fake_db = _install_fakes(monkeypatch, is_sharpe=2.0, oos_sharpe=1.0)
+
+    async def fake_run_optimization_with_inf_and_nan(config, param_grid, job_id):
+        return {
+            "best": {
+                "params": {"fast": 10, "slow": 30},
+                "loss": -2.0,
+                "metrics": {"sharpeRatio": "2.00", "totalTrades": 40},
+            },
+            "results": [
+                {"params": {"fast": 10, "slow": 30}, "loss": -2.0, "rank": 1,
+                 "metrics": {"sharpeRatio": "2.00", "totalTrades": 40}},
+                {"params": {"fast": 5, "slow": 30}, "loss": float("inf"), "rank": 2,
+                 "error": "no trades"},
+                {"params": {"fast": 15, "slow": 30}, "loss": float("nan"), "rank": 3,
+                 "metrics": {"totalTrades": 0}},
+            ],
+        }
+    monkeypatch.setattr(wf_module, "run_optimization", fake_run_optimization_with_inf_and_nan)
+
+    config = {
+        "strategyFile": "strategies/AdaptiveTrend",
+        "exchange": "Binance Futures",
+        "symbol": "BTCUSDT",
+        "timeframe": "1h",
+        "startDate": "2024-01-01T00:00:00+00:00",
+        "endDate": "2024-01-20T00:00:00+00:00",
+        "capital": 10000,
+        "objective": "sharpe",
+        "paramGrid": {"fast": {"min": 5, "max": 15, "step": 5, "type": "int"}},
+        "nFolds": 4,
+        "trainRatio": 0.7,
+        "mode": "rolling",
+    }
+
+    result = _run(run_lab_walk_forward("lab6", config, "hash6"))
+    json.dumps(result)  # raises ValueError if any non-finite float survived
+    for f in result["folds"]:
+        losses = [t["loss"] for t in f["trials"]]
+        assert -2.0 in losses
+        assert None in losses  # both the inf and the nan trial sanitize to None
 
 
 def test_run_lab_walk_forward_rejects_unknown_objective(monkeypatch):

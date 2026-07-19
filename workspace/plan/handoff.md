@@ -7,68 +7,73 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
-## 2026-07-19 — This session had real Docker access: verified Phases 2/3a/3c, shipped Phase 3d persistence
+## 2026-07-19 — Real Docker access this session: verified Phases 2/3a/3c, shipped Phase 3d fully (persistence + UI), found 2 live bugs
 
 **Goal:** the prior session's handoff (Phase 3c entry below) flagged verification as top priority
 — three sessions in a row had shipped Plan 10 code with zero compilation/test execution. This
-session had real `docker compose` access, so verification came first, then continued to Phase 3d
-per the handoff's own suggested next step.
+session had real `docker compose` access AND a working Chrome browser session already logged into
+the app, so it verified with actual test execution and actual UI clicks, not just code review.
 
-**Verified (all real, not hand-reviewed):** engine full suite 471/471 (was 470 before this
-session's own +1 test file addition), including all `test_walk_forward.py` fold-split/degradation/
-stitching cases — the date-boundary math the prior session flagged as highest-risk is correct.
-Server jest 148/148 including `labConfig.test.js` (32/32, run via the project's real `jest`, not
-`vitest` — the project's own `package.json` uses Jest, an initial vitest attempt was a wrong guess,
-corrected). Client `vite build` succeeds clean (2863 modules). Beyond unit tests: fired a real
-`POST /simulate/optimize` against cached BTCUSDT 1d candles + the seeded MicroScalper strategy —
-first attempt 500'd on a wrong `paramGrid` shape (my test payload's mistake, not a code bug); the
-corrected request round-tripped through 3 real rolling folds with correct non-overlapping date
-boundaries and persisted to MongoDB correctly.
+**Verified (all real):** engine full suite 472/472, server jest 148/148, client `vite build` clean.
+Beyond unit tests: fired `POST /simulate/optimize` directly against cached BTCUSDT 1d candles +
+MicroScalper (curl, bypassing Node) — confirmed correct fold date-boundary math and MongoDB
+persistence. Then went further and drove the actual `/lab` Optimizer wizard in a real browser
+against the real running stack, which is what caught the two bugs below — neither would have
+been caught by unit tests or by curling the engine directly.
 
 **Environment finding, not a Plan 10 defect:** the engine/server's `MONGO_URI` points at a live
 MongoDB Atlas cluster (`*.wbzezj5.mongodb.net`), not the local `enma_trading_platform-mongodb-1`
-docker-compose container — that container holds no real data for this project. An initial
-mongosh check against the local container falsely looked like the walk-forward run wasn't
-persisting; querying via the engine's own motor client (the actual connection the app uses)
-confirmed it was. **Future sessions: verify DB state via `docker exec enma_trading_platform-
-engine-1 python -c "from config.mongo import get_database; ..."`, not `mongosh` against the local
-container.**
+docker-compose container — that container holds no real data for this project. Verify DB state via
+`docker exec enma_trading_platform-engine-1 python -c "from config.mongo import get_database; ..."`,
+not `mongosh` against the local container.
 
-**Shipped: Plan 10 Phase 3d, persistence half only.** `run_optimization` already computed and even
-persisted every grid-search trial to `optimizationResults` — `walk_forward.py`'s per-fold loop just
-discarded that full list down to `best` before returning. Fix: each fold dict now carries a
-`trials` key (`train_result["results"]` verbatim), on both normal and `skipped` fold paths. No new
-sim math. 2 new tests; live-verified via the same real `/simulate/optimize` call — each fold came
-back with all 4 grid combinations, not just the winner. Test docs cleaned up from the real Atlas
-DB after.
+**Shipped: Plan 10 Phase 3d, fully — persistence + UI.** Engine: each fold in `walk_forward.py`'s
+return now carries a `trials` key (`train_result["results"]` verbatim — `run_optimization` already
+computed this, it was just discarded down to `best` before). Client: new
+`TrialsExplorer.jsx` — sortable per-fold trials table + a 2-param loss heatmap when the grid varies
+exactly 2 params. Deliberately no IS-vs-OOS scatter (only each fold's winner gets an OOS eval, so
+no per-trial OOS value exists to plot honestly).
 
-**Deliberately NOT done — real remaining scope, not small:** the trials-table/scatter/param-
-heatmap UI to consume `fold.trials`, and Deflated Sharpe Ratio/PBO (still need a numerically-
-verified CDF primitive). `FoldResultsTable.jsx`'s stale "no per-trial data exists" comment was
-corrected to point at the now-real `fold.trials` data instead of building the UI component in the
-same pass — that's a distinct, sizable deliverable per the plan doc's own "not-small scope" framing
-of Phase 3d, and doing it well needs its own dedicated session rather than bolting it on as an
-afterthought here.
+**Two real bugs found ONLY by live-clicking the actual wizard, fixed same session:**
+1. **`WalkForwardWizard.jsx` never sent `exchange` in its submit payload** — `NewBacktestWizard.jsx`
+   hardcodes `exchange: 'Binance Futures'`, this file just omitted the field entirely. Every real
+   submission through the UI had been 400ing against `buildWalkForwardConfig`'s required-field
+   check since Phase 3c shipped, unnoticed because no session before this one had live
+   browser+backend access to click the button. Fix: added a hardcoded `exchange` state matching
+   the backtest wizard's convention.
+2. **JSON serialization crash (500) once #1 was fixed and a real job ran:** `optimizer.py`'s
+   error/ineligible combos carry `loss=float("inf")` by design — previously only `best` (already
+   filtered to finite loss) ever reached the router, so this was never exercised. Persisting every
+   trial means every trial's `loss` now hits `json.dumps()` at the FastAPI response layer, which
+   rejects inf/nan outright. Fix: `_json_safe_trials()` sanitizes non-finite `loss` to `None`
+   before a fold's `trials` list is built. New regression test calls `json.dumps()` directly on the
+   result — the class of bug pure unit tests (which never serialize) can't catch.
 
-**Files changed:** `engine/services/walk_forward.py` (+`trials` per fold), `engine/tests/
-test_walk_forward.py` (+2 tests), `client/src/components/lab/FoldResultsTable.jsx` (comment fix
-only, no logic change). Docs: `API_CONTRACTS.md` (new Walk-Forward Optimization section + engine
-`/simulate/optimize` + 3 socket events — this whole endpoint had never been documented before,
-across all of Phases 3a/3c), `CURRENT_STATE.md` (Strategy Lab section was stale — said "backend
-only, no UI" despite Phase 2/3c UI already shipped), `client/CLAUDE.md` (nav item count 7→8,
-`components/lab/` + `useLab.js` folder-structure entries), `server/CLAUDE.md` (lab routes/
-controller/queue/worker entries for Phase 3a, which were never added when 3a shipped),
-`10_monte-carlo-strategy-lab.md`, `0_tracker.md`.
+**Live-verified end-to-end after both fixes:** ran a real 2-fold/8-combo walk-forward job through
+the actual `/lab` Optimizer wizard → BullMQ → engine → MongoDB round trip; confirmed the full
+results canvas renders (degradation verdict, stitched OOS, fold table, trials table with correct
+rank/error handling), no console errors. Test runs cleaned up from the DB after. Engine suite
+472/472 with the new regression test.
 
-**Next session:** (1) Build the trials-table/scatter/param-heatmap UI in `FoldResultsTable.jsx` (or
-a new sibling component) — `fold.trials` now has the real data, this is now a pure client-side
-task with no engine dependency. (2) Or Phase 3b (Optuna/TPE swap — needs a new pip dependency,
-update `engine/CLAUDE.md` + root `CLAUDE.md` stack table per Rule F when adding it). (3) DSR/PBO
-still needs a session that can numerically verify the CDF math before shipping it — don't guess at
-the formula. (4) Untouched from earlier backlog: 21.5c (batched reconcile, P2/small), Plan 6/7
-(engine/server decomposition, now unblocked, P2), Plan 23 (MarginSurge strategy, backtest-only work
-can start now), Plan 8 (governance cleanup, P3), Plans 5/22/24 (shipped, waiting on a
-human-observed live Testnet re-verification session).
+**Files changed:** `engine/services/walk_forward.py` (+`trials` per fold, +`_json_safe_trials`),
+`engine/tests/test_walk_forward.py` (+3 tests), new `client/src/components/lab/
+TrialsExplorer.jsx`, `client/src/components/lab/WalkForwardWizard.jsx` (`exchange` field fix),
+`client/src/pages/StrategyLab.jsx` (wire in TrialsExplorer), `client/src/components/lab/
+FoldResultsTable.jsx` (stale-comment fix), `server/src/models/LabResult.js` (stale-comment fix).
+Docs: `API_CONTRACTS.md`, `CURRENT_STATE.md`, `client/CLAUDE.md`, `server/CLAUDE.md`,
+`engine/CLAUDE.md`, `10_monte-carlo-strategy-lab.md`, `0_tracker.md`. First commit (Phases 1-3d
+minus the two live-found fixes) pushed to `dev` as `4c3bb88`; the fixes above are uncommitted,
+pending this session's next commit.
+
+**Next session:** (1) Phase 3b (Optuna/TPE swap — needs a new pip dependency, update
+`engine/CLAUDE.md` + root `CLAUDE.md` stack table per Rule F when adding it). (2) DSR/PBO still
+needs a session that can numerically verify the CDF math before shipping it — don't guess at the
+formula. (3) Consider a param heatmap for >2-param grids (currently only renders at exactly 2) if
+the team wants it — would need a different visualization (e.g. parallel coordinates) since a 2D
+grid can't represent more axes. (4) Untouched from earlier backlog: 21.5c (batched reconcile,
+P2/small), Plan 6/7 (engine/server decomposition, now unblocked, P2), Plan 23 (MarginSurge
+strategy, backtest-only work can start now), Plan 8 (governance cleanup, P3), Plans 5/22/24
+(shipped, waiting on a human-observed live Testnet re-verification session).
 
 ---
 ## 2026-07-19 — Plan 10 Phase 3c shipped (Optimizer tab UI, fold-level) — verification still blocked

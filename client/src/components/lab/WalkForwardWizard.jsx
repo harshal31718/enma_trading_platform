@@ -30,6 +30,7 @@ export default function WalkForwardWizard({ onRun, submitting }) {
   const { data: objectives = ['sharpe'] } = useObjectives()
 
   const [strategyId, setStrategyId] = useState('')
+  const [exchange] = useState('Binance Futures') // only exchange currently supported (matches NewBacktestWizard's default)
   const [symbol, setSymbol] = useState('')
   const [timeframe, setTimeframe] = useState('1h')
   const [startDate, setStartDate] = useState('2023-01-01')
@@ -55,6 +56,7 @@ export default function WalkForwardWizard({ onRun, submitting }) {
     if (!strategyId || !symbol || Object.keys(paramGrid).length === 0) return
     onRun({
       strategyId,
+      exchange,
       symbol,
       timeframe,
       startDate,

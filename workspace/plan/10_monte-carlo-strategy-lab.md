@@ -3,40 +3,61 @@
 **Status:** In progress — MC engine core shipped 2026-07-15 (Phase 1a), job plumbing shipped
 2026-07-19 (Phase 1b), Strategy Lab MC tab shipped 2026-07-19 (Phase 2), walk-forward job
 plumbing shipped 2026-07-19 (Phase 3a), **Optimizer tab UI shipped 2026-07-19 (Phase 3c, see
-below)**, **Phase 3d per-trial persistence shipped 2026-07-19 (engine side only, see below)**;
-Phase 3b (Optuna TPE), the Phase 3d trials-table/scatter/heatmap UI + DSR/PBO stats, and Phase 4
+below)**, **Phase 3d fully shipped and live-verified 2026-07-19 (engine persistence + client
+trials table, see below)**; Phase 3b (Optuna TPE), DSR/PBO overfitting stats, and Phase 4
 (MC-scored selection) not started · **Priority:** P1 ·
 **Depends on:** 9 (steps 9.1/9.3 for correct inputs — both Shipped; 9.6/9.9 are absorbed here) ·
 **Related:** 2 (jobs/CI), 7 (client decomposition)
 
-## Phase 3d shipped 2026-07-19 (per-trial persistence only — engine side)
+## Phase 3d shipped 2026-07-19 (per-trial persistence + trials table UI — DSR/PBO still not started)
 
-This is the persistence half of Phase 3d, not the whole phase — the trials-table/scatter/heatmap
-UI and DSR/PBO overfitting statistics below are still not started.
+**Engine — per-trial persistence.** `services/walk_forward.py`'s per-fold loop already had every
+combo `run_optimization` scored sitting in `train_result["results"]` — the grid search was never
+re-run once the winner was picked, its full ranked list was just discarded down to `best` before
+this change. Fix: each fold dict in `run_lab_walk_forward`'s return now carries a `trials` key —
+`train_result["results"]` verbatim (params/loss/rank/metrics per combo), present on both normal
+and `skipped` folds. No new simulation math, no new formula, no schema migration.
 
-`services/walk_forward.py`'s per-fold loop already had every combo `run_optimization` scored
-sitting in `train_result["results"]` — the grid search was never re-run once the winner was
-picked, its full ranked list was just discarded down to `best` before this change. Fix: each fold
-dict in `run_lab_walk_forward`'s return now carries a `trials` key — `train_result["results"]`
-verbatim (params/loss/rank/metrics per combo), present on both normal and `skipped` folds. No new
-simulation math, no new formula, no schema migration — the data was already computed and already
-persisted once to `optimizationResults` per train call; this just also threads it into the
-`labResults` doc the walk-forward endpoint returns. Two new tests in `test_walk_forward.py`
-(trials present + correctly shaped on both a normal fold and a `skipped`-fold path); full suite
-471/471. **Live-verified** (this session had real Docker access, unlike the sandbox that wrote
-Phases 1-3c): a real `POST /simulate/optimize` call against cached BTCUSDT 1d candles + the seeded
-MicroScalper strategy round-tripped through the engine, persisted to the real dev MongoDB (the
-project's Atlas cluster — the `enma_trading_platform-mongodb-1` container in `docker-compose.yml`
-is unused/vestigial for this project, do not query it expecting real data), and each fold's
-`trials` array came back with all 4 grid combinations, not just the winner. Test docs cleaned up
-after.
+**Real bug found and fixed by live-verifying, not just unit tests:** the first live browser
+exercise of the Optimizer tab (below) hit a real HTTP 500 — `ValueError: Out of range float
+values are not JSON compliant`. `optimizer.py`'s error/ineligible combos carry `loss=float("inf")`
+by design (its own error path); only `best` (already filtered to a finite loss via
+`math.isfinite`) reached the router before this session, so this was never exercised. Persisting
+every trial means every trial's `loss` now serializes into the HTTP response, and Python's `json`
+module rejects inf/-inf/nan outright. Fix: `_json_safe_trials()` sanitizes any non-finite `loss`
+to `None` before a fold's `trials` list is built. New regression test
+(`test_run_lab_walk_forward_trials_are_always_json_serializable`) calls `json.dumps()` on the
+result directly — this is the class of bug unit tests alone can't catch, since they never
+serialize the response the way FastAPI actually does. Full engine suite 472/472.
 
-**Still not done (real remaining scope, not small):** `FoldResultsTable.jsx`'s inline note claiming
-"no per-trial data exists" is now stale and needs updating, but the trials table / IS-vs-OOS
-scatter / param heatmap / walk-forward window map UI components themselves are not built — this
-session only unblocked them with real data. Deflated Sharpe Ratio and PBO (§2.2's "honesty layer")
-still need a normal-CDF/inverse-CDF primitive and are still deferred pending a session that can
-numerically verify the formula.
+**Client — trials table.** New `client/src/components/lab/TrialsExplorer.jsx`: a per-fold
+sortable trials table (rank/params/IS metrics/loss, "error" shown for failed combos) plus a
+loss-landscape heatmap when the grid varies exactly 2 params (both genuinely buildable from
+`fold.trials` alone). Deliberately **not** an IS-vs-OOS scatter — only each fold's winning combo
+gets evaluated out-of-sample, so no per-trial OOS value exists to plot; fabricating one would
+misrepresent the data. Wired into `StrategyLab.jsx`'s Optimizer results canvas, replacing the
+stale "not built yet" placeholder for the trials-table piece specifically (Optuna/DSR/PBO notice
+kept, still accurate).
+
+**Also found and fixed while live-testing:** `WalkForwardWizard.jsx`'s submit payload never
+included `exchange` at all (`NewBacktestWizard.jsx`'s equivalent hardcodes
+`exchange: 'Binance Futures'` — this file just omitted the field), so every real submission
+through the UI 400'd against `buildWalkForwardConfig`'s required-field check. This had been true
+since Phase 3c shipped and was never caught because no prior session had live browser/backend
+access to click the actual button — a concrete example of why "the code compiles" and "the
+feature works" are different claims.
+
+**Live-verified end-to-end, this session's own Chrome instance, already-logged-in session:**
+selected MicroScalper/BTCUSDT/1d/2022-06-15→2023-12-31 in the real Optimizer wizard, ran a
+2-fold/8-combo-per-fold job through the real BullMQ queue → engine → MongoDB (Atlas) round trip,
+watched it fail with the exchange-field 400, fixed it, resubmitted, hit the inf-loss 500, fixed
+that too, resubmitted again, and confirmed the full results canvas renders correctly — degradation
+verdict, stitched OOS card, fold table, and the new trials table with correct rank/params/error
+handling, no console errors. Both test lab runs cleaned up from the DB after.
+
+**Still not done:** Deflated Sharpe Ratio and PBO (§2.2's "honesty layer") still need a
+normal-CDF/inverse-CDF primitive and are still deferred pending a session that can numerically
+verify the formula. Optuna/TPE search is Phase 3b, separately scoped.
 
 ## Phase 3c shipped 2026-07-19 (Optimizer tab UI — fold-level only, not the full trials view)
 

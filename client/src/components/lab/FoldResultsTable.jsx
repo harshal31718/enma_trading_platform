@@ -1,9 +1,7 @@
 // Plan 10 Phase 3c — per-fold walk-forward results. This is NOT the plan's
 // §4.3.1 "trials table" (every combo evaluated, IS/OOS/DSR/rank per row) —
-// each fold's response now DOES carry every trial in `fold.trials` (Phase 3d,
-// engine-side persistence shipped 2026-07-19), but the trials-table/scatter/
-// heatmap UI to consume it is still not built. This table shows one row per
-// fold; a follow-up component still needs to render `fold.trials`.
+// this table shows one row per fold. See TrialsExplorer.jsx (Phase 3d,
+// shipped 2026-07-19) for the per-combo trials table + 2-param loss heatmap.
 export default function FoldResultsTable({ folds }) {
   if (!folds?.length) return null
 
