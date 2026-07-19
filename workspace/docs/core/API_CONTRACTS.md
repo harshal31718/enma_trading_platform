@@ -77,7 +77,7 @@ type SymbolOverride = { maxLeverage?: number, volatilityMultiplier?: number, max
 
 ### Optimization
 - **`GET /api/v1/optimize/objectives`** -> `{ objectives: string[] }` (e.g. `netProfit`, `sharpeRatio`, `profitFactor`) — proxies engine `GET /optimize/objectives`
-- **`POST /api/v1/optimize/run`** -> Req: `{ strategyId, exchange, symbol, timeframe, startDate, endDate, capital, leverage, feeRate, paramGrid, objective }` -> `{ jobId, status }` — proxies engine `POST /optimize/run`. Grid search only (`itertools.product` over `paramGrid`); no Bayesian/optuna support (`workspace/plan/19_bayesian-hyperopt.md`).
+- **`POST /api/v1/optimize/run`** -> Req: `{ strategyId, exchange, symbol, timeframe, startDate, endDate, capital, leverage, feeRate, paramGrid, objective }` -> `{ jobId, status }` — proxies engine `POST /optimize/run`. Note: no Node route actually mounts this proxy today — the raw engine endpoint (`engine/routers/optimize.py`) is reachable directly but unproxied from the product; the job-based `/api/v1/lab/optimizations` path (below) is what the UI uses. The engine endpoint itself now supports `method: "grid" | "bayesian"` (default `"grid"`, back-compat) + `nTrials`/`seed` (bayesian only) — Optuna TPE search, Plan 10 Phase 3b, `workspace/plan/19_bayesian-hyperopt.md`.
 - **`GET /api/v1/optimize/:id/status`** -> `{ jobId, status, progressPct? }` — proxies engine `GET /optimize/{job_id}/status`
 - **`GET /api/v1/optimize/:id/results`** -> `{ jobId, results: { params: object, metrics: BacktestMetric }[] }`, sorted by the requested objective — proxies engine `GET /optimize/{job_id}/results`
 
@@ -103,14 +103,17 @@ type WalkForwardFold = {
   // Present (possibly length 0) on both normal and `skipped` folds.
 }
 type WalkForwardResults = {
-  mode: "rolling"|"anchored", nFoldsRequested: number, nFoldsBuilt: number, trainRatio: number,
+  mode: "rolling"|"anchored", method: "grid"|"bayesian", nTrials: number | null, seed: number | null,
+  // nTrials/seed non-null only when method="bayesian" (Plan 10 Phase 3b) — engine's per-fold
+  // train step dispatches to optimizer.run_bayesian_optimization instead of run_optimization.
+  nFoldsRequested: number, nFoldsBuilt: number, trainRatio: number,
   objective: string, minTrades: number, folds: WalkForwardFold[],
   stitchedOOS: { totalTrades: number, netProfitPct: string, winRate: string, tradeSharpeApprox: string },
   avgDegradationRatio: number | null, minTradesWarning: string | null,
   meta: { paramGrid: object, maxCombinations: number, strategyFile: string, symbol: string, timeframe: string },
 }
 ```
-- **`POST /api/v1/lab/optimizations`** -> Req: `{ strategyId, exchange, symbol, timeframe, startDate, endDate, capital, leverage?, feeRate?, objective?, mode?: "rolling"|"anchored", nFolds?, trainRatio?, minTrades?, maxCombinations?, paramGrid: { [param]: { min, max, step|num, type: "int"|"float" } } }` -> 202 `{ labId, status: "queued" }`, or 200 `{ labId, status, cached: true }` on an identical-config cache hit (same `(userId, configHash)` pattern as `/lab/simulations`). `strategyId` resolves server-side to the engine `filePath` (client never sends a raw path). Enqueues a BullMQ job on `optimization` queue (`optimizationQueue.js`/`optimization.worker.js`, mirrors `simulation.worker.js`).
+- **`POST /api/v1/lab/optimizations`** -> Req: `{ strategyId, exchange, symbol, timeframe, startDate, endDate, capital, leverage?, feeRate?, objective?, mode?: "rolling"|"anchored", nFolds?, trainRatio?, minTrades?, maxCombinations?, method?: "grid"|"bayesian" (default "grid"), nTrials? (bayesian only, default 50, capped at 500), seed? (bayesian only), paramGrid: { [param]: { min, max, step|num, type: "int"|"float" } } }` -> 202 `{ labId, status: "queued" }`, or 200 `{ labId, status, cached: true }` on an identical-config cache hit (same `(userId, configHash)` pattern as `/lab/simulations`). `strategyId` resolves server-side to the engine `filePath` (client never sends a raw path). Enqueues a BullMQ job on `optimization` queue (`optimizationQueue.js`/`optimization.worker.js`, mirrors `simulation.worker.js`).
 - **`GET /api/v1/lab/optimizations/:labId`** -> `{ ...LabResult, results?: WalkForwardResults }` (404 if not owned/found)
 - **`GET /api/v1/lab/optimizations?limit=`** -> `{ optimizations: LabResult[] }` (`results` omitted from the list projection)
 - **`GET /api/v1/lab/objectives`** -> `{ objectives: string[] }` — proxies engine `GET /optimize/objectives` (same registry the grid search and walk-forward optimizer both use)
@@ -205,7 +208,7 @@ type TradeRecord = { tradeId: string, source: "bot"|"manual", executedBy: string
 
 ### Engine Simulate Routes (Node → Engine, Plan 10 Phase 1)
 - **`POST /simulate/monte-carlo`** -> Req: `{ simId, sourceJobId, userId, config, configHash }` -> `{ success: true, data: LabResult["results"] }` (`engine/routers/simulate.py`, mounted `engine/main.py`). Same async-job-semantics pattern as `POST /backtest/run` — the engine writes the full `labResults` doc itself (sole-writer), the router's own write only happens on the failure path.
-- **`POST /simulate/optimize`** -> Req: `{ labId, userId, config, configHash }` -> `{ success: true, data: WalkForwardResults }` (`engine/routers/simulate.py` -> `engine/services/walk_forward.py`). Same sole-writer/async-job-semantics pattern as `/simulate/monte-carlo` — persists the full `labResults` doc itself, router only writes on the failure path. Splits `config`'s date range into `nFolds` sequential non-overlapping folds by candle count (`_split_folds`), runs `services.optimizer.run_optimization` (grid search — Optuna/TPE swap is Phase 3b, not yet implemented) on each fold's train window, evaluates the winning params OOS via `run_backtest_simulation` on that fold's test window, and reports the in-sample-vs-OOS Sharpe degradation ratio per fold plus a trade-level stitched-OOS aggregate across all folds.
+- **`POST /simulate/optimize`** -> Req: `{ labId, userId, config, configHash }` -> `{ success: true, data: WalkForwardResults }` (`engine/routers/simulate.py` -> `engine/services/walk_forward.py`). Same sole-writer/async-job-semantics pattern as `/simulate/monte-carlo` — persists the full `labResults` doc itself, router only writes on the failure path. Splits `config`'s date range into `nFolds` sequential non-overlapping folds by candle count (`_split_folds`), runs `services.optimizer.run_optimization` (grid, default) or `services.optimizer.run_bayesian_optimization` (`config.method: "bayesian"`, Plan 10 Phase 3b — `config.nTrials` TPE trials per fold, `config.seed` base seed offset per fold) on each fold's train window, evaluates the winning params OOS via `run_backtest_simulation` on that fold's test window, and reports the in-sample-vs-OOS Sharpe degradation ratio per fold plus a trade-level stitched-OOS aggregate across all folds. `WalkForwardResults` carries top-level `method`/`nTrials`/`seed` (null for grid) alongside the existing `mode`/`objective`/`folds`/`stitchedOOS` fields.
 
 ## Socket.IO Events
 - Envelope: `{ event: string, data: any }`

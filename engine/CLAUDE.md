@@ -16,6 +16,7 @@
 - websockets (Binance kline WebSocket streams for live bot)
 - pandas + numpy (data processing)
 - redis-py (progress publishing)
+- optuna (TPE Bayesian hyperparameter search — `services/optimizer.py`'s `run_bayesian_optimization`, Plan 10 Phase 3b; pure-Python, no native build)
 - motor (async MongoDB driver — `AsyncIOMotorClient`; pymongo is a transitive dep, do not use it directly)
 - asyncpg (async PostgreSQL/TimescaleDB driver — candle reads/writes)
 - python-dotenv
@@ -73,9 +74,9 @@ engine/
 │   ├── pairlist.py         ← pairlist pipeline: VolumePairList → SpreadFilter / VolatilityFilter / PrecisionFilter / AgeFilter; config-based factory
 │   ├── trade_recorder.py   ← record_trade() + build_trade_record(); writes completed round-trip trades to MongoDB tradeRecords (best-effort, never blocks close path)
 │   ├── strategy_seeder.py  ← seeds default strategies on startup (idempotent)
-│   ├── optimizer.py        ← grid-search parameter optimization (itertools.product over PARAMS grid) — no Bayesian/optuna support yet, see next_phase/S8
+│   ├── optimizer.py        ← parameter optimization: `run_optimization` (grid, itertools.product) + `run_bayesian_optimization` (Optuna TPE, ask/tell async loop, Plan 10 Phase 3b) — same objective registry, same `run_backtest_simulation` per trial, same ranked-results shape (`_finalize_optimization` shared tail) for both search methods
 │   ├── monte_carlo.py      ← Monte Carlo trade-sequence resampling; `run_monte_carlo_simulation()` (legacy sync path, Risk Dashboard) + `run_lab_simulation()` (Plan 10 Phase 1 — config-driven job version, writes labResults, called from routers/simulate.py)
-│   ├── walk_forward.py     ← walk-forward optimization (Plan 10 Phase 3a/3d) — `run_lab_walk_forward()`: splits a date range into candle-count folds, grid-optimizes each fold's train window via `optimizer.run_optimization`, evaluates OOS via `backtest_runner.run_backtest_simulation`, reports per-fold IS-vs-OOS Sharpe degradation + every trial scored (Phase 3d) + trade-level stitched-OOS aggregate. Writes labResults, called from routers/simulate.py's `POST /simulate/optimize`.
+│   ├── walk_forward.py     ← walk-forward optimization (Plan 10 Phase 3a/3b/3d) — `run_lab_walk_forward()`: splits a date range into candle-count folds, optimizes each fold's train window via `optimizer.run_optimization` (grid, default) or `optimizer.run_bayesian_optimization` (`method: "bayesian"`, Phase 3b — per-fold deterministic-but-distinct seed), evaluates OOS via `backtest_runner.run_backtest_simulation`, reports per-fold IS-vs-OOS Sharpe degradation + every trial scored (Phase 3d) + trade-level stitched-OOS aggregate. Writes labResults, called from routers/simulate.py's `POST /simulate/optimize`.
 │   ├── leverage_sensitivity_runner.py ← runs leverage-scenario sweeps, writes BacktestLeverageScenario docs
 │   ├── curves.py           ← equity/drawdown/rolling-metric curve computation for backtest results
 │   ├── fill_model.py       ← adverse-slippage fill simulation shared by backtest/live execution
@@ -94,7 +95,8 @@ engine/
 │   ├── test_boundaries.py ← service-boundary contract tests
 │   ├── test_cli_roundtrip.py ← enma_cli.py export/import round-trip (hermetic — fake asyncpg pool + fake Mongo collection)
 │   ├── test_lab_simulation.py ← run_lab_simulation() config/mode/seed/persistence tests (Plan 10 Phase 1)
-│   └── test_walk_forward.py ← fold-split conservation, anchored-vs-rolling, degradation ratio, stitched-OOS aggregate, per-fold trials persistence tests (Plan 10 Phase 3a/3d)
+│   ├── test_walk_forward.py ← fold-split conservation, anchored-vs-rolling, degradation ratio, stitched-OOS aggregate, per-fold trials persistence, method="bayesian" fold dispatch tests (Plan 10 Phase 3a/3b/3d)
+│   └── test_bayesian_optimizer.py ← Optuna TPE param-suggestion mapping, seeded reproducibility, known-optimum convergence, min-trades filter, error-path tests (Plan 10 Phase 3b)
 ├── main.py                ← FastAPI app entry point
 ├── requirements.txt
 └── .env

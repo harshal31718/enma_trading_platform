@@ -373,3 +373,84 @@ def test_run_lab_walk_forward_rejects_invalid_mode(monkeypatch):
     }
     with pytest.raises(ValueError, match="mode must be"):
         _run(run_lab_walk_forward("lab4", config, "hash4"))
+
+
+def test_run_lab_walk_forward_rejects_invalid_method(monkeypatch):
+    _install_fakes(monkeypatch)
+    config = {
+        "strategyFile": "strategies/AdaptiveTrend", "exchange": "Binance Futures",
+        "symbol": "BTCUSDT", "timeframe": "1h",
+        "startDate": "2024-01-01T00:00:00+00:00", "endDate": "2024-01-20T00:00:00+00:00",
+        "capital": 10000, "method": "bogus",
+        "paramGrid": {"fast": {"min": 5, "max": 15, "step": 5, "type": "int"}},
+    }
+    with pytest.raises(ValueError, match="method must be"):
+        _run(run_lab_walk_forward("lab7", config, "hash7"))
+
+
+# ── Phase 3b: method="bayesian" dispatches the fold train step to TPE ──────
+
+def test_run_lab_walk_forward_bayesian_method_dispatches_to_bayesian_optimizer(monkeypatch):
+    """Grid dispatch is covered by every other test in this file (the default
+    fake patches `run_optimization`). This confirms `method: "bayesian"`
+    calls `run_bayesian_optimization` instead — with `nTrials` and a
+    per-fold-offset seed — and that grid's `run_optimization` is left
+    untouched (never called) in that mode."""
+    times = _times(400)
+    monkeypatch.setattr(wf_module, "_fetch_candle_times", lambda *a, **kw: _fake_coro(times))
+
+    grid_calls = []
+
+    async def fake_run_optimization(config, param_grid, job_id):
+        grid_calls.append(job_id)
+        raise AssertionError("grid optimizer must not be called in bayesian mode")
+    monkeypatch.setattr(wf_module, "run_optimization", fake_run_optimization)
+
+    bayesian_calls = []
+
+    async def fake_run_bayesian_optimization(config, param_grid, n_trials, job_id, seed=42):
+        bayesian_calls.append({"job_id": job_id, "n_trials": n_trials, "seed": seed})
+        return {
+            "best": {
+                "params": {"fast": 10},
+                "loss": -2.0,
+                "metrics": {"sharpeRatio": "2.00", "totalTrades": 40},
+            },
+            "results": [
+                {"params": {"fast": 10}, "loss": -2.0, "rank": 1,
+                 "metrics": {"sharpeRatio": "2.00", "totalTrades": 40}},
+            ],
+        }
+    monkeypatch.setattr(wf_module, "run_bayesian_optimization", fake_run_bayesian_optimization)
+
+    async def fake_run_backtest_simulation(job_id, **kwargs):
+        return {"jobId": job_id, "status": "completed",
+                "metrics": {"sharpeRatio": "1.00"}, "tradeCount": 3}
+    monkeypatch.setattr(wf_module, "run_backtest_simulation", fake_run_backtest_simulation)
+
+    fake_db = _FakeDB({})
+    monkeypatch.setattr(wf_module, "get_database", lambda: fake_db)
+
+    config = {
+        "strategyFile": "strategies/AdaptiveTrend", "exchange": "Binance Futures",
+        "symbol": "BTCUSDT", "timeframe": "1h",
+        "startDate": "2024-01-01T00:00:00+00:00", "endDate": "2024-01-20T00:00:00+00:00",
+        "capital": 10000, "objective": "sharpe",
+        "paramGrid": {"fast": {"min": 5, "max": 15, "step": 5, "type": "int"}},
+        "nFolds": 4, "trainRatio": 0.7, "mode": "rolling",
+        "method": "bayesian", "nTrials": 25,
+    }
+
+    result = _run(run_lab_walk_forward("lab8", config, "hash8"))
+
+    assert grid_calls == []
+    assert len(bayesian_calls) == 4  # one per fold
+    assert all(c["n_trials"] == 25 for c in bayesian_calls)
+    seeds = [c["seed"] for c in bayesian_calls]
+    assert seeds == sorted(seeds)  # distinct-but-deterministic per fold
+    assert len(set(seeds)) == 4
+
+    assert result["method"] == "bayesian"
+    assert result["nTrials"] == 25
+    for f in result["folds"]:
+        assert f["bestParams"] == {"fast": 10}

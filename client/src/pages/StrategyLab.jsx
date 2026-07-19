@@ -339,15 +339,16 @@ function OptimizerTab() {
               avgDegradationRatio={results.avgDegradationRatio}
               nFoldsBuilt={results.nFoldsBuilt}
               mode={results.mode}
+              method={results.method}
             />
             <StitchedOOSCard stitchedOOS={results.stitchedOOS} minTradesWarning={results.minTradesWarning} />
             <FoldResultsTable folds={results.folds} />
             <TrialsExplorer folds={results.folds} />
             <div className="border border-dashed border-slate-800 p-3 text-[10px] text-slate-500 font-mono italic">
-              Optuna/TPE search (Phase 3b) and Deflated Sharpe Ratio / PBO overfitting stats are not
-              built yet (see 10_monte-carlo-strategy-lab.md) — both need a numerically-verified
-              search/statistics primitive. No IS-vs-OOS scatter either: only each fold's winning
-              combo gets an out-of-sample evaluation, so a per-trial OOS value doesn't exist to plot.
+              Deflated Sharpe Ratio / PBO overfitting stats are not built yet (see
+              10_monte-carlo-strategy-lab.md) — both need a numerically-verified statistics
+              primitive. No IS-vs-OOS scatter either: only each fold's winning combo gets an
+              out-of-sample evaluation, so a per-trial OOS value doesn't exist to plot.
             </div>
           </>
         )}

@@ -28,6 +28,13 @@ Scope decisions (Phase 3a, documented — not silently dropped):
   overfitting is worse than shipping none — deferred to Phase 3b rather than
   guessed at. The per-fold degradation ratio below uses only numbers each
   already-tested primitive already computes (no new formula risk).
+- Phase 3b: the per-fold train step now accepts `method: "grid" | "bayesian"`
+  (default `"grid"`, back-compat) — dispatches to
+  `optimizer.run_bayesian_optimization` (TPE search, `nTrials` trials per
+  fold) instead of `optimizer.run_optimization` (grid). Per Plan 19's own
+  sequencing note ("make S8 selectable as the fold optimizer") — no other
+  fold/stitch logic changes; both optimizer functions return the identical
+  ranked-results shape.
 - Phase 3d: each fold's `trials` key carries every combo `run_optimization`
   scored on that fold's train window (params/loss/rank/metrics — the same
   list it already builds and persists to `optimizationResults`, just no
@@ -57,6 +64,7 @@ from services.optimizer import (
     OptimizerConfig,
     _safe_float_metric,
     run_optimization,
+    run_bayesian_optimization,
 )
 from services.backtest_runner import run_backtest_simulation
 from utils.timeframes import to_timedelta
@@ -242,6 +250,12 @@ async def run_lab_walk_forward(lab_id: str, config: dict, config_hash: str) -> d
     if mode not in ("rolling", "anchored"):
         raise ValueError(f"mode must be 'rolling' or 'anchored', got '{mode}'")
 
+    method = config.get("method") or "grid"
+    if method not in ("grid", "bayesian"):
+        raise ValueError(f"method must be 'grid' or 'bayesian', got '{method}'")
+    n_trials = int(config.get("nTrials") or 50)  # bayesian only
+    base_seed = int(config.get("seed") or 42)  # bayesian only — TPE sampler seed, per fold below
+
     n_folds = int(config.get("nFolds") or DEFAULT_N_FOLDS)
     train_ratio = float(config.get("trainRatio") or DEFAULT_TRAIN_RATIO)
     min_trades = int(config.get("minTrades") or 0)
@@ -286,14 +300,29 @@ async def run_lab_walk_forward(lab_id: str, config: dict, config_hash: str) -> d
             min_trades=min_trades,
         )
 
-        train_result = await run_optimization(
-            config=train_config,
-            param_grid=param_grid,
-            job_id=f"wf_{lab_id}_fold{i}_train",
-        )
+        fold_job_id = f"wf_{lab_id}_fold{i}_train"
+        if method == "bayesian":
+            train_result = await run_bayesian_optimization(
+                config=train_config,
+                param_grid=param_grid,
+                n_trials=n_trials,
+                job_id=fold_job_id,
+                seed=base_seed + i,  # distinct-but-deterministic per fold, same stance as monte_carlo.py
+            )
+        else:
+            train_result = await run_optimization(
+                config=train_config,
+                param_grid=param_grid,
+                job_id=fold_job_id,
+            )
         best = train_result.get("best")
 
-        if not best or not math.isfinite(best.get("loss", float("inf"))):
+        best_loss = best.get("loss") if best else None
+        # `optimizer.py`'s shared tail now sanitizes a non-finite loss to
+        # `None` (JSON-safety pass, same fix class as this file's own
+        # `_json_safe_trials`) — `None` must short-circuit before
+        # `math.isfinite`, which raises TypeError on a non-float.
+        if not best or best_loss is None or not math.isfinite(best_loss):
             fold_results.append({
                 "fold": i,
                 "trainRange": [fold["trainStart"], fold["trainEnd"]],
@@ -376,6 +405,9 @@ async def run_lab_walk_forward(lab_id: str, config: dict, config_hash: str) -> d
 
     results = {
         "mode": mode,
+        "method": method,
+        "nTrials": n_trials if method == "bayesian" else None,
+        "seed": base_seed if method == "bayesian" else None,
         "nFoldsRequested": n_folds,
         "nFoldsBuilt": len(folds),
         "trainRatio": train_ratio,

@@ -4,10 +4,80 @@
 2026-07-19 (Phase 1b), Strategy Lab MC tab shipped 2026-07-19 (Phase 2), walk-forward job
 plumbing shipped 2026-07-19 (Phase 3a), **Optimizer tab UI shipped 2026-07-19 (Phase 3c, see
 below)**, **Phase 3d fully shipped and live-verified 2026-07-19 (engine persistence + client
-trials table, see below)**; Phase 3b (Optuna TPE), DSR/PBO overfitting stats, and Phase 4
-(MC-scored selection) not started · **Priority:** P1 ·
+trials table, see below)**, **Phase 3b fully shipped and live-verified 2026-07-19 (Optuna TPE
+Bayesian search, see below)**; DSR/PBO overfitting stats and Phase 4 (MC-scored selection) not
+started · **Priority:** P1 ·
 **Depends on:** 9 (steps 9.1/9.3 for correct inputs — both Shipped; 9.6/9.9 are absorbed here) ·
 **Related:** 2 (jobs/CI), 7 (client decomposition)
+
+## Phase 3b shipped 2026-07-19 (Optuna/TPE Bayesian search — DSR/PBO still not started)
+
+**Engine.** `engine/services/optimizer.py` gained `run_bayesian_optimization()` + a
+`_suggest_params()` adapter, per Plan 19's own design: the same `param_grid` JSON spec
+(`{min,max,step,type:"int"}` / `{min,max,type:"float"}` / `values` categorical) drives both grid
+(`itertools.product`) and Bayesian (`trial.suggest_int`/`suggest_float`/`suggest_categorical`) —
+no new client contract. Uses optuna's ask/tell API rather than `study.optimize(...)` — Plan 19's
+own documented risk ("ask/tell is cleaner for async") — because each trial needs to `await
+run_backtest_simulation(...)`. Seeded `TPESampler` for reproducibility (same seed + same space →
+identical trial sequence, tested). A failing trial's exception is caught and `study.tell()`'d a
+large finite sentinel loss (optuna's `tell()` rejects non-finite values, unlike grid's plain list
+append) while the reported/persisted result still carries `loss=inf` → sanitized to `null` (see
+bug below) — same error-path shape as grid. The ranking/min-trades-filter/persistence tail
+(previously duplicated at the end of `run_optimization`) was extracted into a shared
+`_finalize_optimization()` so grid and Bayesian return byte-identical result shapes; both now
+carry a `method: "grid"|"bayesian"` field.
+
+**Router.** `POST /optimize/run` gained `method: "grid"|"bayesian"` (default `"grid"`, back-compat)
++ `nTrials`/`seed` (bayesian only), dispatching to the new function.
+
+**Walk-forward integration, per Plan 19's own sequencing note** ("make S8 selectable as the fold
+optimizer"): `walk_forward.py`'s per-fold train step reads `config.method`/`config.nTrials`/
+`config.seed` and dispatches to `run_bayesian_optimization` when `method == "bayesian"`, with a
+deterministic-but-distinct seed per fold (`base_seed + foldIndex`, same stance as `monte_carlo.py`'s
+own per-source seeding). No other fold/stitch logic changed — both optimizer functions return the
+identical ranked-results shape Phase 3a/3d's fold loop already consumes.
+
+**Real, pre-existing bug found and fixed at the source, not just worked around:** live-testing the
+Bayesian path (both a direct `curl POST /optimize/run` against real cached BTCUSDT candles, and a
+full browser session through the actual `/lab` Optimizer wizard) hit
+`ValueError: Out of range float values are not JSON compliant` the moment any trial's backtest
+raised (`loss=inf` by the optimizer's own error-path design, same class of bug Phase 3d already
+fixed for `walk_forward.py`'s per-fold `trials`). This crash was **not new to Bayesian** — grid's
+`run_optimization` had carried the identical defect since before this session, just never
+exercised because `/optimize/run` has no Node route mounted today (only the job-based
+`/lab/optimizations` path is reachable from the product, and no prior session had hit an erroring
+combo through it with live browser access). Fixed once at the shared `_finalize_optimization()`
+tail — every non-finite loss is sanitized to `null` before it reaches JSON, for both `results` and
+`best`, for both methods. `walk_forward.py`'s own `best.get("loss")` check was updated to
+short-circuit on `None` before calling `math.isfinite()` (which raises `TypeError` on non-float).
+
+**Client.** `WalkForwardWizard.jsx` gained a Grid/Bayesian search-method toggle and a
+trials-per-fold input (replacing the max-combinations field when Bayesian is selected); the cost
+estimate strip now reads "Bayesian: N TPE trials/fold (of M possible combos)" instead of the grid
+combo count. `DegradationVerdict.jsx` shows "Bayesian/TPE search" in its header when applicable.
+`server/src/utils/labConfig.js`'s `buildWalkForwardConfig()` gained `method`/`nTrials` (clamped to
+`MAX_N_TRIALS`=500, same guardrail stance as `MAX_MAX_COMBINATIONS`)/`seed` validation.
+
+**Live-verified, real Docker access, this session:** engine suite 488/488 (+16 new tests across
+`test_bayesian_optimizer.py` and `test_walk_forward.py`'s new bayesian-dispatch test), server jest
+156/156 (+8 new `labConfig.test.js` cases), client `vite build` clean. Beyond unit tests: a direct
+`curl POST /optimize/run` with `method: "bayesian"` against real cached BTCUSDT 1h candles +
+MicroScalper (6 trials, one genuinely errored on a strategy-internal param-bound check, correctly
+surfaced as `loss: null` with its real error string, `best` correctly picked the finite-loss
+winner) — then went further and drove the actual `/lab` Optimizer wizard in a real logged-in
+browser session against the real running stack (AdaptiveTrend/BTCUSDT, Bayesian method, 5 trials/
+fold × 2 folds): the run completed end-to-end through BullMQ → engine → MongoDB, both folds
+legitimately reported "skipped — no eligible parameter combination" (5 TPE trials over a large
+multi-param space genuinely found nothing eligible — not a bug, a real search-budget tradeoff),
+and the results canvas (trials table, stitched OOS, fold table) rendered correctly with zero
+console errors. Test data cleaned up from MongoDB Atlas after both runs. Also directly verified
+`POST /simulate/optimize` (the actual job-based walk-forward path) end-to-end with a friendlier
+AdaptiveTrend/BTCUSDT config — a fold produced a real winning combo, correct degradation ratio,
+and clean JSON.
+
+**Still not done:** Deflated Sharpe Ratio and PBO (§2.2's "honesty layer") still need a
+normal-CDF/inverse-CDF primitive and remain deferred pending a session that can numerically verify
+the formula.
 
 ## Phase 3d shipped 2026-07-19 (per-trial persistence + trials table UI — DSR/PBO still not started)
 

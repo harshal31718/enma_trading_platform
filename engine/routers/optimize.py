@@ -11,7 +11,12 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from config.mongo import get_database
-from services.optimizer import list_objectives, run_optimization, OptimizerConfig
+from services.optimizer import (
+    list_objectives,
+    run_optimization,
+    run_bayesian_optimization,
+    OptimizerConfig,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -35,6 +40,9 @@ class OptimizeRequest(BaseModel):
     objective: str = "sharpe"
     maxCombinations: int = 0  # 0 = full grid
     paramGrid: dict  # see services/optimizer.py _expand_param_range spec
+    method: str = "grid"  # "grid" | "bayesian" — Plan 10 Phase 3b, back-compat default
+    nTrials: int = 50  # bayesian only, ignored for grid
+    seed: int = 42  # bayesian only — reproducible TPE sampler
 
 
 class ObjectiveListResponse(BaseModel):
@@ -52,6 +60,12 @@ async def start_optimization(req: OptimizeRequest):
     """Run a parameter optimization across the specified grid."""
     if not req.paramGrid:
         raise HTTPException(status_code=400, detail="paramGrid must not be empty")
+
+    if req.method not in ("grid", "bayesian"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"method must be 'grid' or 'bayesian', got '{req.method}'",
+        )
 
     available = list_objectives()
     if req.objective not in available:
@@ -84,11 +98,20 @@ async def start_optimization(req: OptimizeRequest):
     )
 
     try:
-        result = await run_optimization(
-            config=config,
-            param_grid=req.paramGrid,
-            job_id=job_id,
-        )
+        if req.method == "bayesian":
+            result = await run_bayesian_optimization(
+                config=config,
+                param_grid=req.paramGrid,
+                n_trials=req.nTrials,
+                job_id=job_id,
+                seed=req.seed,
+            )
+        else:
+            result = await run_optimization(
+                config=config,
+                param_grid=req.paramGrid,
+                job_id=job_id,
+            )
         return {"success": True, "data": result}
     except Exception as e:
         logger.error(f"Optimization {job_id} failed: {e}")

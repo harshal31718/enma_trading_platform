@@ -43,12 +43,14 @@ export default function WalkForwardWizard({ onRun, submitting }) {
   const [trainRatio, setTrainRatio] = useState(0.7)
   const [minTrades, setMinTrades] = useState(0)
   const [maxCombinations, setMaxCombinations] = useState(50)
+  const [method, setMethod] = useState('grid')
+  const [nTrials, setNTrials] = useState(50)
   const [paramGrid, setParamGrid] = useState({})
 
   const { data: paramsSchema } = useStrategyParams(strategyId || null)
 
   const perFoldCombos = useMemo(() => _perFoldComboCount(paramGrid), [paramGrid])
-  const cappedPerFold = Math.min(perFoldCombos, Number(maxCombinations) || 1)
+  const cappedPerFold = method === 'bayesian' ? Number(nTrials) || 1 : Math.min(perFoldCombos, Number(maxCombinations) || 1)
   const estimatedBacktests = cappedPerFold * Number(nFolds) + Number(nFolds) // + 1 test backtest per fold
 
   const handleSubmit = (e) => {
@@ -69,6 +71,8 @@ export default function WalkForwardWizard({ onRun, submitting }) {
       trainRatio: Number(trainRatio),
       minTrades: Number(minTrades),
       maxCombinations: Number(maxCombinations),
+      method,
+      nTrials: method === 'bayesian' ? Number(nTrials) : undefined,
       paramGrid,
     })
   }
@@ -190,16 +194,47 @@ export default function WalkForwardWizard({ onRun, submitting }) {
       </div>
 
       <div>
-        <label className="text-[9px] uppercase text-slate-400 font-semibold tracking-wider block mb-1">
-          Max combinations per fold (capped at 500 server-side)
-        </label>
-        <input type="number" min={1} max={500} value={maxCombinations} onChange={(e) => setMaxCombinations(e.target.value)}
-          className="bg-slate-900 border border-slate-700 w-full px-2 py-1.5 outline-none focus:border-emerald-500 text-xs font-mono text-slate-200" />
+        <label className="text-[9px] uppercase text-slate-400 font-semibold tracking-wider block mb-1">Search method</label>
+        <div className="flex gap-2 text-xs font-mono">
+          <button type="button" onClick={() => setMethod('grid')}
+            className={`flex-1 py-1.5 border ${method === 'grid' ? 'border-emerald-500 text-emerald-400 bg-emerald-950/20' : 'border-slate-700 text-slate-400'}`}>
+            Grid
+          </button>
+          <button type="button" onClick={() => setMethod('bayesian')}
+            className={`flex-1 py-1.5 border ${method === 'bayesian' ? 'border-emerald-500 text-emerald-400 bg-emerald-950/20' : 'border-slate-700 text-slate-400'}`}>
+            Bayesian (TPE)
+          </button>
+        </div>
       </div>
 
+      {method === 'grid' ? (
+        <div>
+          <label className="text-[9px] uppercase text-slate-400 font-semibold tracking-wider block mb-1">
+            Max combinations per fold (capped at 500 server-side)
+          </label>
+          <input type="number" min={1} max={500} value={maxCombinations} onChange={(e) => setMaxCombinations(e.target.value)}
+            className="bg-slate-900 border border-slate-700 w-full px-2 py-1.5 outline-none focus:border-emerald-500 text-xs font-mono text-slate-200" />
+        </div>
+      ) : (
+        <div>
+          <label className="text-[9px] uppercase text-slate-400 font-semibold tracking-wider block mb-1">
+            Trials per fold (capped at 500 server-side)
+          </label>
+          <input type="number" min={1} max={500} value={nTrials} onChange={(e) => setNTrials(e.target.value)}
+            className="bg-slate-900 border border-slate-700 w-full px-2 py-1.5 outline-none focus:border-emerald-500 text-xs font-mono text-slate-200" />
+          <p className="text-[9px] text-slate-500 mt-1">TPE-sampled search — far fewer backtests than an exhaustive grid for a comparable-quality result.</p>
+        </div>
+      )}
+
       <div className="bg-slate-900/50 border border-slate-800 p-2 text-[10px] font-mono text-slate-400">
-        Grid: {perFoldCombos.toLocaleString()} combos/fold
-        {perFoldCombos > cappedPerFold && <span className="text-amber-400"> (capped to {cappedPerFold})</span>}
+        {method === 'grid' ? (
+          <>
+            Grid: {perFoldCombos.toLocaleString()} combos/fold
+            {perFoldCombos > cappedPerFold && <span className="text-amber-400"> (capped to {cappedPerFold})</span>}
+          </>
+        ) : (
+          <>Bayesian: {cappedPerFold.toLocaleString()} TPE trials/fold (of {perFoldCombos.toLocaleString()} possible combos)</>
+        )}
         {' '}× {nFolds} folds ≈ <span className="text-slate-200 font-bold">{estimatedBacktests.toLocaleString()} backtests</span> total.
         {estimatedBacktests > 1000 && (
           <p className="text-amber-400 mt-1">⚠ Large run — this may take several minutes.</p>

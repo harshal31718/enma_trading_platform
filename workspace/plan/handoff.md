@@ -7,6 +7,59 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
+## 2026-07-19 — Plan 10 Phase 3b shipped (Optuna/TPE Bayesian search) — live-verified, 1 real pre-existing bug fixed
+
+**Goal:** user said "Phase 3b — Optuna/TPE swap proceed", the next item on the tracker after last
+session's Phase 3d.
+
+**Shipped:** `engine/services/optimizer.py` gained `run_bayesian_optimization()` (ask/tell async
+loop over optuna's `TPESampler`, seeded for reproducibility) + `_suggest_params()` adapter reusing
+the existing `param_grid` JSON spec unchanged for grid and Bayesian (Plan 19's own design). Shared
+ranking/min-trades-filter/persistence tail extracted into `_finalize_optimization()` so both
+methods return byte-identical shapes (`method: "grid"|"bayesian"` field added to both).
+`walk_forward.py`'s per-fold train step now dispatches on `config.method`, with a
+deterministic-but-distinct TPE seed per fold. `POST /optimize/run` + `POST /lab/optimizations`
+gained `method`/`nTrials`/`seed`. `WalkForwardWizard.jsx` gained a Grid/Bayesian toggle + trials
+input. `optuna` added to `engine/requirements.txt`, image rebuilt (`docker compose build engine`),
+confirmed it survives a container restart.
+
+**Real, pre-existing bug found and fixed (not new to Bayesian):** live-testing hit
+`ValueError: Out of range float values are not JSON compliant` whenever any trial errored — this
+was grid's own defect too (never exercised because `/optimize/run` has no Node route mounted and
+no prior session hit an erroring combo through `/lab/optimizations` with live browser access).
+Fixed at `_finalize_optimization()`'s shared tail: non-finite loss → `null` before JSON, for both
+`results`/`best`, both methods. Updated `walk_forward.py`'s `best.get("loss")` check to
+short-circuit on `None` before `math.isfinite()` (which raises `TypeError` on non-float).
+
+**Live-verified, real Docker + browser access this session:** engine 488/488 (+16 tests), server
+jest 156/156 (+8), client `vite build` clean. Direct `curl POST /optimize/run` with
+`method=bayesian` against real cached BTCUSDT candles + MicroScalper (one trial genuinely errored,
+correctly sanitized). Full `/lab` Optimizer wizard browser session (AdaptiveTrend/BTCUSDT,
+Bayesian, 5 trials × 2 folds) — completed end-to-end via BullMQ→engine→Mongo, both folds correctly
+reported "skipped — no eligible combo" (real search-budget tradeoff, not a bug), results canvas
+rendered cleanly, zero console errors. Also verified `POST /simulate/optimize` directly with a
+config that DID produce a winning combo (real degradation ratio computed). All test data cleaned
+up from MongoDB Atlas after.
+
+**Files changed:** `engine/requirements.txt` (+optuna), `engine/services/optimizer.py`
+(`run_bayesian_optimization`, `_suggest_params`, `_finalize_optimization` shared tail, JSON-safety
+fix), `engine/routers/optimize.py` (+method/nTrials/seed), `engine/services/walk_forward.py`
+(+method dispatch, +seed, None-safe best-loss check), new
+`engine/tests/test_bayesian_optimizer.py` (18 tests), `engine/tests/test_walk_forward.py` (+2
+tests), `server/src/utils/labConfig.js` (+method/nTrials/seed + `MAX_N_TRIALS`),
+`server/src/utils/__tests__/labConfig.test.js` (+8 tests), `client/src/components/lab/
+WalkForwardWizard.jsx` (method toggle, trials input), `client/src/components/lab/
+DegradationVerdict.jsx` (+method prop), `client/src/pages/StrategyLab.jsx` (wire method prop,
+fixed stale "Optuna not built yet" note). Docs: `API_CONTRACTS.md`, `CURRENT_STATE.md`,
+`engine/CLAUDE.md`, `10_monte-carlo-strategy-lab.md`, `0_tracker.md`.
+
+**Next session:** (1) DSR/PBO still needs a session that can numerically verify the CDF math
+before shipping it — don't guess at the formula. (2) Phase 4 (MC-scored selection) is the next
+undone Plan 10 phase. (3) Untouched backlog: 21.5c (batched reconcile, P2/small), Plan 6/7
+(engine/server decomposition, P2), Plan 23 (MarginSurge strategy), Plan 8 (governance cleanup,
+P3), Plans 5/22/24 (shipped, waiting on human-observed live Testnet re-verification).
+
+---
 ## 2026-07-19 — Real Docker access this session: verified Phases 2/3a/3c, shipped Phase 3d fully (persistence + UI), found 2 live bugs
 
 **Goal:** the prior session's handoff (Phase 3c entry below) flagged verification as top priority
@@ -134,75 +187,3 @@ standing risk across all of Plan 10's recent work, not just this entry. Run: eng
 suspected risk (date-math > config validation > UI wiring). (2) Once verified: Phase 3b (Optuna) or
 Phase 3d (per-trial persistence — needed before the real trials table/scatter/heatmap can exist) per
 `0_tracker.md`'s sequencing, or Phase 4 (MC-scored selection) if the team wants to skip ahead.
-
----
-## 2026-07-19 — Plan 10 Phase 3a shipped (walk-forward job plumbing, grid search only) — verification still blocked
-
-**Goal:** user asked to continue with the next logical plan. Phase 2 (Strategy Lab MC tab, shipped
-earlier the same day) left Phase 3 (optimizer exposure) as the top P1 item on `0_tracker.md`. Given
-Phase 3's full scope (walk-forward + Optuna + DSR/PBO + Optimizer tab UI) is itself multi-day per
-the plan's own framing, scoped it the same way Phase 1 did — job plumbing + the core, verifiable
-algorithm first ("3a"), UI and the harder statistics as documented follow-ups ("3b"/"3c").
-
-**Done:** `engine/services/walk_forward.py` — pure orchestration over `services.optimizer.
-run_optimization` (train) and `services.backtest_runner.run_backtest_simulation` (test), no new
-sim math, per Plan 18's own design note. Fold split by candle count (`_fetch_candle_times` +
-`_split_folds`, rolling=fixed-width train per fold vs anchored=expanding train from the first
-candle); per fold, grid-optimize on train → best params → backtest test window with those params
-→ in-sample-vs-out-of-sample Sharpe degradation ratio (the headline overfitting signal, built from
-two already-tested real numbers, no new formula). Stitched-OOS aggregate reads back each fold's
-persisted `backtestTrades` and concatenates trade-level (same pnl/capital convention `monte_carlo.
-py` already uses), explicitly labeled as a trade-level approximation vs. the real per-fold
-candle-level Sharpe each `oosMetrics` already carries. New `POST /simulate/optimize` (mirrors
-`/simulate/monte-carlo`'s thin async-job pattern). `services/optimizer.py` gained an opt-in
-`min_trades` filter (default 0/off, backward compatible) — the other half of the plan's "honesty
-layer." Node: `buildWalkForwardConfig()` in `labConfig.js`, `/api/v1/lab/optimizations` (POST/GET/
-GET:id), new `optimizationQueue`/`optimization.worker.js` mirroring the simulation job pattern
-exactly, `socketEmitter.js` gained an `optimization` job type. **Found and fixed a real drift
-while wiring this:** `config/socket.js`'s room join/leave/disconnect handling turned out to be 3
-hardcoded string-prefix checks (`backtest:`/`simulation:`), not the generic `<prefix>:<id>` handler
-a prior session's own tracker note claimed — added the `optimization:` prefix explicitly rather
-than trust the stale claim.
-
-**Deliberately deferred, documented in the plan file, not silently dropped:** Optuna/TPE search
-(Phase 3b — the search loop is swappable without touching this session's fold/stitch logic, per
-Plan 19's own framing); Deflated Sharpe Ratio / PBO overfitting statistics (Phase 3b/3c — both need
-a normal-CDF/inverse-CDF primitive with no way to verify numerically in this sandbox; shipping an
-unverified formula that traders would use to judge overfitting risked being worse than shipping
-none, so it was not attempted rather than guessed at); the Optimizer tab UI — trials table,
-IS-vs-OOS scatter, param heatmap, walk-forward window map, wizard (Phase 3c — job plumbing before
-UI, same sequencing this plan already used for Phase 1b→2; nothing in the product calls the new
-endpoint yet); per-fold progress publishing (wired in `socketEmitter.js` but `walk_forward.py`
-never calls `publish_progress` — unlike MC where the sub-second job makes this a non-issue, a
-walk-forward run is genuinely multi-minute, so this is a real gap, not a documented non-issue).
-
-**NOT verified — disclosed, not skipped, same constraint as this morning's Phase 2 entry:** no
-Docker access in this sandbox, so `engine/tests/test_walk_forward.py` (14 cases — fold-split
-conservation, anchored-vs-rolling train behavior, degradation-ratio computation, trade stitching/
-scale_out exclusion, error paths) and `labConfig.test.js`'s 12 new `buildWalkForwardConfig` cases
-were written but never run. Additionally: this is genuinely intricate scheduling/date-math code
-(fold boundary computation, exclusive-vs-inclusive candle bounds) — hand-traced carefully against
-the codebase's existing `time < end` convention, but date-boundary bugs are exactly the class of
-error that's easy to get subtly wrong without running the tests. This is the single highest-risk
-item to verify first next session.
-
-**Files changed:** new `engine/services/walk_forward.py`; `engine/services/optimizer.py`
-(`min_trades` field + filter); `engine/routers/simulate.py` (`POST /optimize`... routed as
-`/simulate/optimize`); new `engine/tests/test_walk_forward.py`; `server/src/utils/labConfig.js`
-(`buildWalkForwardConfig`); `server/src/utils/__tests__/labConfig.test.js` (+12 cases);
-`server/src/controllers/lab.controller.js` (+3 handlers); `server/src/routes/lab.routes.js`
-(+3 routes); new `server/src/services/optimizationQueue.js`; new
-`server/src/workers/optimization.worker.js`; `server/src/server.js` (worker require);
-`server/src/services/socketEmitter.js` (`optimization` case); `server/src/config/socket.js`
-(`optimization:` prefix, 3 sites). Docs: `10_monte-carlo-strategy-lab.md`, `0_tracker.md`.
-
-**Next session:** (1) **first priority — get Docker/container access and run
-`test_walk_forward.py` + `labConfig.test.js`.** Fold-boundary date math is the highest-risk part of
-this session's work to have gotten subtly wrong (off-by-one on the exclusive/inclusive candle
-bound, or the anchored-vs-rolling train-slice logic) — fix any failures before trusting this. (2)
-Also still owed from Phase 2: verify the client actually builds (needs a Linux-native
-`client/node_modules`, not this sandbox's Windows bind mount). (3) Once both verify: Phase 3b
-(Optuna) or 3c (Optimizer tab UI) per `0_tracker.md`'s own sequencing, or DSR/PBO if picked up by a
-session that can verify the statistics numerically.
-
-

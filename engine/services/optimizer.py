@@ -232,6 +232,7 @@ async def run_optimization(
         return {
             "jobId": job_id,
             "status": "completed",
+            "method": "grid",
             "objective": config.objective,
             "totalCombinations": 0,
             "results": [],
@@ -315,15 +316,186 @@ async def run_optimization(
         if idx % 5 == 0:
             await asyncio.sleep(0)
 
-    # Rank: lower loss = better
+    return await _finalize_optimization(
+        job_id=job_id, config=config, param_grid=param_grid,
+        scored=scored, total=total, errors=errors, method="grid",
+    )
+
+
+# ── Bayesian (Optuna TPE) search ───────────────────────────────────────────
+# Plan 19's design, absorbed into Plan 10 Phase 3b: same objective registry,
+# same per-trial `run_backtest_simulation` call as grid search — only the
+# search loop differs (TPE proposes each next trial's params instead of
+# `itertools.product` enumerating all of them up front).
+
+def _suggest_params(trial, param_grid: dict[str, dict]) -> dict[str, Any]:
+    """Map one optuna trial onto the same `param_grid` spec `_expand_param_range`
+    consumes for grid search — no new client contract (Plan 19 §Search-space
+    mapping): `{min,max,step,type:int}` -> suggest_int, `{min,max,type:float}`
+    -> suggest_float, `values`/categorical -> suggest_categorical."""
+    params: dict[str, Any] = {}
+    for name, spec in param_grid.items():
+        ptype = spec.get("type", "int")
+        if ptype == "categorical" or "values" in spec:
+            params[name] = trial.suggest_categorical(name, list(spec["values"]))
+        elif ptype == "int":
+            step = spec.get("step", 1)
+            params[name] = trial.suggest_int(name, int(spec["min"]), int(spec["max"]), step=step)
+        else:
+            params[name] = trial.suggest_float(name, float(spec["min"]), float(spec["max"]))
+    return params
+
+
+async def run_bayesian_optimization(
+    config: OptimizerConfig,
+    param_grid: dict[str, dict],
+    n_trials: int,
+    job_id: str | None = None,
+    seed: int = 42,
+    progress_callback: Callable[[int, int, dict], None] | None = None,
+) -> dict:
+    """TPE-sampled search over `param_grid`, same return shape as
+    `run_optimization` (grid) so callers (walk_forward.py, the router) don't
+    branch on method. Uses optuna's ask/tell API rather than
+    `study.optimize(...)` — `study.optimize`'s callback is synchronous, and
+    each trial needs to `await run_backtest_simulation(...)` (Plan 19's own
+    documented risk: "ask/tell is cleaner for async").
+    """
+    import optuna
+    from optuna.samplers import TPESampler
+
+    if job_id is None:
+        job_id = f"opt_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{config.strategy_file.split('/')[-1]}"
+
+    objective_fn = OBJECTIVE_REGISTRY.get(config.objective)
+    if objective_fn is None:
+        raise ValueError(
+            f"Unknown objective '{config.objective}'. "
+            f"Available: {list_objectives()}"
+        )
+
+    if n_trials <= 0 or not param_grid:
+        return {
+            "jobId": job_id,
+            "status": "completed",
+            "method": "bayesian",
+            "objective": config.objective,
+            "totalCombinations": 0,
+            "results": [],
+        }
+
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    study = optuna.create_study(direction="minimize", sampler=TPESampler(seed=seed))
+
+    logger.info(
+        "[Optimizer] %s: running %d bayesian trials (objective=%s, seed=%d)",
+        job_id, n_trials, config.objective, seed,
+    )
+
+    scored: list[dict] = []
+    completed = 0
+    errors = 0
+
+    for idx in range(n_trials):
+        trial = study.ask()
+        alpha_params = _suggest_params(trial, param_grid)
+        combo_job_id = f"{job_id}_t{idx:04d}"
+        try:
+            bt_result = await run_backtest_simulation(
+                job_id=combo_job_id,
+                strategy_file=config.strategy_file,
+                exchange=config.exchange,
+                symbol=config.symbol,
+                timeframe=config.timeframe,
+                start_date=config.start_date,
+                end_date=config.end_date,
+                capital=config.capital,
+                leverage=config.leverage,
+                fee_rate=config.fee_rate,
+                slippage_pct=config.slippage_pct,
+                funding_enabled=config.funding_enabled,
+                funding_rate=config.funding_rate,
+                alpha_params=alpha_params,
+                risk_params=config.risk_params,
+            )
+
+            metrics = bt_result.get("metrics", {})
+            loss = objective_fn(metrics)
+            study.tell(trial, loss)
+
+            scored.append({
+                "params": dict(alpha_params),
+                "loss": loss,
+                "rank": 0,
+                "metrics": {
+                    k: metrics[k]
+                    for k in ("totalTrades", "winRate", "netProfit", "netProfitPct",
+                              "maxDrawdown", "sharpeRatio", "sortinoRatio", "calmarRatio",
+                              "profitFactor", "sqn", "expectancy", "cagrPct",
+                              "maxConsecutiveWins", "maxConsecutiveLosses")
+                    if k in metrics
+                },
+            })
+            trade_count = bt_result.get("tradeCount", 0)
+            net_profit = metrics.get("netProfit", "0.00")
+            logger.info(
+                "[Optimizer] %s trial %d/%d: loss=%.4f trades=%d netPnl=%s",
+                job_id, idx + 1, n_trials, loss, trade_count, net_profit,
+            )
+
+        except Exception as e:
+            errors += 1
+            logger.warning(
+                "[Optimizer] %s trial %d/%d failed: %s",
+                job_id, idx + 1, n_trials, e,
+            )
+            # optuna requires every asked trial to be told something finite —
+            # unlike grid's plain list append, tell() would raise on inf/nan.
+            fail_loss = 1e18
+            study.tell(trial, fail_loss)
+            scored.append({
+                "params": dict(alpha_params),
+                "loss": float("inf"),
+                "rank": 0,
+                "error": str(e),
+            })
+
+        completed += 1
+
+        if progress_callback:
+            progress_callback(completed, n_trials, {
+                "best_loss": min(s["loss"] for s in scored if math.isfinite(s["loss"])) if any(math.isfinite(s["loss"]) for s in scored) else None,
+                "errors": errors,
+            })
+
+        if idx % 5 == 0:
+            await asyncio.sleep(0)
+
+    return await _finalize_optimization(
+        job_id=job_id, config=config, param_grid=param_grid,
+        scored=scored, total=n_trials, errors=errors, method="bayesian",
+    )
+
+
+# ── Shared ranking / eligibility / persistence tail ────────────────────────
+
+async def _finalize_optimization(
+    job_id: str,
+    config: OptimizerConfig,
+    param_grid: dict[str, dict],
+    scored: list[dict],
+    total: int,
+    errors: int,
+    method: str,
+) -> dict:
+    """Rank, apply the min-trades honesty filter, persist, and shape the
+    result dict — identical for grid and bayesian search so callers never
+    branch on `method` (Plan 19: "Return the same ranked-results shape ...
+    so the UI is unchanged")."""
     scored.sort(key=lambda s: s["loss"])
     for rank, entry in enumerate(scored, start=1):
         entry["rank"] = rank
 
-    # Plan 10 Phase 3 min-trades filter: a combo with too few trades can post
-    # a great point-metric by luck. Off by default (min_trades=0) — fully
-    # backward compatible, `eligible == scored` in that case so `best` is
-    # unchanged from before this filter existed.
     if config.min_trades > 0:
         eligible = [
             s for s in scored
@@ -335,9 +507,27 @@ async def run_optimization(
 
     best = eligible[0] if eligible else None
 
+    # JSON-safety pass (applied only to the transport/persistence copies, not
+    # to `scored`/`eligible` above — ranking and the min-trades filter both
+    # need the real numeric loss). An errored/ineligible combo carries
+    # `loss=float("inf")` by design (this module's own error path); Python's
+    # `json` module rejects inf/-inf/nan outright
+    # (`ValueError: Out of range float values are not JSON compliant`), which
+    # crashed `GET /optimize/run`'s raw response the same way it crashed
+    # walk_forward.py's per-fold trials before that was fixed in Phase 3d —
+    # this closes the same gap at its source so every caller gets it for free.
+    json_safe_results = [
+        {**s, "loss": None} if not math.isfinite(s.get("loss", 0.0)) else s
+        for s in scored
+    ]
+    json_safe_best = (
+        {**best, "loss": None} if best is not None and not math.isfinite(best.get("loss", 0.0)) else best
+    )
+
     result = {
         "jobId": job_id,
         "status": "completed",
+        "method": method,
         "objective": config.objective,
         "totalCombinations": total,
         "errorCount": errors,
@@ -354,11 +544,10 @@ async def run_optimization(
             "capital": config.capital,
             "leverage": config.leverage,
         },
-        "results": scored,
-        "best": best,
+        "results": json_safe_results,
+        "best": json_safe_best,
     }
 
-    # Persist to MongoDB
     try:
         db = get_database()
         await db.backtestResults.update_one(
@@ -369,10 +558,11 @@ async def run_optimization(
                     "strategyName": config.strategy_file.split("/")[-1],
                     "status": "completed",
                     "type": "optimization",
+                    "method": method,
                     "objective": config.objective,
                     "totalCombinations": total,
                     "errorCount": errors,
-                    "best": best,
+                    "best": json_safe_best,
                     "updatedAt": datetime.now(timezone.utc),
                 },
                 "$setOnInsert": {"createdAt": datetime.now(timezone.utc)},
@@ -384,11 +574,12 @@ async def run_optimization(
             {"jobId": job_id},
             {
                 "jobId": job_id,
+                "method": method,
                 "objective": config.objective,
                 "paramGrid": param_grid,
                 "config": result["config"],
-                "results": scored,
-                "best": best,
+                "results": json_safe_results,
+                "best": json_safe_best,
                 "createdAt": datetime.now(timezone.utc),
             },
             upsert=True,
@@ -397,8 +588,8 @@ async def run_optimization(
         logger.error("[Optimizer] %s: failed to persist results: %s", job_id, e)
 
     logger.info(
-        "[Optimizer] %s: done — %d/%d ok, %d errors. Best loss=%.4f",
-        job_id, completed - errors, total, errors,
+        "[Optimizer] %s: done (%s) — %d/%d ok, %d errors. Best loss=%.4f",
+        job_id, method, total - errors, total, errors,
         best["loss"] if best else float("inf"),
     )
 

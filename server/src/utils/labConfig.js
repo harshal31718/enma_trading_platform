@@ -52,6 +52,9 @@ const MAX_N_FOLDS = 12
 const DEFAULT_N_FOLDS = 4
 const DEFAULT_TRAIN_RATIO = 0.7
 const MAX_MAX_COMBINATIONS = 500 // Plan 10 §5.8 concurrency/compute guardrail
+const MAX_N_TRIALS = 500 // Plan 10 Phase 3b — bayesian's per-fold trial count,
+// same guardrail stance as MAX_MAX_COMBINATIONS (grid's per-fold combo count)
+const DEFAULT_N_TRIALS = 50
 
 function buildWalkForwardConfig(input = {}) {
   const required = ['strategyFile', 'exchange', 'symbol', 'timeframe', 'startDate', 'endDate', 'capital', 'paramGrid']
@@ -67,6 +70,26 @@ function buildWalkForwardConfig(input = {}) {
   const mode = input.mode ?? 'rolling'
   if (mode !== 'rolling' && mode !== 'anchored') {
     throw new Error(`mode must be 'rolling' or 'anchored', got '${mode}'`)
+  }
+
+  const method = input.method ?? 'grid'
+  if (method !== 'grid' && method !== 'bayesian') {
+    throw new Error(`method must be 'grid' or 'bayesian', got '${method}'`)
+  }
+
+  const nTrialsNum = Number(input.nTrials ?? DEFAULT_N_TRIALS)
+  if (!Number.isFinite(nTrialsNum) || nTrialsNum < 1) {
+    throw new Error('nTrials must be a positive number')
+  }
+  const nTrials = Math.min(Math.round(nTrialsNum), MAX_N_TRIALS)
+
+  let seed = null
+  if (input.seed !== undefined && input.seed !== null && input.seed !== '') {
+    const seedNum = Number(input.seed)
+    if (!Number.isFinite(seedNum)) {
+      throw new Error('seed must be a number when provided')
+    }
+    seed = Math.round(seedNum)
   }
 
   const objective = input.objective ?? 'sharpe'
@@ -120,6 +143,9 @@ function buildWalkForwardConfig(input = {}) {
     objective,
     paramGrid: input.paramGrid,
     mode,
+    method,
+    nTrials: method === 'bayesian' ? nTrials : undefined,
+    seed: method === 'bayesian' ? seed : undefined,
     nFolds,
     trainRatio: trainRatioNum,
     maxCombinations,
@@ -145,4 +171,5 @@ module.exports = {
   DEFAULT_RUNS,
   MAX_N_FOLDS,
   MAX_MAX_COMBINATIONS,
+  MAX_N_TRIALS,
 }

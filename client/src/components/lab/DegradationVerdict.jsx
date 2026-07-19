@@ -6,7 +6,7 @@
 // (see 10_monte-carlo-strategy-lab.md's Phase 3a section for why) — this is
 // a simpler, honest signal built only from numbers the engine already
 // computes for real.
-export default function DegradationVerdict({ avgDegradationRatio, nFoldsBuilt, mode }) {
+export default function DegradationVerdict({ avgDegradationRatio, nFoldsBuilt, mode, method }) {
   if (avgDegradationRatio == null) {
     return (
       <div className="border border-slate-800 bg-slate-950 p-4 text-xs font-mono text-slate-500 italic">
@@ -29,7 +29,8 @@ export default function DegradationVerdict({ avgDegradationRatio, nFoldsBuilt, m
     <div className="border border-slate-800 bg-slate-950 p-4 flex items-center justify-between">
       <div>
         <h4 className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">
-          Average IS → OOS degradation ({nFoldsBuilt} {mode} folds)
+          Average IS → OOS degradation ({nFoldsBuilt} {mode} folds
+          {method === 'bayesian' ? ', Bayesian/TPE search' : ''})
         </h4>
         <p className="text-[10px] text-slate-500 font-mono">
           out-of-sample Sharpe ÷ in-sample Sharpe, averaged across folds — 1.0 = no degradation

@@ -6,6 +6,7 @@ const {
   DEFAULT_RUNS,
   MAX_N_FOLDS,
   MAX_MAX_COMBINATIONS,
+  MAX_N_TRIALS,
 } = require('../labConfig')
 
 const baseWfInput = () => ({
@@ -100,6 +101,47 @@ describe('buildWalkForwardConfig', () => {
     expect(config.maxCombinations).toBe(MAX_MAX_COMBINATIONS)
     expect(config.minTrades).toBe(0)
     expect(config.objective).toBe('sharpe')
+  })
+
+  test('defaults method to grid, with nTrials/seed left undefined', () => {
+    const config = buildWalkForwardConfig(baseWfInput())
+    expect(config.method).toBe('grid')
+    expect(config.nTrials).toBeUndefined()
+    expect(config.seed).toBeUndefined()
+  })
+
+  test('accepts method=bayesian with a default nTrials', () => {
+    const config = buildWalkForwardConfig({ ...baseWfInput(), method: 'bayesian' })
+    expect(config.method).toBe('bayesian')
+    expect(config.nTrials).toBe(50)
+  })
+
+  test('rejects an invalid method', () => {
+    expect(() => buildWalkForwardConfig({ ...baseWfInput(), method: 'bogus' })).toThrow(/method must be/)
+  })
+
+  test('clamps nTrials to the documented cap rather than rejecting', () => {
+    const config = buildWalkForwardConfig({ ...baseWfInput(), method: 'bayesian', nTrials: MAX_N_TRIALS + 1000 })
+    expect(config.nTrials).toBe(MAX_N_TRIALS)
+  })
+
+  test('rejects non-positive nTrials', () => {
+    expect(() => buildWalkForwardConfig({ ...baseWfInput(), method: 'bayesian', nTrials: 0 })).toThrow(/nTrials must be/)
+    expect(() => buildWalkForwardConfig({ ...baseWfInput(), method: 'bayesian', nTrials: -3 })).toThrow(/nTrials must be/)
+  })
+
+  test('nTrials is ignored (not passed through) when method=grid', () => {
+    const config = buildWalkForwardConfig({ ...baseWfInput(), method: 'grid', nTrials: 200 })
+    expect(config.nTrials).toBeUndefined()
+  })
+
+  test('accepts an explicit seed for bayesian reproducibility', () => {
+    const config = buildWalkForwardConfig({ ...baseWfInput(), method: 'bayesian', seed: 7 })
+    expect(config.seed).toBe(7)
+  })
+
+  test('rejects a non-numeric seed', () => {
+    expect(() => buildWalkForwardConfig({ ...baseWfInput(), method: 'bayesian', seed: 'nope' })).toThrow(/seed must be/)
   })
 
   test.each(['strategyFile', 'exchange', 'symbol', 'timeframe', 'startDate', 'endDate', 'capital', 'paramGrid'])(

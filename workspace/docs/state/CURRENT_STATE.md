@@ -3,7 +3,29 @@
 **Authority:** This is the single source of truth for what ENMA currently does.
 Read this before starting any work. If this conflicts with chat history, this document wins.
 
-Last updated: 2026-07-19 (**Plan 10 Phases 2/3a/3c shipped, Phase 3d fully shipped (persistence +
+Last updated: 2026-07-19 (**Plan 10 Phase 3b shipped** — Optuna TPE Bayesian search is now a
+selectable alternative to grid search for the walk-forward optimizer's per-fold train step.
+`engine/services/optimizer.py` gained `run_bayesian_optimization()` (ask/tell async loop over
+optuna, seeded `TPESampler`) + a `_suggest_params()` adapter reusing the existing `param_grid`
+JSON spec unchanged for both grid and Bayesian (Plan 19's own design). `walk_forward.py`'s fold
+loop dispatches on `config.method` (`"grid"` default / `"bayesian"`), one TPE study per fold with
+a deterministic-but-distinct seed (`base_seed + foldIndex`). `POST /optimize/run` and
+`POST /lab/optimizations` both gained `method`/`nTrials`/`seed`. `WalkForwardWizard.jsx` gained a
+Grid/Bayesian search-method toggle + trials-per-fold input. **Real, pre-existing bug found and
+fixed in passing:** `/optimize/run`'s raw JSON response (and `walk_forward.py`'s per-fold
+`best`/`trials`) crashed with `ValueError: Out of range float values are not JSON compliant`
+whenever any combo errored (`loss=inf`) — this affected grid search too, just never exercised
+because Bayesian's live-browser test (this session) was the first time a real strategy validation
+error surfaced through this exact path. Fixed at the source: `optimizer.py`'s shared
+`_finalize_optimization()` tail now sanitizes non-finite loss to `null` for every caller. Verified
+with real Docker access: engine suite 488/488 (+16 new tests), server jest 156/156 (+8), client
+`vite build` clean, plus live end-to-end runs against real cached BTCUSDT candles — both a direct
+`POST /optimize/run` (MicroScalper, one combo genuinely errored, correctly sanitized) and a full
+`/lab` Optimizer-tab browser session (AdaptiveTrend, Bayesian method, both folds legitimately
+skipped — no eligible combo in 5 trials over a large param space — rendered correctly with no
+console errors). DSR/PBO overfitting stats remain deferred (still need a numerically-verified
+CDF primitive). See `workspace/plan/10_monte-carlo-strategy-lab.md` Phase 3b section for detail.)
+Earlier: 2026-07-19 (**Plan 10 Phases 2/3a/3c shipped, Phase 3d fully shipped (persistence +
 trials-table UI)** — Strategy Lab is now a real `/lab` page with two tabs: Robustness (MC, Phase 2)
 and Optimizer (walk-forward, Phase 3c UI over Phase 3a job plumbing). Each walk-forward fold now
 returns every grid-search trial, not just the winner, and `TrialsExplorer.jsx` renders it as a
@@ -164,16 +186,19 @@ reads it back. `configHash` short-circuits identical resubmissions. The existing
 `SimulationResults.jsx` / `leverage_sensitivity.py` MC path is untouched (still what the Risk
 Dashboard shows today).
 
-Walk-forward optimization (Phase 3a/3c/3d-partial): `POST /api/v1/lab/optimizations
+Walk-forward optimization (Phase 3a/3b/3c/3d shipped): `POST /api/v1/lab/optimizations
 {strategyId, exchange, symbol, timeframe, startDate, endDate, paramGrid, mode, nFolds,
-trainRatio, ...}` enqueues a BullMQ job; the engine (`services/walk_forward.py`) splits the date
-range into candle-count folds, grid-optimizes each fold's train window
-(`services/optimizer.run_optimization`), evaluates the winner OOS, and reports a per-fold
-IS-vs-OOS Sharpe degradation ratio plus a trade-level stitched-OOS aggregate. Each fold's `trials`
-array (Phase 3d, shipped 2026-07-19) carries every combo scored on that fold's train window, not
-just the winner — the raw material for a trials table/scatter/param heatmap, which is **not yet
-built** in `FoldResultsTable.jsx` (still one row per fold). Deflated Sharpe Ratio / PBO
-overfitting stats and the Optuna/TPE search swap (Phase 3b) are also not started. See
+trainRatio, method, nTrials, seed, ...}` enqueues a BullMQ job; the engine
+(`services/walk_forward.py`) splits the date range into candle-count folds, optimizes each fold's
+train window via `services/optimizer.run_optimization` (grid, default) or
+`run_bayesian_optimization` (`method: "bayesian"`, Phase 3b — Optuna TPE, `nTrials` per fold,
+per-fold deterministic seed), evaluates the winner OOS, and reports a per-fold IS-vs-OOS Sharpe
+degradation ratio plus a trade-level stitched-OOS aggregate. Each fold's `trials` array (Phase 3d)
+carries every combo scored on that fold's train window, not just the winner — rendered as a
+sortable trials table + 2-param loss heatmap by `TrialsExplorer.jsx` (`FoldResultsTable.jsx`
+itself is still one row per fold — the trials view is the separate, already-shipped component).
+`WalkForwardWizard.jsx` has a Grid/Bayesian search-method toggle. Deflated Sharpe Ratio / PBO
+overfitting stats are still not started (need a numerically-verified CDF primitive). See
 `workspace/plan/10_monte-carlo-strategy-lab.md`.
 
 ### Risk Intelligence Dashboard
