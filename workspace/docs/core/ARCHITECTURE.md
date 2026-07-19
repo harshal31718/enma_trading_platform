@@ -37,9 +37,9 @@ Enma is a full-stack algorithmic trading platform for writing Python strategies,
 
 ## Database Responsibilities
 
-- **MongoDB (Node/Engine)**: `strategies` (global, no `userId`), `users`, `platformConfig`, `backtestResults`, `backtestTrades` (split from results to avoid BSON limits), `backtestLeverageScenarios`, `liveSessions`, `tradeOrders`, `tradeExecutions`, `tradeRecords`, `tradeTransactions`, `Settings`, `executionEvents` (append-only, engine-written fact log for live-trading state; Plan 5 Step 5.1 — see `CURRENT_STATE.md`).
+- **MongoDB (Node/Engine)**: `strategies` (global, no `userId`), `users`, `platformConfig`, `backtestResults`, `backtestTrades` (split from results to avoid BSON limits), `backtestLeverageScenarios`, `labResults` (Plan 10 Phase 1 — Monte Carlo / optimization job results, same server-creates-queued-doc/engine-writes-results ownership split as `backtestResults`), `liveSessions`, `tradeOrders`, `tradeExecutions`, `tradeRecords`, `tradeTransactions`, `Settings`, `executionEvents` (append-only, engine-written fact log for live-trading state; Plan 5 Step 5.1 — see `CURRENT_STATE.md`).
 - **TimescaleDB (Engine only)**: `candles` hypertable. Only Python engine reads/writes candles via asyncpg.
-- **Redis (Node/Engine)**: BullMQ (`bull:backtest`), symbol locks (`server/src/services/symbolLock.js`), backtest cancel flags (`backtest:cancel:{jobId}`), progress streams (`progress:{jobId}`), live-metrics cache (`risk:live-metrics:{userId}`, 10s TTL).
+- **Redis (Node/Engine)**: BullMQ (`bull:backtest`, `bull:simulation` — Plan 10 Phase 1), symbol locks (`server/src/services/symbolLock.js`), backtest cancel flags (`backtest:cancel:{jobId}`), progress streams (`progress:{jobId}`), live-metrics cache (`risk:live-metrics:{userId}`, 10s TTL).
 
 ## Binance Environment Model
 

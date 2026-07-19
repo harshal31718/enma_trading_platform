@@ -57,7 +57,8 @@ engine/
 │   ├── algo.py            ← POST /algo/sessions, POST /algo/sessions/:id/stop, GET /algo/sessions/:id/status, POST /algo/sessions/:id/trading-state, POST /algo/pairlist/preview
 │   ├── optimize.py        ← GET /optimize/objectives, POST /optimize/run, GET /optimize/:id/status, GET /optimize/:id/results (grid search — see services/optimizer.py)
 │   ├── risk.py             ← Risk Intelligence Dashboard endpoints (settings, live metrics, overrides)
-│   └── leverage_sensitivity.py ← leverage-scenario simulation endpoints (Risk Dashboard Zone 3)
+│   ├── leverage_sensitivity.py ← leverage-scenario simulation endpoints (Risk Dashboard Zone 3) — still the synchronous path SimulationResults.jsx uses; Plan 10 Phase 2 retires it
+│   └── simulate.py        ← POST /simulate/monte-carlo (Plan 10 Phase 1 — job-based Strategy Lab robustness runs, writes labResults)
 ├── config/
 │   ├── mongo.py           ← motor AsyncIOMotorClient (results, live sessions)
 │   └── timescale.py       ← asyncpg connection pool (candle hypertable)
@@ -73,7 +74,8 @@ engine/
 │   ├── trade_recorder.py   ← record_trade() + build_trade_record(); writes completed round-trip trades to MongoDB tradeRecords (best-effort, never blocks close path)
 │   ├── strategy_seeder.py  ← seeds default strategies on startup (idempotent)
 │   ├── optimizer.py        ← grid-search parameter optimization (itertools.product over PARAMS grid) — no Bayesian/optuna support yet, see next_phase/S8
-│   ├── monte_carlo.py      ← Monte Carlo trade-sequence resampling for the Risk Dashboard
+│   ├── monte_carlo.py      ← Monte Carlo trade-sequence resampling; `run_monte_carlo_simulation()` (legacy sync path, Risk Dashboard) + `run_lab_simulation()` (Plan 10 Phase 1 — config-driven job version, writes labResults, called from routers/simulate.py)
+│   ├── walk_forward.py     ← walk-forward optimization (Plan 10 Phase 3a/3d) — `run_lab_walk_forward()`: splits a date range into candle-count folds, grid-optimizes each fold's train window via `optimizer.run_optimization`, evaluates OOS via `backtest_runner.run_backtest_simulation`, reports per-fold IS-vs-OOS Sharpe degradation + every trial scored (Phase 3d) + trade-level stitched-OOS aggregate. Writes labResults, called from routers/simulate.py's `POST /simulate/optimize`.
 │   ├── leverage_sensitivity_runner.py ← runs leverage-scenario sweeps, writes BacktestLeverageScenario docs
 │   ├── curves.py           ← equity/drawdown/rolling-metric curve computation for backtest results
 │   ├── fill_model.py       ← adverse-slippage fill simulation shared by backtest/live execution
@@ -90,7 +92,9 @@ engine/
 │   └── _io_formats.py     ← CSV/JSON read+write + row<->DB-record transforms for enma_cli.py (stdlib csv/json only, no new deps)
 ├── tests/
 │   ├── test_boundaries.py ← service-boundary contract tests
-│   └── test_cli_roundtrip.py ← enma_cli.py export/import round-trip (hermetic — fake asyncpg pool + fake Mongo collection)
+│   ├── test_cli_roundtrip.py ← enma_cli.py export/import round-trip (hermetic — fake asyncpg pool + fake Mongo collection)
+│   ├── test_lab_simulation.py ← run_lab_simulation() config/mode/seed/persistence tests (Plan 10 Phase 1)
+│   └── test_walk_forward.py ← fold-split conservation, anchored-vs-rolling, degradation ratio, stitched-OOS aggregate, per-fold trials persistence tests (Plan 10 Phase 3a/3d)
 ├── main.py                ← FastAPI app entry point
 ├── requirements.txt
 └── .env

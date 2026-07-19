@@ -17,7 +17,7 @@ this board no longer duplicates it).
 | 5  | Live-trading state integrity | ALL SHIPPED (5.1–5.6, container-verified 2026-07-18 [engine 441/441, server 112/112]) — 5.5 scoped to running-total accumulation sites (documented scope decision, not full float→Decimal); 5.6's resume capability shipped but not wired into the default restart path (explicit open decision) | **Done** | — | 21.1–21.2 informed 5.6 | 2026-07-18 |
 | 22 | Industry-standard risk management (Session Risk Governor) | ALL SHIPPED (22.1–22.7, container/Jest-verified 2026-07-17 [330/330 pytest, 88/88 jest], 22.6 golden-master-verified, 22.7 live-verified in-browser) — pending live Testnet re-verification only | **Done** (pending live re-verification) | — | 21 (21.1–21.4, shipped) | 2026-07-17 |
 | 9  | Backtest & optimizer correctness (quant core) | ALL STEPS SHIPPED (9.1–9.11, container-verified 2026-07-18 [427/427 pytest]) — liquidation fee (QNT-4) shipped opt-in 2026-07-18 per user decision; 2 deliberately deferred sub-items remain: warmup fail-loud (needs Plan 8 coordination), `"inf"`-string persistence (dormant, no active consumer) | **Done** | — | — | 2026-07-18 |
-| 10 | Monte Carlo Optimiser & Strategy Lab | Phases 1b–4 (job plumbing, `labResults`, UI, optimizer w/ walk-forward + Optuna) | Ready | P1 | 9 (9.1/9.3, shipped) | 2026-07-16 |
+| 10 | Monte Carlo Optimiser & Strategy Lab | Phase 3b (Optuna), 3d remainder (trials-table/scatter/heatmap UI + DSR/PBO), Phase 4 (MC-scored selection) — Phase 1 (job plumbing) + Phase 2 (MC tab) + Phase 3a (walk-forward job plumbing) + Phase 3c (Optimizer tab UI, fold-level) + Phase 3d per-trial persistence (engine side, live-verified) shipped 2026-07-19 | In progress | P1 | 9 (9.1/9.3, shipped) | 2026-07-19 |
 | 13 | Informative / multi-timeframe contract (`self.htf()`) | Shipped — primitive only, no seeded strategy adopts it yet | **Done** | — | — | 2026-07-17 |
 | 17 | Recursive-formula / warmup-insufficiency analysis | Shipped — no live-vs-backtest drift risk found at w=500 for any seeded strategy | **Done** | — | — | 2026-07-17 |
 | 6  | Engine decomposition & exchange abstraction | All | Blocked | P2 | 5 fully shipped; 21.3/21.4 should land first | 2026-07-16 |
@@ -259,9 +259,62 @@ pipeline-touching steps) a golden-master check per Rule C.
   fixed-8h-boundary fallback. Manually verified end-to-end against real mainnet data (22 real
   BTCUSDT funding events fetched, idempotent re-fetch confirmed). Default `None` reproduces the
   exact pre-9.7 code path — golden master byte-identical.
-- **10** — MC core math is honest (Phase 1a shipped) but still behind the old synchronous
-  endpoint; everything else (job queue, `labResults`, Strategy Lab UI, optimizer exposure)
-  unstarted. Phase 3 absorbs plans 18/19 — build from their design notes, not their specs.
+- **10** — MC core math is honest (Phase 1a shipped 2026-07-15). **Phase 1b (job plumbing) shipped
+  2026-07-19**: new `labResults` collection, `simulationQueue`/`simulation.worker.js`, engine
+  `routers/simulate.py` (`POST /simulate/monte-carlo`), Node `lab.controller.js`/`lab.routes.js` at
+  `/api/v1/lab` — same BullMQ/Socket.IO job pattern as backtest, `configHash` cache short-circuit,
+  ownership-checked. Real end-to-end smoke test against a live 38-trade backtest completed in
+  ~1.0s. Engine 458/458, server jest 129/129. **Phase 2 (Strategy Lab page, MC tab) shipped
+  2026-07-19**: new `/lab` route + nav, `hooks/useLab.js`, `components/lab/` (RunWizard,
+  HistoryRail, FanChart, PercentileSpread, ExceedanceCurve, RuinCard, VerdictStrip, ConfigDrawer),
+  socket wiring against `simulation:{labId}` mirroring `Backtest.jsx`'s pattern. `SimulationResults.jsx`
+  deleted, its Risk Dashboard slot replaced with a `/lab` CTA; `GET /api/v1/risk/backtest/:id/simulation`
+  now returns 410 Gone; `useBacktestSimulation` hook removed. Deep-link "Robustness Check" button
+  added on the Backtest report page. **Real gap found and handled honestly, not silently:** §4.2's
+  final-equity/max-drawdown "histograms" need raw per-run samples the engine discards after computing
+  percentiles — `PercentileSpread.jsx` renders a percentile box/whisker spread instead, documented
+  in-code as a follow-up scope item (persist bins/raw samples in `run_lab_simulation` if needed).
+  Mode-breakdown table also deferred (engine runs one mode per submission, not several at once —
+  unchanged from Phase 1's own scoping). **Not done:** backtest-page auto-enqueued MC summary strip
+  (only the manual deep-link shipped), results-canvas component tests (no per-component test harness
+  convention exists in this repo yet to follow), and **build/test verification** — this session's
+  sandbox has no Docker access and its `client/node_modules` is a platform-mismatched (Windows→Linux)
+  bind mount, so `vite build`/`vitest` could not run; reinstalling would violate the "don't alter
+  node_modules on host" constraint. All new files were hand-reviewed against sibling component
+  patterns but not compiled — verification debt carried to next session, same pattern as 2026-07-18's
+  Docker gap. Deliberately still deferred from Phase 1: cancel endpoint, the 3 remaining MC modes,
+  progress publishing. **Phase 3a (walk-forward job plumbing, grid search only) shipped
+  2026-07-19**: new `engine/services/walk_forward.py` (fold split by candle count, rolling/anchored
+  train, per-fold grid-optimize train + backtest test, per-fold degradation ratio, trade-level
+  stitched-OOS aggregate), new `POST /simulate/optimize`, opt-in `min_trades` filter added to
+  `services/optimizer.py` (default off, backward compatible). Node: `buildWalkForwardConfig()`,
+  `/api/v1/lab/optimizations` (`lab.controller.js`/`lab.routes.js`), new `optimizationQueue`/
+  `optimization.worker.js` mirroring the simulation job pattern, `socketEmitter.js`/`socket.js`
+  gained an `optimization` job type (also fixed `socket.js`'s room handling, which turned out to be
+  3 hardcoded string-prefix checks, not the generic `<prefix>:<id>` handler a prior session's
+  tracker note claimed). **Deliberately deferred, documented in-plan:** Optuna/TPE search (Phase
+  3b — swappable search loop, doesn't touch this session's fold/stitch logic), DSR/PBO overfitting
+  statistics (Phase 3b/3c — needs a normal-CDF/inverse-CDF primitive this session couldn't verify
+  without pytest access; shipping an unverified formula traders would use to judge overfitting was
+  judged worse than shipping none), the Optimizer tab UI (Phase 3c — job plumbing before UI, same
+  sequencing as Phase 1b→2), and per-fold progress publishing (wired but unused — a walk-forward
+  run is genuinely multi-minute, unlike MC's sub-second job, so this is a real gap not a documented
+  non-issue). **Verification gap, same as Phase 2:** this sandbox has no Docker, so
+  `engine/tests/test_walk_forward.py` (14 cases) and `labConfig.test.js`'s 12 new
+  `buildWalkForwardConfig` cases were written but not executed. **Phase 3c (Optimizer tab UI)
+  shipped 2026-07-19, same session:** new "Optimizer" tab on `StrategyLab.jsx` (Tabs alongside the
+  existing MC tab) — `WalkForwardWizard.jsx` (strategy/symbol/TF/range + `ParamGridForm.jsx`
+  auto-rendering min/max/step from the strategy's existing PARAMS schema + objective/mode/nFolds/
+  trainRatio/minTrades/maxCombinations + a combo-count cost estimate), `OptimizationHistoryRail.jsx`,
+  results canvas (`DegradationVerdict.jsx`, `StitchedOOSCard.jsx`, `FoldResultsTable.jsx`). New thin
+  Node proxy `GET /api/v1/lab/objectives`. Fixed a real gap found while wiring: Phase 3a's
+  `runOptimization` controller trusted a raw `strategyFile` from the client instead of resolving
+  `strategyId` → `filePath` via `Strategy.findById` like `POST /api/v1/backtest` does — fixed.
+  **Honestly scoped, not faked:** `walk_forward.py` only persists each fold's WINNING combo, not
+  every trial — so this is a fold-level table, not the plan's full per-trial "trials table" with
+  IS-vs-OOS scatter/param heatmap. That needs an engine change to persist every trial (new **Phase
+  3d**), explicitly noted in-UI and in the plan doc rather than silently relabeling fold rows as
+  trials. Same verification gap as everything else this session — not compiled/rendered.
 - **13/17** — **13 shipped 2026-07-17**: `informative_timeframes` + `self.htf()` on `BaseStrategy`,
   as-of aligned (freqtrade ffill+shift pattern) via `utils/timeframes.to_ms()`, wired into both
   `backtest_runner.py` and `live_bot_manager.py`. No seeded strategy adopts it yet — this shipped

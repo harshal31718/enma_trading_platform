@@ -6,7 +6,7 @@ const subscriber = new Redis(process.env.REDIS_URL || 'redis://redis:6379')
 
 subscriber.on('error', (err) => console.error('[socketEmitter] redis error:', err))
 
-const jobTypes = new Map() // jobId -> type ('candles' | 'backtest')
+const jobTypes = new Map() // jobId -> type ('candles' | 'backtest' | 'simulation' | 'optimization')
 const tradeStreamUsers = new Set() // userIds currently subscribed to trade-stream:{userId}
 
 function subscribeToJob(jobId, type = 'candles') {
@@ -69,6 +69,23 @@ subscriber.on('message', (channel, message) => {
     if (type === 'backtest') {
       io.to(`backtest:${jobId}`).emit('backtest:progress', {
         jobId,
+        ...parsed,
+      })
+    } else if (type === 'simulation') {
+      io.to(`simulation:${jobId}`).emit('simulation:progress', {
+        simId: jobId,
+        ...parsed,
+      })
+    } else if (type === 'optimization') {
+      // Plan 10 Phase 3a: walk-forward runs take multi-fold-x-grid-combo
+      // time (genuinely long, unlike the sub-second MC path) — progress
+      // publishing matters here. The engine doesn't call publish_progress
+      // yet (per-fold granularity would need threading progress through
+      // run_optimization's existing progress_callback param down into
+      // walk_forward.py) — infra is wired now so that's a pure engine-side
+      // follow-up, no second Node wiring pass needed.
+      io.to(`optimization:${jobId}`).emit('optimization:progress', {
+        labId: jobId,
         ...parsed,
       })
     }

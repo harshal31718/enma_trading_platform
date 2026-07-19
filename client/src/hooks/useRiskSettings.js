@@ -38,15 +38,6 @@ export function useLiveRiskMetrics() {
   })
 }
 
-export function useBacktestSimulation(jobId) {
-  return useQuery({
-    queryKey: ['risk', 'backtest-simulation', jobId],
-    queryFn: async () => {
-      if (!jobId) return null
-      const res = await api.get(`/api/v1/risk/backtest/${jobId}/simulation`)
-      return res.data.data
-    },
-    enabled: !!jobId,
-    staleTime: Infinity, // Benchmark/backtest simulations are immutable once computed
-  })
-}
+// useBacktestSimulation removed (Plan 10 Phase 2) — its endpoint
+// (GET /api/v1/risk/backtest/:id/simulation) is retired (410); use
+// useRunMonteCarlo/useSimulation from hooks/useLab.js instead.

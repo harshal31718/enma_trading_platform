@@ -7,6 +7,13 @@ Python i.i.d. loop. Preserves the existing response contract (`ruinProbability`,
 unchanged; adds extra fields for the future job-based Strategy Lab (Plan 10
 Phases 1+) to consume without another contract break.
 
+`run_lab_simulation()` (Plan 10 Phase 1) is the job-based sibling: same
+bootstrap core, but config-driven (mode/runs/blockLen/ruinThreshold/seed),
+persists the full result to the `labResults` collection itself (engine is
+sole writer of `results`/`status`, matching the `backtestResults` ownership
+rule), and returns downsampled percentile equity bands for the future fan
+chart. Called from `routers/simulate.py`, not `leverage_sensitivity.py`.
+
 Methodology fixes vs the prior implementation:
 - Block bootstrap (circular, block length ~sqrt(N)) instead of i.i.d.
   resampling — i.i.d. shuffling destroys win/loss clustering and understates
@@ -23,6 +30,7 @@ Methodology fixes vs the prior implementation:
   Plan 10 §3.3 ("10k runs x 2k trades in well under 1s").
 """
 import hashlib
+from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
@@ -30,8 +38,11 @@ import numpy as np
 from config.mongo import get_database
 
 DEFAULT_RUN_COUNT = 5_000
+MAX_RUN_COUNT = 20_000  # Plan 10 §3.3 — tail metrics stabilize by 10k, more is waste
 RUIN_THRESHOLD_PCT = 30.0  # preserved from the prior implementation's contract
 DRAWDOWN_BUCKETS = (10.0, 20.0, 30.0, 40.0, 50.0)
+EXCEEDANCE_BUCKETS = tuple(range(5, 55, 5))  # 5..50 step 5, finer than the legacy 5-bucket dist
+EQUITY_BAND_MAX_POINTS = 500  # Plan 10 §3.2 / §5.7 — downsampled band storage cap
 
 _DEFAULT_DIST = [
     {"drawdownPct": f"{k:.2f}", "probability": "0.000"} for k in DRAWDOWN_BUCKETS
@@ -130,3 +141,149 @@ async def run_monte_carlo_simulation(job_id: str, n_runs: int = DEFAULT_RUN_COUN
             str(p): float(np.percentile(max_dd_per_run, p)) for p in (5, 25, 50, 75, 95)
         },
     }
+
+
+def _iid_bootstrap_indices(rng: np.random.Generator, n_runs: int, n_trades: int) -> np.ndarray:
+    """Classic i.i.d. resample-with-replacement — the labeled alternative to
+    the default block bootstrap (Plan 10 §2.1 mode 2 / §3.3 "expose as a
+    labeled alternative, not the default")."""
+    return rng.integers(0, n_trades, size=(n_runs, n_trades))
+
+
+def _downsample_indices(n_points: int, max_points: int) -> np.ndarray:
+    if n_points <= max_points:
+        return np.arange(n_points)
+    return np.unique(np.linspace(0, n_points - 1, max_points).astype(int))
+
+
+def _seed_from_key(key: str) -> int:
+    return int(hashlib.md5(key.encode()).hexdigest()[:8], 16)
+
+
+async def run_lab_simulation(sim_id: str, source_job_id: str, config: dict, config_hash: str) -> dict[str, Any]:
+    """Job-based Monte Carlo robustness run for the Strategy Lab (Plan 10 Phase 1).
+
+    Persists the full result to `labResults` itself (engine is sole writer of
+    `results`/`status`, mirroring `backtestResults`) — the router that calls
+    this does not write on success, only on exception (same pattern as
+    `routers/backtest.py`). Reproducibility: the seed defaults to a
+    deterministic hash of `sourceJobId:configHash` (not `simId`) so any
+    re-submission of an identical config against the same source backtest —
+    regardless of what labId it lands under — reproduces the same draw
+    sequence; an explicit `config.seed` always wins.
+    """
+    db = get_database()
+
+    mode = config.get("mode") or "block"
+    if mode not in ("block", "iid"):
+        raise ValueError(f"invalid mode '{mode}' — must be 'block' or 'iid'")
+
+    n_runs = int(config.get("runs") or DEFAULT_RUN_COUNT)
+    n_runs = max(1, min(n_runs, MAX_RUN_COUNT))
+
+    ruin_threshold_pct = float(config.get("ruinThresholdPct") or RUIN_THRESHOLD_PCT)
+
+    seed = config.get("seed")
+    seed = int(seed) if seed is not None else _seed_from_key(f"{source_job_id}:{config_hash}")
+
+    parent = await db.backtestResults.find_one({"jobId": source_job_id}, {"capital": 1})
+    capital = float(parent.get("capital", 10000.0)) if parent else 10000.0
+
+    cursor = db.backtestTrades.find({"jobId": source_job_id})
+    trades = await cursor.to_list(length=100_000)
+
+    round_trips = [t for t in trades if t.get("exitReason") != "scale_out"]
+    returns = []
+    for t in round_trips:
+        try:
+            returns.append(float(t.get("pnl", 0.0)) / capital)
+        except (ValueError, TypeError):
+            continue
+
+    now = datetime.now(timezone.utc)
+
+    if not returns:
+        results = {
+            "ruinProbability": "0.000",
+            "drawdownExceedance": [
+                {"drawdownPct": f"{k:.2f}", "probability": "0.000"} for k in EXCEEDANCE_BUCKETS
+            ],
+            "finalEquityPercentiles": {},
+            "maxDrawdownPercentiles": {},
+            "equityBands": {"tradeIndices": [], "p5": [], "p25": [], "p50": [], "p75": [], "p95": []},
+            "meta": {"nRuns": n_runs, "nTrades": 0, "mode": mode, "seed": seed, "scaleOutLegsExcluded": len(trades)},
+        }
+        await db.labResults.update_one(
+            {"labId": sim_id},
+            {"$set": {"status": "completed", "results": results, "completedAt": now, "updatedAt": now}},
+            upsert=True,
+        )
+        return results
+
+    returns_arr = np.array(returns, dtype=np.float64)
+    n_trades = len(returns_arr)
+    rng = np.random.default_rng(seed)
+
+    block_len_cfg = config.get("blockLen")
+    block_len = int(block_len_cfg) if block_len_cfg else max(5, round(np.sqrt(n_trades)))
+
+    if mode == "iid":
+        idx = _iid_bootstrap_indices(rng, n_runs, n_trades)
+    else:
+        idx = _block_bootstrap_indices(rng, n_runs, n_trades, block_len)
+
+    resampled = returns_arr[idx]  # (n_runs, n_trades)
+
+    equity = 1.0 + np.cumsum(resampled, axis=1)
+    peak = np.maximum.accumulate(np.maximum(equity, 1.0), axis=1)
+    drawdown = (peak - equity) / peak
+    max_dd_per_run = drawdown.max(axis=1)
+
+    ruin_prob = float(np.mean(max_dd_per_run >= (ruin_threshold_pct / 100.0)))
+    exceedance = [
+        {
+            "drawdownPct": f"{threshold:.2f}",
+            "probability": f"{float(np.mean(max_dd_per_run >= threshold / 100.0)):.3f}",
+        }
+        for threshold in EXCEEDANCE_BUCKETS
+    ]
+
+    final_equity = equity[:, -1]
+    final_equity_pct = {str(p): float(np.percentile(final_equity, p)) for p in (5, 25, 50, 75, 95)}
+    max_dd_pct = {str(p): float(np.percentile(max_dd_per_run, p)) for p in (5, 25, 50, 75, 95)}
+
+    # Percentile equity bands over the trade-sequence axis (synthetic index,
+    # not wall-clock — block bootstrap paths don't map 1:1 to original candle
+    # times), downsampled to <= EQUITY_BAND_MAX_POINTS for the future fan chart.
+    band_idx = _downsample_indices(n_trades, EQUITY_BAND_MAX_POINTS)
+    equity_bands = {
+        "tradeIndices": [int(i) for i in band_idx],
+        **{
+            f"p{p}": [float(v) for v in np.percentile(equity[:, band_idx], p, axis=0)]
+            for p in (5, 25, 50, 75, 95)
+        },
+    }
+
+    results = {
+        "ruinProbability": f"{ruin_prob:.3f}",
+        "drawdownExceedance": exceedance,
+        "finalEquityPercentiles": final_equity_pct,
+        "maxDrawdownPercentiles": max_dd_pct,
+        "equityBands": equity_bands,
+        "meta": {
+            "nRuns": n_runs,
+            "nTrades": n_trades,
+            "blockLength": block_len if mode == "block" else None,
+            "mode": mode,
+            "seed": seed,
+            "scaleOutLegsExcluded": len(trades) - len(round_trips),
+        },
+    }
+
+    await db.labResults.update_one(
+        {"labId": sim_id},
+        {"$set": {"status": "completed", "results": results, "completedAt": now, "updatedAt": now}},
+        upsert=True,
+    )
+
+    return results

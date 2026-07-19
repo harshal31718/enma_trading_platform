@@ -81,6 +81,39 @@ type SymbolOverride = { maxLeverage?: number, volatilityMultiplier?: number, max
 - **`GET /api/v1/optimize/:id/status`** -> `{ jobId, status, progressPct? }` — proxies engine `GET /optimize/{job_id}/status`
 - **`GET /api/v1/optimize/:id/results`** -> `{ jobId, results: { params: object, metrics: BacktestMetric }[] }`, sorted by the requested objective — proxies engine `GET /optimize/{job_id}/results`
 
+### Strategy Lab (Plan 10 — `/lab` page, two tabs: Robustness (MC) + Optimizer)
+```typescript
+type LabResult = { labId: string, type: "monte_carlo"|"optimization", sourceJobId?: string, config: object, configHash: string, status: "queued"|"running"|"completed"|"failed"|"cancelled", error?: string, results?: { ruinProbability: string, drawdownExceedance: {drawdownPct, probability}[], finalEquityPercentiles: {[p:string]: number}, maxDrawdownPercentiles: {[p:string]: number}, equityBands: { tradeIndices: number[], p5: number[], p25: number[], p50: number[], p75: number[], p95: number[] }, meta: { nRuns, nTrades, blockLength, mode, seed, scaleOutLegsExcluded } }, completedAt?: string, createdAt: string }
+```
+- **`POST /api/v1/lab/simulations`** -> Req: `{ sourceJobId, mode?: "block"|"iid", runs?: number, blockLen?: number, ruinThresholdPct?: number, seed?: number }` -> 202 `{ labId, status: "queued" }`, or 200 `{ labId, status, cached: true }` if an identical `(userId, sourceJobId, configHash)` completed run already exists. `sourceJobId` must be a `completed` backtest owned by the caller (404/400 otherwise). Enqueues a BullMQ job on `simulation` (mirrors `backtest` queue exactly).
+- **`GET /api/v1/lab/simulations/:simId`** -> `{ ...LabResult }` (404 if not owned/found)
+- **`GET /api/v1/lab/simulations?sourceJobId=&limit=`** -> `{ simulations: LabResult[] }` (`results` field omitted from the list projection)
+
+### Strategy Lab — Walk-Forward Optimization (Plan 10 Phase 3a/3c/3d)
+```typescript
+type WalkForwardFold = {
+  fold: number, trainRange: [string, string], testRange: [string, string],
+  skipped?: true, reason?: string,
+  bestParams?: object, isMetrics?: BacktestMetric, oosMetrics?: BacktestMetric,
+  oosTradeCount?: number, degradationRatio?: number | null,
+  trials: { params: object, loss: number, rank: number, metrics: object, error?: string }[],
+  // Phase 3d: EVERY combo run_optimization scored on this fold's train window (not just
+  // bestParams) — the raw material for a trials table / IS-vs-OOS scatter / param heatmap.
+  // Present (possibly length 0) on both normal and `skipped` folds.
+}
+type WalkForwardResults = {
+  mode: "rolling"|"anchored", nFoldsRequested: number, nFoldsBuilt: number, trainRatio: number,
+  objective: string, minTrades: number, folds: WalkForwardFold[],
+  stitchedOOS: { totalTrades: number, netProfitPct: string, winRate: string, tradeSharpeApprox: string },
+  avgDegradationRatio: number | null, minTradesWarning: string | null,
+  meta: { paramGrid: object, maxCombinations: number, strategyFile: string, symbol: string, timeframe: string },
+}
+```
+- **`POST /api/v1/lab/optimizations`** -> Req: `{ strategyId, exchange, symbol, timeframe, startDate, endDate, capital, leverage?, feeRate?, objective?, mode?: "rolling"|"anchored", nFolds?, trainRatio?, minTrades?, maxCombinations?, paramGrid: { [param]: { min, max, step|num, type: "int"|"float" } } }` -> 202 `{ labId, status: "queued" }`, or 200 `{ labId, status, cached: true }` on an identical-config cache hit (same `(userId, configHash)` pattern as `/lab/simulations`). `strategyId` resolves server-side to the engine `filePath` (client never sends a raw path). Enqueues a BullMQ job on `optimization` queue (`optimizationQueue.js`/`optimization.worker.js`, mirrors `simulation.worker.js`).
+- **`GET /api/v1/lab/optimizations/:labId`** -> `{ ...LabResult, results?: WalkForwardResults }` (404 if not owned/found)
+- **`GET /api/v1/lab/optimizations?limit=`** -> `{ optimizations: LabResult[] }` (`results` omitted from the list projection)
+- **`GET /api/v1/lab/objectives`** -> `{ objectives: string[] }` — proxies engine `GET /optimize/objectives` (same registry the grid search and walk-forward optimizer both use)
+
 ### Health
 - **`GET /api/v1/health`** -> `{ status: "ok"|"degraded", mongo: "connected"|"error", redis: "connected"|"error" }` (no auth required)
 
@@ -169,10 +202,20 @@ type TradeRecord = { tradeId: string, source: "bot"|"manual", executedBy: string
   the `/api/v1/optimize/*` section above for the Node-facing shapes; Node mirrors these paths
   approximately, same pattern as other engine proxies.
 
+### Engine Simulate Routes (Node → Engine, Plan 10 Phase 1)
+- **`POST /simulate/monte-carlo`** -> Req: `{ simId, sourceJobId, userId, config, configHash }` -> `{ success: true, data: LabResult["results"] }` (`engine/routers/simulate.py`, mounted `engine/main.py`). Same async-job-semantics pattern as `POST /backtest/run` — the engine writes the full `labResults` doc itself (sole-writer), the router's own write only happens on the failure path.
+- **`POST /simulate/optimize`** -> Req: `{ labId, userId, config, configHash }` -> `{ success: true, data: WalkForwardResults }` (`engine/routers/simulate.py` -> `engine/services/walk_forward.py`). Same sole-writer/async-job-semantics pattern as `/simulate/monte-carlo` — persists the full `labResults` doc itself, router only writes on the failure path. Splits `config`'s date range into `nFolds` sequential non-overlapping folds by candle count (`_split_folds`), runs `services.optimizer.run_optimization` (grid search — Optuna/TPE swap is Phase 3b, not yet implemented) on each fold's train window, evaluates the winning params OOS via `run_backtest_simulation` on that fold's test window, and reports the in-sample-vs-OOS Sharpe degradation ratio per fold plus a trade-level stitched-OOS aggregate across all folds.
+
 ## Socket.IO Events
 - Envelope: `{ event: string, data: any }`
 - `backtest:progress` -> `{ jobId, pct, message }`
 - `backtest:complete` -> `{ jobId, resultId }`
+- `simulation:progress` -> `{ simId, pct, message }` (Plan 10 Phase 1 — plumbing exists via `socketEmitter.js`'s `simulation` case, but the engine never calls `publish_progress` for a lab run today; sub-second jobs don't need it. Wired for Phase 3's optimizer, which will.)
+- `simulation:complete` -> `{ simId, labId }`
+- `simulation:error` -> `{ simId, error }`
+- `optimization:progress` -> `{ labId, pct, message }` (Plan 10 Phase 3a — room `optimization:{jobId}`; wired end-to-end in Node/`socketEmitter.js`, but the engine doesn't call `publish_progress` from `walk_forward.py` yet, so this event is not currently emitted in practice)
+- `optimization:complete` -> `{ labId }`
+- `optimization:error` -> `{ labId, error }`
 - `algo:session:update` -> `{ sessionId, status?, pnl?, openPositions?, symbolStats?, tradingState? }` — **partial**: clients merge only the fields present. Most emits carry `status`/`pnl`/`openPositions`; the per-symbol aggregation emits carry only `symbolStats` (a `{ [symbol]: { trades, qty, notional, realisedPnl, leverage } }` map re-derived from `tradeRecords` on each close and on session stop; also persisted on the `LiveSession` doc); `tradingState` changes are emitted by the kill-switch endpoint.
 - `algo:session:log` -> `{ sessionId, message: string, level?: "info"|"warn"|"error", timestamp }` — free-text session log lines, emitted repeatedly throughout a session's lifecycle (start, order placement, errors, stop).
 - `algo:position:open` -> `{ sessionId, symbol, side, qty, price, leverage, timestamp }` (`leverage` = per-symbol clamped value)

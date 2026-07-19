@@ -30,6 +30,7 @@ from routers.trade import router as trade_router
 from routers.risk import router as risk_router
 from routers.leverage_sensitivity import router as leverage_sensitivity_router
 from routers.optimize import router as optimize_router
+from routers.simulate import router as simulate_router
 from services.strategy_seeder import seed_strategies
 from services.binance_testnet import close_client
 from utils.symbols import load_exchange_rules, load_symbol_volume_tiers, load_book_tickers
@@ -207,6 +208,7 @@ app.include_router(algo_router, prefix="/algo", tags=["algo"])
 app.include_router(risk_router, prefix="/risk", tags=["risk"])
 app.include_router(leverage_sensitivity_router, prefix="/backtest", tags=["backtest"])
 app.include_router(optimize_router, prefix="/optimize", tags=["optimize"])
+app.include_router(simulate_router, prefix="/simulate", tags=["simulate"])
 
 
 @app.get("/health")

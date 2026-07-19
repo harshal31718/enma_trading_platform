@@ -1,9 +1,255 @@
 # Plan 10 — Monte Carlo Optimiser & Strategy Lab
 
-**Status:** Ready — MC engine core shipped 2026-07-15 (Phase 1a of 4), Phases 1b–4 (job plumbing,
-Strategy Lab UI, optimizer exposure, MC-scored selection) not started · **Priority:** P1 ·
+**Status:** In progress — MC engine core shipped 2026-07-15 (Phase 1a), job plumbing shipped
+2026-07-19 (Phase 1b), Strategy Lab MC tab shipped 2026-07-19 (Phase 2), walk-forward job
+plumbing shipped 2026-07-19 (Phase 3a), **Optimizer tab UI shipped 2026-07-19 (Phase 3c, see
+below)**, **Phase 3d per-trial persistence shipped 2026-07-19 (engine side only, see below)**;
+Phase 3b (Optuna TPE), the Phase 3d trials-table/scatter/heatmap UI + DSR/PBO stats, and Phase 4
+(MC-scored selection) not started · **Priority:** P1 ·
 **Depends on:** 9 (steps 9.1/9.3 for correct inputs — both Shipped; 9.6/9.9 are absorbed here) ·
 **Related:** 2 (jobs/CI), 7 (client decomposition)
+
+## Phase 3d shipped 2026-07-19 (per-trial persistence only — engine side)
+
+This is the persistence half of Phase 3d, not the whole phase — the trials-table/scatter/heatmap
+UI and DSR/PBO overfitting statistics below are still not started.
+
+`services/walk_forward.py`'s per-fold loop already had every combo `run_optimization` scored
+sitting in `train_result["results"]` — the grid search was never re-run once the winner was
+picked, its full ranked list was just discarded down to `best` before this change. Fix: each fold
+dict in `run_lab_walk_forward`'s return now carries a `trials` key — `train_result["results"]`
+verbatim (params/loss/rank/metrics per combo), present on both normal and `skipped` folds. No new
+simulation math, no new formula, no schema migration — the data was already computed and already
+persisted once to `optimizationResults` per train call; this just also threads it into the
+`labResults` doc the walk-forward endpoint returns. Two new tests in `test_walk_forward.py`
+(trials present + correctly shaped on both a normal fold and a `skipped`-fold path); full suite
+471/471. **Live-verified** (this session had real Docker access, unlike the sandbox that wrote
+Phases 1-3c): a real `POST /simulate/optimize` call against cached BTCUSDT 1d candles + the seeded
+MicroScalper strategy round-tripped through the engine, persisted to the real dev MongoDB (the
+project's Atlas cluster — the `enma_trading_platform-mongodb-1` container in `docker-compose.yml`
+is unused/vestigial for this project, do not query it expecting real data), and each fold's
+`trials` array came back with all 4 grid combinations, not just the winner. Test docs cleaned up
+after.
+
+**Still not done (real remaining scope, not small):** `FoldResultsTable.jsx`'s inline note claiming
+"no per-trial data exists" is now stale and needs updating, but the trials table / IS-vs-OOS
+scatter / param heatmap / walk-forward window map UI components themselves are not built — this
+session only unblocked them with real data. Deflated Sharpe Ratio and PBO (§2.2's "honesty layer")
+still need a normal-CDF/inverse-CDF primitive and are still deferred pending a session that can
+numerically verify the formula.
+
+## Phase 3c shipped 2026-07-19 (Optimizer tab UI — fold-level only, not the full trials view)
+
+New "Optimizer" tab on the Strategy Lab page (`client/src/pages/StrategyLab.jsx` now uses
+`Tabs`/`TabsContent` for "Robustness (MC)" vs "Optimizer", per §4.1's two-tab layout).
+`WalkForwardWizard.jsx`: strategy/symbol/timeframe/date-range picker (mirrors
+`NewBacktestWizard.jsx`'s own fields), `ParamGridForm.jsx` (auto-renders min/max/step-or-point-count
+per param from the strategy's existing PARAMS schema — same `{label, default, min, max, type}`
+shape `ParamsForm.jsx` already consumes for single-value backtest runs, per §4.3.7's own
+recommendation), objective dropdown (new thin Node proxy `GET /api/v1/lab/objectives` →
+engine's existing `GET /optimize/objectives`), mode/nFolds/trainRatio/minTrades/maxCombinations
+inputs, and a combo-count × fold-count cost estimate preview with a warning above 1,000 backtests.
+`OptimizationHistoryRail.jsx` mirrors the MC tab's `HistoryRail.jsx`. Results canvas:
+`DegradationVerdict.jsx` (the headline avg IS→OOS Sharpe degradation ratio, severity-colored),
+`StitchedOOSCard.jsx` (the trade-level OOS aggregate), `FoldResultsTable.jsx` (one row per fold —
+train/test range, best params, IS/OOS Sharpe, degradation, OOS trade count). Socket wiring against
+`optimization:{labId}` mirrors the MC tab's `simulation:{labId}` pattern exactly. Also fixed:
+`lab.controller.js`'s `runOptimization` now resolves a client-sent `strategyId` to the engine's
+`filePath` via `Strategy.findById` (matching `POST /api/v1/backtest`'s own convention) instead of
+trusting a raw `strategyFile` path from the client, which the Phase 3a controller had skipped.
+
+**Real, disclosed limitation — not the plan's full §4.3 vision:** `walk_forward.py` (Phase 3a)
+only persists each fold's WINNING param combo, not every trial evaluated during that fold's grid
+search. So `FoldResultsTable.jsx` is genuinely one-row-per-fold, not the plan's §4.3.1 "trials
+table (params, IS/OOS metrics, DSR, mc_p5, rank)" — there is no per-trial IS-vs-OOS scatter, param
+heatmap, or walk-forward window map possible from today's persisted data. Building those needs an
+engine-side change (persist every trial's params+metrics per fold, not just the winner) — real,
+not-small scope, called **Phase 3d** below rather than faked with fold-level data relabeled as
+"trials." The UI says this explicitly in an inline note rather than silently presenting a
+fold-table as if it were the richer view the plan originally sketched.
+
+**Verification gap, same pattern as Phases 2/3a:** no Docker/Linux-native `client/node_modules` in
+this sandbox — none of this was compiled or rendered. Hand-reviewed against `NewBacktestWizard.jsx`
+and the MC tab's own already-shipped components for import-path/prop-shape consistency.
+
+## Phase 3a shipped 2026-07-19 (walk-forward job plumbing, grid search only)
+
+Engine: new `engine/services/walk_forward.py` — pure orchestration over the two already-shipped,
+already-tested primitives (`services.optimizer.run_optimization` for train,
+`services.backtest_runner.run_backtest_simulation` for test), per Plan 18's own framing ("no new
+sim math"). Fold split by candle COUNT (not calendar days) via a new `_fetch_candle_times()` +
+`_split_folds()` (rolling = fixed-width train per fold; anchored = expanding train from the very
+first candle). Per fold: grid-optimize on the train window → best params → single backtest on the
+test window with those params → per-fold in-sample-vs-out-of-sample Sharpe degradation ratio (the
+plan's own headline "is this overfit" signal) computed from two already-real numbers, no new
+statistical formula. Stitched-OOS aggregate reads back each fold's persisted `backtestTrades` and
+concatenates them trade-level (same pnl/capital-additive, scale_out-excluded convention
+`monte_carlo.py` already uses) — explicitly documented as a trade-level approximation, not the
+candle-level Sharpe a single contiguous backtest reports (folds have calendar gaps between them).
+New `POST /simulate/optimize` router endpoint, same thin async-job-semantics pattern as
+`/simulate/monte-carlo`. `services/optimizer.py` gained an opt-in `min_trades` filter
+(`OptimizerConfig.min_trades`, default 0/off — fully backward compatible) that excludes
+lucky-few-trades combos from being selected as `best` (still visible in `results`, just
+ineligible for the top pick).
+
+Node: `labConfig.js` gained `buildWalkForwardConfig()` (reject-not-clamp validation, mirroring
+`buildMonteCarloConfig`'s stance, except the two documented numeric caps `MAX_N_FOLDS`=12 and
+`MAX_MAX_COMBINATIONS`=500 — unlike the old sync `/optimize/run`, the job-based Lab path never lets
+`maxCombinations=0` mean "uncapped", since a fold × grid product without a cap can mean thousands
+of backtests). New `lab.controller.js` handlers (`runOptimization`/`getOptimization`/
+`listOptimizations`) at `/api/v1/lab/optimizations` — no parent-jobId ownership check needed
+(unlike Monte Carlo, an optimization isn't derived from an existing backtest; it's a standalone
+strategy+symbol+range run scoped directly to `req.user.id`). New `optimizationQueue`/
+`optimization.worker.js` mirroring `simulationQueue`/`simulation.worker.js` exactly.
+`socketEmitter.js` gained an `optimization` job-type case (`optimization:progress/complete/error`);
+`config/socket.js`'s room join/leave/disconnect handling extended to the `optimization:` prefix
+(alongside the existing `backtest:`/`simulation:` cases — this was NOT actually a generic
+`<prefix>:<id>` handler despite a prior session's tracker note claiming so; it's three explicit
+string-prefix checks, corrected here rather than left to bite a future session).
+
+**Deliberately deferred, not silently dropped:**
+- **Optuna/TPE search (Plan 19's design) — Phase 3b.** Grid search only ships here; the search
+  loop is swappable without touching the fold/stitch logic (Plan 19 itself notes "S8 swaps only
+  the search loop").
+- **Deflated Sharpe Ratio / PBO overfitting statistics (§2.2's "honesty layer") — Phase 3b/3c,
+  not attempted this session.** Both need a normal-CDF/inverse-CDF numerical primitive this
+  session had no way to verify (no pytest/Docker access in the writing sandbox — see below).
+  Shipping an unverified statistical formula that traders would use to judge overfitting risked
+  being worse than shipping none; deferred rather than guessed at. The min-trades filter (the
+  other half of the honesty layer) DID ship — it's a simple threshold, no formula risk.
+- **Optimizer tab UI — shipped later the same day as Phase 3c** (fold-level wizard/history/results
+  only; see Phase 3c's own section above for what shipped and what didn't). This session (3a)
+  shipped job plumbing only, mirroring Phase 1b → Phase 2's own sequencing: backend before UI.
+  The trials table / IS-vs-OOS scatter / param heatmap / walk-forward window map need per-trial
+  data this session's persistence doesn't capture — that's Phase 3d, still not done.
+- **Progress publishing** — `socketEmitter.js`'s `optimization` case is wired end-to-end, but
+  `walk_forward.py` never calls `publish_progress` (unlike Monte Carlo where this is a deliberate
+  no-op because the job is sub-second, a walk-forward run is genuinely multi-minute — this one
+  is a real gap, not a documented non-issue. Needs per-fold progress threaded through
+  `run_optimization`'s existing-but-unused `progress_callback` param down into `walk_forward.py`.
+
+**Verification gap, disclosed rather than skipped:** same sandbox constraint as Phase 2 — no
+Docker access, and this session cannot run engine pytest (`asyncpg`/TA-Lib import chain
+unavailable on host, per root `CLAUDE.md` Rule B) or server jest (this is server+engine code, not
+client, so the earlier Phase 2 node_modules platform-mismatch doesn't apply here, but there is
+still no Docker to run jest in either). New tests written (`engine/tests/test_walk_forward.py`,
+14 cases covering fold-split conservation/anchored-vs-rolling/degradation-ratio computation/trade
+stitching/error paths; `labConfig.test.js` gained 12 `buildWalkForwardConfig` cases) but **not
+executed** — same disclosed pattern as Phase 2 and the 2026-07-18 session's Docker gap. Run inside
+the container to confirm:
+```
+docker exec enma_trading_platform-engine-1 pytest /app/tests/test_walk_forward.py
+docker exec enma_trading_platform-server-1 npm test -- labConfig.test.js
+```
+
+## Phase 2 shipped 2026-07-19 (Strategy Lab page, MC tab)
+
+New route `/lab` (`client/src/pages/StrategyLab.jsx`) + nav item (between Backtest and
+AlgoTrading), `hooks/useLab.js` (mirrors `useBacktest.js`'s job-lifecycle pattern exactly —
+mutation to enqueue, query-by-id with terminal-state `staleTime: Infinity`, history-list query).
+`components/lab/`: `RunWizard` (backtest selector + mode/runs/blockLen/ruinThresholdPct),
+`HistoryRail` (status-iconed run list), `FanChart` (recharts `ComposedChart`, p5/p25/p50/p75/p95
+bands over the synthetic trade-sequence index from `equityBands`), `PercentileSpread` (box/
+whisker-style spread for final-equity and max-drawdown), `ExceedanceCurve` (P(DD>x) from
+`drawdownExceedance`, ruin-threshold reference line), `RuinCard` (severity-colored), `VerdictStrip`
+(point-estimate vs MC-p5 gap sentence, per the plan's own example wording), `ConfigDrawer`
+(read-only, reproducibility). Socket wiring mirrors `Backtest.jsx`'s `backtest:*` room pattern
+against `simulation:{labId}` (`simulation:progress`/`simulation:complete`/`simulation:error`,
+already wired server-side in Phase 1).
+
+**Real scope gap found and resolved honestly, not silently:** §4.2 items 2–3 call for final-equity
+and max-drawdown *histograms*. `run_lab_simulation` (Phase 1) only persists the five percentiles
+(`finalEquityPercentiles`/`maxDrawdownPercentiles`) — the raw per-run array (up to 20,000 values)
+is discarded after `np.percentile` runs; there is no binned-count field in `labResults.results`
+today. A true histogram needs an engine-side change (persist bins or raw samples) that Phase 1
+didn't scope. Rather than fabricate a histogram from 5 points, `PercentileSpread.jsx` renders an
+honest box/whisker-style percentile spread instead, with an explicit code comment documenting why
+and what would need to change. **Follow-up scope, not done here:** add binned histogram data to
+`run_lab_simulation`'s persisted results if/when the fan chart + percentile spread turn out to be
+insufficient in practice.
+
+**Also scoped out (per Phase 1's own already-documented decisions, unchanged):** the mode-breakdown
+table (§4.2 item 5) needs multiple modes enabled per single run — the engine only runs one mode
+(`block` xor `iid`) per submission; comparing them today means two separate history-rail entries,
+not a combined breakdown row. True drag-to-explore on the ruin threshold isn't wired (would imply
+live recompute) — re-running with a different `ruinThresholdPct` via the wizard is the mechanism.
+
+**Retired:** `SimulationResults.jsx` deleted; its Risk Dashboard slot (Zone 3) replaced with a
+CTA card linking to `/lab`. `GET /api/v1/risk/backtest/:id/simulation` now returns **410 Gone**
+with a pointer to `/api/v1/lab/simulations` (per Phase 2's own acceptance criteria) — the
+`engine/routers/leverage_sensitivity.py` router itself is untouched (still callable directly,
+just no longer reachable from the product). `useBacktestSimulation` hook removed from
+`useRiskSettings.js`. Added a "Robustness Check" deep-link button on the Backtest report page
+(next to Export JSON) to `/lab?sourceJobId={jobId}` — covers part of §4.4's "everywhere else"
+scope (the auto-enqueued MC summary strip itself is not built; that's a bigger Phase 4-adjacent
+piece needing an auto-enqueue trigger on backtest completion, left as remaining scope below).
+
+**Not done / remaining for Phase 2's own full scope:**
+- Backtest-page compact MC summary strip (auto-enqueued on backtest completion) — only a manual
+  deep-link button shipped, not the auto-enqueue-and-render-inline piece from §4.4.
+- Component tests for the results canvas (Plan 2's harness) — not written this session; the repo's
+  only existing client test file is a page-level smoke test (`src/tests/pages.smoke.test.jsx`),
+  no per-component harness convention exists yet to follow.
+- **Verification gap, disclosed rather than skipped:** this session's sandbox has no Docker access
+  (root `CLAUDE.md` Rule B) and its bind-mounted `client/node_modules` is a Windows-installed copy
+  (`@rollup/rollup-linux-x64-gnu` / `@esbuild/linux-x64` missing) — `vite build`/`vitest` cannot run
+  here, and reinstalling would violate the "do not alter `node_modules` on host" constraint. All
+  new/changed files were written directly and reviewed for import-path and JSX correctness against
+  existing sibling components, but **no automated build/test run has confirmed this compiles or
+  renders** — that check is still owed, same caveat pattern as the 2026-07-18 session's Docker gap.
+
+## Phase 1 shipped 2026-07-19 (job plumbing — SRV-5 architectural fix)
+
+Engine: `services/monte_carlo.run_lab_simulation()` — config-driven (mode `block`|`iid`, runs
+capped at `MAX_RUN_COUNT`=20k, optional `blockLen`/`ruinThresholdPct`/`seed`), writes the full
+result to `labResults` itself (engine sole-writer, mirrors `backtestResults`). Seed defaults to a
+deterministic hash of `sourceJobId:configHash` (not `simId`) so any re-submission of an identical
+config reproduces the same draw sequence regardless of which labId it lands under. New
+`routers/simulate.py` (`POST /simulate/monte-carlo`), same async-job-semantics pattern as
+`routers/backtest.py` (only the failure path writes on the router side). The original
+`run_monte_carlo_simulation()` (used by `leverage_sensitivity.py`) is untouched — retiring it is
+Phase 2's job, alongside `SimulationResults.jsx`.
+
+Node: new `LabResult` model (`labId`, `type`, `sourceJobId`, `config`, `configHash`, `status`,
+`results` — same ownership split as `BacktestResult`: server creates the `queued` doc + updates
+`status`/`error` only, engine writes `results`), `simulationQueue`/`simulation.worker.js` (mirrors
+`backtestQueue`/`backtest.worker.js` exactly, including the redundant-but-harmless status
+double-write), `lab.controller.js`/`lab.routes.js` mounted at `/api/v1/lab`. `configHash` is
+computed server-side (`utils/labConfig.js`, pure + unit-tested) and short-circuits identical
+resubmissions against a cached completed doc before ever touching the queue.
+
+**Acceptance criteria met:** 5k-run MC on a real 38-trade backtest completed in **~1.0s**
+end-to-end (well under the 5s bar — smaller trade count than the plan's 2k-trade benchmark, but
+the vectorized core is the same one Phase 1a already proved out at 100x); re-submitting an
+identical config returns the cached doc (`configHash` lookup, tested); a forced error (invalid
+`mode`) surfaces its real message via `HTTPException`/`ApiError`, not a blanket 503 (tested);
+seeded re-run reproduces an identical `equityBands`/`ruinProbability` doc regardless of labId
+(tested — `test_deterministic_seed_from_source_and_confighash_not_simid`). Engine container suite
+458/458 (450 + 8 new `test_lab_simulation.py`); server jest 129/129 (116 + 13 new
+`labConfig.test.js`).
+
+**Scope decisions taken (deferred, not forgotten):**
+- **Cancel endpoint (`DELETE /lab/simulations/:id`) not built.** The plan's §3.1 lists it, but MC
+  runs complete in ~1s — there's nothing meaningful to cancel. Revisit for Phase 3's optimizer
+  jobs, which are genuinely multi-minute and where cancellation has real value.
+- **Only `block` and `iid` modes implemented.** Skip-trades/cost-stress/start-date-perturbation
+  (§2.1 modes 3–5) are real scope but not required by Phase 1's own acceptance criteria; add them
+  when Phase 2's UI actually needs a mode picker for them, not before.
+- **Progress publishing (`progress:{simId}` Redis channel, `socketEmitter.js`'s new `simulation`
+  case) is wired end-to-end but the engine never actually calls `publish_progress` during the ~1s
+  run** — not worth the plumbing for a sub-second job. The channel/socket-room infrastructure is
+  in place for Phase 3's optimizer (genuinely long-running, needs real progress updates).
+
+**Not yet done:** no UI consumes any of this yet — `POST /api/v1/lab/simulations` is reachable but
+nothing calls it. Phase 2 (Strategy Lab page, MC tab) is the correct next slice.
+
+**Drift-reviewer pass (2026-07-19):** clean — no stack/structure/API/boundary drift; ownership
+check in `lab.controller.js` correctly scopes by `userId` and 404s cross-user `sourceJobId`.
+One low-severity finding fixed same-day: `server/src/config/socket.js`'s `join`/`leave`/`disconnect`
+handlers only special-cased `backtest:` rooms for the subscribe/auto-cleanup dance — added a
+`simulation:` case (generalized to any `<prefix>:<id>` room) so Phase 2's UI gets the same
+semantics without a second wiring pass. Inert either way today (`simulation.worker.js` already
+self-subscribes independent of client room membership) but now correct for when Phase 2 lands.
 
 > Source findings: `audit_2_quant-core.md` QNT-6/7/17 + the diagnosis in §1
 > below. Scope: the Monte Carlo simulation feature (currently rendered but broken), the

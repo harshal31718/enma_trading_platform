@@ -1,5 +1,5 @@
 import { useState, useEffect, lazy, Suspense } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams, Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import {
   TrendingUp,
@@ -11,6 +11,7 @@ import {
   Download,
   Plus,
   Square,
+  Dices,
 } from 'lucide-react'
 
 import PageWrapper from '../components/layout/PageWrapper'
@@ -514,9 +515,17 @@ export default function Backtest() {
                     )}
                   </TabsTrigger>
                 </TabsList>
+                <Link
+                  to={`/lab?sourceJobId=${activeResult.jobId}`}
+                  className="ml-auto flex items-center justify-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-sm rounded-lg transition-colors"
+                  title="Run a Monte Carlo robustness simulation on this backtest"
+                >
+                  <Dices className="size-4 text-emerald-400" />
+                  Robustness Check
+                </Link>
                 <button
                   onClick={() => exportResultAsJSON(activeResult, activeResult.strategyName || 'backtest')}
-                  className="ml-auto mr-4 flex items-center justify-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm rounded-lg transition-colors"
+                  className="mr-4 flex items-center justify-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm rounded-lg transition-colors"
                 >
                   <Download className="size-4" />
                   Export JSON

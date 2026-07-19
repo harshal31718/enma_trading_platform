@@ -1,0 +1,148 @@
+const crypto = require('crypto')
+
+const MAX_RUNS = 20_000
+const DEFAULT_RUNS = 5_000
+
+// Normalizes + validates a Monte Carlo robustness-run request body into the
+// exact config shape persisted on LabResult.config and forwarded to the
+// engine (Plan 10 §3.2). Rejects, does not clamp, invalid enum/type input —
+// clamps only the numeric runs bound (Plan 10 §3.3's documented cap).
+function buildMonteCarloConfig(input = {}) {
+  const mode = input.mode ?? 'block'
+  if (mode !== 'block' && mode !== 'iid') {
+    throw new Error(`mode must be 'block' or 'iid', got '${mode}'`)
+  }
+
+  const runsNum = Number(input.runs ?? DEFAULT_RUNS)
+  if (!Number.isFinite(runsNum) || runsNum < 1) {
+    throw new Error('runs must be a positive number')
+  }
+  const runs = Math.min(Math.round(runsNum), MAX_RUNS)
+
+  let blockLen = null
+  if (input.blockLen !== undefined && input.blockLen !== null && input.blockLen !== '') {
+    const blockLenNum = Number(input.blockLen)
+    if (!Number.isFinite(blockLenNum) || blockLenNum < 1) {
+      throw new Error('blockLen must be a positive integer when provided')
+    }
+    blockLen = Math.round(blockLenNum)
+  }
+
+  const ruinThresholdPctNum = Number(input.ruinThresholdPct ?? 30.0)
+  if (!Number.isFinite(ruinThresholdPctNum) || ruinThresholdPctNum <= 0 || ruinThresholdPctNum > 100) {
+    throw new Error('ruinThresholdPct must be a number between 0 and 100')
+  }
+
+  let seed = null
+  if (input.seed !== undefined && input.seed !== null && input.seed !== '') {
+    const seedNum = Number(input.seed)
+    if (!Number.isFinite(seedNum)) {
+      throw new Error('seed must be a number when provided')
+    }
+    seed = Math.round(seedNum)
+  }
+
+  return { mode, runs, blockLen, ruinThresholdPct: ruinThresholdPctNum, seed }
+}
+
+// Plan 10 Phase 3a — walk-forward optimization config. Same "reject, don't
+// clamp invalid input" stance as buildMonteCarloConfig, except the numeric
+// caps (nFolds, maxCombinations) which are documented, clamped bounds.
+const MAX_N_FOLDS = 12
+const DEFAULT_N_FOLDS = 4
+const DEFAULT_TRAIN_RATIO = 0.7
+const MAX_MAX_COMBINATIONS = 500 // Plan 10 §5.8 concurrency/compute guardrail
+
+function buildWalkForwardConfig(input = {}) {
+  const required = ['strategyFile', 'exchange', 'symbol', 'timeframe', 'startDate', 'endDate', 'capital', 'paramGrid']
+  for (const key of required) {
+    if (input[key] === undefined || input[key] === null || input[key] === '') {
+      throw new Error(`${key} is required`)
+    }
+  }
+  if (typeof input.paramGrid !== 'object' || Array.isArray(input.paramGrid) || Object.keys(input.paramGrid).length === 0) {
+    throw new Error('paramGrid must be a non-empty object')
+  }
+
+  const mode = input.mode ?? 'rolling'
+  if (mode !== 'rolling' && mode !== 'anchored') {
+    throw new Error(`mode must be 'rolling' or 'anchored', got '${mode}'`)
+  }
+
+  const objective = input.objective ?? 'sharpe'
+
+  const nFoldsNum = Number(input.nFolds ?? DEFAULT_N_FOLDS)
+  if (!Number.isFinite(nFoldsNum) || nFoldsNum < 1) {
+    throw new Error('nFolds must be a positive number')
+  }
+  const nFolds = Math.min(Math.round(nFoldsNum), MAX_N_FOLDS)
+
+  const trainRatioNum = Number(input.trainRatio ?? DEFAULT_TRAIN_RATIO)
+  if (!Number.isFinite(trainRatioNum) || trainRatioNum <= 0 || trainRatioNum >= 1) {
+    throw new Error('trainRatio must be a number between 0 and 1 (exclusive)')
+  }
+
+  const maxCombinationsNum = Number(input.maxCombinations ?? 0)
+  if (!Number.isFinite(maxCombinationsNum) || maxCombinationsNum < 0) {
+    throw new Error('maxCombinations must be a non-negative number')
+  }
+  const maxCombinations = maxCombinationsNum > 0
+    ? Math.min(Math.round(maxCombinationsNum), MAX_MAX_COMBINATIONS)
+    : MAX_MAX_COMBINATIONS // 0 ("full grid") is dangerous here — a fold-x-grid product without
+    // a cap can mean thousands of backtests; unlike the old sync /optimize/run
+    // (which lets 0="all combos" through), the job-based Lab path always caps.
+
+  const minTradesNum = Number(input.minTrades ?? 0)
+  if (!Number.isFinite(minTradesNum) || minTradesNum < 0) {
+    throw new Error('minTrades must be a non-negative number')
+  }
+
+  const leverageNum = Number(input.leverage ?? 10)
+  const capitalNum = Number(input.capital)
+  if (!Number.isFinite(capitalNum) || capitalNum <= 0) {
+    throw new Error('capital must be a positive number')
+  }
+
+  return {
+    strategyFile: input.strategyFile,
+    exchange: input.exchange,
+    symbol: input.symbol,
+    timeframe: input.timeframe,
+    startDate: input.startDate,
+    endDate: input.endDate,
+    capital: capitalNum,
+    leverage: Number.isFinite(leverageNum) ? Math.round(leverageNum) : 10,
+    feeRate: input.feeRate != null ? Number(input.feeRate) : undefined,
+    slippagePct: input.slippagePct != null ? Number(input.slippagePct) : null,
+    fundingEnabled: !!input.fundingEnabled,
+    fundingRate: input.fundingRate != null ? Number(input.fundingRate) : null,
+    riskParams: input.riskParams ?? {},
+    objective,
+    paramGrid: input.paramGrid,
+    mode,
+    nFolds,
+    trainRatio: trainRatioNum,
+    maxCombinations,
+    minTrades: Math.round(minTradesNum),
+  }
+}
+
+// Deterministic regardless of key insertion order — sorts keys before
+// hashing so `{mode:'block',runs:5000}` and `{runs:5000,mode:'block'}` hash
+// identically (both come from buildMonteCarloConfig's fixed key order in
+// practice, but this makes the guarantee explicit rather than incidental).
+function computeConfigHash(sourceJobId, config) {
+  const sortedKeys = Object.keys(config).sort()
+  const canonical = JSON.stringify({ sourceJobId, ...Object.fromEntries(sortedKeys.map((k) => [k, config[k]])) })
+  return crypto.createHash('sha256').update(canonical).digest('hex')
+}
+
+module.exports = {
+  buildMonteCarloConfig,
+  buildWalkForwardConfig,
+  computeConfigHash,
+  MAX_RUNS,
+  DEFAULT_RUNS,
+  MAX_N_FOLDS,
+  MAX_MAX_COMBINATIONS,
+}

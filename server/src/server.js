@@ -4,8 +4,10 @@ const mongoose = require('mongoose')
 const app = require('./app')
 const { initSocket } = require('./config/socket')
 
-// Import worker to start it — side effect only
+// Import workers to start them — side effect only
 require('./workers/backtest.worker')
+require('./workers/simulation.worker')
+require('./workers/optimization.worker')
 
 const PORT = process.env.PORT || 5000
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://mongodb:27017/enma_trading'

@@ -139,6 +139,9 @@ class OptimizerConfig:
     risk_params: dict | None = None
     objective: str = "sharpe"
     max_combinations: int = 0  # 0 = all combinations
+    min_trades: int = 0  # 0 = off (backward compatible); Plan 10 Phase 3 honesty-layer
+    # filter — excludes lucky-few-trades combos from being selected as `best`
+    # (still reported in `results`, just ineligible for the top pick).
 
 
 # ── Grid generation ──────────────────────────────────────────────────────────
@@ -317,7 +320,20 @@ async def run_optimization(
     for rank, entry in enumerate(scored, start=1):
         entry["rank"] = rank
 
-    best = scored[0] if scored else None
+    # Plan 10 Phase 3 min-trades filter: a combo with too few trades can post
+    # a great point-metric by luck. Off by default (min_trades=0) — fully
+    # backward compatible, `eligible == scored` in that case so `best` is
+    # unchanged from before this filter existed.
+    if config.min_trades > 0:
+        eligible = [
+            s for s in scored
+            if math.isfinite(s.get("loss", float("inf")))
+            and _safe_float_metric(s.get("metrics", {}), "totalTrades", 0) >= config.min_trades
+        ]
+    else:
+        eligible = scored
+
+    best = eligible[0] if eligible else None
 
     result = {
         "jobId": job_id,
@@ -325,6 +341,8 @@ async def run_optimization(
         "objective": config.objective,
         "totalCombinations": total,
         "errorCount": errors,
+        "minTrades": config.min_trades,
+        "eligibleCount": len(eligible),
         "paramGrid": param_grid,
         "config": {
             "strategyFile": config.strategy_file,

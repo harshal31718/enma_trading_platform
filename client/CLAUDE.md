@@ -47,6 +47,11 @@ client/
 │   │   ├── charts/      ← Recharts wrappers: EquityCurve.jsx, EquitySparkline.jsx,
 │   │   │                   DrawdownSparkline.jsx (DrawdownChart/CandleChart do not exist)
 │   │   ├── layout/      ← Navbar.jsx, PageWrapper.jsx (no Sidebar)
+│   │   ├── lab/         ← Strategy Lab (Plan 10) components
+│   │   │   ├── ConfigDrawer.jsx, RunWizard.jsx, WalkForwardWizard.jsx, ParamGridForm.jsx
+│   │   │   ├── HistoryRail.jsx, OptimizationHistoryRail.jsx
+│   │   │   ├── RuinCard.jsx, ExceedanceCurve.jsx, PercentileSpread.jsx, FanChart.jsx (MC tab)
+│   │   │   └── DegradationVerdict.jsx, StitchedOOSCard.jsx, FoldResultsTable.jsx, VerdictStrip.jsx (Optimizer tab)
 │   │   ├── risk/        ← Risk Intelligence Dashboard visualizations
 │   │   │   ├── AggregateMarginGauge.jsx ← locked margin / free balance / leverage gauge (Zone 1)
 │   │   │   ├── CorrelationHeatmap.jsx   ← rolling 30-day close-return correlation heatmap (Zone 1)
@@ -91,6 +96,7 @@ client/
 │   │   ├── useAuth.js             ← TanStack Query: useAuth() (GET /api/v1/auth/me, 5-min stale, 401→null; exposes hasAlgoAccess), useLogout()
 │   │   ├── useAlgoAccess.js       ← useRequestAlgoAccess() (POST /algo/access-request), useAdminUsers() (GET /admin/users), useSetUserAlgoAccess() (PATCH /admin/users/:id/algo-access)
 │   │   ├── useRiskSettings.js     ← TanStack Query hooks for /api/v1/risk/* (settings, live metrics, simulation, overrides)
+│   │   ├── useLab.js              ← TanStack Query hooks for /api/v1/lab/* (simulations + optimizations, Plan 10)
 │   │   └── useBinanceWS.js        ← registers/unregisters callbacks on the binanceWS singleton
 
 │   ├── context/
@@ -107,6 +113,7 @@ client/
 │   │   ├── Strategies.jsx     ← route: /strategies
 │   │   ├── Settings.jsx       ← route: /settings
 │   │   ├── Trade.jsx          ← route: /trade/:symbol (manual trading terminal)
+│   │   ├── StrategyLab.jsx    ← route: /lab (Plan 10 — Robustness (MC) + Optimizer tabs)
 │   │   ├── AlgoTrading.jsx    ← route: /algo (algo bot session management)
 │   │   ├── OrderHistory.jsx   ← route: /order-history (paginated trade log; not in navbar)
 │   │   ├── Login.jsx          ← route: /login (Google OAuth entry point, public)
@@ -229,12 +236,12 @@ WebSocket stream (`@kline_<interval>`) — only the initial REST fetch is affect
 
 - **Navbar:** fixed top, full width, 56px tall, `bg-title-bg` (`#0a0d13`) `border-b border-slate-700/50`
   - Logo: "ENMA" text, `text-emerald-400 font-medium`, left-aligned
-  - Nav items (desktop, `md:flex`, hidden below `md`): **Dashboard, Trade, Strategies, Risk Dashboard, Backtest, AlgoTrading, Order History** (7 items). `Settings` is a standalone icon button next to the avatar (not in the nav item list). This order supersedes the old 6-item spec — updated 2026-07-01 (UI Refinement Phase 2, decision 5.1: keep code, update docs).
+  - Nav items (desktop, `md:flex`, hidden below `md`): **Dashboard, Trade, Strategies, Risk Dashboard, Backtest, Strategy Lab, AlgoTrading, Order History** (8 items, `client/src/components/layout/Navbar.jsx`'s `navItems`). `Settings` is a standalone icon button next to the avatar (not in the nav item list). Strategy Lab (`/lab`) added 2026-07-19 (Plan 10 Phase 2).
   - Nav item default: `text-slate-400`, transparent bg, `border-b-2 border-transparent`
   - Nav item hover: `text-gray-100`, `bg-slate-800/50`
   - Nav item active: `text-emerald-400`, `bg-emerald-400/10`, `border-b-2 border-emerald-400`
   - Nav item focus (keyboard): `focus-visible:ring-2 focus-visible:ring-emerald-500`
-  - **Mobile (`<md`):** hamburger toggle (`Menu`/`X` icon, `aria-label`/`aria-expanded`/`aria-controls="mobile-nav-menu"`) opens a full-width drawer (`#mobile-nav-menu`) listing the same 7 items + a running-session count badge on AlgoTrading. This is an intentional improvement over the original "desktop only" spec.
+  - **Mobile (`<md`):** hamburger toggle (`Menu`/`X` icon, `aria-label`/`aria-expanded`/`aria-controls="mobile-nav-menu"`) opens a full-width drawer (`#mobile-nav-menu`) listing the same items + a running-session count badge on AlgoTrading. This is an intentional improvement over the original "desktop only" spec.
   - Avatar button: `aria-haspopup="menu"`, `aria-expanded`, `aria-label="User menu"`. Circle shape uses the Tailwind arbitrary class `[border-radius:50%]` (not inline `style=`) because the global `tailwind.config.js` sets `borderRadius: 0`, so `rounded-full` resolves to square corners.
 - **PageWrapper:** `pt-[56px]` to clear navbar, `bg-[#060a0f]` (deepest layer), full width, **no padding** — content is edge-to-edge
 - **PageHeader:** full-width bar with `px-6 py-3 border-b border-slate-700/50 bg-title-bg title-fade` — not a floating title, it's a connected header row

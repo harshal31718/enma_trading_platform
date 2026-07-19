@@ -10,6 +10,7 @@ import {
   History,
   Shield,
   ShieldCheck,
+  Dices,
   LogOut,
   Menu,
   X,
@@ -24,6 +25,7 @@ const navItems = [
   { label: 'Strategies', icon: Code2, to: '/strategies' },
   { label: 'Risk Dashboard', icon: Shield, to: '/risk-dashboard' },
   { label: 'Backtest', icon: FlaskConical, to: '/backtest' },
+  { label: 'Strategy Lab', icon: Dices, to: '/lab' },
   { label: 'AlgoTrading', icon: Bot, to: '/algo' },
   { label: 'Order History', icon: History, to: '/order-history' },
 ]

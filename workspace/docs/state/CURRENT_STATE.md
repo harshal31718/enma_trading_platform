@@ -3,15 +3,30 @@
 **Authority:** This is the single source of truth for what ENMA currently does.
 Read this before starting any work. If this conflicts with chat history, this document wins.
 
-Last updated: 2026-07-19 (**F7 LIVE-VERIFIED & resolved on the diagnostic side** — container pytest
-444/444; live testnet chaos confirmed the fill-staleness symptom is fixed (~0.5s via A-8, not ~60s)
-and root-caused the SL/TP-placement 400 as `-2021 Order would immediately trigger` (PERCENT_PRICE
-hypothesis disproven). Two new bugs surfaced live: (a) FIXED — a server governor-config coercion
-(`risk.js` `Number(null)===0`) that armed correlation/VaR/CVaR/margin caps at 0 on blank fields and
-blocked ALL live entries, +5 jest tests → 116/116; (b) FIXED — `-4015` emergency-close
-`clientOrderId`>36 chars, systemic across ~6 placement sites, resolved with a central
-`_make_client_id()` ≤35-char builder (engine pytest 450/450). Both fixes uncommitted in the working
-tree, pending commit. See the Known Technical Debt entries below + `handoff.md` 2026-07-19. Plan 22/24 got incidental live
+Last updated: 2026-07-19 (**Plan 10 Phases 2/3a/3c shipped, Phase 3d persistence shipped and
+live-verified** — Strategy Lab is now a real `/lab` page with two tabs: Robustness (MC, Phase 2)
+and Optimizer (walk-forward, Phase 3c UI over Phase 3a job plumbing). Each walk-forward fold now
+also returns every grid-search trial, not just the winner (Phase 3d persistence half; the
+trials-table/scatter/heatmap UI to consume it is not built yet). This session had real Docker
+access and verified all of it: engine 471/471, server jest 148/148, client `vite build` clean, plus
+a live end-to-end `POST /simulate/optimize` run against real cached candles. See the "Strategy Lab"
+section below and `workspace/plan/10_monte-carlo-strategy-lab.md` for full detail.)
+Earlier: 2026-07-19 (**Plan 10 Phase 1 shipped** — job-based Monte Carlo robustness runs,
+mirroring the existing BullMQ backtest pattern: new `labResults` collection, `simulationQueue`/
+`simulation.worker.js`, engine `routers/simulate.py` (`POST /simulate/monte-carlo`), Node
+`lab.controller.js`/`lab.routes.js` at `/api/v1/lab`. Fixes the SRV-5 synchronous-compute-behind-a-
+`GET` defect that 2026-07-15's MC-engine-core rewrite (Phase 1a) didn't address. Real end-to-end
+smoke test against a live 38-trade backtest: 5,000 runs in ~1.0s. Engine 458/458, server jest
+129/129.)
+Earlier: 2026-07-19 (**F7 LIVE-VERIFIED & resolved on the diagnostic side, fixes committed as
+`bedd8dc`** — container pytest 444/444; live testnet chaos confirmed the fill-staleness symptom is
+fixed (~0.5s via A-8, not ~60s) and root-caused the SL/TP-placement 400 as `-2021 Order would
+immediately trigger` (PERCENT_PRICE hypothesis disproven). Two new bugs surfaced live: (a) FIXED —
+a server governor-config coercion (`risk.js` `Number(null)===0`) that armed correlation/VaR/CVaR/
+margin caps at 0 on blank fields and blocked ALL live entries, +5 jest tests → 116/116; (b) FIXED —
+`-4015` emergency-close `clientOrderId`>36 chars, systemic across ~6 placement sites, resolved with
+a central `_make_client_id()` ≤35-char builder (engine pytest 450/450). See the Known Technical
+Debt entries below + `handoff.md` 2026-07-19. Plan 22/24 got incidental live
 re-verification (governor "Reducing" badge, StoplossGuard cooldown, correlation cap, clean stop).
 Earlier: 2026-07-17 (**Plan 9 — ALL STEPS SHIPPED (9.1–9.11)**, container-verified 415/415
 pytest. Same session, in order: 9.11-B decided (cost gate stays opt-in), 9.9's QNT-14 leg-vs-
@@ -135,6 +150,28 @@ Execution & Risk Mechanics, Report UI sections) — this bullet is a pointer, no
 - Recent Live Runs + Recent Backtests panels (last 5 each, deep-link to results)
 - Cached candles table (TimescaleDB inventory) — demoted into a collapsible section (default closed)
 - **See** `workspace/docs/features/dashboard/SPEC.md` for the full redesign spec.
+
+### Strategy Lab (Plan 10 — `/lab` page, two tabs: Robustness (MC) + Optimizer)
+Job-based Monte Carlo robustness runs over a completed backtest's trades: `POST
+/api/v1/lab/simulations {sourceJobId, mode, runs, blockLen, ruinThresholdPct, seed}` enqueues a
+BullMQ job (same pattern as backtest), the engine's vectorized block/iid bootstrap
+(`services/monte_carlo.run_lab_simulation`) writes percentile equity bands + drawdown-exceedance
+curve + ruin probability to the `labResults` collection, `GET /api/v1/lab/simulations/:simId`
+reads it back. `configHash` short-circuits identical resubmissions. The existing synchronous
+`SimulationResults.jsx` / `leverage_sensitivity.py` MC path is untouched (still what the Risk
+Dashboard shows today).
+
+Walk-forward optimization (Phase 3a/3c/3d-partial): `POST /api/v1/lab/optimizations
+{strategyId, exchange, symbol, timeframe, startDate, endDate, paramGrid, mode, nFolds,
+trainRatio, ...}` enqueues a BullMQ job; the engine (`services/walk_forward.py`) splits the date
+range into candle-count folds, grid-optimizes each fold's train window
+(`services/optimizer.run_optimization`), evaluates the winner OOS, and reports a per-fold
+IS-vs-OOS Sharpe degradation ratio plus a trade-level stitched-OOS aggregate. Each fold's `trials`
+array (Phase 3d, shipped 2026-07-19) carries every combo scored on that fold's train window, not
+just the winner — the raw material for a trials table/scatter/param heatmap, which is **not yet
+built** in `FoldResultsTable.jsx` (still one row per fold). Deflated Sharpe Ratio / PBO
+overfitting stats and the Optuna/TPE search swap (Phase 3b) are also not started. See
+`workspace/plan/10_monte-carlo-strategy-lab.md`.
 
 ### Risk Intelligence Dashboard
 Centralized `/risk-dashboard` page: Zone 1 real-time portfolio VaR/CVaR + correlation heatmap, Zone 2

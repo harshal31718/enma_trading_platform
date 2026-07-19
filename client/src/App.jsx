@@ -13,6 +13,7 @@ import Trade from '@/pages/Trade'
 import AlgoTrading from '@/pages/AlgoTrading'
 import OrderHistory from '@/pages/OrderHistory'
 import RiskDashboard from '@/pages/RiskDashboard'
+import StrategyLab from '@/pages/StrategyLab'
 import AdminPanel from '@/pages/AdminPanel'
 import NotFound from '@/pages/NotFound'
 
@@ -81,6 +82,7 @@ export default function App() {
               <Route path="/algo" element={<AlgoTrading />} />
               <Route path="/order-history" element={<OrderHistory />} />
               <Route path="/risk-dashboard" element={<RiskDashboard />} />
+              <Route path="/lab" element={<StrategyLab />} />
               <Route path="/admin" element={<AdminPanel />} />
             </Route>
             <Route path="*" element={<NotFound />} />

@@ -58,6 +58,7 @@ server/
     │   │                         engine fields (Mixed, never written by server): metrics, equityCurve
     │   ├── BacktestTrade.js   ← split collection backtestTrades (jobId, tradeIndex, …)
     │   ├── BacktestLeverageScenario.js ← Risk Dashboard Zone 3 leverage-sensitivity runs (engine-owned)
+    │   ├── LabResult.js        ← Strategy Lab job results (labId, type: "monte_carlo"|"optimization", sourceJobId?, config, configHash, status, results[engine-owned]) — shared by Phase 1 (MC) and Phase 3a (walk-forward)
     │   ├── LiveSession.js
     │   ├── TradeOrder.js
     │   ├── TradeExecution.js
@@ -73,6 +74,7 @@ server/
     │   ├── dashboard.routes.js  ← /dashboard/stats, /dashboard/performance-calendar
     │   ├── trade.routes.js      ← /trade/* (settings/keys [testnet+mainnet env], balances [testnet+mainnet, read-only mainnet], account, positions, orders, klines, order status)
     │   ├── risk.routes.js         ← /risk/* (settings, live metrics, simulation, overrides)
+    │   ├── lab.routes.js          ← /lab/simulations [POST, GET list, GET :simId] (Plan 10 Phase 1, MC), /lab/optimizations [POST, GET list, GET :labId], /lab/objectives [GET] (Plan 10 Phase 3a, walk-forward)
     │   ├── algo.routes.js         ← /algo/sessions [requireAlgoAccess], /algo/chaos [requireAlgoAccess], /algo/access-request, /algo/symbols/locked, /algo/pairlist/preview, /algo/sessions/:id/trading-state
     │   ├── settings.routes.js     ← /settings/exchange
     │   ├── orderHistory.routes.js ← /order-history (GET, paginated, filterable)
@@ -86,24 +88,30 @@ server/
     │   ├── dashboard.controller.js  ← proxies engine /dashboard/stats, /dashboard/performance-calendar
     │   ├── trade.controller.js
     │   ├── risk.controller.js         ← proxies engine /risk/* (settings, live metrics cache, simulation, overrides)
+    │   ├── lab.controller.js          ← runMonteCarlo (enqueues Plan 10 Phase 1 job, configHash cache short-circuit), getSimulation, listSimulations, runOptimization (Phase 3a, resolves strategyId→filePath), getOptimization, listOptimizations, listObjectives
     │   ├── algo.controller.js         ← session CRUD + startChaos + trading-state kill-switch + engine callbacks (handleEngineStats, handleAlgoPlaceOrder, …)
     │   ├── settings.controller.js     ← getExchangeSettings, updateExchangeSettings
     │   └── orderHistory.controller.js ← getOrderHistory (reads tradeRecords; engine is sole writer)
     ├── services/
     │   ├── engineClient.js  ← axios instance for engine HTTP calls
     │   ├── backtestQueue.js ← BullMQ queue definition for bull:backtest
+    │   ├── simulationQueue.js ← BullMQ queue definition for bull:simulation (Plan 10 Phase 1)
+    │   ├── optimizationQueue.js ← BullMQ queue definition for bull:optimization (Plan 10 Phase 3a)
     │   ├── socketEmitter.js ← Redis pub/sub → Socket.IO relay
     │   ├── symbolService.js ← fetches tiered symbol list from engine (5-min TTL cache)
     │   ├── symbolLock.js    ← Redis-backed symbol lock (bot vs manual)
     │   └── reconciliation.js ← startup reconciliation (server.js), aligns local state with exchange/engine truth
     ├── workers/
-    │   └── backtest.worker.js
+    │   ├── backtest.worker.js
+    │   ├── simulation.worker.js ← Plan 10 Phase 1 — mirrors backtest.worker.js, POSTs engine /simulate/monte-carlo
+    │   └── optimization.worker.js ← Plan 10 Phase 3a — mirrors simulation.worker.js, POSTs engine /simulate/optimize
     ├── utils/
     │   ├── ApiError.js        ← Custom error class
     │   ├── ApiResponse.js     ← Standard response helpers
     │   ├── chaosAllocator.js  ← Chaos Mode symbol allocation (manual pick guarantee + round-robin tier partition)
     │   ├── encryption.js      ← AES-256 for API key storage
-    │   └── risk.js            ← resolveRiskParams() — per-run risk override merge
+    │   ├── risk.js            ← resolveRiskParams() — per-run risk override merge
+    │   └── labConfig.js       ← buildMonteCarloConfig() (Phase 1) / buildWalkForwardConfig() (Phase 3a) / computeConfigHash(), pure + unit-tested
     ├── app.js               ← Express app setup (no server.listen here)
     └── server.js            ← Entry point (server.listen + startup reconciliation)
 ```
@@ -154,7 +162,7 @@ The engine client handles: base URL from env, API key header, timeout, error wra
 - Workers publish progress to Redis pub/sub — never directly to Socket.IO
 - `socketEmitter.js` subscribes to Redis pub/sub and relays to Socket.IO rooms
 - Job IDs are UUIDs (generated before queue submission in the controller)
-- **One active queue:** `bull:backtest` — no candle queue, no live queue
+- **Three active queues:** `bull:backtest`, `bull:simulation` (Plan 10 Phase 1), `bull:optimization` (Plan 10 Phase 3a) — no candle queue, no live queue
 - Worker only updates `status` and `error` in `backtestResults` — never writes `metrics`, `equityCurve`, or trade records; engine is the sole writer for result data
 
 
@@ -212,6 +220,7 @@ The server owns the routing, auth, and job queue layers. Database ownership is s
 | MongoDB — `liveSessions` | engine | Read-only (same pattern) |
 | MongoDB — `tradeRecords` | engine | Read-only via `TradeRecord.js` model — engine is sole writer |
 | MongoDB — `backtestLeverageScenarios` | engine | Read-only via `BacktestLeverageScenario.js` model — engine is sole writer (Risk Dashboard Zone 3) |
+| MongoDB — `labResults` | split | Server creates the `queued` doc + updates `status`/`error` only (same pattern as `backtestResults`); engine is sole writer of `results` (Plan 10 Phase 1) |
 | MongoDB — `users` | server | Read + write via `User.js` (Passport creates/updates on login; admin reads all users + writes `algoAccess`). Admin reads are a deliberate no-`userId`-scope exception. |
 | TimescaleDB — `candles` | engine | **Never** — server never queries TimescaleDB |
 | Redis — BullMQ queues | server | Write (enqueue jobs) |
@@ -227,7 +236,7 @@ The server owns the routing, auth, and job queue layers. Database ownership is s
 - `CandleImport` model, `candle.worker.js`, `candleQueue.js`, `liveQueue.js`, `live.worker.js` — none exist; do not create them
 - Strategy code lives on engine disk — server never reads strategy files directly; always proxy via `GET engine:8000/strategies/:name/code`
 - Strategy metadata (name, description, filePath) lives in MongoDB `strategies` collection, owned by server
-- **`userId` is required** on all mutable Mongoose models (`BacktestResult`, `BacktestTrade`, `BacktestLeverageScenario`, `LiveSession`, `Settings`, `TradeOrder`, `TradeExecution`, `TradeTransaction`, `TradeRecord`). Every controller query must include `userId: req.user.id` in the filter. `Strategy` is the only model WITHOUT `userId` — strategies are shared across all users.
+- **`userId` is required** on all mutable Mongoose models (`BacktestResult`, `BacktestTrade`, `BacktestLeverageScenario`, `LabResult`, `LiveSession`, `Settings`, `TradeOrder`, `TradeExecution`, `TradeTransaction`, `TradeRecord`). Every controller query must include `userId: req.user.id` in the filter. `Strategy` is the only model WITHOUT `userId` — strategies are shared across all users.
 
 ### Auth architecture
 

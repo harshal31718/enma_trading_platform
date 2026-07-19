@@ -49,11 +49,16 @@ function initSocket(httpServer) {
       socket.join(room)
       console.log(`[Socket.IO] ${socket.id} joined room: ${room}`)
 
-      if (room.startsWith('backtest:')) {
+      // Plan 10 Phase 1: simulation.worker.js already self-subscribes/unsubscribes
+      // around its engine call regardless of client room membership, so this
+      // client-triggered path is a no-op today (no UI joins a simulation: room
+      // yet) — kept for parity so Phase 2's UI gets the same double-subscribe/
+      // auto-cleanup semantics backtest: rooms get, without a second wiring pass.
+      if (room.startsWith('backtest:') || room.startsWith('simulation:') || room.startsWith('optimization:')) {
         trackedRooms.add(room)
-        const jobId = room.replace('backtest:', '')
+        const [prefix, jobId] = room.split(':')
         const { subscribeToJob } = require('../services/socketEmitter')
-        subscribeToJob(jobId, 'backtest')
+        subscribeToJob(jobId, prefix)
       }
     })
 
@@ -62,10 +67,10 @@ function initSocket(httpServer) {
       trackedRooms.delete(room)
       console.log(`[Socket.IO] ${socket.id} left room: ${room}`)
 
-      if (room.startsWith('backtest:')) {
+      if (room.startsWith('backtest:') || room.startsWith('simulation:') || room.startsWith('optimization:')) {
         const remaining = io.sockets.adapter.rooms.get(room)?.size || 0
         if (remaining === 0) {
-          const jobId = room.replace('backtest:', '')
+          const [, jobId] = room.split(':')
           const { unsubscribeFromJob } = require('../services/socketEmitter')
           unsubscribeFromJob(jobId)
         }
@@ -76,10 +81,10 @@ function initSocket(httpServer) {
       console.log('[Socket.IO] client disconnected:', socket.id)
 
       for (const room of trackedRooms) {
-        if (room.startsWith('backtest:')) {
+        if (room.startsWith('backtest:') || room.startsWith('simulation:') || room.startsWith('optimization:')) {
           const remaining = io.sockets.adapter.rooms.get(room)?.size || 0
           if (remaining === 0) {
-            const jobId = room.replace('backtest:', '')
+            const [, jobId] = room.split(':')
             const { unsubscribeFromJob } = require('../services/socketEmitter')
             unsubscribeFromJob(jobId)
           }

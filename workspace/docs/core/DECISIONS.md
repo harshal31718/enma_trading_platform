@@ -444,3 +444,32 @@ strategies, none declare `informative_timeframes`). New `engine/tests/test_infor
 still be run against any real strategy that adopts `htf()`**, per this plan's own verification gate
 — the unit tests here prove the primitive is causal, not that every future consumer strategy uses
 it correctly.
+
+## 27. Strategy Lab job architecture — `labResults` collection + `simulation` queue, deterministic seed keyed by source+config not job id (Plan 10 Phase 1, shipped 2026-07-19)
+**Decision:** Job-based Monte Carlo robustness runs mirror the existing backtest job pattern
+exactly rather than inventing a new one: a `labResults` Mongo collection (server creates the
+`queued` doc + updates `status`/`error` only; engine is sole writer of `results` — same split as
+`backtestResults`), a new BullMQ `simulation` queue/worker structurally identical to
+`backtest`/`backtest.worker.js`, and an engine router (`routers/simulate.py`) that follows
+`routers/backtest.py`'s own asymmetry (success writes happen inside the service function, the
+router only writes on the failure path).
+**Seed derivation:** the deterministic seed defaults to a hash of `sourceJobId:configHash`, not
+the job's own `simId`. This means any resubmission of an identical robustness-run config against
+the same source backtest reproduces a byte-identical `equityBands`/`ruinProbability` doc
+regardless of which `labId` it lands under — the reproducibility guarantee is a property of
+*what was asked for*, not *which job asked*. An explicit `config.seed` always overrides.
+**Rationale:** reusing the proven backtest job/queue/ownership pattern avoids a second design for
+the same problem (queueing, progress relay, ownership checks) and keeps `labResults` legible to
+anyone who already understands `backtestResults`. The configHash-not-simId seed choice was made
+because the plan's own §3.2 explicitly calls out "deterministic `seed` stored so any run is
+exactly reproducible" as a design rule — tying it to simId would make reproducibility depend on an
+implementation detail (which random UUID a request happened to generate) instead of the actual
+input.
+**Deferred, not decided against:** a cancel endpoint (`DELETE /lab/simulations/:id`) — the plan's
+§3.1 lists one, but MC runs complete in ~1s, so there's nothing meaningful to cancel yet; build it
+when Phase 3's genuinely multi-minute optimizer jobs need it. Progress-publish plumbing
+(`progress:{simId}` channel, `socketEmitter.js`'s `simulation` case) exists end-to-end but the
+engine never calls `publish_progress` for a sub-second job — same reasoning.
+**Scope:** only the `block` (default) and `iid` bootstrap modes are implemented; skip-trades/
+cost-stress/start-date-perturbation (plan §2.1 modes 3–5) are real remaining scope, not rejected —
+add them when Phase 2's UI needs a mode picker for them.

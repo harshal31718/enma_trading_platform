@@ -1,6 +1,5 @@
 const Settings = require('../models/Settings')
 const Strategy = require('../models/Strategy')
-const BacktestResult = require('../models/BacktestResult')
 const ApiResponse = require('../utils/ApiResponse')
 const ApiError = require('../utils/ApiError')
 const redis = require('../config/redis')
@@ -233,30 +232,22 @@ async function getLiveMetrics(req, res, next) {
 }
 
 /**
- * GET /api/v1/risk/backtest/:id/simulation
- * Triggers or retrieves leverage sensitivity and Monte Carlo simulations for a completed backtest.
+ * GET /api/v1/risk/backtest/:id/simulation — RETIRED (Plan 10 Phase 2).
+ *
+ * This endpoint ran the full backtest 5x (leverage sensitivity) plus a
+ * synchronous i.i.d. Monte Carlo loop inline in the HTTP request — the SRV-5
+ * anti-pattern this plan's §1.2 diagnosed. Superseded by the job-based
+ * `POST /api/v1/lab/simulations` + `GET /api/v1/lab/simulations/:simId`
+ * (server/src/routes/lab.routes.js), consumed by the Strategy Lab page
+ * (client `/lab`). Returns 410 Gone with a pointer rather than a silent
+ * behavior change, per the plan's Phase 2 acceptance criteria.
  */
 async function getBacktestSimulation(req, res, next) {
-  try {
-    const { id: jobId } = req.params
-
-    const backtest = await BacktestResult.findOne({ jobId }).lean()
-    if (!backtest) {
-      throw new ApiError(404, 'NOT_FOUND', 'Backtest not found')
-    }
-
-    if (backtest.status !== 'completed') {
-      throw new ApiError(400, 'BAD_REQUEST', 'Backtest must be completed to run simulations')
-    }
-
-    const response = await engineClient.post('/backtest/run/leverage-sensitivity', {
-      jobId
-    })
-
-    res.json(ApiResponse.success(response.data.data))
-  } catch (err) {
-    next(new ApiError(503, 'ENGINE_UNAVAILABLE', `Simulation failed: ${err.message}`))
-  }
+  next(new ApiError(
+    410,
+    'ENDPOINT_RETIRED',
+    'This endpoint has been retired. Use POST /api/v1/lab/simulations (see the Strategy Lab page at /lab) instead.'
+  ))
 }
 
 module.exports = { getRiskSettings, updateRiskSettings, getLiveMetrics, getBacktestSimulation }

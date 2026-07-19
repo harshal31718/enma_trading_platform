@@ -1,6 +1,7 @@
 import React, { useState, useEffect, Suspense } from 'react'
+import { Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { AlertTriangle, X } from 'lucide-react'
+import { AlertTriangle, X, Dices, ArrowRight } from 'lucide-react'
 import { ConfirmDialog } from '../components/ui/confirm-dialog'
 import PageWrapper from '@/components/layout/PageWrapper'
 import PageHeader from '@/components/ui/PageHeader'
@@ -14,7 +15,6 @@ import { useStrategies } from '../hooks/useStrategies'
 const CorrelationHeatmap = React.lazy(() => import('../components/risk/CorrelationHeatmap'))
 const AggregateMarginGauge = React.lazy(() => import('../components/risk/AggregateMarginGauge'))
 const NetExposureBar = React.lazy(() => import('../components/risk/NetExposureBar'))
-const SimulationResults = React.lazy(() => import('../components/risk/SimulationResults'))
 
 function InlineError({ error, onClear }) {
   if (!error) return null
@@ -724,9 +724,25 @@ export default function RiskDashboard() {
 
           {/* ────────────────── ZONE 3: HISTORICAL RISK PROFILER ────────────────── */}
           <div className="grid grid-cols-1 gap-6">
-            <Suspense fallback={<div className="h-96 bg-slate-950 border border-slate-850 animate-pulse rounded-lg" />}>
-              <SimulationResults />
-            </Suspense>
+            <Link
+              to="/lab"
+              className="bg-slate-950 border border-slate-800 hover:border-emerald-700 p-5 shadow-2xl flex items-center justify-between group transition-colors"
+            >
+              <div className="flex items-center gap-3">
+                <Dices className="text-emerald-400" size={20} />
+                <div>
+                  <h3 className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider">
+                    Backtest & Historical Risk Profiler
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Leverage sensitivity and Monte Carlo robustness simulation moved to the Strategy Lab
+                  </p>
+                </div>
+              </div>
+              <span className="flex items-center gap-1 text-xs font-mono text-emerald-400 group-hover:translate-x-0.5 transition-transform">
+                Open Strategy Lab <ArrowRight size={14} />
+              </span>
+            </Link>
           </div>
 
         </div>
