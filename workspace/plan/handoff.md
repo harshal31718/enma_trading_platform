@@ -7,6 +7,64 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
+## 2026-07-19 — Plan 10 Phase 3e shipped (Deflated Sharpe Ratio) — live-verified, 1 real unrelated bug fixed
+
+**Goal:** user said "move on to next fix/plan" after Phase 3b. DSR/PBO was the next Plan 10 item,
+deferred across 4 prior sessions specifically for lack of pytest access to verify the
+normal-CDF/inverse-CDF primitive DSR needs — this session had that access, so it shipped instead
+of deferring a 5th time.
+
+**Shipped:** new `engine/services/stats.py` — `norm_cdf` (exact, `math.erf`), `norm_ppf` (Acklam's
+rational approximation + Halley refinement, no scipy dep), `deflated_sharpe_ratio()`/
+`expected_max_sharpe()` (Bailey & López de Prado 2014). Verified via round-trip
+(`norm_cdf(norm_ppf(p))==p`) + published reference quantiles, plus property tests (DSR decreases
+as trial count grows for the same apparent Sharpe — the actual deflation behavior, numerically
+checked not just asserted). Trade-level DSR (not the paper's per-period form): the Sharpe-like
+term is `sqn/sqrt(totalTrades)` (SQN already trade-level, no new metric needed for it); two NEW
+metrics (`SkewnessStat`/`KurtosisStat`, trade-PnL, RAW non-excess kurtosis) feed the non-normality
+correction — golden-master-verified additive-only. `walk_forward.py` attaches `fold.dsr` per fold.
+`FoldResultsTable.jsx` gained a DSR column. PBO stays explicitly deferred (needs per-trial OOS
+data this architecture doesn't collect — real, separate scope).
+
+**Real, UNRELATED bug found and fixed via live testing:** verifying DSR through the actual `/lab`
+Optimizer wizard (AdaptiveTrend, ~12 checked params) froze the whole engine container.
+`optimizer.py`'s `_build_param_grid` materialized the FULL cartesian product
+(`list(itertools.product(...))`) before capping to `max_combinations` — AdaptiveTrend's real
+wizard-default grid is ~472 TRILLION combos, and building that list hangs/OOMs a single-process
+container (confirmed: `docker stats` near-zero CPU during the hang, container health flipped
+`unhealthy`, even `/health` from inside the same container timed out). Pre-existing, unrelated to
+DSR, a real production risk (any user checking several wide-range params could freeze the shared
+engine for everyone). Fixed: compute `total` via cheap multiplication (no materialization); when
+capped, sample indices via `random.sample` on a lazy `range` (no materialization) and decode each
+directly to its combo (`_decode_combo_index`, mixed-radix, verified against real
+`itertools.product` output). No test had existed for `_build_param_grid` before this session.
+
+**Live-verified, real Docker + browser access:** engine 538/538 (+50 new tests across
+`test_stats.py`/`test_skew_kurtosis.py`/`test_param_grid.py`/2 walk_forward tests), server jest
+156/156, client build clean. Golden master zero-drift outside the 2 new metric keys. Direct
+`curl POST /simulate/optimize` against real cached BTCUSDT candles — real DSR values (57–69%
+across runs). Then the actual regression repro: AdaptiveTrend's full default grid through the real
+`/lab` wizard — froze pre-fix (confirmed via `docker stats`/health), completes in ~4s post-fix,
+renders cleanly, zero console errors. Engine restarted mid-session to clear hang-accumulated state;
+confirmed healthy afterward.
+
+**Files changed:** new `engine/services/stats.py`, `engine/tests/test_stats.py`; `engine/services/
+metrics.py` (+SkewnessStat/KurtosisStat); new `engine/tests/test_skew_kurtosis.py`;
+`engine/services/optimizer.py` (+skewness/kurtosis to per-trial whitelist, `_build_param_grid`/
+`_decode_combo_index` rewrite); new `engine/tests/test_param_grid.py`; `engine/services/
+walk_forward.py` (+`_compute_fold_dsr`/`_trade_level_sharpe`, `fold.dsr`); `engine/tests/
+test_walk_forward.py` (+2 tests); `client/src/components/lab/FoldResultsTable.jsx` (+DSR column);
+`client/src/pages/StrategyLab.jsx` (disclosure note updated). Docs: `API_CONTRACTS.md`,
+`CURRENT_STATE.md`, `engine/CLAUDE.md`, `10_monte-carlo-strategy-lab.md`, `0_tracker.md`.
+
+**Next session:** (1) PBO needs a genuinely new architectural piece (OOS-evaluate every trial, not
+just fold winners) — scope it properly, don't bolt it onto the existing per-fold-winner-only data
+model. (2) Phase 4 (MC-scored selection) is the next undone Plan 10 phase. (3) Untouched backlog:
+21.5c (batched reconcile, P2/small), Plan 6/7 (engine/server decomposition, P2), Plan 23
+(MarginSurge strategy), Plan 8 (governance cleanup, P3), Plans 5/22/24 (shipped, waiting on
+human-observed live Testnet re-verification).
+
+---
 ## 2026-07-19 — Plan 10 Phase 3b shipped (Optuna/TPE Bayesian search) — live-verified, 1 real pre-existing bug fixed
 
 **Goal:** user said "Phase 3b — Optuna/TPE swap proceed", the next item on the tracker after last
@@ -127,63 +185,3 @@ grid can't represent more axes. (4) Untouched from earlier backlog: 21.5c (batch
 P2/small), Plan 6/7 (engine/server decomposition, now unblocked, P2), Plan 23 (MarginSurge
 strategy, backtest-only work can start now), Plan 8 (governance cleanup, P3), Plans 5/22/24
 (shipped, waiting on a human-observed live Testnet re-verification session).
-
----
-## 2026-07-19 — Plan 10 Phase 3c shipped (Optimizer tab UI, fold-level) — verification still blocked
-
-**Goal:** user said to move on to the next item. Phase 3a (walk-forward job plumbing, shipped
-earlier the same day) left "nothing in the product calls the new endpoint yet" as its own explicit
-gap — same shape as Phase 1b→2's sequencing, so closing that gap with the UI was the direct next
-step rather than jumping to Optuna or the harder DSR/PBO statistics.
-
-**Done:** new "Optimizer" tab on the Strategy Lab page, alongside the existing "Robustness (MC)"
-tab (`Tabs`/`TabsContent`, Radix, matches the plan's §4.1 two-tab layout). `WalkForwardWizard.jsx` —
-strategy/symbol/timeframe/date-range (mirrors `NewBacktestWizard.jsx`'s fields), a new
-`ParamGridForm.jsx` that auto-renders min/max + step-or-point-count per strategy param, reusing the
-exact schema shape (`{label, default, min, max, type}`) `ParamsForm.jsx` already consumes for
-single-value runs — this was the plan's own §4.3.7 recommendation ("the wizard can render min/max/
-step per param automatically" since the schema already exists). Objective dropdown backed by a new
-thin Node proxy `GET /api/v1/lab/objectives` (the engine's `GET /optimize/objectives` had no Node
-route before this — a small, real gap closed in passing). Mode/nFolds/trainRatio/minTrades/
-maxCombinations inputs, plus a combo-count × fold-count cost estimate with a warning above 1,000
-backtests. `OptimizationHistoryRail.jsx` mirrors the MC tab's history rail. Results canvas:
-`DegradationVerdict.jsx` (the headline avg IS→OOS Sharpe degradation ratio, severity-colored),
-`StitchedOOSCard.jsx`, `FoldResultsTable.jsx` (one row per fold: train/test range, best params,
-IS/OOS Sharpe, degradation, OOS trade count). Socket wiring against `optimization:{labId}` mirrors
-the MC tab's pattern.
-
-**Found and fixed while wiring, not part of the original ask:** Phase 3a's `runOptimization`
-controller (this morning's work) accepted a raw `strategyFile` string from the client instead of
-resolving a `strategyId` through `Strategy.findById` like every other run-a-strategy endpoint in
-this codebase (`POST /api/v1/backtest` does this resolution) — fixed so the wizard sends
-`strategyId` consistently and the server resolves the real `filePath`.
-
-**Honestly scoped, not faked:** the plan's §4.3.1 envisions a full "trials table" (every combo
-evaluated, IS/OOS/DSR/rank per row) plus an IS-vs-OOS scatter and param heatmap. `walk_forward.py`
-(this morning's Phase 3a) only persists each fold's WINNING combo, not every trial evaluated during
-that fold's grid search — so none of the per-trial views are buildable from today's data.
-`FoldResultsTable.jsx` is genuinely one row per FOLD, and both the UI (an inline note) and the plan
-doc say this explicitly, rather than quietly relabeling fold-level rows as "trials." Persisting
-every trial is real, separate engine-side scope, now tracked as **Phase 3d**.
-
-**NOT verified — same disclosed constraint as every entry today:** this sandbox has no Docker and
-no Linux-native `client/node_modules`, so none of this session's React code has been compiled or
-rendered. Hand-reviewed against `NewBacktestWizard.jsx` and the already-shipped MC tab components
-for prop-shape and import-path consistency, but that is not the same as running it.
-
-**Files changed:** new `client/src/components/lab/{ParamGridForm,WalkForwardWizard,
-FoldResultsTable,StitchedOOSCard,DegradationVerdict,OptimizationHistoryRail}.jsx`;
-`client/src/pages/StrategyLab.jsx` (rewritten with Tabs, MC tab logic extracted into
-`RobustnessTab`, new `OptimizerTab`); `client/src/hooks/useLab.js` (+`useRunOptimization`/
-`useOptimization`/`useOptimizationsList`/`useObjectives`); `server/src/controllers/
-lab.controller.js` (+`listObjectives`, strategyId→filePath fix in `runOptimization`);
-`server/src/routes/lab.routes.js` (+`GET /objectives`). Docs: `10_monte-carlo-strategy-lab.md`,
-`0_tracker.md`.
-
-**Next session:** (1) **still first priority — get Docker/container access.** Three sessions in a
-row now (Phase 2, 3a, 3c) have shipped code with zero compilation/test execution — this is the
-standing risk across all of Plan 10's recent work, not just this entry. Run: engine
-`test_walk_forward.py`, server `labConfig.test.js`, and a client build/smoke test, in that order of
-suspected risk (date-math > config validation > UI wiring). (2) Once verified: Phase 3b (Optuna) or
-Phase 3d (per-trial persistence — needed before the real trials table/scatter/heatmap can exist) per
-`0_tracker.md`'s sequencing, or Phase 4 (MC-scored selection) if the team wants to skip ahead.

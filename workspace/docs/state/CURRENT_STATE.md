@@ -3,7 +3,45 @@
 **Authority:** This is the single source of truth for what ENMA currently does.
 Read this before starting any work. If this conflicts with chat history, this document wins.
 
-Last updated: 2026-07-19 (**Plan 10 Phase 3b shipped** — Optuna TPE Bayesian search is now a
+Last updated: 2026-07-19 (**Plan 10 Phase 3e shipped** — Deflated Sharpe Ratio (DSR) is now
+computed per walk-forward fold, the statistic Plan 10's §2.2 "honesty layer" deferred across four
+prior sessions specifically for lack of a numerically-verified normal-CDF/inverse-CDF primitive.
+New `engine/services/stats.py`: `norm_cdf` (exact, `math.erf`), `norm_ppf` (Acklam's rational
+approximation + one Halley refinement step, no scipy dependency), `deflated_sharpe_ratio()`/
+`expected_max_sharpe()` (Bailey & López de Prado 2014) — verified two ways in `test_stats.py`:
+round-trip (`norm_cdf(norm_ppf(p)) == p` to ~1e-9 across both Acklam branches) and against
+published reference quantiles (Φ⁻¹(0.975)≈1.959964, Φ⁻¹(0.995)≈2.575829). Trade-level (not the
+paper's per-period formulation): the per-trial Sharpe-like statistic is `sqn / sqrt(totalTrades)`
+(SQN is already trade-level, `sqrt(N)*mean(pnl)/std(pnl)`, so no new per-trial metric was needed),
+skew/kurtosis are two new additive `metrics.py` statistics (`SkewnessStat`/`KurtosisStat`,
+golden-master-verified — every pre-existing metric byte-identical before/after, only the two new
+keys appeared in the diff). `walk_forward.py` attaches `fold.dsr = {dsr, expectedMaxSharpe,
+nTrials, insufficientData}` per fold; `0.5 + insufficientData:true` (never a fabricated confident
+number) when there's too little data. `FoldResultsTable.jsx` gained a DSR column. **PBO remains
+explicitly deferred** — canonical PBO (CSCV) needs every trial's OOS performance across multiple
+resample combinations; this architecture only OOS-evaluates each fold's winner (Phase 3d's own
+documented reason), so faking PBO from data that doesn't support it was rejected in favor of
+disclosing the gap, same stance every other Plan 10 session has taken on unverifiable statistics.
+
+**Real, unrelated pre-existing bug found and fixed via live testing:** `optimizer.py`'s
+`_build_param_grid` used to materialize the FULL cartesian product (`list(itertools.product(...))`)
+before applying the `max_combinations` cap — a strategy with several wide-range params (e.g.
+AdaptiveTrend's own Optimizer-wizard default grid, ~12 checked params) has a total combo count in
+the hundreds of trillions, and building that list hung/OOM'd the entire single-process engine
+container. Reproduced live (checking AdaptiveTrend's default param set in the real `/lab`
+Optimizer wizard and clicking "Run" froze the container — confirmed via `docker stats` showing
+near-zero CPU, i.e. stuck allocating, not computing), root-caused, and fixed: when the grid exceeds
+`max_combinations`, indices are now sampled via `random.sample` on a lazy `range` object (Python
+special-cases this, no materialization) and each one decoded directly to its combo
+(`_decode_combo_index`, mixed-radix decomposition matching `itertools.product`'s own ordering,
+verified against real `itertools.product` output for exactness) — the full product is only ever
+materialized when it's already small enough to be safe. New `test_param_grid.py`, including the
+exact real-world AdaptiveTrend param grid that used to freeze the container (now completes in
+~4s). Engine 538/538, server jest 156/156, client `vite build` clean; both fixes live-verified
+end-to-end via the real `/lab` Optimizer wizard in a real browser session (DSR values 57–69%
+observed on real cached BTCUSDT data; the AdaptiveTrend grid-freeze repro now completes cleanly).
+See `workspace/plan/10_monte-carlo-strategy-lab.md` Phase 3e section for full detail.)
+Earlier: 2026-07-19 (**Plan 10 Phase 3b shipped** — Optuna TPE Bayesian search is now a
 selectable alternative to grid search for the walk-forward optimizer's per-fold train step.
 `engine/services/optimizer.py` gained `run_bayesian_optimization()` (ask/tell async loop over
 optuna, seeded `TPESampler`) + a `_suggest_params()` adapter reusing the existing `param_grid`
@@ -186,20 +224,23 @@ reads it back. `configHash` short-circuits identical resubmissions. The existing
 `SimulationResults.jsx` / `leverage_sensitivity.py` MC path is untouched (still what the Risk
 Dashboard shows today).
 
-Walk-forward optimization (Phase 3a/3b/3c/3d shipped): `POST /api/v1/lab/optimizations
+Walk-forward optimization (Phase 3a/3b/3c/3d/3e shipped): `POST /api/v1/lab/optimizations
 {strategyId, exchange, symbol, timeframe, startDate, endDate, paramGrid, mode, nFolds,
 trainRatio, method, nTrials, seed, ...}` enqueues a BullMQ job; the engine
 (`services/walk_forward.py`) splits the date range into candle-count folds, optimizes each fold's
 train window via `services/optimizer.run_optimization` (grid, default) or
 `run_bayesian_optimization` (`method: "bayesian"`, Phase 3b — Optuna TPE, `nTrials` per fold,
 per-fold deterministic seed), evaluates the winner OOS, and reports a per-fold IS-vs-OOS Sharpe
-degradation ratio plus a trade-level stitched-OOS aggregate. Each fold's `trials` array (Phase 3d)
-carries every combo scored on that fold's train window, not just the winner — rendered as a
-sortable trials table + 2-param loss heatmap by `TrialsExplorer.jsx` (`FoldResultsTable.jsx`
-itself is still one row per fold — the trials view is the separate, already-shipped component).
-`WalkForwardWizard.jsx` has a Grid/Bayesian search-method toggle. Deflated Sharpe Ratio / PBO
-overfitting stats are still not started (need a numerically-verified CDF primitive). See
-`workspace/plan/10_monte-carlo-strategy-lab.md`.
+degradation ratio plus a trade-level Deflated Sharpe Ratio (`fold.dsr`, Phase 3e —
+`services/stats.deflated_sharpe_ratio`) plus a trade-level stitched-OOS aggregate. Each fold's
+`trials` array (Phase 3d) carries every combo scored on that fold's train window, not just the
+winner — rendered as a sortable trials table + 2-param loss heatmap by `TrialsExplorer.jsx`
+(`FoldResultsTable.jsx` is one row per fold, now with a DSR column — the per-trial trials view is
+the separate, already-shipped `TrialsExplorer.jsx`). `WalkForwardWizard.jsx` has a Grid/Bayesian
+search-method toggle. **PBO overfitting stats are still not started** — canonical PBO needs every
+trial's OOS performance across multiple resample combinations, which this architecture doesn't
+collect (only each fold's winner gets OOS-evaluated); real, separate, not-small scope, disclosed
+rather than faked. See `workspace/plan/10_monte-carlo-strategy-lab.md`.
 
 ### Risk Intelligence Dashboard
 Centralized `/risk-dashboard` page: Zone 1 real-time portfolio VaR/CVaR + correlation heatmap, Zone 2

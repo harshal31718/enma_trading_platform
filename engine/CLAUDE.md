@@ -74,13 +74,14 @@ engine/
 │   ├── pairlist.py         ← pairlist pipeline: VolumePairList → SpreadFilter / VolatilityFilter / PrecisionFilter / AgeFilter; config-based factory
 │   ├── trade_recorder.py   ← record_trade() + build_trade_record(); writes completed round-trip trades to MongoDB tradeRecords (best-effort, never blocks close path)
 │   ├── strategy_seeder.py  ← seeds default strategies on startup (idempotent)
-│   ├── optimizer.py        ← parameter optimization: `run_optimization` (grid, itertools.product) + `run_bayesian_optimization` (Optuna TPE, ask/tell async loop, Plan 10 Phase 3b) — same objective registry, same `run_backtest_simulation` per trial, same ranked-results shape (`_finalize_optimization` shared tail) for both search methods
+│   ├── optimizer.py        ← parameter optimization: `run_optimization` (grid, itertools.product) + `run_bayesian_optimization` (Optuna TPE, ask/tell async loop, Plan 10 Phase 3b) — same objective registry, same `run_backtest_simulation` per trial, same ranked-results shape (`_finalize_optimization` shared tail) for both search methods. `_build_param_grid`/`_decode_combo_index` sample+decode combo indices directly rather than materializing the full cartesian product (Plan 10 Phase 3e fix — a strategy with several wide-range params can have a total combo count in the hundreds of trillions; the old `list(itertools.product(...))` hung/OOM'd the whole engine container, found via live UI testing)
 │   ├── monte_carlo.py      ← Monte Carlo trade-sequence resampling; `run_monte_carlo_simulation()` (legacy sync path, Risk Dashboard) + `run_lab_simulation()` (Plan 10 Phase 1 — config-driven job version, writes labResults, called from routers/simulate.py)
-│   ├── walk_forward.py     ← walk-forward optimization (Plan 10 Phase 3a/3b/3d) — `run_lab_walk_forward()`: splits a date range into candle-count folds, optimizes each fold's train window via `optimizer.run_optimization` (grid, default) or `optimizer.run_bayesian_optimization` (`method: "bayesian"`, Phase 3b — per-fold deterministic-but-distinct seed), evaluates OOS via `backtest_runner.run_backtest_simulation`, reports per-fold IS-vs-OOS Sharpe degradation + every trial scored (Phase 3d) + trade-level stitched-OOS aggregate. Writes labResults, called from routers/simulate.py's `POST /simulate/optimize`.
+│   ├── walk_forward.py     ← walk-forward optimization (Plan 10 Phase 3a/3b/3d/3e) — `run_lab_walk_forward()`: splits a date range into candle-count folds, optimizes each fold's train window via `optimizer.run_optimization` (grid, default) or `optimizer.run_bayesian_optimization` (`method: "bayesian"`, Phase 3b — per-fold deterministic-but-distinct seed), evaluates OOS via `backtest_runner.run_backtest_simulation`, reports per-fold IS-vs-OOS Sharpe degradation + every trial scored (Phase 3d) + trade-level Deflated Sharpe Ratio (Phase 3e, `services/stats.deflated_sharpe_ratio`) + trade-level stitched-OOS aggregate. Writes labResults, called from routers/simulate.py's `POST /simulate/optimize`.
+│   ├── stats.py            ← standard-normal primitives (`norm_cdf` exact via `math.erf`, `norm_ppf` Acklam's rational approximation + Halley refinement, numerically verified — no scipy dependency) + `deflated_sharpe_ratio()`/`expected_max_sharpe()` (Bailey & López de Prado 2014, Plan 10 Phase 3e — deferred across 4 prior Plan 10 sessions for lack of pytest access to verify the inverse-CDF primitive)
 │   ├── leverage_sensitivity_runner.py ← runs leverage-scenario sweeps, writes BacktestLeverageScenario docs
 │   ├── curves.py           ← equity/drawdown/rolling-metric curve computation for backtest results
 │   ├── fill_model.py       ← adverse-slippage fill simulation shared by backtest/live execution
-│   ├── metrics.py          ← backtest performance metric calculations
+│   ├── metrics.py          ← backtest performance metric calculations; `SkewnessStat`/`KurtosisStat` (Plan 10 Phase 3e) added — trade-level (round-trip PnL) sample skewness / RAW (non-excess, 3.0=normal) kurtosis, feeds `stats.deflated_sharpe_ratio`; golden-master-verified additive-only (no existing metric changed)
 │   └── user_data_stream.py ← Binance User Data Stream (listenKey create/keepalive/close, WS connection)
 ├── utils/
 │   ├── timeframes.py      ← timeframe string conversions
@@ -95,8 +96,11 @@ engine/
 │   ├── test_boundaries.py ← service-boundary contract tests
 │   ├── test_cli_roundtrip.py ← enma_cli.py export/import round-trip (hermetic — fake asyncpg pool + fake Mongo collection)
 │   ├── test_lab_simulation.py ← run_lab_simulation() config/mode/seed/persistence tests (Plan 10 Phase 1)
-│   ├── test_walk_forward.py ← fold-split conservation, anchored-vs-rolling, degradation ratio, stitched-OOS aggregate, per-fold trials persistence, method="bayesian" fold dispatch tests (Plan 10 Phase 3a/3b/3d)
-│   └── test_bayesian_optimizer.py ← Optuna TPE param-suggestion mapping, seeded reproducibility, known-optimum convergence, min-trades filter, error-path tests (Plan 10 Phase 3b)
+│   ├── test_walk_forward.py ← fold-split conservation, anchored-vs-rolling, degradation ratio, stitched-OOS aggregate, per-fold trials persistence, method="bayesian" fold dispatch, per-fold DSR wiring tests (Plan 10 Phase 3a/3b/3d/3e)
+│   ├── test_bayesian_optimizer.py ← Optuna TPE param-suggestion mapping, seeded reproducibility, known-optimum convergence, min-trades filter, error-path tests (Plan 10 Phase 3b)
+│   ├── test_stats.py       ← norm_cdf/norm_ppf numerical verification (round-trip + published reference quantiles) + deflated_sharpe_ratio property tests (Plan 10 Phase 3e)
+│   ├── test_skew_kurtosis.py ← SkewnessStat/KurtosisStat hand-computed-value tests (Plan 10 Phase 3e)
+│   └── test_param_grid.py  ← `_build_param_grid`/`_decode_combo_index` tests, incl. the astronomically-large-grid regression guard (Plan 10 Phase 3e fix)
 ├── main.py                ← FastAPI app entry point
 ├── requirements.txt
 └── .env

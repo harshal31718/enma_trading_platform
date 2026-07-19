@@ -345,10 +345,11 @@ function OptimizerTab() {
             <FoldResultsTable folds={results.folds} />
             <TrialsExplorer folds={results.folds} />
             <div className="border border-dashed border-slate-800 p-3 text-[10px] text-slate-500 font-mono italic">
-              Deflated Sharpe Ratio / PBO overfitting stats are not built yet (see
-              10_monte-carlo-strategy-lab.md) — both need a numerically-verified statistics
-              primitive. No IS-vs-OOS scatter either: only each fold's winning combo gets an
-              out-of-sample evaluation, so a per-trial OOS value doesn't exist to plot.
+              PBO (Probability of Backtest Overfitting) is not built yet (see
+              10_monte-carlo-strategy-lab.md) — it needs every trial's out-of-sample performance
+              across multiple resample combinations, which this architecture doesn't collect (only
+              each fold's winner gets OOS-evaluated). No IS-vs-OOS scatter for the same reason: a
+              per-trial OOS value doesn't exist to plot.
             </div>
           </>
         )}

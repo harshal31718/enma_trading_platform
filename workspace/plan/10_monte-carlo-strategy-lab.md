@@ -5,10 +5,100 @@
 plumbing shipped 2026-07-19 (Phase 3a), **Optimizer tab UI shipped 2026-07-19 (Phase 3c, see
 below)**, **Phase 3d fully shipped and live-verified 2026-07-19 (engine persistence + client
 trials table, see below)**, **Phase 3b fully shipped and live-verified 2026-07-19 (Optuna TPE
-Bayesian search, see below)**; DSR/PBO overfitting stats and Phase 4 (MC-scored selection) not
-started · **Priority:** P1 ·
+Bayesian search, see below)**, **Phase 3e fully shipped and live-verified 2026-07-19 (Deflated
+Sharpe Ratio, see below)**; PBO overfitting stats and Phase 4 (MC-scored selection) not started ·
+**Priority:** P1 ·
 **Depends on:** 9 (steps 9.1/9.3 for correct inputs — both Shipped; 9.6/9.9 are absorbed here) ·
 **Related:** 2 (jobs/CI), 7 (client decomposition)
+
+## Phase 3e shipped 2026-07-19 (Deflated Sharpe Ratio — PBO still deferred, real unrelated bug found+fixed)
+
+**Why now:** DSR/PBO had been deferred across four prior Plan 10 sessions (Phase 1, 3a, 3b, 3d)
+with the identical stated reason: no way to numerically verify the normal-CDF/inverse-CDF
+primitive DSR depends on without pytest access. This session had real Docker access, so the
+blocker no longer applied — shipped, verified, not guessed at.
+
+**Engine — `services/stats.py` (new).** `norm_cdf(x)` is exact (`math.erf`, a full-precision
+stdlib primitive — no approximation risk at all). `norm_ppf(p)` (the inverse, no closed form) uses
+Peter Acklam's published rational approximation (~1.15e-9 relative error) plus one Halley
+refinement step (using the exact `norm_cdf` above as the error signal, pushing accuracy to
+~1e-12) — no scipy dependency, since scipy isn't in `engine/requirements.txt`. Verified two ways
+in `tests/test_stats.py` (29 tests): round-trip (`norm_cdf(norm_ppf(p)) == p` to ~1e-9, swept
+across both Acklam approximation branches plus the branch boundary) and against published
+reference quantiles (Φ⁻¹(0.975)≈1.959963985, Φ⁻¹(0.995)≈2.575829304, Φ(1)≈0.8413447460685429).
+`expected_max_sharpe()` (SR_0, the extreme-value-theory expected-max-Sharpe-under-null-across-N-
+trials term) and `deflated_sharpe_ratio()` (Bailey & López de Prado 2014) built on top, with
+property tests verifying the core deflation behavior numerically: DSR decreases as trial count
+increases for the same apparent Sharpe (picking the best of more trials should make the same
+result look less convincing — directly tested, not just asserted), DSR stays in [0,1] across 50
+randomized property-test cases, and DSR returns an explicit `insufficientData: true` (dsr=0.5,
+never a fabricated confident number) when there's too little data or a pathological
+non-normality term rather than raising or silently returning something misleading.
+
+**Engine — trade-level, not the paper's per-period formulation.** Deliberate choice: SQN
+(`services/metrics.py`'s existing `SQNStat`) is `sqrt(N)*mean(pnl)/std(pnl)` — already a
+trade-level Sharpe-like statistic. Dividing out `sqrt(N)` recovers `mean(pnl)/std(pnl)` directly
+from data ALREADY persisted per trial (`sqn`, `totalTrades`) — no new per-trial metric needed for
+the Sharpe-like term itself. Two new metrics WERE needed for the non-normality correction:
+`SkewnessStat`/`KurtosisStat` (`services/metrics.py`, trade-level round-trip PnL skewness / RAW
+non-excess kurtosis — 3.0 for normal, matching Bailey & López de Prado's own paper convention, NOT
+numpy/scipy's excess-kurtosis default) — additive-only, golden-master-verified (`before_dsr`/
+`after_dsr` snapshots on all 5 seeded strategies: every pre-existing metric byte-identical, only
+`skewness`/`kurtosis` appeared as new keys in the diff). `optimizer.py`'s per-trial metrics
+whitelist gained `skewness`/`kurtosis` so they flow through into `fold.trials[].metrics`.
+
+**Engine — wiring.** `walk_forward.py`'s per-fold loop computes `fold.dsr` right after each fold's
+`best`/`trials` are determined: `_trade_level_sharpe()` (the `sqn/sqrt(N)` recovery) applied to
+every trial in that fold's pool (for `V[SR_n]`/SR_0) and to the winner (`SR_hat`), `T` =
+winner's `totalTrades`, skew/kurtosis = winner's own trade-PnL skew/kurtosis. Skipped folds (no
+eligible combo) carry a static `{dsr: 0.5, insufficientData: true}` rather than omitting the
+field.
+
+**Real, pre-existing, UNRELATED bug found and fixed via this session's own live testing:**
+verifying DSR through the actual `/lab` Optimizer wizard (AdaptiveTrend, ~12 checked params —
+each expanded to dozens-to-hundreds of grid values) froze the entire engine container. Root
+cause: `optimizer.py`'s `_build_param_grid` called `list(itertools.product(*value_lists))` to
+materialize the FULL cartesian product BEFORE applying the `max_combinations` cap — for
+AdaptiveTrend's real wizard-default grid this is ~472 trillion combinations (confirmed via the
+UI's own cost-estimate string), and attempting to build a Python list of that size hangs/OOMs a
+single-process container (confirmed via `docker stats` showing near-zero CPU during the hang —
+stuck allocating, not computing; confirmed the engine's OWN health status flipped to `unhealthy`
+and even a bare `/health` curl from *inside* the same container timed out). This is a real
+production risk entirely independent of Phase 3e/DSR — any user checking several params with
+default-width ranges in the existing, already-shipped Optimizer wizard could freeze the shared
+engine for every other user. **Fix:** `_build_param_grid` now computes `total` via cheap
+multiplication (no materialization), and when `max_combinations` would cap it, samples indices
+via `random.sample` on a lazy `range` object (Python special-cases `range` — no materialization)
+and decodes each index directly to its combo via `_decode_combo_index` (mixed-radix decomposition
+matching `itertools.product`'s own iteration order — verified against real `itertools.product`
+output for small cases in `test_param_grid.py`, plus a test reproducing the exact
+472-trillion-combo AdaptiveTrend grid completing in milliseconds instead of hanging). No test had
+existed for `_build_param_grid` at all before this session.
+
+**Client.** `FoldResultsTable.jsx` gained a DSR column (color-coded: emerald ≥95%, amber ≥80%,
+red below, "—" when `insufficientData`). `StrategyLab.jsx`'s disclosure note updated — DSR is no
+longer listed as not-built; PBO's specific data-availability reason is now spelled out precisely
+rather than lumped in with DSR under one generic "needs a numerically-verified primitive" line.
+
+**Live-verified, real Docker + browser access, this session:** engine suite 538/538 (+29 stats
+tests, +9 skew/kurtosis tests, +10 param-grid tests, +2 walk_forward DSR tests), server jest
+156/156 (unchanged — no server-side contract change), client `vite build` clean. Golden master
+(`before_dsr` vs `after_dsr`, all 5 seeded strategies): zero drift outside the two new
+`skewness`/`kurtosis` keys. Beyond unit tests: direct `curl POST /simulate/optimize` against real
+cached BTCUSDT candles + MicroScalper — real DSR values (68.6%, 63.4%, 57.0% across different
+runs), correctly `insufficientData: false`, JSON-serialized cleanly. Then the actual real-world
+regression repro: drove the genuine `/lab` Optimizer wizard in a real logged-in browser session
+with AdaptiveTrend's full default param grid (the exact case that froze the container pre-fix) —
+completed end-to-end in ~4s post-fix, rendered the trials table with no console errors. Engine
+container was restarted mid-session to clear state accumulated by the pre-fix hang reproductions;
+confirmed clean afterward (`docker ps` healthy, fresh runs succeed).
+
+**Still not done:** PBO (Probability of Backtest Overfitting, CSCV) remains deferred — needs every
+trial's out-of-sample performance across multiple train/test resample combinations, which this
+architecture deliberately doesn't collect (Phase 3d's own documented reason: only each fold's
+winner gets OOS-evaluated). Computing real PBO means OOS-evaluating every trial in every fold —
+multiplying the walk-forward job's backtest count by the grid/trial size — real, separate,
+not-small scope for a future session, not attempted here.
 
 ## Phase 3b shipped 2026-07-19 (Optuna/TPE Bayesian search — DSR/PBO still not started)
 

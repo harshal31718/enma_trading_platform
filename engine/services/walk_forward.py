@@ -19,15 +19,32 @@ Scope decisions (Phase 3a, documented — not silently dropped):
   Optuna/TPE (Plan 19's design) is Phase 3b — the search loop is swappable
   without touching this file's fold/stitch logic (Plan 19 itself notes S8
   "swaps only the search loop").
-- Deflated Sharpe Ratio / PBO (the plan's §2.2 "honesty layer" statistics)
-  are NOT computed here. Both need a normal-CDF/inverse-CDF primitive this
-  session has no way to numerically verify (no pytest access — see
-  `engine/tests/test_walk_forward.py`'s own header comment) and are a
-  separate, real deliverable from fold-based walk-forward itself. Shipping
-  an unverified statistical formula that traders would use to judge
-  overfitting is worse than shipping none — deferred to Phase 3b rather than
-  guessed at. The per-fold degradation ratio below uses only numbers each
-  already-tested primitive already computes (no new formula risk).
+- Phase 3e: Deflated Sharpe Ratio IS now computed per fold (`services.stats.
+  deflated_sharpe_ratio`, numerically verified against published reference
+  quantiles + a round-trip CDF/inverse-CDF check — see `tests/test_stats.py`
+  — now that this session has real pytest access, unlike the four prior
+  sessions that deferred this exact item for lack of it). Trade-level (not
+  the paper's per-period formulation): SR-like statistic per trial is
+  `sqn / sqrt(totalTrades)` (SQN is already a trade-level Sharpe-like
+  statistic, `sqn = sqrt(N)*mean(pnl)/std(pnl)`, so dividing out `sqrt(N)`
+  recovers `mean(pnl)/std(pnl)` with no new per-trial metric needed), skew/
+  kurtosis are the winning combo's own trade-PnL skew/kurtosis
+  (`metrics.SkewnessStat`/`KurtosisStat`, new this session, golden-master
+  verified additive-only). Attached as `fold.dsr` (0.5 + `insufficientData:
+  true` when there isn't enough data to say anything, never a fabricated
+  confident number).
+- **PBO (Probability of Backtest Overfitting) is still NOT computed.**
+  Canonical PBO (CSCV — Bailey, Borwein, López de Prado & Zhu 2015) needs
+  EVERY trial's out-of-sample performance across multiple train/test
+  subsample combinations, not just the fold winner's. This architecture
+  deliberately only OOS-evaluates each fold's winning combo (Phase 3d's own
+  documented reason: "no per-trial OOS value exists to plot honestly") —
+  computing real PBO would mean OOS-evaluating every trial in every fold,
+  multiplying the walk-forward job's backtest count by the grid/trial size.
+  That is real, separate, not-small scope, not attempted this session.
+  Faking PBO from data that doesn't support it (e.g. from the per-fold
+  degradation ratio alone) would misrepresent what the number means —
+  deferred rather than guessed at, same stance Phase 3a took on DSR itself.
 - Phase 3b: the per-fold train step now accepts `method: "grid" | "bayesian"`
   (default `"grid"`, back-compat) — dispatches to
   `optimizer.run_bayesian_optimization` (TPE search, `nTrials` trials per
@@ -67,6 +84,7 @@ from services.optimizer import (
     run_bayesian_optimization,
 )
 from services.backtest_runner import run_backtest_simulation
+from services.stats import deflated_sharpe_ratio
 from utils.timeframes import to_timedelta
 
 logger = logging.getLogger(__name__)
@@ -191,6 +209,50 @@ def _safe_float(metrics: dict, key: str) -> float | None:
         return _safe_float_metric(metrics, key, default=float("nan"))
     except Exception:
         return None
+
+
+def _trade_level_sharpe(metrics: dict) -> float | None:
+    """`sqn / sqrt(totalTrades)` recovers `mean(pnl)/std(pnl)` (SQN is
+    `sqrt(N)*mean(pnl)/std(pnl)`) — a trade-level, un-annualized Sharpe-like
+    statistic, with no new per-trial metric needed (see this module's own
+    header comment on why trade-level, not period-level, is the deliberate
+    choice for Phase 3e's DSR)."""
+    n = _safe_float(metrics, "totalTrades")
+    sqn = _safe_float(metrics, "sqn")
+    if n is None or sqn is None or math.isnan(n) or math.isnan(sqn) or n < 2:
+        return None
+    return sqn / math.sqrt(n)
+
+
+def _compute_fold_dsr(trial_results: list[dict], best_metrics: dict) -> dict:
+    """Deflated Sharpe Ratio for this fold's winning combo, deflated against
+    the pool of every trial `run_optimization`/`run_bayesian_optimization`
+    scored on this fold's train window. See this module's header comment and
+    `services/stats.py` for the formula + numerical verification."""
+    sr_trials = []
+    for t in trial_results:
+        m = t.get("metrics")
+        if not m:
+            continue
+        sr = _trade_level_sharpe(m)
+        if sr is not None:
+            sr_trials.append(sr)
+
+    sr_selected = _trade_level_sharpe(best_metrics)
+    n_obs = _safe_float(best_metrics, "totalTrades")
+    skew = _safe_float(best_metrics, "skewness")
+    kurtosis = _safe_float(best_metrics, "kurtosis")
+
+    if sr_selected is None or n_obs is None or math.isnan(n_obs):
+        return {"dsr": 0.5, "expectedMaxSharpe": None, "nTrials": len(sr_trials), "insufficientData": True}
+
+    skew = 0.0 if skew is None or math.isnan(skew) else skew
+    kurtosis = 3.0 if kurtosis is None or math.isnan(kurtosis) else kurtosis
+
+    return deflated_sharpe_ratio(
+        sr_trials=sr_trials, sr_selected=sr_selected,
+        n_observations=int(n_obs), skew=skew, kurtosis=kurtosis,
+    )
 
 
 def _aggregate_stitched_oos(trades: list[dict], capital: float) -> dict[str, Any]:
@@ -330,12 +392,14 @@ async def run_lab_walk_forward(lab_id: str, config: dict, config_hash: str) -> d
                 "skipped": True,
                 "reason": "no eligible parameter combination on the train window",
                 "trials": _json_safe_trials(train_result.get("results", [])),
+                "dsr": {"dsr": 0.5, "expectedMaxSharpe": None, "nTrials": 0, "insufficientData": True},
             })
             continue
 
         best_params = best["params"]
         is_metrics = best.get("metrics", {})
         trials = _json_safe_trials(train_result.get("results", []))
+        dsr = _compute_fold_dsr(train_result.get("results", []), is_metrics)
 
         test_job_id = f"wf_{lab_id}_fold{i}_test"
         test_result = await run_backtest_simulation(
@@ -378,6 +442,7 @@ async def run_lab_walk_forward(lab_id: str, config: dict, config_hash: str) -> d
             "oosTradeCount": test_result.get("tradeCount", 0),
             "degradationRatio": degradation,
             "trials": trials,
+            "dsr": dsr,
         })
 
     # Stitched OOS aggregate — read back the persisted trades for each fold's

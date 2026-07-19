@@ -390,6 +390,95 @@ def test_run_lab_walk_forward_rejects_invalid_method(monkeypatch):
 
 # ── Phase 3b: method="bayesian" dispatches the fold train step to TPE ──────
 
+def test_run_lab_walk_forward_computes_dsr_per_fold_when_metrics_available(monkeypatch):
+    """Phase 3e: with sqn/totalTrades/skewness/kurtosis present in the trial
+    pool's metrics, `fold.dsr` should be a real computed value (not the
+    insufficient-data 0.5 default) and stay in [0, 1]."""
+    times = _times(400)
+    monkeypatch.setattr(wf_module, "_fetch_candle_times", lambda *a, **kw: _fake_coro(times))
+
+    async def fake_run_optimization(config, param_grid, job_id):
+        return {
+            "best": {
+                "params": {"fast": 10, "slow": 30},
+                "loss": -2.0,
+                "metrics": {"sharpeRatio": "2.00", "totalTrades": 40, "sqn": "1.20",
+                            "skewness": "0.10", "kurtosis": "3.20"},
+            },
+            "results": [
+                {"params": {"fast": 10, "slow": 30}, "loss": -2.0, "rank": 1,
+                 "metrics": {"sharpeRatio": "2.00", "totalTrades": 40, "sqn": "1.20",
+                             "skewness": "0.10", "kurtosis": "3.20"}},
+                {"params": {"fast": 5, "slow": 30}, "loss": -0.5, "rank": 2,
+                 "metrics": {"sharpeRatio": "0.50", "totalTrades": 35, "sqn": "0.30",
+                             "skewness": "0.05", "kurtosis": "2.90"}},
+                {"params": {"fast": 8, "slow": 30}, "loss": -0.3, "rank": 3,
+                 "metrics": {"sharpeRatio": "0.30", "totalTrades": 38, "sqn": "0.18",
+                             "skewness": "-0.02", "kurtosis": "3.10"}},
+            ],
+        }
+    monkeypatch.setattr(wf_module, "run_optimization", fake_run_optimization)
+
+    async def fake_run_backtest_simulation(job_id, **kwargs):
+        return {"jobId": job_id, "status": "completed",
+                "metrics": {"sharpeRatio": "1.00"}, "tradeCount": 3}
+    monkeypatch.setattr(wf_module, "run_backtest_simulation", fake_run_backtest_simulation)
+
+    fake_db = _FakeDB({})
+    monkeypatch.setattr(wf_module, "get_database", lambda: fake_db)
+
+    config = {
+        "strategyFile": "strategies/AdaptiveTrend", "exchange": "Binance Futures",
+        "symbol": "BTCUSDT", "timeframe": "1h",
+        "startDate": "2024-01-01T00:00:00+00:00", "endDate": "2024-01-20T00:00:00+00:00",
+        "capital": 10000, "objective": "sharpe",
+        "paramGrid": {"fast": {"min": 5, "max": 15, "step": 5, "type": "int"}},
+        "nFolds": 4, "trainRatio": 0.7, "mode": "rolling",
+    }
+
+    result = _run(run_lab_walk_forward("lab9", config, "hash9"))
+    for f in result["folds"]:
+        assert "dsr" in f
+        assert f["dsr"]["insufficientData"] is False
+        assert 0.0 <= f["dsr"]["dsr"] <= 1.0
+        assert f["dsr"]["nTrials"] == 3
+
+
+def test_run_lab_walk_forward_skipped_fold_carries_uninformative_dsr(monkeypatch):
+    times = _times(400)
+    monkeypatch.setattr(wf_module, "_fetch_candle_times", lambda *a, **kw: _fake_coro(times))
+
+    async def fake_run_optimization_no_eligible(config, param_grid, job_id):
+        return {
+            "best": None,
+            "results": [
+                {"params": {"fast": 10}, "loss": float("inf"), "rank": 1,
+                 "metrics": {"totalTrades": 0}},
+            ],
+        }
+    monkeypatch.setattr(wf_module, "run_optimization", fake_run_optimization_no_eligible)
+
+    async def fake_run_backtest_simulation(job_id, **kwargs):
+        return {"jobId": job_id, "status": "completed", "metrics": {}, "tradeCount": 0}
+    monkeypatch.setattr(wf_module, "run_backtest_simulation", fake_run_backtest_simulation)
+
+    fake_db = _FakeDB({})
+    monkeypatch.setattr(wf_module, "get_database", lambda: fake_db)
+
+    config = {
+        "strategyFile": "strategies/AdaptiveTrend", "exchange": "Binance Futures",
+        "symbol": "BTCUSDT", "timeframe": "1h",
+        "startDate": "2024-01-01T00:00:00+00:00", "endDate": "2024-01-20T00:00:00+00:00",
+        "capital": 10000, "objective": "sharpe",
+        "paramGrid": {"fast": {"min": 5, "max": 15, "step": 5, "type": "int"}},
+        "nFolds": 4, "trainRatio": 0.7, "mode": "rolling",
+    }
+
+    result = _run(run_lab_walk_forward("lab10", config, "hash10"))
+    for f in result["folds"]:
+        assert f["dsr"] == {"dsr": 0.5, "expectedMaxSharpe": None, "nTrials": 0, "insufficientData": True}
+
+
 def test_run_lab_walk_forward_bayesian_method_dispatches_to_bayesian_optimizer(monkeypatch):
     """Grid dispatch is covered by every other test in this file (the default
     fake patches `run_optimization`). This confirms `method: "bayesian"`

@@ -15,7 +15,10 @@ type BacktestListObj = { id: string, jobId: string, status: string, strategyId: 
 
 type Strategy = { id: string, name: string, description: string, filePath: string, createdAt: string, updatedAt: string }
 type SideMetric = { totalTrades: number, winningTrades: number, losingTrades: number, winRate: string, netProfit: string, netProfitPct: string, grossProfit: string, grossLoss: string, profitFactor: string, averageWin: string, averageLoss: string, payoffRatio: string, averageHoldingPeriod: string, maxConsecutiveWins: number, maxConsecutiveLosses: number }
-type BacktestMetric = { totalTrades: number, winRate: string, netProfit: string, netProfitPct: string, maxDrawdown: string, sharpeRatio: string, sortinoRatio: string, calmarRatio: string, startingBalance: string, finishingBalance: string, totalFees: string, totalFunding: string, liquidations: number, leverage: number, winningTrades: number, losingTrades: number, averageWin: string, averageLoss: string, largestWin: string, largestLoss: string, averageHoldingPeriod: string, grossProfit: string, grossLoss: string, profitFactor: string, expectancy: string, payoffRatio: string, maxRunup: string, buyHoldReturnPct: string, maxConsecutiveWins: number, maxConsecutiveLosses: number, bySide: { all: SideMetric, long: SideMetric, short: SideMetric } }
+type BacktestMetric = { totalTrades: number, winRate: string, netProfit: string, netProfitPct: string, maxDrawdown: string, sharpeRatio: string, sortinoRatio: string, calmarRatio: string, startingBalance: string, finishingBalance: string, totalFees: string, totalFunding: string, liquidations: number, leverage: number, winningTrades: number, losingTrades: number, averageWin: string, averageLoss: string, largestWin: string, largestLoss: string, averageHoldingPeriod: string, grossProfit: string, grossLoss: string, profitFactor: string, expectancy: string, payoffRatio: string, maxRunup: string, buyHoldReturnPct: string, maxConsecutiveWins: number, maxConsecutiveLosses: number, skewness: string, kurtosis: string, bySide: { all: SideMetric, long: SideMetric, short: SideMetric } }
+// skewness/kurtosis (Plan 10 Phase 3e, new this session): sample skewness/RAW(non-excess)
+// kurtosis of round-trip trade PnLs (services/metrics.py SkewnessStat/KurtosisStat) — trade-level,
+// matching SQN's own convention. kurtosis defaults to "3.00" (normal) below 4 trades, not "0.00".
 type Trade = { tradeIndex: number, type: string, qty: string, entryPrice: string, exitPrice: string, entryAt: string, exitAt: string, exitReason: string, pnl: string, pnlPct: string, leverage: number, liqPrice: string, runUpPct?: string, drawdownPct?: string, barsHeld?: number, entryTag?: string, exitTag?: string }
 type Order = { orderId: number, symbol: string, status: string, side: string, type: string, origQty: string, executedQty: string, price: string, timeInForce: string }
 type Position = { symbol: string, positionAmt: string, entryPrice: string, unrealizedProfit: string, leverage: string, marginType: string }
@@ -89,7 +92,7 @@ type LabResult = { labId: string, type: "monte_carlo"|"optimization", sourceJobI
 - **`GET /api/v1/lab/simulations/:simId`** -> `{ ...LabResult }` (404 if not owned/found)
 - **`GET /api/v1/lab/simulations?sourceJobId=&limit=`** -> `{ simulations: LabResult[] }` (`results` field omitted from the list projection)
 
-### Strategy Lab — Walk-Forward Optimization (Plan 10 Phase 3a/3c/3d)
+### Strategy Lab — Walk-Forward Optimization (Plan 10 Phase 3a/3b/3c/3d/3e)
 ```typescript
 type WalkForwardFold = {
   fold: number, trainRange: [string, string], testRange: [string, string],
@@ -101,6 +104,13 @@ type WalkForwardFold = {
   // Phase 3d: EVERY combo run_optimization scored on this fold's train window (not just
   // bestParams) — the raw material for a trials table / IS-vs-OOS scatter / param heatmap.
   // Present (possibly length 0) on both normal and `skipped` folds.
+  dsr: { dsr: number, expectedMaxSharpe: number | null, nTrials: number, insufficientData: boolean },
+  // Phase 3e — Deflated Sharpe Ratio for this fold's winning combo (services/stats.py,
+  // Bailey & López de Prado 2014), deflated against the pool of every trial scored on this
+  // fold's train window. `dsr` is a probability in [0,1] the winner's edge is genuine after
+  // correcting for selection-bias-across-N-trials + non-normal returns. `insufficientData:
+  // true` (dsr always 0.5 in that case) when there isn't enough data to say anything — never a
+  // fabricated confident number. Present on `skipped` folds too (always insufficientData).
 }
 type WalkForwardResults = {
   mode: "rolling"|"anchored", method: "grid"|"bayesian", nTrials: number | null, seed: number | null,

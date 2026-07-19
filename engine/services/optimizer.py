@@ -173,12 +173,41 @@ def _expand_param_range(spec: dict) -> list:
         return [round(float(v), 6) for v in vals]
 
 
+def _decode_combo_index(idx: int, value_lists: list[list]) -> tuple:
+    """Decode a linear index into the combo tuple `itertools.product` would
+    have produced at that position (last list varies fastest — mixed-radix
+    decomposition), WITHOUT materializing the product. See `_build_param_grid`
+    for why this matters: a strategy with several wide-range params can have
+    a total combo count in the trillions."""
+    combo = []
+    for values in reversed(value_lists):
+        idx, r = divmod(idx, len(values))
+        combo.append(values[r])
+    combo.reverse()
+    return tuple(combo)
+
+
 def _build_param_grid(
     param_grid: dict[str, dict],
     max_combinations: int = 0,
     seed: int = 42,
 ) -> list[dict[str, Any]]:
-    """Generate all (or a random subset of) parameter combinations."""
+    """Generate all (or a random subset of) parameter combinations.
+
+    Guards against materializing an astronomically large cartesian product:
+    a strategy with, say, 8 params each expanded to ~300 values has a total
+    combo count in the hundreds of trillions — `list(itertools.product(...))`
+    on that tries to allocate a list of that size and hangs/OOMs the entire
+    engine process (found via live UI testing, Plan 10 Phase 3e session —
+    checking several AdaptiveTrend params in the Optimizer wizard with
+    default-width ranges reproducibly froze the container). When the grid is
+    larger than `max_combinations`, sample indices directly (`random.sample`
+    on a `range` object is O(k), does not materialize the range) and decode
+    each one straight to its combo (`_decode_combo_index`) — the full
+    product is only ever materialized when it's already small enough to be
+    safe (`total <= max_combinations`, or `max_combinations == 0` i.e. "run
+    the whole grid," which callers are expected to bound themselves for that
+    case, same as before this fix)."""
     expanded = {}
     for key, spec in param_grid.items():
         expanded[key] = _expand_param_range(spec)
@@ -186,13 +215,16 @@ def _build_param_grid(
     keys = list(expanded.keys())
     value_lists = [expanded[k] for k in keys]
 
-    all_combos = list(itertools.product(*value_lists))
-    total = len(all_combos)
+    total = 1
+    for values in value_lists:
+        total *= len(values)
 
     if max_combinations > 0 and total > max_combinations:
         rng = random.Random(seed)
-        indices = set(rng.sample(range(total), min(max_combinations, total)))
-        all_combos = [all_combos[i] for i in sorted(indices)]
+        indices = sorted(rng.sample(range(total), max_combinations))
+        all_combos = [_decode_combo_index(i, value_lists) for i in indices]
+    else:
+        all_combos = list(itertools.product(*value_lists))
 
     return [dict(zip(keys, combo)) for combo in all_combos]
 
@@ -280,7 +312,8 @@ async def run_optimization(
                     for k in ("totalTrades", "winRate", "netProfit", "netProfitPct",
                               "maxDrawdown", "sharpeRatio", "sortinoRatio", "calmarRatio",
                               "profitFactor", "sqn", "expectancy", "cagrPct",
-                              "maxConsecutiveWins", "maxConsecutiveLosses")
+                              "maxConsecutiveWins", "maxConsecutiveLosses",
+                              "skewness", "kurtosis")
                     if k in metrics
                 },
             })
@@ -432,7 +465,8 @@ async def run_bayesian_optimization(
                     for k in ("totalTrades", "winRate", "netProfit", "netProfitPct",
                               "maxDrawdown", "sharpeRatio", "sortinoRatio", "calmarRatio",
                               "profitFactor", "sqn", "expectancy", "cagrPct",
-                              "maxConsecutiveWins", "maxConsecutiveLosses")
+                              "maxConsecutiveWins", "maxConsecutiveLosses",
+                              "skewness", "kurtosis")
                     if k in metrics
                 },
             })

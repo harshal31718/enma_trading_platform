@@ -352,6 +352,45 @@ class SQNStat(Statistic):
         return f"{math.sqrt(len(ctx.trades)) * float(np.mean(pnls)) / std:.2f}"
 
 
+class SkewnessStat(Statistic):
+    """Sample skewness (γ3) of round-trip trade PnLs — trade-level, matching
+    SQNStat/ExpectancyStat's own convention (not the per-candle equity
+    return series SharpeStat uses). Feeds `services/stats.deflated_sharpe_ratio`
+    (Plan 10 Phase 3e) — that function's own docstring documents why
+    trade-level (not period-level) is the deliberate, internally-consistent
+    choice here (SQN is already a trade-level Sharpe-like statistic, so DSR
+    built on top of it needs trade-level skew/kurtosis too, not a mixed
+    per-candle/per-trade basis)."""
+    name = "skewness"
+
+    def compute(self, ctx: MetricContext) -> str:
+        if len(ctx.trades) < 3:
+            return "0.00"
+        pnls = np.array([float(t["pnl"]) for t in ctx.trades], dtype=np.float64)
+        std = float(np.std(pnls))
+        if std <= 0:
+            return "0.00"
+        return f"{float(np.mean(((pnls - np.mean(pnls)) / std) ** 3)):.4f}"
+
+
+class KurtosisStat(Statistic):
+    """RAW (non-excess) kurtosis (γ4) of round-trip trade PnLs — 3.0 for a
+    normal distribution, NOT 0.0. `services/stats.deflated_sharpe_ratio`'s
+    `(γ4-1)/4` term is written for this convention (Bailey & López de
+    Prado's own paper uses raw kurtosis) — do not silently swap to excess
+    kurtosis (numpy/scipy's default) without updating that formula too."""
+    name = "kurtosis"
+
+    def compute(self, ctx: MetricContext) -> str:
+        if len(ctx.trades) < 4:
+            return "3.00"  # normal-distribution default when too few trades to estimate
+        pnls = np.array([float(t["pnl"]) for t in ctx.trades], dtype=np.float64)
+        std = float(np.std(pnls))
+        if std <= 0:
+            return "3.00"
+        return f"{float(np.mean(((pnls - np.mean(pnls)) / std) ** 4)):.4f}"
+
+
 class ExpectancyStat(Statistic):
     """Average $ per trade (already in legacy metrics) — restated here for registry completeness."""
     name = "expectancy"
@@ -654,6 +693,8 @@ def default_registry() -> StatisticRegistry:
         MaxConsecutiveLossesStat(),
         MaxDrawdownDurationStat(),        # NEW — A-007
         ByExitReasonStat(),               # NEW — A-008
+        SkewnessStat(),                   # NEW — Plan 10 Phase 3e (DSR)
+        KurtosisStat(),                   # NEW — Plan 10 Phase 3e (DSR)
     ):
         r.register(s)
     return r
