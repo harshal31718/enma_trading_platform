@@ -39,7 +39,12 @@ function DateInput({ value, onChange, label }) {
   )
 }
 
-export default function NewBacktestWizard({ onCancel, onRun }) {
+// Phase 4b (Plan 10 §4.3 item 5, "robust-pick copy-to-backtest action") —
+// `initialConfig` is optional and additive: `{ strategyId, symbol, timeframe,
+// exchange, params }`, fed by RobustPickPanel.jsx's "Copy robust pick →
+// Backtest" deep link via Backtest.jsx's query-param handling. Every existing
+// caller passes nothing and gets the exact prior blank-defaults behavior.
+export default function NewBacktestWizard({ onCancel, onRun, initialConfig }) {
   const [step, setStep] = useState(1)
   const [selectedStrategy, setSelectedStrategy] = useState(null)
   const [params, setParams] = useState({})
@@ -64,12 +69,41 @@ export default function NewBacktestWizard({ onCancel, onRun }) {
   useEffect(() => {
     if (exchangeSettings && !settingsApplied.current) {
       setCapital(String(exchangeSettings.defaultCapital ?? 10000))
-      setLeverage(String(exchangeSettings.defaultLeverage ?? 1))
       setFeeRate(String(exchangeSettings.takerFee ?? 0.001))
-      setRisk(riskDefaultsFromSettings(exchangeSettings))
+      const settingsRisk = riskDefaultsFromSettings(exchangeSettings)
+      // Phase 4b: a pending robust-pick prefill (`initialConfig.leverage`/
+      // `.riskPct`) must win regardless of which async query — this one or
+      // the prefill effect below — happens to resolve last; skip seeding
+      // just those two fields from settings when a prefill wants them
+      // (capital/feeRate/other risk fields still come from settings either way).
+      if (!initialConfig?.leverage) setLeverage(String(exchangeSettings.defaultLeverage ?? 1))
+      setRisk((prev) => (initialConfig?.riskPct ? { ...settingsRisk, riskPct: prev.riskPct } : settingsRisk))
       settingsApplied.current = true
     }
-  }, [exchangeSettings])
+  }, [exchangeSettings, initialConfig])
+
+  // Phase 4b prefill (runs once, before the "default symbol" effect below so
+  // it wins the race rather than being overwritten): needs `strategies` loaded
+  // to resolve `initialConfig.strategyId` -> the full strategy object this
+  // wizard's local state expects (`selectedStrategy` is an object, not an id).
+  const prefillApplied = useRef(false)
+  useEffect(() => {
+    if (!initialConfig || prefillApplied.current || strategies.length === 0) return
+    const match = strategies.find((s) => s.id === initialConfig.strategyId)
+    if (match) {
+      setSelectedStrategy(match)
+      if (initialConfig.params) setParams(initialConfig.params)
+    }
+    if (initialConfig.symbol) setSymbol(initialConfig.symbol)
+    if (initialConfig.timeframe) setTimeframe(initialConfig.timeframe)
+    if (initialConfig.exchange) setExchange(initialConfig.exchange)
+    // Phase 4b (risk_pct/leverage search) — only present when the deep-linked
+    // robust pick actually searched them; `risk` state stores riskPct as a
+    // percentage string (same convention as every other risk field here).
+    if (initialConfig.leverage) setLeverage(String(initialConfig.leverage))
+    if (initialConfig.riskPct) setRisk((prev) => ({ ...prev, riskPct: String(initialConfig.riskPct) }))
+    prefillApplied.current = true
+  }, [initialConfig, strategies])
 
   // Engine only supports USD-M Futures — always use the futures symbol list
   const symbolList = symbolData?.futures || []

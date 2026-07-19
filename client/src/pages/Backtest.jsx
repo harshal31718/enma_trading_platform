@@ -1,4 +1,4 @@
-import { useState, useEffect, lazy, Suspense } from 'react'
+import { useState, useEffect, useMemo, useRef, lazy, Suspense } from 'react'
 import { useSearchParams, Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import {
@@ -26,6 +26,7 @@ import { Pagination } from '../components/ui/pagination'
 const EquityCurve = lazy(() => import('../components/charts/EquityCurve'))
 import BacktestHistory from '../features/backtest/BacktestHistory'
 import BacktestMetricCard from '../features/backtest/BacktestMetricCard'
+import MCSummaryStrip from '../features/backtest/MCSummaryStrip'
 
 const NewBacktestWizard = lazy(() => import('../features/backtest/NewBacktestWizard'))
 const BacktestCalendar = lazy(() => import('../features/backtest/BacktestCalendar'))
@@ -194,6 +195,19 @@ export default function Backtest() {
   const [searchParams, setSearchParams] = useSearchParams()
   const jobIdParam = searchParams.get('jobId')
 
+  // Phase 4b (Plan 10 §4.3 item 5) — RobustPickPanel's "Copy robust pick →
+  // Backtest" deep link. Prefixed `prefill*` names deliberately: bare
+  // `symbol`/`timeframe` already belong to the history-filter params below.
+  const prefillStrategyId = searchParams.get('prefillStrategyId')
+  const prefillSymbol = searchParams.get('prefillSymbol')
+  const prefillTimeframe = searchParams.get('prefillTimeframe')
+  const prefillExchange = searchParams.get('prefillExchange')
+  const prefillParamsRaw = searchParams.get('prefillParams')
+  // Phase 4b (risk_pct/leverage search) — present only when the deep-linked
+  // robust pick came from a run that searched risk_pct/leverage.
+  const prefillLeverage = searchParams.get('prefillLeverage')
+  const prefillRiskPct = searchParams.get('prefillRiskPct')
+
   // History filters live in the URL (?strategyName=&symbol=&...) per §3.4 — shareable,
   // survives refresh, back-button-able. jobId is a separate, pre-existing deep-link param.
   const historyFilters = {
@@ -218,6 +232,42 @@ export default function Backtest() {
   const [comparisonIds, setComparisonIds] = useState([])
   const [compareError, setCompareError] = useState('')
   const [showWizard, setShowWizard] = useState(false)
+
+  // Phase 4b prefill payload for NewBacktestWizard — undefined (not just
+  // falsy) when no prefillStrategyId is present, so the wizard's own
+  // "nothing passed" behavior is untouched for every normal "Run Backtest"/
+  // "Run Again" click.
+  const prefillConfig = useMemo(() => {
+    if (!prefillStrategyId) return undefined
+    let params
+    if (prefillParamsRaw) {
+      try {
+        params = JSON.parse(prefillParamsRaw)
+      } catch {
+        params = undefined // malformed/tampered URL — degrade to no param prefill, not a crash
+      }
+    }
+    return {
+      strategyId: prefillStrategyId,
+      symbol: prefillSymbol || undefined,
+      timeframe: prefillTimeframe || undefined,
+      exchange: prefillExchange || undefined,
+      params,
+      // Phase 4b: only present when the robust pick searched risk_pct/leverage.
+      leverage: prefillLeverage || undefined,
+      riskPct: prefillRiskPct || undefined,
+    }
+  }, [prefillStrategyId, prefillSymbol, prefillTimeframe, prefillExchange, prefillParamsRaw, prefillLeverage, prefillRiskPct])
+
+  // Auto-open the wizard once for a deep-linked prefill — guarded so
+  // navigating away and back within the same URL doesn't keep re-opening it.
+  const prefillWizardOpened = useRef(false)
+  useEffect(() => {
+    if (prefillConfig && !prefillWizardOpened.current) {
+      setShowWizard(true)
+      prefillWizardOpened.current = true
+    }
+  }, [prefillConfig])
 
   const { data: listData, isLoading: loadingHistory, isError: historyError, refetch: refetchHistory } = useBacktestsList(1, 20, historyFilters)
 
@@ -584,6 +634,8 @@ export default function Backtest() {
                     )
                   })()}
 
+                  <MCSummaryStrip sourceJobId={activeResult.jobId} enabled={activeResult.status === 'completed'} />
+
                   {/* Performance Charts */}
                   <div className="border-b border-slate-700/50">
                     <div className="h-11 bg-title-bg title-fade flex items-center px-4 border-b border-slate-700/30">
@@ -769,6 +821,7 @@ export default function Backtest() {
               <NewBacktestWizard
                 onCancel={() => setShowWizard(false)}
                 onRun={(config) => { setShowWizard(false); handleRun(config) }}
+                initialConfig={prefillConfig}
               />
             </Suspense>
           </DialogContent>

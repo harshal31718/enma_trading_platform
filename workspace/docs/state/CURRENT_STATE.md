@@ -3,7 +3,29 @@
 **Authority:** This is the single source of truth for what ENMA currently does.
 Read this before starting any work. If this conflicts with chat history, this document wins.
 
-Last updated: 2026-07-19 (**Plan 10 Phase 3e shipped** — Deflated Sharpe Ratio (DSR) is now
+Last updated: 2026-07-19 (**Plan 10 Phase 4a + 4b shipped** — MC-scored trial selection
+(`config.mcScoring`, opt-in) OOS-evaluates a fold's top-K eligible trials and ranks them by Monte
+Carlo p5 outcome instead of raw loss, surfacing a robust pick that can differ from the point-metric
+winner; risk_pct/leverage search (`config.riskLeverageGrid`, opt-in) extends the same fold loop to
+search sizing/leverage alongside strategy params. Both are default-off, zero behavior change for
+every existing run. See the "Strategy Lab" section below for the full shape. Two sessions worked
+this concurrently (one built the engine+client end-to-end via a sandbox with limited real-execution
+access; a second, working the same repo in parallel, did the actual Docker-based verification):
+engine container pytest **551/551**, server container jest **169/169**, client `vite build` clean,
+client `vitest` smoke 11/11. Golden master flagged real drift across 3 seeded strategies
+(`MicroScalper`/`MultiDivergence`/`MicroMacroRSIDivergence`) against the prior `after_dsr` baseline
+— investigated, NOT a code regression: two independent golden-master re-runs against the current
+code+environment are byte-identical to each other, and the TimescaleDB `candles` table for
+BTCUSDT/1h currently has a real gap (only 1,440 of the ~8,760 candles needed for the golden
+harness's fixed 2024-01-01→2025-01-01 window are cached) — a data-availability difference between
+when the `after_dsr` baseline was captured and now, not a Phase 4 code change (Phase 4a/4b touch
+only optimizer/walk-forward plumbing, never `backtest_runner.py`/strategies/indicators). Live-
+verified end-to-end in a real logged-in browser session against the actual `/lab` Optimizer wizard:
+MC-scoring toggle + top-K input render and wire into the cost estimate correctly, a real walk-
+forward job completes through the full BullMQ→engine→Mongo pipeline, and the MC-scored-picks panel
+renders both the "robust pick differs" path and the honest "insufficient OOS trades, no fabricated
+percentile" guard path with zero console errors. **PBO remains the only unshipped Plan 10 item.**)
+Earlier: 2026-07-19 (**Plan 10 Phase 3e shipped** — Deflated Sharpe Ratio (DSR) is now
 computed per walk-forward fold, the statistic Plan 10's §2.2 "honesty layer" deferred across four
 prior sessions specifically for lack of a numerically-verified normal-CDF/inverse-CDF primitive.
 New `engine/services/stats.py`: `norm_cdf` (exact, `math.erf`), `norm_ppf` (Acklam's rational
@@ -237,10 +259,35 @@ degradation ratio plus a trade-level Deflated Sharpe Ratio (`fold.dsr`, Phase 3e
 winner — rendered as a sortable trials table + 2-param loss heatmap by `TrialsExplorer.jsx`
 (`FoldResultsTable.jsx` is one row per fold, now with a DSR column — the per-trial trials view is
 the separate, already-shipped `TrialsExplorer.jsx`). `WalkForwardWizard.jsx` has a Grid/Bayesian
-search-method toggle. **PBO overfitting stats are still not started** — canonical PBO needs every
-trial's OOS performance across multiple resample combinations, which this architecture doesn't
-collect (only each fold's winner gets OOS-evaluated); real, separate, not-small scope, disclosed
-rather than faked. See `workspace/plan/10_monte-carlo-strategy-lab.md`.
+search-method toggle.
+
+**Phase 4a — MC-scored trial selection (opt-in, shipped 2026-07-19):** `config.mcScoring`
+(default `False`, zero behavior change otherwise) OOS-evaluates a fold's top-`mcTopK` (default 3,
+capped at 10) min-trades-*eligible* trials instead of only the raw-loss winner, and ranks them by
+Monte Carlo p5 profit outcome (`services.monte_carlo.compute_mc_stats`, a new Mongo-free pure
+extraction of `run_lab_simulation`'s bootstrap core) rather than the point-estimate loss —
+`fold.mcScoring.robustPick` can differ from `fold.mcScoring.rawPick`, surfacing the fragility gap
+a point metric hides. A candidate with fewer than `MIN_MC_OOS_TRADES`=10 OOS trades is marked
+`insufficientData: true` rather than given a fabricated percentile. `WalkForwardWizard.jsx` has
+the toggle + top-K input; `RobustPickPanel.jsx` (new) renders the per-fold picks table inside
+`TrialsExplorer.jsx`.
+
+**Phase 4b — risk_pct/leverage search (opt-in, shipped 2026-07-19):** `config.riskLeverageGrid`
+(default `None`) cartesian-multiplies a separate `risk_pct`/`leverage` grid against the strategy's
+own `paramGrid` (`optimizer._build_combined_grid`, namespaced apart from `alpha_params` since
+`run_backtest_simulation` validates alpha params strictly against the strategy's `PARAMS` schema).
+Each fold's winning trial's own searched risk_pct/leverage — not the job's flat default — is what
+that fold's OOS evaluation (and Phase 4a's MC-scored candidates) actually use
+(`walk_forward._override_bt_common`). `WalkForwardWizard.jsx` has a "Search risk_pct / leverage
+too" toggle; a robust pick's risk_pct/leverage carries through a "Copy robust pick → Backtest"
+deep link into `NewBacktestWizard.jsx`'s prefill. The Backtest report page also gained a compact
+MC summary strip (`MCSummaryStrip.jsx`, `Backtest.jsx`) — the §4.4 "everywhere else" auto-enqueue
+piece deferred since Phase 2.
+
+**PBO overfitting stats are still not started** — canonical PBO needs every trial's OOS
+performance across multiple resample combinations, which this architecture doesn't collect (only
+each fold's winner, plus Phase 4a's top-K, get OOS-evaluated); real, separate, not-small scope,
+disclosed rather than faked. See `workspace/plan/10_monte-carlo-strategy-lab.md`.
 
 ### Risk Intelligence Dashboard
 Centralized `/risk-dashboard` page: Zone 1 real-time portfolio VaR/CVaR + correlation heatmap, Zone 2

@@ -10,7 +10,9 @@ const TIMEFRAMES = ['1m', '5m', '15m', '1h', '4h', '1d']
 function _perFoldComboCount(paramGrid) {
   return Object.values(paramGrid || {}).reduce((acc, spec) => {
     let n
-    if (spec.type === 'float') {
+    if (spec.values) {
+      n = Math.max(1, spec.values.length)
+    } else if (spec.type === 'float') {
       n = Math.max(1, Math.round(spec.num || 1))
     } else {
       n = Math.max(1, Math.floor((spec.max - spec.min) / (spec.step || 1)) + 1)
@@ -45,13 +47,60 @@ export default function WalkForwardWizard({ onRun, submitting }) {
   const [maxCombinations, setMaxCombinations] = useState(50)
   const [method, setMethod] = useState('grid')
   const [nTrials, setNTrials] = useState(50)
+  const [mcScoring, setMcScoring] = useState(false)
+  const [mcTopK, setMcTopK] = useState(3)
   const [paramGrid, setParamGrid] = useState({})
+
+  // Plan 10 Phase 4b (risk_pct/leverage search) — 2026-07-19 decision: a
+  // separate grid, cartesian-multiplied against `paramGrid` on the engine
+  // side (`_build_combined_grid`), searched independently per fold. Off by
+  // default — zero effect on the submitted config unless enabled. Risk % is
+  // entered as a percentage here (matching this app's other risk fields,
+  // e.g. RiskParamsFields' "Risk % / Trade") and converted to the engine's
+  // native fraction convention (0.01 = 1%) only at submit time.
+  const [riskLeverageSearch, setRiskLeverageSearch] = useState(false)
+  const [riskPctMin, setRiskPctMin] = useState('1')
+  const [riskPctMax, setRiskPctMax] = useState('3')
+  const [riskPctSteps, setRiskPctSteps] = useState('3')
+  const [leverageMin, setLeverageMin] = useState('5')
+  const [leverageMax, setLeverageMax] = useState('20')
+  const [leverageStep, setLeverageStep] = useState('5')
 
   const { data: paramsSchema } = useStrategyParams(strategyId || null)
 
-  const perFoldCombos = useMemo(() => _perFoldComboCount(paramGrid), [paramGrid])
+  const riskLeverageGrid = useMemo(() => {
+    if (!riskLeverageSearch) return undefined
+    return {
+      risk_pct: {
+        min: Number(riskPctMin) / 100,
+        max: Number(riskPctMax) / 100,
+        num: Math.max(1, Number(riskPctSteps) || 1),
+        type: 'float',
+      },
+      leverage: {
+        min: Number(leverageMin),
+        max: Number(leverageMax),
+        step: Math.max(1, Number(leverageStep) || 1),
+        type: 'int',
+      },
+    }
+  }, [riskLeverageSearch, riskPctMin, riskPctMax, riskPctSteps, leverageMin, leverageMax, leverageStep])
+
+  const strategyGridCombos = useMemo(() => _perFoldComboCount(paramGrid), [paramGrid])
+  const riskLeverageCombos = useMemo(
+    () => (riskLeverageGrid ? _perFoldComboCount(riskLeverageGrid) : 1),
+    [riskLeverageGrid]
+  )
+  // The TRUE per-fold combinatorial total — strategy grid x risk/leverage
+  // grid — matching what the engine's `_build_combined_grid` guardrail
+  // actually bounds (not just the strategy grid alone).
+  const perFoldCombos = strategyGridCombos * riskLeverageCombos
   const cappedPerFold = method === 'bayesian' ? Number(nTrials) || 1 : Math.min(perFoldCombos, Number(maxCombinations) || 1)
-  const estimatedBacktests = cappedPerFold * Number(nFolds) + Number(nFolds) // + 1 test backtest per fold
+  // + 1 OOS test backtest per fold for the raw winner, + (topK-1) extra OOS
+  // backtests per fold when MC-scoring is on (candidate 0 reuses the raw
+  // winner's OOS run — see walk_forward.py's `_mc_score_fold`).
+  const mcExtraPerFold = mcScoring ? Math.max(0, Number(mcTopK) - 1) : 0
+  const estimatedBacktests = (cappedPerFold + 1 + mcExtraPerFold) * Number(nFolds)
 
   const handleSubmit = (e) => {
     e.preventDefault()
@@ -73,7 +122,10 @@ export default function WalkForwardWizard({ onRun, submitting }) {
       maxCombinations: Number(maxCombinations),
       method,
       nTrials: method === 'bayesian' ? Number(nTrials) : undefined,
+      mcScoring,
+      mcTopK: mcScoring ? Number(mcTopK) : undefined,
       paramGrid,
+      riskLeverageGrid,
     })
   }
 
@@ -225,6 +277,74 @@ export default function WalkForwardWizard({ onRun, submitting }) {
           <p className="text-[9px] text-slate-500 mt-1">TPE-sampled search — far fewer backtests than an exhaustive grid for a comparable-quality result.</p>
         </div>
       )}
+
+      <div className="border border-slate-800 p-2">
+        <label className="flex items-center gap-2 text-xs font-mono text-slate-300">
+          <input type="checkbox" checked={mcScoring} onChange={(e) => setMcScoring(e.target.checked)} className="accent-emerald-500" />
+          MC-scored trial selection
+        </label>
+        <p className="text-[9px] text-slate-500 mt-1">
+          Instead of picking each fold's winner by raw loss alone, OOS-evaluate its top-K
+          min-trades-eligible trials and rank them by Monte Carlo p5 profit outcome — surfaces a
+          more robust pick when the point-estimate winner has a hidden fragility gap (Plan 10 §2.3).
+        </p>
+        {mcScoring && (
+          <div className="mt-2">
+            <label className="text-[9px] uppercase text-slate-400 font-semibold tracking-wider block mb-1">
+              Top-K candidates per fold (capped at 10 server-side)
+            </label>
+            <input type="number" min={1} max={10} value={mcTopK} onChange={(e) => setMcTopK(e.target.value)}
+              className="bg-slate-900 border border-slate-700 w-full px-2 py-1.5 outline-none focus:border-emerald-500 text-xs font-mono text-slate-200" />
+          </div>
+        )}
+      </div>
+
+      <div className="border border-slate-800 p-2">
+        <label className="flex items-center gap-2 text-xs font-mono text-slate-300">
+          <input type="checkbox" checked={riskLeverageSearch} onChange={(e) => setRiskLeverageSearch(e.target.checked)} className="accent-emerald-500" />
+          Search risk_pct / leverage too
+        </label>
+        <p className="text-[9px] text-slate-500 mt-1">
+          Multiplies the param grid above by every risk_pct × leverage combination below — searched
+          independently per fold, same as the strategy params. Each fold's winning combo is
+          OOS-tested at ITS OWN risk_pct/leverage, not the fixed values in the Capital/Leverage
+          fields above (those still apply when this is off).
+        </p>
+        {riskLeverageSearch && (
+          <div className="mt-2 space-y-2">
+            <div>
+              <label className="text-[9px] uppercase text-slate-400 font-semibold tracking-wider block mb-1">
+                Risk % / trade — min / max / steps
+              </label>
+              <div className="grid grid-cols-3 gap-2">
+                <input type="number" step="0.1" value={riskPctMin} onChange={(e) => setRiskPctMin(e.target.value)}
+                  className="bg-slate-900 border border-slate-700 w-full px-2 py-1.5 outline-none focus:border-emerald-500 text-xs font-mono text-slate-200" />
+                <input type="number" step="0.1" value={riskPctMax} onChange={(e) => setRiskPctMax(e.target.value)}
+                  className="bg-slate-900 border border-slate-700 w-full px-2 py-1.5 outline-none focus:border-emerald-500 text-xs font-mono text-slate-200" />
+                <input type="number" min={1} value={riskPctSteps} onChange={(e) => setRiskPctSteps(e.target.value)}
+                  className="bg-slate-900 border border-slate-700 w-full px-2 py-1.5 outline-none focus:border-emerald-500 text-xs font-mono text-slate-200" />
+              </div>
+            </div>
+            <div>
+              <label className="text-[9px] uppercase text-slate-400 font-semibold tracking-wider block mb-1">
+                Leverage — min / max / step
+              </label>
+              <div className="grid grid-cols-3 gap-2">
+                <input type="number" min={1} max={125} value={leverageMin} onChange={(e) => setLeverageMin(e.target.value)}
+                  className="bg-slate-900 border border-slate-700 w-full px-2 py-1.5 outline-none focus:border-emerald-500 text-xs font-mono text-slate-200" />
+                <input type="number" min={1} max={125} value={leverageMax} onChange={(e) => setLeverageMax(e.target.value)}
+                  className="bg-slate-900 border border-slate-700 w-full px-2 py-1.5 outline-none focus:border-emerald-500 text-xs font-mono text-slate-200" />
+                <input type="number" min={1} value={leverageStep} onChange={(e) => setLeverageStep(e.target.value)}
+                  className="bg-slate-900 border border-slate-700 w-full px-2 py-1.5 outline-none focus:border-emerald-500 text-xs font-mono text-slate-200" />
+              </div>
+            </div>
+            <p className="text-[9px] text-slate-500">
+              {riskLeverageCombos.toLocaleString()} risk/leverage combinations × {strategyGridCombos.toLocaleString()}{' '}
+              strategy param combinations = {perFoldCombos.toLocaleString()} total per fold, before any cap below.
+            </p>
+          </div>
+        )}
+      </div>
 
       <div className="bg-slate-900/50 border border-slate-800 p-2 text-[10px] font-mono text-slate-400">
         {method === 'grid' ? (

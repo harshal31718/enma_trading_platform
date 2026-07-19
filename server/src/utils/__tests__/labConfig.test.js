@@ -7,6 +7,8 @@ const {
   MAX_N_FOLDS,
   MAX_MAX_COMBINATIONS,
   MAX_N_TRIALS,
+  MAX_MC_TOP_K,
+  DEFAULT_MC_TOP_K,
 } = require('../labConfig')
 
 const baseWfInput = () => ({
@@ -195,5 +197,85 @@ describe('buildWalkForwardConfig', () => {
 
   test('rejects a non-object paramGrid', () => {
     expect(() => buildWalkForwardConfig({ ...baseWfInput(), paramGrid: 'nope' })).toThrow(/paramGrid must be/)
+  })
+
+  // Plan 10 Phase 4a (MC-scored trial selection) — this validator was the
+  // missing link between the fully-built engine feature
+  // (walk_forward.py's _mc_score_fold) and the API: mcScoring/mcTopK weren't
+  // read from the request body at all before this, so the feature could
+  // never actually be enabled end-to-end.
+  test('mcScoring defaults to off, mcTopK undefined when off', () => {
+    const config = buildWalkForwardConfig(baseWfInput())
+    expect(config.mcScoring).toBe(false)
+    expect(config.mcTopK).toBeUndefined()
+  })
+
+  test('mcScoring=true defaults mcTopK to DEFAULT_MC_TOP_K', () => {
+    const config = buildWalkForwardConfig({ ...baseWfInput(), mcScoring: true })
+    expect(config.mcScoring).toBe(true)
+    expect(config.mcTopK).toBe(DEFAULT_MC_TOP_K)
+  })
+
+  test('clamps an explicit mcTopK to the documented cap (must match engine MAX_MC_TOP_K=10)', () => {
+    const config = buildWalkForwardConfig({ ...baseWfInput(), mcScoring: true, mcTopK: MAX_MC_TOP_K + 50 })
+    expect(config.mcTopK).toBe(MAX_MC_TOP_K)
+  })
+
+  test('rejects a non-positive mcTopK', () => {
+    expect(() => buildWalkForwardConfig({ ...baseWfInput(), mcScoring: true, mcTopK: 0 })).toThrow(/mcTopK must be/)
+  })
+
+  test('mcTopK is ignored (not passed through) when mcScoring is off', () => {
+    const config = buildWalkForwardConfig({ ...baseWfInput(), mcScoring: false, mcTopK: 5 })
+    expect(config.mcTopK).toBeUndefined()
+  })
+
+  // Plan 10 Phase 4b (risk_pct/leverage search) — 2026-07-19 decision: a
+  // separate grid restricted to exactly risk_pct/leverage, cartesian-
+  // multiplied against paramGrid inside the engine, not tagged/prefixed
+  // keys merged into paramGrid itself.
+  test('riskLeverageGrid is undefined when not provided (zero behavior change)', () => {
+    const config = buildWalkForwardConfig(baseWfInput())
+    expect(config.riskLeverageGrid).toBeUndefined()
+  })
+
+  test('accepts a valid riskLeverageGrid with values specs', () => {
+    const riskLeverageGrid = { risk_pct: { values: [0.01, 0.02] }, leverage: { values: [5, 10, 20] } }
+    const config = buildWalkForwardConfig({ ...baseWfInput(), riskLeverageGrid })
+    expect(config.riskLeverageGrid).toEqual(riskLeverageGrid)
+  })
+
+  test('accepts a valid riskLeverageGrid with a min/max range spec', () => {
+    const riskLeverageGrid = { leverage: { min: 5, max: 20, step: 5, type: 'int' } }
+    const config = buildWalkForwardConfig({ ...baseWfInput(), riskLeverageGrid })
+    expect(config.riskLeverageGrid).toEqual(riskLeverageGrid)
+  })
+
+  test('rejects an empty riskLeverageGrid', () => {
+    expect(() => buildWalkForwardConfig({ ...baseWfInput(), riskLeverageGrid: {} })).toThrow(/must not be empty/)
+  })
+
+  test('rejects a riskLeverageGrid key outside risk_pct/leverage', () => {
+    expect(() => buildWalkForwardConfig({
+      ...baseWfInput(), riskLeverageGrid: { fast: { values: [1, 2] } },
+    })).toThrow(/must be one of risk_pct, leverage/)
+  })
+
+  test('rejects a riskLeverageGrid spec with neither values nor min/max', () => {
+    expect(() => buildWalkForwardConfig({
+      ...baseWfInput(), riskLeverageGrid: { leverage: { step: 5 } },
+    })).toThrow(/must specify either/)
+  })
+
+  test('rejects a riskLeverageGrid key colliding with a paramGrid key of the same name', () => {
+    const input = baseWfInput()
+    input.paramGrid = { leverage: { min: 1, max: 5, step: 1, type: 'int' } }
+    expect(() => buildWalkForwardConfig({
+      ...input, riskLeverageGrid: { leverage: { values: [5, 10] } },
+    })).toThrow(/collides with a paramGrid key/)
+  })
+
+  test('rejects a non-object riskLeverageGrid', () => {
+    expect(() => buildWalkForwardConfig({ ...baseWfInput(), riskLeverageGrid: 'nope' })).toThrow(/must be an object/)
   })
 })

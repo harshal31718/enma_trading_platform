@@ -20,6 +20,7 @@ import WalkForwardWizard from '../components/lab/WalkForwardWizard'
 import OptimizationHistoryRail from '../components/lab/OptimizationHistoryRail'
 import FoldResultsTable from '../components/lab/FoldResultsTable'
 import TrialsExplorer from '../components/lab/TrialsExplorer'
+import RobustPickPanel from '../components/lab/RobustPickPanel'
 import StitchedOOSCard from '../components/lab/StitchedOOSCard'
 import DegradationVerdict from '../components/lab/DegradationVerdict'
 
@@ -343,6 +344,7 @@ function OptimizerTab() {
             />
             <StitchedOOSCard stitchedOOS={results.stitchedOOS} minTradesWarning={results.minTradesWarning} />
             <FoldResultsTable folds={results.folds} />
+            <RobustPickPanel folds={results.folds} config={opt.config} />
             <TrialsExplorer folds={results.folds} />
             <div className="border border-dashed border-slate-800 p-3 text-[10px] text-slate-500 font-mono italic">
               PBO (Probability of Backtest Overfitting) is not built yet (see

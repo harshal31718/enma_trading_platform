@@ -14,6 +14,14 @@ sole writer of `results`/`status`, matching the `backtestResults` ownership
 rule), and returns downsampled percentile equity bands for the future fan
 chart. Called from `routers/simulate.py`, not `leverage_sensitivity.py`.
 
+`compute_mc_stats()` (Plan 10 Phase 4a) is the Mongo-free extraction of
+`run_lab_simulation`'s bootstrap core — takes a returns array directly
+instead of reading trades from `db.backtestTrades`, so it can be called
+synchronously per-candidate. Used by `walk_forward.py`'s MC-scored trial
+selection (OOS-evaluating a fold's top-K candidates instead of only the
+raw-loss winner, then ranking by MC-p5 outcome). `run_lab_simulation` is
+now a thin DB-read/write wrapper around it — behavior unchanged.
+
 Methodology fixes vs the prior implementation:
 - Block bootstrap (circular, block length ~sqrt(N)) instead of i.i.d.
   resampling — i.i.d. shuffling destroys win/loss clustering and understates
@@ -160,6 +168,100 @@ def _seed_from_key(key: str) -> int:
     return int(hashlib.md5(key.encode()).hexdigest()[:8], 16)
 
 
+def returns_from_trades(trades: list[dict], capital: float) -> np.ndarray:
+    """Additive per-trade return array from raw `backtestTrades` docs —
+    `pnl / capital` (fixed starting capital), `scale_out` legs excluded
+    (QNT-14). Shared by `run_lab_simulation` and `walk_forward.py`'s
+    per-candidate MC scoring (Plan 10 Phase 4a) so the resampling-pool
+    convention has exactly one implementation.
+    """
+    round_trips = [t for t in trades if t.get("exitReason") != "scale_out"]
+    returns = []
+    for t in round_trips:
+        try:
+            returns.append(float(t.get("pnl", 0.0)) / capital)
+        except (ValueError, TypeError):
+            continue
+    return np.array(returns, dtype=np.float64)
+
+
+def compute_mc_stats(
+    returns: np.ndarray,
+    mode: str,
+    n_runs: int,
+    block_len: int | None,
+    ruin_threshold_pct: float,
+    seed: int,
+    include_equity_bands: bool = True,
+) -> dict[str, Any]:
+    """Pure bootstrap core — no DB access, no job/simId state.
+
+    `returns` is an additive per-trade return array (`pnl / capital`, fixed
+    starting capital, `scale_out` legs already excluded by the caller —
+    QNT-14). `block_len=None` resolves to `max(5, round(sqrt(n_trades)))`,
+    same default `run_lab_simulation` has always used. `include_equity_bands`
+    defaults `True` to preserve `run_lab_simulation`'s exact existing output
+    shape; callers scoring many candidates (e.g. `walk_forward.py`'s top-K
+    MC ranking) should pass `False` to avoid persisting a full downsampled
+    band series per candidate (BSON-bloat risk at topK x nFolds scale).
+    """
+    n_trades = len(returns)
+    rng = np.random.default_rng(seed)
+
+    resolved_block_len = int(block_len) if block_len else max(5, round(np.sqrt(n_trades)))
+
+    if mode == "iid":
+        idx = _iid_bootstrap_indices(rng, n_runs, n_trades)
+    else:
+        idx = _block_bootstrap_indices(rng, n_runs, n_trades, resolved_block_len)
+
+    resampled = returns[idx]  # (n_runs, n_trades)
+
+    equity = 1.0 + np.cumsum(resampled, axis=1)
+    peak = np.maximum.accumulate(np.maximum(equity, 1.0), axis=1)
+    drawdown = (peak - equity) / peak
+    max_dd_per_run = drawdown.max(axis=1)
+
+    ruin_prob = float(np.mean(max_dd_per_run >= (ruin_threshold_pct / 100.0)))
+    exceedance = [
+        {
+            "drawdownPct": f"{threshold:.2f}",
+            "probability": f"{float(np.mean(max_dd_per_run >= threshold / 100.0)):.3f}",
+        }
+        for threshold in EXCEEDANCE_BUCKETS
+    ]
+
+    final_equity = equity[:, -1]
+    final_equity_pct = {str(p): float(np.percentile(final_equity, p)) for p in (5, 25, 50, 75, 95)}
+    max_dd_pct = {str(p): float(np.percentile(max_dd_per_run, p)) for p in (5, 25, 50, 75, 95)}
+
+    results: dict[str, Any] = {
+        "ruinProbability": f"{ruin_prob:.3f}",
+        "drawdownExceedance": exceedance,
+        "finalEquityPercentiles": final_equity_pct,
+        "maxDrawdownPercentiles": max_dd_pct,
+        "meta": {
+            "nRuns": n_runs,
+            "nTrades": n_trades,
+            "blockLength": resolved_block_len if mode == "block" else None,
+            "mode": mode,
+            "seed": seed,
+        },
+    }
+
+    if include_equity_bands:
+        band_idx = _downsample_indices(n_trades, EQUITY_BAND_MAX_POINTS)
+        results["equityBands"] = {
+            "tradeIndices": [int(i) for i in band_idx],
+            **{
+                f"p{p}": [float(v) for v in np.percentile(equity[:, band_idx], p, axis=0)]
+                for p in (5, 25, 50, 75, 95)
+            },
+        }
+
+    return results
+
+
 async def run_lab_simulation(sim_id: str, source_job_id: str, config: dict, config_hash: str) -> dict[str, Any]:
     """Job-based Monte Carlo robustness run for the Strategy Lab (Plan 10 Phase 1).
 
@@ -192,17 +294,12 @@ async def run_lab_simulation(sim_id: str, source_job_id: str, config: dict, conf
     cursor = db.backtestTrades.find({"jobId": source_job_id})
     trades = await cursor.to_list(length=100_000)
 
-    round_trips = [t for t in trades if t.get("exitReason") != "scale_out"]
-    returns = []
-    for t in round_trips:
-        try:
-            returns.append(float(t.get("pnl", 0.0)) / capital)
-        except (ValueError, TypeError):
-            continue
+    returns_arr = returns_from_trades(trades, capital)
+    scale_out_count = sum(1 for t in trades if t.get("exitReason") == "scale_out")
 
     now = datetime.now(timezone.utc)
 
-    if not returns:
+    if len(returns_arr) == 0:
         results = {
             "ruinProbability": "0.000",
             "drawdownExceedance": [
@@ -220,65 +317,19 @@ async def run_lab_simulation(sim_id: str, source_job_id: str, config: dict, conf
         )
         return results
 
-    returns_arr = np.array(returns, dtype=np.float64)
-    n_trades = len(returns_arr)
-    rng = np.random.default_rng(seed)
-
     block_len_cfg = config.get("blockLen")
-    block_len = int(block_len_cfg) if block_len_cfg else max(5, round(np.sqrt(n_trades)))
+    block_len = int(block_len_cfg) if block_len_cfg else None
 
-    if mode == "iid":
-        idx = _iid_bootstrap_indices(rng, n_runs, n_trades)
-    else:
-        idx = _block_bootstrap_indices(rng, n_runs, n_trades, block_len)
-
-    resampled = returns_arr[idx]  # (n_runs, n_trades)
-
-    equity = 1.0 + np.cumsum(resampled, axis=1)
-    peak = np.maximum.accumulate(np.maximum(equity, 1.0), axis=1)
-    drawdown = (peak - equity) / peak
-    max_dd_per_run = drawdown.max(axis=1)
-
-    ruin_prob = float(np.mean(max_dd_per_run >= (ruin_threshold_pct / 100.0)))
-    exceedance = [
-        {
-            "drawdownPct": f"{threshold:.2f}",
-            "probability": f"{float(np.mean(max_dd_per_run >= threshold / 100.0)):.3f}",
-        }
-        for threshold in EXCEEDANCE_BUCKETS
-    ]
-
-    final_equity = equity[:, -1]
-    final_equity_pct = {str(p): float(np.percentile(final_equity, p)) for p in (5, 25, 50, 75, 95)}
-    max_dd_pct = {str(p): float(np.percentile(max_dd_per_run, p)) for p in (5, 25, 50, 75, 95)}
-
-    # Percentile equity bands over the trade-sequence axis (synthetic index,
-    # not wall-clock — block bootstrap paths don't map 1:1 to original candle
-    # times), downsampled to <= EQUITY_BAND_MAX_POINTS for the future fan chart.
-    band_idx = _downsample_indices(n_trades, EQUITY_BAND_MAX_POINTS)
-    equity_bands = {
-        "tradeIndices": [int(i) for i in band_idx],
-        **{
-            f"p{p}": [float(v) for v in np.percentile(equity[:, band_idx], p, axis=0)]
-            for p in (5, 25, 50, 75, 95)
-        },
-    }
-
-    results = {
-        "ruinProbability": f"{ruin_prob:.3f}",
-        "drawdownExceedance": exceedance,
-        "finalEquityPercentiles": final_equity_pct,
-        "maxDrawdownPercentiles": max_dd_pct,
-        "equityBands": equity_bands,
-        "meta": {
-            "nRuns": n_runs,
-            "nTrades": n_trades,
-            "blockLength": block_len if mode == "block" else None,
-            "mode": mode,
-            "seed": seed,
-            "scaleOutLegsExcluded": len(trades) - len(round_trips),
-        },
-    }
+    results = compute_mc_stats(
+        returns_arr,
+        mode=mode,
+        n_runs=n_runs,
+        block_len=block_len,
+        ruin_threshold_pct=ruin_threshold_pct,
+        seed=seed,
+        include_equity_bands=True,
+    )
+    results["meta"]["scaleOutLegsExcluded"] = scale_out_count
 
     await db.labResults.update_one(
         {"labId": sim_id},

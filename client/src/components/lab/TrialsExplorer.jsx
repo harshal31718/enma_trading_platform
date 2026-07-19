@@ -18,6 +18,11 @@ function paramKeys(trials) {
 function TrialsTable({ trials }) {
   const [sortKey, setSortKey] = useState('rank')
   const keys = paramKeys(trials)
+  // Plan 10 Phase 4b (risk_pct/leverage search) — extra columns only appear
+  // when this run actually searched risk_pct/leverage (any trial carries a
+  // non-empty `riskLeverage`); a run that didn't opt in renders identically
+  // to before this feature existed.
+  const hasRiskLeverage = trials.some((t) => t.riskLeverage && Object.keys(t.riskLeverage).length > 0)
 
   const sorted = useMemo(() => {
     const copy = [...trials]
@@ -36,6 +41,8 @@ function TrialsTable({ trials }) {
           <tr className="border-b border-slate-800 text-[10px] text-slate-400 uppercase tracking-wider">
             <th className="p-2 cursor-pointer hover:text-slate-200" onClick={() => setSortKey('rank')}>Rank</th>
             {keys.map((k) => <th key={k} className="p-2">{k}</th>)}
+            {hasRiskLeverage && <th className="p-2 text-right">Risk %</th>}
+            {hasRiskLeverage && <th className="p-2 text-right">Leverage</th>}
             <th className="p-2 text-right">IS Sharpe</th>
             <th className="p-2 text-right">IS Net Profit%</th>
             <th className="p-2 text-right">IS Trades</th>
@@ -49,6 +56,16 @@ function TrialsTable({ trials }) {
               {keys.map((k) => (
                 <td key={k} className="p-2 text-slate-400">{t.params?.[k] ?? '—'}</td>
               ))}
+              {hasRiskLeverage && (
+                <td className="p-2 text-right text-slate-400">
+                  {t.riskLeverage?.risk_pct != null ? `${(t.riskLeverage.risk_pct * 100).toFixed(2)}%` : '—'}
+                </td>
+              )}
+              {hasRiskLeverage && (
+                <td className="p-2 text-right text-slate-400">
+                  {t.riskLeverage?.leverage != null ? `${t.riskLeverage.leverage}x` : '—'}
+                </td>
+              )}
               <td className="p-2 text-right text-slate-300">{t.metrics?.sharpeRatio ?? '—'}</td>
               <td className="p-2 text-right text-slate-300">{t.metrics?.netProfitPct ?? '—'}</td>
               <td className="p-2 text-right text-slate-400">{t.metrics?.totalTrades ?? '—'}</td>

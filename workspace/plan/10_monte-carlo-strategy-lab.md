@@ -6,10 +6,343 @@ plumbing shipped 2026-07-19 (Phase 3a), **Optimizer tab UI shipped 2026-07-19 (P
 below)**, **Phase 3d fully shipped and live-verified 2026-07-19 (engine persistence + client
 trials table, see below)**, **Phase 3b fully shipped and live-verified 2026-07-19 (Optuna TPE
 Bayesian search, see below)**, **Phase 3e fully shipped and live-verified 2026-07-19 (Deflated
-Sharpe Ratio, see below)**; PBO overfitting stats and Phase 4 (MC-scored selection) not started ·
+Sharpe Ratio, see below)**, **Phase 4a (MC-scored trial selection) shipped 2026-07-19 — engine
+side had already been built by a prior session; this session found and fixed the gap that made it
+unreachable via the API, wired the full-stack path (config validation → wizard UI toggle →
+robust-pick results panel), and added the previously-missing test coverage (see below)**, **Phase
+4b's copy-to-backtest action and backtest-page MC auto-enqueue strip shipped 2026-07-19 (see
+below)**, **Phase 4b's risk_pct/leverage search shipped 2026-07-19 (see below) — Plan 10's own
+"§2.3 sizing/leverage recommendations" scope item, fully engine+server+client wired**, **Phase
+4a/4b real-Docker-verified 2026-07-19 (a second, concurrent session — see "Real Docker
+verification" section below): engine 551/551, server jest 169/169, client `vite build` clean +
+vitest 11/11, live-verified against the real `/lab` Optimizer wizard in a real browser**; only PBO
+overfitting stats remain — **scoped, not started (see "Scoping notes" below)** ·
 **Priority:** P1 ·
 **Depends on:** 9 (steps 9.1/9.3 for correct inputs — both Shipped; 9.6/9.9 are absorbed here) ·
 **Related:** 2 (jobs/CI), 7 (client decomposition)
+
+## Real Docker verification, 2026-07-19 (closes the sandbox gaps both Phase 4a/4b sections below disclose)
+
+Both Phase 4a and 4b were built and self-tested from a sandbox with no Docker access — real but
+partial verification (pip-installed dependency reconstruction, `@babel/parser` JSX-parse-only for
+client files, no `vite build`/`vitest`/real `jest`). A second session, concurrently working the
+same repo with real `docker exec` access, closed those gaps:
+
+- **Engine, full container suite:** `docker exec enma_trading_platform-engine-1 python -m pytest
+  /app/tests/` — **551/551 passed** (the 4 pre-existing unrelated `EventLog`/Mongo-hostname
+  failures the sandbox saw don't reproduce inside the real docker-compose network, confirming that
+  diagnosis was correct).
+- **Server, full container suite:** `docker exec enma_trading_platform-server-1 npm test` —
+  **169/169 passed**, including the 5 new `mcScoring`/`mcTopK` and 8 new `riskLeverageGrid`
+  `labConfig.test.js` cases the sandbox could only verify via a standalone Node script.
+- **Client:** `npx vite build` clean (only the pre-existing >500kB chunk-size warning, unrelated),
+  `npx vitest run` — the existing `pages.smoke.test.jsx` suite 11/11.
+- **Golden master** (`scripts/golden_master.py run/compare`, root `CLAUDE.md` Rule C): flagged real
+  drift across 3 seeded strategies against the `after_dsr` baseline captured earlier the same day.
+  Investigated rather than dismissed or blindly accepted: two independent golden-master re-runs
+  against the CURRENT code+environment are byte-identical to each other (proves determinism is
+  intact), and `SELECT COUNT(*) ... FROM candles WHERE symbol='BTCUSDT' AND timeframe='1h' AND
+  time BETWEEN '2024-01-01' AND '2025-01-01'` returns only 1,440 of the ~8,760 candles the fixed
+  golden-master window needs — a real TimescaleDB data-availability gap that changed between when
+  `after_dsr.json` was captured and now, NOT a Phase 4 code regression (Phase 4a/4b touch only
+  `optimizer.py`/`walk_forward.py`/`monte_carlo.py` — never `backtest_runner.py`, strategies, or
+  indicators, and neither seeded-strategy default run passes through any new opt-in code path).
+  Root cause of the gap itself (partial `ensure_candles_available` backfill, or a
+  container/volume reset) not chased further — out of scope for this verification pass, flagged
+  here so a future session doesn't have to re-diagnose it.
+- **Live browser verification**, real logged-in session against the actual `/lab` Optimizer wizard
+  (not a mock): confirmed the MC-scoring checkbox + top-K input render and correctly extend the
+  cost-estimate string; submitted a real walk-forward job (MicroScalper/BTCUSDT/1h/2023, 2 folds,
+  6 combos/fold, mcScoring on) through the full BullMQ → engine → MongoDB pipeline; inspected the
+  persisted `labResults` doc directly (`fold.mcScoring.candidates[]`, `.rawPick`, `.robustPick`)
+  to confirm the shape matches the design; the rendered `RobustPickPanel.jsx` correctly showed the
+  **honest "insufficient OOS trades, no fabricated percentile" guard path** (every candidate in
+  this particular run had 0-1 OOS trades, below `MIN_MC_OOS_TRADES`=10, so `robustPick: null` and
+  the panel rendered its "no valid MC-robust pick" fallback rather than a fake number) — the
+  "MC-robust pick differs from raw pick" happy path is covered instead by the sandbox session's
+  own deliberately-constructed `test_walk_forward.py` fixture (§ Phase 4a Verification below),
+  which controls OOS trade counts directly rather than depending on which real market window
+  happens to produce enough trades. Zero console errors in either case.
+
+## Phase 4b shipped 2026-07-19 (risk_pct/leverage search — engine tested 537/537, client verified via real Node execution + JSX parse)
+
+**Why now:** user reviewed this session's own scoping notes (below) and made 3 decisions: (1)
+separate grid cartesian-multiplied against the strategy's `param_grid`, not tagged/prefixed keys in
+the same dict; (2) searched independently per fold; (3) build risk_pct/leverage before PBO.
+
+**Engine (`services/optimizer.py`):** new `_build_combined_grid(param_grid, risk_leverage_grid,
+max_combinations, seed)` — cartesian-multiplies an optional `risk_leverage_grid` (keys `risk_pct`
+fraction-of-equity, `leverage` int) against the strategy grid, returning
+`{"alphaParams": {...}, "riskLeverage": {...}}` per combo — the two namespaces kept separate from
+the start (never merged into one flat dict), because `run_backtest_simulation` validates every
+`alpha_params` key strictly against the strategy's own `PARAMS` schema and would error on an
+unrecognized `risk_pct` key rather than ignore it. Reuses `_decode_combo_index` unchanged for the
+combinatorics guardrail this session's own scoping notes flagged (a 3-param grid capped at 200
+combos, multiplied by 3×3 risk/leverage values, would otherwise become 1,800 combos with no
+existing guardrail catching it) — `_build_combined_grid` computes the TRUE combined total across
+every dimension and samples over THAT combined index space. `run_optimization`/
+`run_bayesian_optimization` both gained an optional `risk_leverage_grid` param (default `None` =
+zero behavior change) and now override `leverage`/`risk_params` per-combo before each
+`run_backtest_simulation` call; every scored trial carries its own `riskLeverage` for downstream
+reuse. `_finalize_optimization` persists `riskLeverageGrid` alongside `paramGrid` for
+reproducibility.
+
+**Engine (`services/walk_forward.py`):** new `_override_bt_common(bt_common, risk_leverage)` helper
+— a fold's winning trial's OWN `riskLeverage` (not the job's flat `leverage`/`riskParams` default)
+is what that fold's OOS test call actually uses, and the same override applies per-candidate inside
+`_mc_score_fold`'s extra top-K OOS backtests. "Searched independently per fold" turned out to need
+zero new per-fold logic — each fold already runs its own independent
+`run_optimization`/`run_bayesian_optimization` call, so the combined grid is simply what gets
+handed to it. `fold.bestRiskLeverage` and `meta.riskLeverageGrid` added to the persisted result.
+
+**Server (`server/src/utils/labConfig.js`):** `riskLeverageGrid` validated when present — object,
+non-empty, keys restricted to exactly `risk_pct`/`leverage`, each spec must have `values` or
+`min`/`max`, and a key colliding with a `paramGrid` key of the same name is rejected outright
+(fail loud rather than silently guessing which one wins downstream in the engine's namespace
+split). Bounded by the existing `maxCombinations` cap (already clamped to `MAX_MAX_COMBINATIONS`) —
+`_build_combined_grid` samples over the true combined total, so a wide `riskLeverageGrid` can't
+bypass it.
+
+**Client:** `WalkForwardWizard.jsx` gained a "Search risk_pct / leverage too" toggle with min/max/
+steps inputs (risk % entered as a percentage, matching this app's other risk fields, converted to
+the engine's native fraction convention only at submit) — off by default, and the combo-count cost
+estimate now multiplies the strategy grid size by the risk/leverage grid size, matching what the
+engine's own guardrail actually bounds. `TrialsExplorer.jsx`'s trials table gains Risk %/Leverage
+columns only when a run searched them. `RobustPickPanel.jsx`'s candidates show
+`(risk=X%, lev=Yx)` inline next to strategy params when present, and its existing "Copy robust pick
+→ Backtest" deep link now also carries the robust pick's own risk_pct/leverage forward
+(`prefillLeverage`/`prefillRiskPct` query params) — `NewBacktestWizard.jsx`'s prefill effect seeds
+them, and the pre-existing exchange-settings prefill effect was hardened to defer to a pending
+risk_pct/leverage prefill regardless of which of the two async queries happens to resolve first
+(a real ordering bug this session caught and fixed before it could ship, not just theorized about).
+
+**Verification, the most thorough this session achieved:** new `engine/tests/
+test_risk_leverage_search.py` (7 tests: `_build_combined_grid` combinatorics + guardrail sampling,
+`run_optimization`/`run_bayesian_optimization` per-combo override reaching a mocked
+`run_backtest_simulation`, zero-behavior-change when `risk_leverage_grid` is omitted) plus 2 new
+`test_walk_forward.py` cases (end-to-end: the grid reaches every fold's train step, the winning
+trial's risk/leverage — not the job default — reaches the OOS call, `bestRiskLeverage`/
+`meta.riskLeverageGrid` populate correctly). **Actually executed with real pytest in this session's
+sandbox** (not just written) — engine full suite **537/537** (the entire suite, not just the new
+tests), after reconstructing the dependency chain (`pip install` into the sandbox, the `/engine`
+symlink shim from this session's earlier verification work) and fixing 8 pre-existing test fakes
+in `test_walk_forward.py` that needed a `**kwargs` catch-all for the new `risk_leverage_grid`
+keyword. `server/src/utils/labConfig.js`'s new validation was verified with a standalone Node
+script (real `require()`/`assert` execution, not jest — this sandbox's `server/node_modules/jest`
+is an empty directory) covering all 8 new cases plus a 4-case regression check that nothing
+pre-existing broke; the same 8 cases were also written into `labConfig.test.js` for whenever real
+jest access exists. Client-side changes verified via `@babel/parser` JSX-valid parsing only — no
+working `vitest`/`vite` in this sandbox, so nothing was rendered or click-tested.
+
+## Scoping notes (2026-07-19) — risk_pct/leverage search (shipped, see above) + PBO (still not started)
+
+Per this session's own planning-task convention (design docs only, no code/stubs until told to
+build): both remaining Plan 10 items were researched against the actual current code (not guessed
+at) to identify the real architectural decisions someone building them will need to make. The
+risk_pct/leverage section below is now historical — the user made the 3 decisions it lays out and
+this session built it same-day (see the Phase 4b section above). **PBO remains scoped but not
+started** — it needs its own design pass (see its own subsection below), separate scope from
+everything shipped today.
+
+### risk_pct / leverage search (Phase 4b's remaining half)
+
+**Current state, confirmed by reading the code, not assumed:** `leverage` and `risk_params` are
+each a single fixed value per entire optimization/walk-forward run today — `walk_forward.py:501`
+(`int(config.get("leverage") or 10)`) and `:518` set them once into `bt_common`, reused identically
+across every fold and every trial. `optimizer.py`'s `OptimizerConfig` likewise carries them as
+single scalar/dict fields (not per-trial). `labConfig.js` mirrors this: `leverage`/`riskParams` are
+validated as one scalar/object, never a range (unlike `paramGrid`, which is explicitly a
+per-param range spec).
+
+**Why this can't just be "add risk_pct to the existing param_grid dict":** `_build_param_grid`
+(optimizer.py) is a flat, untyped `dict[str, dict]` that would happily expand a `risk_pct` key
+alongside strategy params — but the resulting combo dict is passed wholesale as `alpha_params` into
+`run_backtest_simulation`, which validates every `alpha_params` key strictly against that
+strategy's own `PARAMS` schema (`backtest_runner.py`) and raises `Unknown parameter` on anything
+else. `risk_pct` is a `risk_params` dict key, not a strategy-schema key — injecting it into
+`param_grid` as-is would make every single trial error out, not silently ignore the extra
+dimension.
+
+**Two real design options, not yet chosen:**
+1. **Tagged/prefixed keys in the same `param_grid`** (e.g. `risk.risk_pct`, `exec.leverage`),
+   split back into `alpha_params` vs `risk_params`/`leverage` right before each
+   `run_backtest_simulation` call. Advantage: reuses the existing `max_combinations`/
+   `_build_param_grid` cap completely unmodified — it doesn't distinguish key "kinds," so the
+   combined grid is automatically bounded by the same guardrail already in place. Disadvantage:
+   mixes non-strategy concerns into the strategy-param namespace; every consumer of `param_grid`
+   (grid search, Bayesian `_suggest_params`, the client's `ParamGridForm`) needs to know about the
+   split convention.
+2. **A separate risk/leverage grid, cartesian-producted against the existing strategy grid
+   externally** (client-side: a second small form section, e.g. "Search risk_pct/leverage too,"
+   next to the existing per-param range inputs). Advantage: clean separation, matches how the
+   wizard already separates concerns (strategy params vs. objective/mode/mcScoring toggles).
+   Disadvantage: this multiplication happens OUTSIDE `_build_param_grid`, so the existing cap does
+   **not** protect it automatically — a 3-param strategy grid capped at 200 combos, multiplied
+   externally by 3 risk_pct values × 3 leverage values, becomes 1,800 backtests per fold with no
+   single guardrail catching it unless the combined cardinality is explicitly folded into
+   `max_combinations` *before* calling `_build_param_grid` (a new, explicit guardrail, in the same
+   spirit as `MAX_MC_TOP_K`/`MIN_MC_OOS_TRADES`).
+
+**Recommendation (not a decision — needs sign-off):** option 2, because it keeps the wizard's
+mental model clean and matches how Phase 4a's own guardrails were built (a small, explicit,
+documented cap rather than an implicit one) — but it requires writing that new cap deliberately,
+not inheriting it for free. Bayesian search is cheaper to extend either way (`_suggest_params` just
+gets 1-2 more TPE dimensions; no cartesian blow-up since Bayesian never enumerates the full grid).
+
+**Scope this should stay opt-in**, same pattern as `mcScoring`/`method: bayesian` — default off,
+zero behavior change for every existing run, a new checkbox + range inputs in `WalkForwardWizard`,
+and the combo-count cost estimate needs another multiplier so it doesn't silently undercount.
+
+**Not yet answered, needs a decision before implementation starts:** should risk_pct/leverage be
+searched independently per fold (like the strategy grid already is), or held fixed across all
+folds within one run and only swept across separate runs? The former is more thorough but
+multiplies cost by `nFolds` on top of everything else in point 2 above.
+
+### PBO (Probability of Backtest Overfitting, CSCV method)
+
+**Confirmed via code reading:** today, `run_lab_walk_forward` OOS-evaluates only each fold's single
+winner (`best_params`). Phase 4a's `mcScoring` OOS-evaluates a *few more* trials per fold
+(`mcTopK`, capped at 10) — but that is still a fixed top-K subset of **one fold's one fixed
+train/test boundary**, not "every trial across every combinatorial split," which is what CSCV
+actually requires (per this file's own pre-existing docstring in `walk_forward.py`). Phase 4a's
+extra-OOS-backtest plumbing is reusable in the narrow mechanical sense ("run one more backtest and
+score it") but does **not** generate the additional split combinations PBO needs — that's new
+fold-partitioning logic, not a wider `top_k`.
+
+**Why this is a materially different, larger piece of work, not an extension of walk-forward:**
+canonical CSCV partitions the full backtest into `S` contiguous subsamples and evaluates every one
+of `C(S, S/2)` combinatorial train/test splits (e.g. `S=8` → 70 combinations), computing every
+trial's out-of-sample rank in every combination. This is symmetric train/test combinatorics, not
+walk-forward's sequential rolling/anchored fold order — it is a genuinely different statistical
+procedure that happens to share vocabulary ("in-sample/out-of-sample") with walk-forward, not a
+mode of it. The open architectural question, not yet resolved: does PBO reuse walk-forward's
+existing fold boundaries as its `S` subsamples (cheap to build, but ties PBO's subsample count to
+whatever `nFolds` the user picked for an unrelated reason), or does it need its own independent
+subsampling scheme over the full date range (statistically cleaner, but a parallel pipeline next to
+walk-forward rather than a feature bolted onto it)?
+
+**Cost, the reason this needs explicit scoping before any code:** the naive approach (re-run every
+trial's backtest against every combinatorial split's test set) multiplies backtest count by
+`n_trials × C(S, S/2)` — for even a modest 50-trial Bayesian search and `S=8`, that's 3,500 extra
+backtests, an order of magnitude past anything else this plan has built. The much cheaper
+alternative — compute each trial's full-range trade-level returns ONCE, then slice/re-score that
+already-computed series against each combination's test-period boundaries — avoids re-backtesting
+entirely, but needs confirming whether every trial's trade-level data is actually persisted
+anywhere today (Phase 3d's `fold.trials` carries params/loss/rank/**metrics**, not raw per-trade
+data — whether `backtestTrades` exists per-trial, keyed by a per-trial jobId, or only for each
+fold's single winner, was not confirmed this session and is the first thing a PBO implementation
+session needs to check before designing further).
+
+**Recommendation:** PBO deserves its own short design pass (likely its own `services/pbo.py`, not
+an addition to `walk_forward.py`) before any code — specifically resolving (a) subsample source
+(reuse fold boundaries vs. independent), and (b) whether per-trial trade-level data needs a new
+persistence path or already exists. Not attempted further this session — writing an unverified cost
+model or data-shape assumption into code would risk the same "shipped but unreachable/wrong" class
+of gap this session already found and fixed once in Phase 4a.
+
+## Phase 4a shipped 2026-07-19 (MC-scored trial selection — engine built by a prior session, this session closed the API gap + shipped UI + tests)
+
+**Why now:** a different session (context lost mid-work, resumed from a partially-corrupted
+pasted transcript) had already built the full engine side of Phase 4a — `services/walk_forward.py`
+gained `_eligible_trials`/`_mc_score_fold`, `services/monte_carlo.py` had already been refactored
+to expose `compute_mc_stats` as a pure Mongo-free function for `_mc_score_fold` to call directly.
+This session's job was to establish ground truth by reading the actual files (the pasted transcript
+was truncated mid-word and not trustworthy as a instruction source), verify that work, and finish
+whatever it left incomplete.
+
+**Real gap found: the engine feature was completely unreachable via the API.** A full-codebase
+grep for `mcScoring`/`mcTopK` turned up matches ONLY inside `walk_forward.py` — `server/src/utils/
+labConfig.js`'s `buildWalkForwardConfig()` never read either field out of the request body at all,
+so no request could ever set `config.mcScoring = true` no matter what the client sent. The fully-
+built engine feature had shipped dead code from day one. Fixed: `labConfig.js` now validates
+`mcScoring` (bool) and `mcTopK` (clamped to a new `MAX_MC_TOP_K=10`, matching the engine's own
+guardrail, defaulting to `DEFAULT_MC_TOP_K=3` when `mcScoring` is on) and includes both in its
+returned config (5 new `labConfig.test.js` cases).
+
+**Shipped the rest of the full-stack wiring, previously missing:**
+- `WalkForwardWizard.jsx` — mcScoring checkbox + conditional `mcTopK` input, and the combo-count
+  cost estimate now accounts for the extra top-K OOS backtests
+  (`(cappedPerFold + 1 + mcExtraPerFold) * nFolds`) so the estimate doesn't silently undercount
+  what an mcScoring-enabled run actually costs.
+- New `client/src/components/lab/RobustPickPanel.jsx` — renders per-fold when
+  `fold.mcScoring?.enabled`: a fold switcher (for multi-fold runs), an amber "picks differ" banner
+  vs a neutral "picks agree" banner, and a candidates table (rank/params/OOS net profit%/OOS
+  trades/MC p5 profit%/fragility gap) highlighting the raw pick and the MC-robust pick. Wired into
+  `StrategyLab.jsx` between `FoldResultsTable` and `TrialsExplorer`.
+- New engine test coverage in `test_walk_forward.py` (previously zero for this code path):
+  `_eligible_trials` unit tests (min-trades filter, non-finite-loss exclusion even at
+  `min_trades<=0`), and an end-to-end `mcScoring=True` run verifying `fold.mcScoring` is populated
+  correctly, that the raw pick's OOS backtest is reused rather than re-run (no duplicate
+  `run_backtest_simulation` call for rank 1), that the extra OOS backtest IS made for the
+  remaining top-K candidates, and that the MC-robust pick can diverge from the raw pick when a
+  candidate's OOS trades hide a tail-loss behind a similar headline point-estimate.
+
+**Phase 4b slice shipped same day: robust-pick copy-to-backtest action (§4.3 item 5).**
+`RobustPickPanel.jsx` gained a "Copy robust pick → Backtest" button, enabled once
+`config.strategyFile` (the optimization job's persisted filePath) resolves against
+`useStrategies()` client-side — same filePath join key `NewBacktestWizard`/`Backtest.jsx` already
+use, no server change needed. Clicking it deep-links to `/backtest?prefillStrategyId=...&
+prefillSymbol=...&prefillTimeframe=...&prefillExchange=...&prefillParams=<json>` (prefixed
+`prefill*` names deliberately — `Backtest.jsx`'s existing history-filter UI already owns bare
+`symbol`/`timeframe` query params for list filtering; reusing those names would have silently
+corrupted that filter state instead of seeding the wizard). `Backtest.jsx` reads these once
+(ref-guarded, mirroring the existing `jobIdParam`/`exchangeSettings` prefill patterns already in
+this codebase) and auto-opens the `NewBacktestWizard` dialog; `NewBacktestWizard.jsx` gained a new
+optional `initialConfig` prop (additive — every existing caller passes nothing and gets identical
+blank-defaults behavior) that seeds `selectedStrategy`/`params`/`symbol`/`timeframe`/`exchange`
+once `useStrategies()` resolves. Malformed/tampered `prefillParams` JSON degrades to no param
+prefill rather than crashing the page. Button is disabled (with an honest tooltip, not silently
+hidden) when the strategy can't be matched — e.g. renamed/deleted since the optimization ran.
+
+**Phase 4b slice shipped same day: backtest-page MC summary auto-enqueue strip (§4.4).** New
+`client/src/features/backtest/MCSummaryStrip.jsx`, rendered on `Backtest.jsx`'s Overview tab right
+after the metrics grid, gated on `activeResult.status === 'completed'`. Auto-fires
+`useRunMonteCarlo({ sourceJobId })` with no other config (the engine/server's own defaults: `block`
+mode, `DEFAULT_RUNS`, 30% ruin threshold) once per `sourceJobId`, reusing Phase 1's already-shipped
+`configHash` idempotent-cache short-circuit rather than a client-side "does one already exist?"
+check — remounting for the same backtest just returns the cached completed doc instantly instead
+of re-queueing. Polls via the existing `useSimulation` hook + `simulation:complete`/`simulation:
+error` Socket.IO events (same room/event names `RobustnessTab` already uses) — no progress bar,
+since a default-config MC run completes in under a second and the engine doesn't call
+`publish_progress` for a job that short (documented in this file's own Phase 1 section). Renders
+p5/median/p95 final-equity % + P(ruin) with severity coloring, plus a "Full analysis in Lab →" deep
+link (`/lab?sourceJobId=...`, same pattern as the existing "Robustness Check" button). Fails
+quietly (renders nothing) rather than showing an alarming error banner on an otherwise-successful
+backtest report — this is a bonus strip, not the report itself. No engine or server change needed;
+100% client-side, reusing already-tested infra unchanged.
+
+**Still deferred (Phase 4b's remaining half):** risk_pct search and leverage bands — both need a
+genuine engine-side extension (searching over `risk_params`/leverage as additional optimizer
+dimensions, not just strategy PARAMS), materially larger than either slice shipped today.
+
+**Verification for this slice:** same sandbox constraints as the rest of Phase 4a — no working
+`vite`/`vitest` here (`client/node_modules`'s `.bin/` shims are Windows-format and fail to execute
+directly under this Linux sandbox's `sh`, and importing `vitest` for a real run hits the same
+native-binary gap already diagnosed for `esbuild`). All 4 touched files (`RobustPickPanel.jsx`,
+`StrategyLab.jsx`, `NewBacktestWizard.jsx`, `Backtest.jsx`) were confirmed to parse as valid JSX via
+`@babel/parser` (the same real check used for the rest of Phase 4a), and reviewed line-by-line
+against each file's existing state/effect conventions, but not rendered or click-tested.
+
+**Real engine pytest execution achieved this session (a first this week).** No Docker in this
+sandbox, but the engine's Python deps have no hard OS-level requirement beyond TA-Lib (not needed
+by this code path), so they were pip-installed directly for verification purposes only (does not
+touch the actual Docker image/`requirements.txt`). The one real blocker — every strategy file
+imports via `from engine.core...`, relying on a `/engine → /app` symlink `main.py` creates at
+container boot — was replicated with a writable-path shim (`/tmp/pyshim/engine` + `PYTHONPATH`)
+since this sandbox has no root write access. **Result: 534 engine tests collected, 530 passed, 4
+failed — all 4 failures are the same pre-existing, unrelated cause** (`test_execute_entry_
+risk_check_event.py` x2, `test_reconcile_fixes.py` x2 — each hits a real, unmocked EventLog Mongo
+write against the hostname `mongodb`, which only resolves inside the actual docker-compose
+network; DNS failure in this sandbox, not a code bug). Every Phase 4a file passed for real:
+`test_walk_forward.py` 22/22 (the new mcScoring tests confirmed the raw pick's OOS backtest is
+reused not duplicated, and the MC-robust pick genuinely diverges from the raw pick via the real
+`compute_mc_stats`, not a mocked stand-in), `test_stats.py`/`test_lab_simulation.py`/
+`test_bayesian_optimizer.py`/`test_monte_carlo.py` 57/57. **Still unverified:** `server`/`client`
+jest/`vite build` — both `node_modules` in this sandbox are broken in a way distinct from the
+previously-known Windows/Linux native-binary mismatch (entire packages like `jest`/`express` exist
+as empty directories), so reinstalling wasn't attempted (would violate "don't alter node_modules on
+host"). `RobustPickPanel.jsx` was reviewed against `FoldResultsTable.jsx`'s existing styling/
+structure conventions and parses as valid JSX (`@babel/parser`) but was not rendered.
 
 ## Phase 3e shipped 2026-07-19 (Deflated Sharpe Ratio — PBO still deferred, real unrelated bug found+fixed)
 

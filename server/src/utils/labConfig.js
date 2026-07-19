@@ -55,6 +55,10 @@ const MAX_MAX_COMBINATIONS = 500 // Plan 10 §5.8 concurrency/compute guardrail
 const MAX_N_TRIALS = 500 // Plan 10 Phase 3b — bayesian's per-fold trial count,
 // same guardrail stance as MAX_MAX_COMBINATIONS (grid's per-fold combo count)
 const DEFAULT_N_TRIALS = 50
+const MAX_MC_TOP_K = 10 // Plan 10 Phase 4a — must match engine walk_forward.py's own
+// MAX_MC_TOP_K exactly: each extra candidate is one more full OOS backtest per fold,
+// engine re-clamps defensively but this is the first line of defense
+const DEFAULT_MC_TOP_K = 3
 
 function buildWalkForwardConfig(input = {}) {
   const required = ['strategyFile', 'exchange', 'symbol', 'timeframe', 'startDate', 'endDate', 'capital', 'paramGrid']
@@ -65,6 +69,51 @@ function buildWalkForwardConfig(input = {}) {
   }
   if (typeof input.paramGrid !== 'object' || Array.isArray(input.paramGrid) || Object.keys(input.paramGrid).length === 0) {
     throw new Error('paramGrid must be a non-empty object')
+  }
+
+  // Plan 10 Phase 4b (risk_pct/leverage search) — opt-in, `undefined` when
+  // absent = zero behavior change for every existing run. 2026-07-19
+  // decision: a SEPARATE grid (not tagged/prefixed keys merged into
+  // paramGrid) restricted to exactly `risk_pct`/`leverage`, cartesian-
+  // multiplied against paramGrid inside the engine's own
+  // `_build_combined_grid` — validated only for shape here (each entry
+  // needs either `values` or `min`/`max`, same loose contract paramGrid
+  // itself already has, since `_expand_param_range` on the engine side does
+  // the real per-key validation). The combinatorial-explosion risk this
+  // decision flagged is bounded downstream by `maxCombinations` below
+  // (already clamped to MAX_MAX_COMBINATIONS) — `_build_combined_grid`
+  // samples over the TRUE combined total, so a wide risk_leverage_grid
+  // can't bypass that cap.
+  let riskLeverageGrid
+  if (input.riskLeverageGrid !== undefined && input.riskLeverageGrid !== null) {
+    if (typeof input.riskLeverageGrid !== 'object' || Array.isArray(input.riskLeverageGrid)) {
+      throw new Error('riskLeverageGrid must be an object')
+    }
+    const allowedKeys = ['risk_pct', 'leverage']
+    const keys = Object.keys(input.riskLeverageGrid)
+    if (keys.length === 0) {
+      throw new Error('riskLeverageGrid must not be empty when provided')
+    }
+    for (const key of keys) {
+      if (!allowedKeys.includes(key)) {
+        throw new Error(`riskLeverageGrid keys must be one of ${allowedKeys.join(', ')}, got '${key}'`)
+      }
+      if (Object.prototype.hasOwnProperty.call(input.paramGrid, key)) {
+        // Would silently collide inside the engine's combined grid namespace
+        // split otherwise — fail loud here instead of guessing which one wins.
+        throw new Error(`riskLeverageGrid key '${key}' collides with a paramGrid key of the same name`)
+      }
+      const spec = input.riskLeverageGrid[key]
+      if (typeof spec !== 'object' || spec === null || Array.isArray(spec)) {
+        throw new Error(`riskLeverageGrid.${key} must be an object (range or values spec)`)
+      }
+      const hasValues = Array.isArray(spec.values) && spec.values.length > 0
+      const hasRange = spec.min !== undefined && spec.max !== undefined
+      if (!hasValues && !hasRange) {
+        throw new Error(`riskLeverageGrid.${key} must specify either 'values' or 'min'/'max'`)
+      }
+    }
+    riskLeverageGrid = input.riskLeverageGrid
   }
 
   const mode = input.mode ?? 'rolling'
@@ -120,6 +169,17 @@ function buildWalkForwardConfig(input = {}) {
     throw new Error('minTrades must be a non-negative number')
   }
 
+  // Plan 10 Phase 4a — MC-scored trial selection (opt-in, default off, zero
+  // behavior change otherwise). Was fully built engine-side
+  // (walk_forward.py/_mc_score_fold) but never reached this validator, so it
+  // was unreachable from the API — fixed here.
+  const mcScoring = !!input.mcScoring
+  const mcTopKNum = Number(input.mcTopK ?? DEFAULT_MC_TOP_K)
+  if (!Number.isFinite(mcTopKNum) || mcTopKNum < 1) {
+    throw new Error('mcTopK must be a positive number')
+  }
+  const mcTopK = Math.min(Math.round(mcTopKNum), MAX_MC_TOP_K)
+
   const leverageNum = Number(input.leverage ?? 10)
   const capitalNum = Number(input.capital)
   if (!Number.isFinite(capitalNum) || capitalNum <= 0) {
@@ -142,6 +202,7 @@ function buildWalkForwardConfig(input = {}) {
     riskParams: input.riskParams ?? {},
     objective,
     paramGrid: input.paramGrid,
+    riskLeverageGrid,
     mode,
     method,
     nTrials: method === 'bayesian' ? nTrials : undefined,
@@ -150,6 +211,8 @@ function buildWalkForwardConfig(input = {}) {
     trainRatio: trainRatioNum,
     maxCombinations,
     minTrades: Math.round(minTradesNum),
+    mcScoring,
+    mcTopK: mcScoring ? mcTopK : undefined,
   }
 }
 
@@ -172,4 +235,6 @@ module.exports = {
   MAX_N_FOLDS,
   MAX_MAX_COMBINATIONS,
   MAX_N_TRIALS,
+  MAX_MC_TOP_K,
+  DEFAULT_MC_TOP_K,
 }
