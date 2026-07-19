@@ -88,6 +88,15 @@ subscriber.on('message', (channel, message) => {
         labId: jobId,
         ...parsed,
       })
+    } else if (type === 'pbo') {
+      // Same as 'optimization' above — a PBO run's engine side doesn't call
+      // publish_progress yet either (it's a single run_optimization/
+      // run_bayesian_optimization pass, same granularity gap); infra wired
+      // now, engine-side follow-up if per-candidate progress is ever needed.
+      io.to(`pbo:${jobId}`).emit('pbo:progress', {
+        labId: jobId,
+        ...parsed,
+      })
     }
   } catch (err) {
     console.error('[socketEmitter] emit error:', err.message)

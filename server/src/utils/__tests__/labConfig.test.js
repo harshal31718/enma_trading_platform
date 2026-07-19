@@ -1,6 +1,7 @@
 const {
   buildMonteCarloConfig,
   buildWalkForwardConfig,
+  buildPBOConfig,
   computeConfigHash,
   MAX_RUNS,
   DEFAULT_RUNS,
@@ -9,6 +10,9 @@ const {
   MAX_N_TRIALS,
   MAX_MC_TOP_K,
   DEFAULT_MC_TOP_K,
+  MIN_N_BLOCKS,
+  MAX_N_BLOCKS,
+  DEFAULT_N_BLOCKS,
 } = require('../labConfig')
 
 const baseWfInput = () => ({
@@ -277,5 +281,82 @@ describe('buildWalkForwardConfig', () => {
 
   test('rejects a non-object riskLeverageGrid', () => {
     expect(() => buildWalkForwardConfig({ ...baseWfInput(), riskLeverageGrid: 'nope' })).toThrow(/must be an object/)
+  })
+})
+
+// Plan 10 — PBO (Probability of Backtest Overfitting). Deliberately no mode/nFolds/trainRatio
+// fields (unlike buildWalkForwardConfig) — PBO runs one full-range optimization pass and does its
+// own CSCV block subsampling, not walk-forward's sequential fold splitting.
+describe('buildPBOConfig', () => {
+  test('requires the same base fields as buildWalkForwardConfig', () => {
+    expect(() => buildPBOConfig({})).toThrow(/strategyFile is required/)
+  })
+
+  test('defaults method/objective/nBlocks/maxCombinations when nothing else is provided', () => {
+    const config = buildPBOConfig(baseWfInput())
+    expect(config.method).toBe('grid')
+    expect(config.objective).toBe('sharpe')
+    expect(config.nBlocks).toBe(DEFAULT_N_BLOCKS)
+    expect(config.maxCombinations).toBe(MAX_MAX_COMBINATIONS)
+  })
+
+  test('has no mode/nFolds/trainRatio fields — not a walk-forward variant', () => {
+    const config = buildPBOConfig(baseWfInput())
+    expect(config.mode).toBeUndefined()
+    expect(config.nFolds).toBeUndefined()
+    expect(config.trainRatio).toBeUndefined()
+  })
+
+  test('rejects an odd nBlocks', () => {
+    expect(() => buildPBOConfig({ ...baseWfInput(), nBlocks: 7 })).toThrow(/nBlocks must be an even number/)
+  })
+
+  test('rejects an nBlocks below MIN_N_BLOCKS', () => {
+    expect(() => buildPBOConfig({ ...baseWfInput(), nBlocks: 2 })).toThrow(/nBlocks must be an even number/)
+    expect(MIN_N_BLOCKS).toBe(4)
+  })
+
+  test('clamps an explicit nBlocks to the documented cap (must match engine MAX_N_BLOCKS=12)', () => {
+    const config = buildPBOConfig({ ...baseWfInput(), nBlocks: 100 })
+    expect(config.nBlocks).toBe(MAX_N_BLOCKS)
+  })
+
+  test('accepts a valid even nBlocks within range', () => {
+    const config = buildPBOConfig({ ...baseWfInput(), nBlocks: 10 })
+    expect(config.nBlocks).toBe(10)
+  })
+
+  test('bayesian method carries nTrials/seed, grid method does not', () => {
+    const bayesian = buildPBOConfig({ ...baseWfInput(), method: 'bayesian', nTrials: 80, seed: 7 })
+    expect(bayesian.nTrials).toBe(80)
+    expect(bayesian.seed).toBe(7)
+
+    const grid = buildPBOConfig({ ...baseWfInput(), method: 'grid', nTrials: 80, seed: 7 })
+    expect(grid.nTrials).toBeUndefined()
+    expect(grid.seed).toBeUndefined()
+  })
+
+  test('rejects an invalid method', () => {
+    expect(() => buildPBOConfig({ ...baseWfInput(), method: 'random' })).toThrow(/method must be/)
+  })
+
+  // Same riskLeverageGrid validation as buildWalkForwardConfig (Phase 4b) — spot-check it's
+  // actually wired here too, not just copy-pasted comments.
+  test('accepts a valid riskLeverageGrid', () => {
+    const riskLeverageGrid = { risk_pct: { values: [0.01, 0.02] } }
+    const config = buildPBOConfig({ ...baseWfInput(), riskLeverageGrid })
+    expect(config.riskLeverageGrid).toEqual(riskLeverageGrid)
+  })
+
+  test('rejects a riskLeverageGrid key colliding with a paramGrid key', () => {
+    const input = baseWfInput()
+    input.paramGrid = { leverage: { min: 1, max: 5, step: 1, type: 'int' } }
+    expect(() => buildPBOConfig({
+      ...input, riskLeverageGrid: { leverage: { values: [5, 10] } },
+    })).toThrow(/collides with a paramGrid key/)
+  })
+
+  test('rejects a non-positive capital', () => {
+    expect(() => buildPBOConfig({ ...baseWfInput(), capital: 0 })).toThrow(/capital must be/)
   })
 })

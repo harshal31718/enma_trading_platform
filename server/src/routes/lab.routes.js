@@ -8,6 +8,9 @@ const {
   getOptimization,
   listOptimizations,
   listObjectives,
+  runPBO,
+  getPBO,
+  listPBO,
 } = require('../controllers/lab.controller')
 
 router.post('/simulations', runMonteCarlo)
@@ -19,5 +22,11 @@ router.post('/optimizations', runOptimization)
 router.get('/optimizations', listOptimizations)
 router.get('/objectives', listObjectives) // before /optimizations/:labId so it isn't captured as a labId
 router.get('/optimizations/:labId', getOptimization)
+
+// Plan 10 — PBO (Probability of Backtest Overfitting). /pbo (list) before /pbo/:labId, same
+// capture-order reasoning as /optimizations above.
+router.post('/pbo', runPBO)
+router.get('/pbo', listPBO)
+router.get('/pbo/:labId', getPBO)
 
 module.exports = router

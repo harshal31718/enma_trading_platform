@@ -1,27 +1,104 @@
 # Plan 10 — Monte Carlo Optimiser & Strategy Lab
 
-**Status:** In progress — MC engine core shipped 2026-07-15 (Phase 1a), job plumbing shipped
-2026-07-19 (Phase 1b), Strategy Lab MC tab shipped 2026-07-19 (Phase 2), walk-forward job
-plumbing shipped 2026-07-19 (Phase 3a), **Optimizer tab UI shipped 2026-07-19 (Phase 3c, see
-below)**, **Phase 3d fully shipped and live-verified 2026-07-19 (engine persistence + client
-trials table, see below)**, **Phase 3b fully shipped and live-verified 2026-07-19 (Optuna TPE
-Bayesian search, see below)**, **Phase 3e fully shipped and live-verified 2026-07-19 (Deflated
-Sharpe Ratio, see below)**, **Phase 4a (MC-scored trial selection) shipped 2026-07-19 — engine
-side had already been built by a prior session; this session found and fixed the gap that made it
-unreachable via the API, wired the full-stack path (config validation → wizard UI toggle →
-robust-pick results panel), and added the previously-missing test coverage (see below)**, **Phase
-4b's copy-to-backtest action and backtest-page MC auto-enqueue strip shipped 2026-07-19 (see
-below)**, **Phase 4b's risk_pct/leverage search shipped 2026-07-19 (see below) — Plan 10's own
-"§2.3 sizing/leverage recommendations" scope item, fully engine+server+client wired**, **Phase
-4a/4b real-Docker-verified 2026-07-19 (a second, concurrent session — see "Real Docker
-verification" section below): engine 551/551, server jest 169/169, client `vite build` clean +
-vitest 11/11, live-verified against the real `/lab` Optimizer wizard in a real browser**; only PBO
-overfitting stats remain — **scoped, not started (see "Scoping notes" below)** ·
+**Status:** **SHIPPED IN FULL, 2026-07-19/20 — no remaining scoped-but-unbuilt items.** MC engine
+core shipped 2026-07-15 (Phase 1a), job plumbing shipped 2026-07-19 (Phase 1b), Strategy Lab MC tab
+shipped 2026-07-19 (Phase 2), walk-forward job plumbing shipped 2026-07-19 (Phase 3a), Optimizer
+tab UI shipped 2026-07-19 (Phase 3c), Phase 3d (engine persistence + client trials table), Phase 3b
+(Optuna TPE Bayesian search), Phase 3e (Deflated Sharpe Ratio) — all shipped and live-verified
+2026-07-19. Phase 4a (MC-scored trial selection) + Phase 4b (risk_pct/leverage search,
+copy-to-backtest, backtest-page MC summary strip) shipped 2026-07-19, real-Docker-verified the same
+day (engine 551/551, server jest 169/169, client `vite build` clean + vitest 11/11). **PBO
+(Probability of Backtest Overfitting, CSCV) — the plan's last item — shipped and real-Docker-
+verified 2026-07-19/20 (see "PBO shipped" section below): engine 567/567 (+16 new), server jest
+181/181 (+12 new), client build clean, live-verified against the real `/lab` PBO tab.** ·
 **Priority:** P1 ·
 **Depends on:** 9 (steps 9.1/9.3 for correct inputs — both Shipped; 9.6/9.9 are absorbed here) ·
 **Related:** 2 (jobs/CI), 7 (client decomposition)
 
-## Real Docker verification, 2026-07-19 (closes the sandbox gaps both Phase 4a/4b sections below disclose)
+## PBO shipped 2026-07-19/20 (Probability of Backtest Overfitting, CSCV — closes Plan 10 out)
+
+**Why now:** the last remaining Plan 10 item, previously scoped-but-not-started (see "Scoping
+notes" below, still accurate as historical record of the two open architectural questions this
+design resolves). User said "move and implement."
+
+**Design decisions (resolving the scoping notes' two open questions), verified against the actual
+code before writing anything:**
+1. **Subsample source: PBO's own independent block scheme, NOT walk-forward's fold boundaries.**
+   `run_lab_pbo()` calls `optimizer.run_optimization`/`run_bayesian_optimization` DIRECTLY over the
+   FULL requested date range — no fold splitting at all — to get N candidates, each backtested once
+   over the whole range. The date range is then partitioned into `nBlocks` (even, default 8, capped
+   12) contiguous, equal-candle-count blocks, PBO's own scheme, matching CSCV's actual requirement
+   (symmetric train/test combinatorics over one shared partition, not walk-forward's sequential
+   rolling/anchored refit).
+2. **Per-trial trade data already existed — confirmed by reading `optimizer.py`, not assumed.**
+   Every combo `run_optimization`/`run_bayesian_optimization` scores already gets its own full
+   backtest with trades bulk-persisted to `backtestTrades` under `{job_id}_c{idx:04d}` (grid) /
+   `_t{idx:04d}` (bayesian) — no new persistence path needed. The one real gap: the returned trial
+   dict didn't carry that job_id (lost once `_finalize_optimization` re-sorts by loss). **Fixed at
+   the source**, not worked around: both search functions now include `"jobId": combo_job_id` in
+   every scored trial dict — small, additive, backward-compatible.
+
+**This closes the "3,500 extra backtests" cost the scoping notes flagged for the naive approach**:
+only the initial N candidates are ever backtested (identical cost to a plain optimization run).
+Every one of CSCV's `C(nBlocks, nBlocks/2)` train/test combinations is scored by slicing each
+candidate's ALREADY-fetched trade list by block membership (via `entryAt`, parsed back from its
+persisted ISO-string form) and recomputing a trade-level statistic in memory (numpy) — zero
+additional `run_backtest_simulation` calls beyond the N candidates.
+
+**Scoring statistic:** the same trade-level Sharpe-like proxy (`mean(pnl/capital)/std(pnl/capital)`)
+already established for DSR (Phase 3e) and the stitched-OOS aggregate — a full-range annualized
+Sharpe can't be recomputed from an arbitrary trade subset without re-running a backtest, so this is
+a deliberate, documented choice, not an oversight.
+
+**A real bug caught during design, before any code was trusted:** CSCV's OOS ranking must be
+ASCENDING (rank 1 = worst performer, rank N = best) — this isn't cosmetic, it's required for
+`P(logit<=0)` to mean what PBO's own definition says it means (the IS-selected candidate performed
+at/below the OOS median = overfit signal). An initial descending-rank draft would have silently
+INVERTED the entire statistic — a candidate that performed BEST out-of-sample would have counted as
+"overfit." Caught while hand-deriving two exact-value test scenarios (not just directional
+assertions) before trusting the implementation: a perfectly anti-correlated IS/OOS construction
+(`pbo == 1.0` exactly) and a strictly/uniformly ordered construction (`pbo == 0.0` exactly) — both
+asserted to the exact float value in `engine/tests/test_pbo.py`, not just "high" or "low."
+
+**Honesty guards, same stance as DSR/Phase 4a:** a block-combination where the IS-selected
+candidate can't be determined (no candidate has enough train-side trades), or a candidate with no
+computable OOS statistic in a given split (ranks worst by construction, not excluded — "no OOS
+signal" is itself informative), never produces a fabricated logit. If every combination is
+uncomputable, `pbo` is `null` with `insufficientData: true`.
+
+**Server:** new `buildPBOConfig()` (`labConfig.js`) — deliberately NO `mode`/`nFolds`/`trainRatio`
+fields (unlike `buildWalkForwardConfig`), since PBO isn't a walk-forward variant; same
+`riskLeverageGrid` validation reused, new `nBlocks` (even, `MIN_N_BLOCKS`=4, `MAX_N_BLOCKS`=12 —
+must match the engine's own cap exactly). New `pboQueue.js`/`pbo.worker.js` (mirrors
+`optimizationQueue.js`/`optimization.worker.js` exactly), `POST/GET /api/v1/lab/pbo[/:labId]`,
+`LabResult.type` enum gained `'pbo'`, `config/socket.js`/`socketEmitter.js` gained the `pbo:` room
+prefix (same three-way pattern as `backtest:`/`simulation:`/`optimization:`).
+
+**Client:** new "Overfitting (PBO)" third tab on `/lab`. `PBOWizard.jsx` mirrors
+`WalkForwardWizard.jsx`'s paramGrid/riskLeverageGrid/method/objective shape (deliberately NOT a
+clone with fold fields removed — a fresh component reflecting PBO's actual shape) plus an `nBlocks`
+control with a live `C(n, n/2)` combination-count preview. `PBOVerdictCard.jsx` clones
+`RuinCard.jsx`'s severity-card template (PBO thresholds: <20% low / 20-50% elevated / ≥50% high —
+a documented judgment call, not from a specific citation, since the CSCV paper itself doesn't
+prescribe a universal cutoff). `PBOCandidatesTable.jsx` mirrors `TrialsExplorer.jsx`'s sortable
+table shape without the fold-switcher (PBO has one flat candidate list, not per-fold trials).
+
+**Verified with real Docker access, this session:** engine container pytest **567/567** (551 + 16
+new `test_pbo.py` cases — pure unit tests for `_block_boundaries`/`_assign_block`/
+`_stat_from_returns`, the two hand-derived exact-value CSCV scenarios described above, an
+insufficient-data guard test, a missing-OOS-data-ranks-worst-not-excluded test, and 6 `run_lab_pbo`
+wiring tests against fakes). Server jest **181/181** (169 + 12 new `buildPBOConfig` cases). Client
+`vite build` clean, `vitest` 11/11. **Live-verified end-to-end, real logged-in browser session
+against the actual `/lab` PBO tab**: submitted a real run (MicroScalper/BTCUSDT/1h/2023, 6
+candidates, 4 CSCV blocks, grid search) through the full BullMQ→engine→MongoDB pipeline; inspected
+the persisted `labResults` doc directly (5 eligible candidates after one combo errored, `pbo: 0.0`,
+`nEvaluated: 5`, `nSkipped: 1`) to confirm the shape; `PBOVerdictCard`/`PBOCandidatesTable` rendered
+the real result correctly (0.0% / "LOW" severity, full candidate breakdown with rank/params/Sharpe/
+trades) with zero console errors. One real copy bug found and fixed during this same live pass
+(missing space in the wizard's block-count explainer text — `"4-vs-4train/test split"` — a JSX
+line-wrap whitespace-collapse issue, fixed with an explicit `{' '}`), re-verified after the fix.
+
+
 
 Both Phase 4a and 4b were built and self-tested from a sandbox with no Docker access — real but
 partial verification (pip-installed dependency reconstruction, `@babel/parser` JSX-parse-only for
@@ -134,15 +211,14 @@ pre-existing broke; the same 8 cases were also written into `labConfig.test.js` 
 jest access exists. Client-side changes verified via `@babel/parser` JSX-valid parsing only — no
 working `vitest`/`vite` in this sandbox, so nothing was rendered or click-tested.
 
-## Scoping notes (2026-07-19) — risk_pct/leverage search (shipped, see above) + PBO (still not started)
+## Scoping notes (2026-07-19) — risk_pct/leverage search (shipped, see above) + PBO (shipped, see "PBO shipped" section above)
 
 Per this session's own planning-task convention (design docs only, no code/stubs until told to
 build): both remaining Plan 10 items were researched against the actual current code (not guessed
 at) to identify the real architectural decisions someone building them will need to make. The
 risk_pct/leverage section below is now historical — the user made the 3 decisions it lays out and
-this session built it same-day (see the Phase 4b section above). **PBO remains scoped but not
-started** — it needs its own design pass (see its own subsection below), separate scope from
-everything shipped today.
+this session built it same-day (see the Phase 4b section above). **PBO is also now historical** —
+shipped 2026-07-19/20, see the "PBO shipped" section near the top of this file.
 
 ### risk_pct / leverage search (Phase 4b's remaining half)
 
@@ -199,6 +275,13 @@ folds within one run and only swept across separate runs? The former is more tho
 multiplies cost by `nFolds` on top of everything else in point 2 above.
 
 ### PBO (Probability of Backtest Overfitting, CSCV method)
+
+> **RESOLVED AND SHIPPED 2026-07-19/20 — see the "PBO shipped" section near the top of this file.**
+> Both open questions below were answered: subsample source is PBO's own independent block scheme
+> (NOT walk-forward's folds), and per-trial trade data turned out to already exist (confirmed by
+> reading `optimizer.py`) — the only real gap was a missing `jobId` field on scored trial dicts,
+> fixed at the source. This subsection is kept as the original scoping analysis / historical
+> record, not a current TODO.
 
 **Confirmed via code reading:** today, `run_lab_walk_forward` OOS-evaluates only each fold's single
 winner (`best_params`). Phase 4a's `mcScoring` OOS-evaluates a *few more* trials per fold

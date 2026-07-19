@@ -49,9 +49,11 @@ client/
 │   │   ├── layout/      ← Navbar.jsx, PageWrapper.jsx (no Sidebar)
 │   │   ├── lab/         ← Strategy Lab (Plan 10) components
 │   │   │   ├── ConfigDrawer.jsx, RunWizard.jsx, WalkForwardWizard.jsx, ParamGridForm.jsx
-│   │   │   ├── HistoryRail.jsx, OptimizationHistoryRail.jsx
+│   │   │   ├── HistoryRail.jsx, OptimizationHistoryRail.jsx, PBOHistoryRail.jsx
 │   │   │   ├── RuinCard.jsx, ExceedanceCurve.jsx, PercentileSpread.jsx, FanChart.jsx (MC tab)
-│   │   │   └── DegradationVerdict.jsx, StitchedOOSCard.jsx, FoldResultsTable.jsx, TrialsExplorer.jsx, VerdictStrip.jsx (Optimizer tab)
+│   │   │   ├── DegradationVerdict.jsx, StitchedOOSCard.jsx, FoldResultsTable.jsx, TrialsExplorer.jsx, VerdictStrip.jsx (Optimizer tab)
+│   │   │   ├── RobustPickPanel.jsx ← Phase 4a MC-scored picks panel, rendered inside TrialsExplorer.jsx per selected fold
+│   │   │   └── PBOWizard.jsx, PBOVerdictCard.jsx, PBOCandidatesTable.jsx (Overfitting (PBO) tab — deliberately NOT a walk-forward variant, see engine/services/pbo.py)
 │   │   ├── risk/        ← Risk Intelligence Dashboard visualizations
 │   │   │   ├── AggregateMarginGauge.jsx ← locked margin / free balance / leverage gauge (Zone 1)
 │   │   │   ├── CorrelationHeatmap.jsx   ← rolling 30-day close-return correlation heatmap (Zone 1)
@@ -70,7 +72,8 @@ client/
 │   │   │   ├── BacktestCalendar.jsx   ← performance calendar heatmap (Day/Week/Month/Quarter)
 │   │   │   ├── BacktestHistory.jsx     ← history sidebar list with emerald highlight
 │   │   │   ├── BacktestMetricCard.jsx  ← single reusable KPI stat card (replaces 6 inline copies)
-│   │   │   └── NewBacktestWizard.jsx   ← multi-step dialog wizard for launching a backtest (strategy → params → market → settings → review)
+│   │   │   ├── NewBacktestWizard.jsx   ← multi-step dialog wizard for launching a backtest (strategy → params → market → settings → review); optional `initialConfig` prop (Plan 10 Phase 4b) prefills from a robust-pick "Copy to Backtest" deep link, additive — every other caller passes nothing, unchanged behavior
+│   │   │   └── MCSummaryStrip.jsx      ← compact MC p5/median/p95 + P(ruin) strip on the Backtest report page (Plan 10 Phase 4b, §4.4), deep-links to /lab for the full analysis
 │   │   ├── dashboard/
 │   │   │   ├── StatCard.jsx            ← single numeric metric card (canonical — only this one exists)
 │   │   │   ├── CachedCandlesTable.jsx  ← TimescaleDB candle cache summary table
@@ -96,7 +99,7 @@ client/
 │   │   ├── useAuth.js             ← TanStack Query: useAuth() (GET /api/v1/auth/me, 5-min stale, 401→null; exposes hasAlgoAccess), useLogout()
 │   │   ├── useAlgoAccess.js       ← useRequestAlgoAccess() (POST /algo/access-request), useAdminUsers() (GET /admin/users), useSetUserAlgoAccess() (PATCH /admin/users/:id/algo-access)
 │   │   ├── useRiskSettings.js     ← TanStack Query hooks for /api/v1/risk/* (settings, live metrics, simulation, overrides)
-│   │   ├── useLab.js              ← TanStack Query hooks for /api/v1/lab/* (simulations + optimizations, Plan 10)
+│   │   ├── useLab.js              ← TanStack Query hooks for /api/v1/lab/* (simulations + optimizations + pbo, Plan 10)
 │   │   └── useBinanceWS.js        ← registers/unregisters callbacks on the binanceWS singleton
 
 │   ├── context/
@@ -113,7 +116,7 @@ client/
 │   │   ├── Strategies.jsx     ← route: /strategies
 │   │   ├── Settings.jsx       ← route: /settings
 │   │   ├── Trade.jsx          ← route: /trade/:symbol (manual trading terminal)
-│   │   ├── StrategyLab.jsx    ← route: /lab (Plan 10 — Robustness (MC) + Optimizer tabs)
+│   │   ├── StrategyLab.jsx    ← route: /lab (Plan 10 — Robustness (MC) + Optimizer + Overfitting (PBO) tabs)
 │   │   ├── AlgoTrading.jsx    ← route: /algo (algo bot session management)
 │   │   ├── OrderHistory.jsx   ← route: /order-history (paginated trade log; not in navbar)
 │   │   ├── Login.jsx          ← route: /login (Google OAuth entry point, public)

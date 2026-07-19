@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from config.mongo import get_database
 from services.monte_carlo import run_lab_simulation
 from services.walk_forward import run_lab_walk_forward
+from services.pbo import run_lab_pbo
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -70,6 +71,34 @@ async def run_walk_forward_optimization(req: LabOptimizationRequest):
         return {"success": True, "data": results}
     except Exception as e:
         logger.error(f"Lab optimization {req.labId} failed: {e}")
+        db = get_database()
+        await db.labResults.update_one(
+            {"labId": req.labId},
+            {"$set": {"status": "failed", "error": str(e), "updatedAt": datetime.now(timezone.utc)}},
+        )
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class LabPboRequest(BaseModel):
+    labId: str
+    userId: str = ""
+    config: dict = {}
+    configHash: str = ""
+
+
+@router.post("/pbo")
+async def run_pbo(req: LabPboRequest):
+    """Probability of Backtest Overfitting (CSCV) — the last unshipped Plan 10 item. Same thin
+    async-job-semantics pattern as the two handlers above."""
+    try:
+        results = await run_lab_pbo(
+            lab_id=req.labId,
+            config=req.config,
+            config_hash=req.configHash,
+        )
+        return {"success": True, "data": results}
+    except Exception as e:
+        logger.error(f"Lab PBO {req.labId} failed: {e}")
         db = get_database()
         await db.labResults.update_one(
             {"labId": req.labId},

@@ -1,13 +1,14 @@
 const { v4: uuidv4 } = require('uuid')
 const simulationQueue = require('../services/simulationQueue')
 const optimizationQueue = require('../services/optimizationQueue')
+const pboQueue = require('../services/pboQueue')
 const LabResult = require('../models/LabResult')
 const BacktestResult = require('../models/BacktestResult')
 const Strategy = require('../models/Strategy')
 const ApiResponse = require('../utils/ApiResponse')
 const ApiError = require('../utils/ApiError')
 const engineClient = require('../services/engineClient')
-const { buildMonteCarloConfig, buildWalkForwardConfig, computeConfigHash } = require('../utils/labConfig')
+const { buildMonteCarloConfig, buildWalkForwardConfig, buildPBOConfig, computeConfigHash } = require('../utils/labConfig')
 
 // POST /api/v1/lab/simulations
 async function runMonteCarlo(req, res, next) {
@@ -219,6 +220,95 @@ async function listObjectives(req, res, next) {
   }
 }
 
+// POST /api/v1/lab/pbo — Probability of Backtest Overfitting (CSCV). Same
+// standalone-run shape as runOptimization (strategyId -> filePath resolution,
+// no parent-jobId ownership check) — PBO is its own full-range optimization
+// pass, not derived from an existing job.
+async function runPBO(req, res, next) {
+  try {
+    const { strategyId } = req.body
+    if (!strategyId) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'strategyId is required')
+    }
+    const strategy = await Strategy.findById(strategyId).lean()
+    if (!strategy) {
+      throw new ApiError(404, 'NOT_FOUND', 'Strategy not found')
+    }
+
+    let config
+    try {
+      config = buildPBOConfig({ ...req.body, strategyFile: strategy.filePath })
+    } catch (e) {
+      throw new ApiError(400, 'VALIDATION_ERROR', e.message)
+    }
+
+    const identityKey = `${config.strategyFile}:${config.symbol}:${config.timeframe}:${config.startDate}:${config.endDate}`
+    const configHash = computeConfigHash(identityKey, config)
+
+    const cached = await LabResult.findOne({
+      userId: req.user.id,
+      configHash,
+      type: 'pbo',
+      status: 'completed',
+    }).lean()
+    if (cached) {
+      return res.status(200).json(ApiResponse.success({ labId: cached.labId, status: cached.status, cached: true }))
+    }
+
+    const labId = uuidv4()
+
+    await LabResult.create({
+      userId: req.user.id,
+      labId,
+      type: 'pbo',
+      config,
+      configHash,
+      status: 'queued',
+    })
+
+    await pboQueue.add('run', {
+      labId,
+      userId: req.user.id,
+      config,
+      configHash,
+    }, { jobId: labId })
+
+    res.status(202).json(ApiResponse.success({ labId, status: 'queued' }))
+  } catch (err) {
+    next(err)
+  }
+}
+
+// GET /api/v1/lab/pbo/:labId
+async function getPBO(req, res, next) {
+  try {
+    const { labId } = req.params
+    const lab = await LabResult.findOne({ userId: req.user.id, labId, type: 'pbo' }).lean()
+    if (!lab) throw new ApiError(404, 'NOT_FOUND', 'PBO run not found')
+    res.json(ApiResponse.success(lab))
+  } catch (err) {
+    next(err)
+  }
+}
+
+// GET /api/v1/lab/pbo?limit=20
+async function listPBO(req, res, next) {
+  try {
+    const parsedLimit = parseInt(req.query.limit, 10)
+    const limit = Math.min(isNaN(parsedLimit) ? 20 : parsedLimit, 100)
+
+    const labs = await LabResult.find({ userId: req.user.id, type: 'pbo' })
+      .select('-results')
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .lean()
+
+    res.json(ApiResponse.success({ runs: labs }))
+  } catch (err) {
+    next(err)
+  }
+}
+
 module.exports = {
   runMonteCarlo,
   getSimulation,
@@ -227,4 +317,7 @@ module.exports = {
   getOptimization,
   listOptimizations,
   listObjectives,
+  runPBO,
+  getPBO,
+  listPBO,
 }

@@ -7,6 +7,74 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
+## 2026-07-20 — Plan 10 SHIPPED IN FULL — PBO (Probability of Backtest Overfitting) implemented, verified, closes the plan out
+
+**Goal:** user said "move and implement" on PBO — the one remaining Plan 10 item, previously
+scoped-but-not-started (see `10_monte-carlo-strategy-lab.md`'s "Scoping notes" section). Design
+first (resolve the two open architectural questions it flagged), then implement.
+
+**Design resolved both open questions by reading the actual code, not guessing:** (1) subsample
+source is PBO's OWN independent block scheme — `run_lab_pbo()` calls `optimizer.run_optimization`/
+`run_bayesian_optimization` DIRECTLY over the full date range (no walk-forward fold splitting) to
+get N candidates, each backtested once, then partitions the range into `nBlocks` CSCV blocks
+itself; (2) per-trial trade data already existed (confirmed via code reading) — every combo's
+trades are already persisted to `backtestTrades` under `{job_id}_c{idx:04d}`/`_t{idx:04d}`, the
+only real gap was the returned trial dict not carrying that job_id (lost on re-sort by loss) —
+fixed at the source in `optimizer.py` (both search functions now include `"jobId"` in every scored
+trial dict, small/additive/backward-compatible).
+
+**This avoids the "3,500 extra backtests" cost the scoping notes flagged**: only the initial N
+candidates are ever backtested; every `C(nBlocks, nBlocks/2)` train/test combination is scored by
+slicing each candidate's already-fetched trades in memory (numpy) — zero extra backtests.
+
+**A real bug caught during design, before trusting the implementation**: CSCV's OOS ranking must
+be ascending (rank 1 = worst, matching the paper's own convention) for `P(logit<=0)` to mean what
+PBO's definition says — an initial descending-rank draft would have silently INVERTED the whole
+statistic. Caught by hand-deriving two exact-value test scenarios (perfectly anti-correlated
+IS/OOS -> `pbo==1.0` exactly; strictly-ordered candidates -> `pbo==0.0` exactly) before trusting
+the code, not just asserting a plausible-looking range.
+
+**Shipped:** `engine/services/pbo.py` (new — `compute_pbo()` pure CSCV combinatorics,
+`run_lab_pbo()` orchestrator), `optimizer.py` (`jobId` field addition), `routers/simulate.py`
+(`POST /simulate/pbo`). Server: `buildPBOConfig()` (`labConfig.js`, deliberately no
+mode/nFolds/trainRatio — not a walk-forward variant), `pboQueue.js`/`pbo.worker.js`,
+`lab.controller.js` (`runPBO`/`getPBO`/`listPBO`), `lab.routes.js`, `LabResult.type` enum gained
+`'pbo'`, `config/socket.js`/`socketEmitter.js` gained the `pbo:` room prefix. Client: new
+"Overfitting (PBO)" third tab on `/lab` — `PBOWizard.jsx`, `PBOVerdictCard.jsx` (severity card,
+<20%/20-50%/≥50% thresholds, a documented judgment call), `PBOCandidatesTable.jsx`,
+`PBOHistoryRail.jsx`, `useLab.js` gained `useRunPBO`/`usePBO`/`usePBOList`.
+
+**Verified with real Docker access, this session:** engine pytest 567/567 (551 + 16 new
+`test_pbo.py` — pure unit tests plus the two hand-derived exact-value CSCV scenarios plus 6
+`run_lab_pbo` wiring tests), server jest 181/181 (169 + 12 new `buildPBOConfig` cases), client
+`vite build` clean, `vitest` 11/11. Live-verified end-to-end in a real browser session against the
+actual `/lab` PBO tab: a real run (MicroScalper/BTCUSDT/1h/2023, 6 candidates, 4 CSCV blocks)
+completed through the full BullMQ→engine→MongoDB pipeline, inspected the persisted `labResults`
+doc directly to confirm shape (`pbo: 0.0`, 5/6 combos evaluated), `PBOVerdictCard`/
+`PBOCandidatesTable` rendered the real result correctly with zero console errors. One real copy
+bug (missing space in a JSX line-wrap, `"4-vs-4train/test split"`) found and fixed during this same
+live pass, re-verified after the fix.
+
+**Files changed:** `engine/services/pbo.py` (new), `engine/services/optimizer.py`,
+`engine/routers/simulate.py`, `engine/tests/test_pbo.py` (new), `server/src/services/pboQueue.js`
+(new), `server/src/workers/pbo.worker.js` (new), `server/src/controllers/lab.controller.js`,
+`server/src/routes/lab.routes.js`, `server/src/models/LabResult.js`, `server/src/utils/labConfig.js`,
+`server/src/utils/__tests__/labConfig.test.js`, `server/src/config/socket.js`,
+`server/src/services/socketEmitter.js`, `server/src/server.js`, `client/src/components/lab/
+PBOWizard.jsx`/`PBOVerdictCard.jsx`/`PBOCandidatesTable.jsx`/`PBOHistoryRail.jsx` (all new),
+`client/src/pages/StrategyLab.jsx`, `client/src/hooks/useLab.js`. Docs: `CURRENT_STATE.md`,
+`10_monte-carlo-strategy-lab.md`, `engine/CLAUDE.md`, `server/CLAUDE.md`, `client/CLAUDE.md`,
+`0_tracker.md`, this file.
+
+**Open questions:** none blocking — Plan 10 is fully shipped. The TimescaleDB candle gap found
+during the prior session's golden-master investigation (BTCUSDT/1h only partially cached for some
+historical windows) is still real and worth a full backfill before the next golden-master baseline
+capture, but is an infra/data task separate from Plan 10. Untouched backlog unchanged: 21.5c
+(batched reconcile, P2/small), Plan 6/7 (engine/server decomposition, P2), Plan 23 (MarginSurge
+strategy), Plan 8 (governance cleanup, P3), Plans 5/22/24 (shipped, waiting on human-observed live
+Testnet re-verification).
+
+---
 ## 2026-07-19 — Plan 10 Phase 4a/4b real-Docker verification — closes out every gap the sandbox session below flagged
 
 **Goal:** a concurrent session (same repo, different account — this session's own token limit had
@@ -255,60 +323,3 @@ reconcile, P2/small), Plan 6/7 (engine/server decomposition, P2), Plan 23 (Margi
 Plan 8 (governance cleanup, P3), Plans 5/22/24 (shipped, waiting on human-observed live Testnet
 re-verification).
 
----
-## 2026-07-19 — Plan 10 Phase 3e shipped (Deflated Sharpe Ratio) — live-verified, 1 real unrelated bug fixed
-
-**Goal:** user said "move on to next fix/plan" after Phase 3b. DSR/PBO was the next Plan 10 item,
-deferred across 4 prior sessions specifically for lack of pytest access to verify the
-normal-CDF/inverse-CDF primitive DSR needs — this session had that access, so it shipped instead
-of deferring a 5th time.
-
-**Shipped:** new `engine/services/stats.py` — `norm_cdf` (exact, `math.erf`), `norm_ppf` (Acklam's
-rational approximation + Halley refinement, no scipy dep), `deflated_sharpe_ratio()`/
-`expected_max_sharpe()` (Bailey & López de Prado 2014). Verified via round-trip
-(`norm_cdf(norm_ppf(p))==p`) + published reference quantiles, plus property tests (DSR decreases
-as trial count grows for the same apparent Sharpe — the actual deflation behavior, numerically
-checked not just asserted). Trade-level DSR (not the paper's per-period form): the Sharpe-like
-term is `sqn/sqrt(totalTrades)` (SQN already trade-level, no new metric needed for it); two NEW
-metrics (`SkewnessStat`/`KurtosisStat`, trade-PnL, RAW non-excess kurtosis) feed the non-normality
-correction — golden-master-verified additive-only. `walk_forward.py` attaches `fold.dsr` per fold.
-`FoldResultsTable.jsx` gained a DSR column. PBO stays explicitly deferred (needs per-trial OOS
-data this architecture doesn't collect — real, separate scope).
-
-**Real, UNRELATED bug found and fixed via live testing:** verifying DSR through the actual `/lab`
-Optimizer wizard (AdaptiveTrend, ~12 checked params) froze the whole engine container.
-`optimizer.py`'s `_build_param_grid` materialized the FULL cartesian product
-(`list(itertools.product(...))`) before capping to `max_combinations` — AdaptiveTrend's real
-wizard-default grid is ~472 TRILLION combos, and building that list hangs/OOMs a single-process
-container (confirmed: `docker stats` near-zero CPU during the hang, container health flipped
-`unhealthy`, even `/health` from inside the same container timed out). Pre-existing, unrelated to
-DSR, a real production risk (any user checking several wide-range params could freeze the shared
-engine for everyone). Fixed: compute `total` via cheap multiplication (no materialization); when
-capped, sample indices via `random.sample` on a lazy `range` (no materialization) and decode each
-directly to its combo (`_decode_combo_index`, mixed-radix, verified against real
-`itertools.product` output). No test had existed for `_build_param_grid` before this session.
-
-**Live-verified, real Docker + browser access:** engine 538/538 (+50 new tests across
-`test_stats.py`/`test_skew_kurtosis.py`/`test_param_grid.py`/2 walk_forward tests), server jest
-156/156, client build clean. Golden master zero-drift outside the 2 new metric keys. Direct
-`curl POST /simulate/optimize` against real cached BTCUSDT candles — real DSR values (57–69%
-across runs). Then the actual regression repro: AdaptiveTrend's full default grid through the real
-`/lab` wizard — froze pre-fix (confirmed via `docker stats`/health), completes in ~4s post-fix,
-renders cleanly, zero console errors. Engine restarted mid-session to clear hang-accumulated state;
-confirmed healthy afterward.
-
-**Files changed:** new `engine/services/stats.py`, `engine/tests/test_stats.py`; `engine/services/
-metrics.py` (+SkewnessStat/KurtosisStat); new `engine/tests/test_skew_kurtosis.py`;
-`engine/services/optimizer.py` (+skewness/kurtosis to per-trial whitelist, `_build_param_grid`/
-`_decode_combo_index` rewrite); new `engine/tests/test_param_grid.py`; `engine/services/
-walk_forward.py` (+`_compute_fold_dsr`/`_trade_level_sharpe`, `fold.dsr`); `engine/tests/
-test_walk_forward.py` (+2 tests); `client/src/components/lab/FoldResultsTable.jsx` (+DSR column);
-`client/src/pages/StrategyLab.jsx` (disclosure note updated). Docs: `API_CONTRACTS.md`,
-`CURRENT_STATE.md`, `engine/CLAUDE.md`, `10_monte-carlo-strategy-lab.md`, `0_tracker.md`.
-
-**Next session:** (1) PBO needs a genuinely new architectural piece (OOS-evaluate every trial, not
-just fold winners) — scope it properly, don't bolt it onto the existing per-fold-winner-only data
-model. (2) Phase 4 (MC-scored selection) is the next undone Plan 10 phase. (3) Untouched backlog:
-21.5c (batched reconcile, P2/small), Plan 6/7 (engine/server decomposition, P2), Plan 23
-(MarginSurge strategy), Plan 8 (governance cleanup, P3), Plans 5/22/24 (shipped, waiting on
-human-observed live Testnet re-verification).

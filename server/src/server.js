@@ -8,6 +8,7 @@ const { initSocket } = require('./config/socket')
 require('./workers/backtest.worker')
 require('./workers/simulation.worker')
 require('./workers/optimization.worker')
+require('./workers/pbo.worker')
 
 const PORT = process.env.PORT || 5000
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://mongodb:27017/enma_trading'

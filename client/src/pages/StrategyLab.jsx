@@ -6,7 +6,7 @@ import PageWrapper from '@/components/layout/PageWrapper'
 import PageHeader from '@/components/ui/PageHeader'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import socket from '../lib/socket'
-import { useRunMonteCarlo, useSimulation, useRunOptimization, useOptimization } from '../hooks/useLab'
+import { useRunMonteCarlo, useSimulation, useRunOptimization, useOptimization, useRunPBO, usePBO } from '../hooks/useLab'
 import { useBacktestResult } from '../hooks/useBacktest'
 import RunWizard from '../components/lab/RunWizard'
 import HistoryRail from '../components/lab/HistoryRail'
@@ -23,6 +23,10 @@ import TrialsExplorer from '../components/lab/TrialsExplorer'
 import RobustPickPanel from '../components/lab/RobustPickPanel'
 import StitchedOOSCard from '../components/lab/StitchedOOSCard'
 import DegradationVerdict from '../components/lab/DegradationVerdict'
+import PBOWizard from '../components/lab/PBOWizard'
+import PBOHistoryRail from '../components/lab/PBOHistoryRail'
+import PBOVerdictCard from '../components/lab/PBOVerdictCard'
+import PBOCandidatesTable from '../components/lab/PBOCandidatesTable'
 
 // Plan 10 Phase 2/3c — Strategy Lab page. Two tabs per §4.1: Robustness (MC)
 // and Optimizer (walk-forward). Both are job-based against the same
@@ -39,12 +43,16 @@ export default function StrategyLab() {
           <TabsList className="mb-4 border-b border-slate-800">
             <TabsTrigger value="robustness">Robustness (MC)</TabsTrigger>
             <TabsTrigger value="optimizer">Optimizer</TabsTrigger>
+            <TabsTrigger value="pbo">Overfitting (PBO)</TabsTrigger>
           </TabsList>
           <TabsContent value="robustness">
             <RobustnessTab sourceJobIdParam={sourceJobIdParam} />
           </TabsContent>
           <TabsContent value="optimizer">
             <OptimizerTab />
+          </TabsContent>
+          <TabsContent value="pbo">
+            <PBOTab />
           </TabsContent>
         </Tabs>
       </div>
@@ -347,11 +355,136 @@ function OptimizerTab() {
             <RobustPickPanel folds={results.folds} config={opt.config} />
             <TrialsExplorer folds={results.folds} />
             <div className="border border-dashed border-slate-800 p-3 text-[10px] text-slate-500 font-mono italic">
-              PBO (Probability of Backtest Overfitting) is not built yet (see
-              10_monte-carlo-strategy-lab.md) — it needs every trial's out-of-sample performance
-              across multiple resample combinations, which this architecture doesn't collect (only
-              each fold's winner gets OOS-evaluated). No IS-vs-OOS scatter for the same reason: a
-              per-trial OOS value doesn't exist to plot.
+              MC-scored selection (above) is opt-in — <span className="text-slate-400">mcScoring: false</span> reproduces
+              today's raw-loss-only fold winner exactly, unchanged. PBO (Probability of Backtest
+              Overfitting) is a separate, deliberately non-walk-forward procedure — see the
+              "Overfitting (PBO)" tab.
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function PBOTab() {
+  const queryClient = useQueryClient()
+  const [selectedLabId, setSelectedLabId] = useState(null)
+  const [progressPct, setProgressPct] = useState(0)
+  const [progressMessage, setProgressMessage] = useState('')
+
+  const runMutation = useRunPBO()
+  const { data: pboRun } = usePBO(selectedLabId)
+
+  // Socket.IO progress streaming against the pbo:{labId} room — mirrors the
+  // Optimizer tab's optimization:{labId} wiring exactly.
+  useEffect(() => {
+    if (!selectedLabId) return
+
+    const handleProgress = (data) => {
+      if (data.labId === selectedLabId) {
+        setProgressPct(data.pct || 0)
+        setProgressMessage(data.message || '')
+      }
+    }
+    const handleComplete = (data) => {
+      if (data.labId === selectedLabId) {
+        setProgressPct(0)
+        setProgressMessage('')
+        toast.success('PBO run completed')
+        queryClient.invalidateQueries({ queryKey: ['lab', 'pbo', selectedLabId] })
+        queryClient.invalidateQueries({ queryKey: ['lab', 'pbo', 'list'] })
+      }
+    }
+    const handleError = (data) => {
+      if (data.labId === selectedLabId) {
+        setProgressPct(0)
+        setProgressMessage('')
+        toast.error(`PBO run failed: ${data.error}`)
+        queryClient.invalidateQueries({ queryKey: ['lab', 'pbo', selectedLabId] })
+      }
+    }
+
+    socket.connect()
+    socket.emit('join', `pbo:${selectedLabId}`)
+    socket.on('pbo:progress', handleProgress)
+    socket.on('pbo:complete', handleComplete)
+    socket.on('pbo:error', handleError)
+
+    return () => {
+      socket.off('pbo:progress', handleProgress)
+      socket.off('pbo:complete', handleComplete)
+      socket.off('pbo:error', handleError)
+    }
+  }, [selectedLabId, queryClient])
+
+  const handleRun = async (config) => {
+    try {
+      const res = await runMutation.mutateAsync(config)
+      setSelectedLabId(res.labId)
+      if (res.cached) toast.success('Identical config already run — showing cached result')
+      else toast.success('PBO run queued (this can take a few minutes)')
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to queue run')
+    }
+  }
+
+  const results = pboRun?.results
+  const isRunning = pboRun && ['queued', 'running'].includes(pboRun.status)
+  const isFailed = pboRun?.status === 'failed'
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-6">
+      <div className="space-y-4">
+        <PBOWizard onRun={handleRun} submitting={runMutation.isPending} />
+        <PBOHistoryRail selectedLabId={selectedLabId} onSelect={setSelectedLabId} />
+      </div>
+
+      <div className="space-y-4">
+        {!selectedLabId && (
+          <div className="border border-dashed border-slate-800 p-12 text-center text-xs text-slate-500 font-mono italic">
+            Configure and run a PBO (Probability of Backtest Overfitting) check, or select one from history.
+          </div>
+        )}
+
+        {selectedLabId && isRunning && (
+          <div className="border border-slate-800 bg-slate-950 p-8 text-center">
+            <p className="text-xs text-emerald-400 font-mono animate-pulse mb-3">
+              {progressMessage || 'Running PBO on engine — this can take a few minutes…'}
+            </p>
+            <div className="w-full h-1.5 bg-slate-900 max-w-md mx-auto">
+              <div className="h-1.5 bg-emerald-500 transition-all" style={{ width: `${progressPct}%` }} />
+            </div>
+          </div>
+        )}
+
+        {selectedLabId && isFailed && (
+          <div className="border border-red-800/40 bg-red-950/10 p-8 text-center text-xs text-red-400 font-mono">
+            PBO run failed: {pboRun.error || 'unknown error'}
+          </div>
+        )}
+
+        {selectedLabId && results && pboRun.status === 'completed' && (
+          <>
+            <PBOVerdictCard
+              pbo={results.pbo}
+              nCandidates={results.nCandidates}
+              nEvaluated={results.nEvaluated}
+              nCombinations={results.nCombinations}
+              insufficientData={results.insufficientData}
+            />
+            <div className="border border-slate-800 bg-slate-950 p-4">
+              <h4 className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2">
+                Candidates ({results.nCandidates}, {results.method} search, full date range)
+              </h4>
+              <PBOCandidatesTable candidates={results.candidates} />
+            </div>
+            <div className="border border-dashed border-slate-800 p-3 text-[10px] text-slate-500 font-mono italic">
+              CSCV subsampling ({results.nBlocks} blocks, {results.nCombinations?.toLocaleString()} train/test
+              splits) runs entirely against each candidate's own already-persisted full-range
+              trades — no extra backtests beyond the {results.nCandidates} candidates above. Not a
+              walk-forward variant: see the Optimizer tab for sequential rolling/anchored
+              re-optimization instead.
             </div>
           </>
         )}

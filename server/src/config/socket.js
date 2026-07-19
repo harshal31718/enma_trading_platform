@@ -54,7 +54,7 @@ function initSocket(httpServer) {
       // client-triggered path is a no-op today (no UI joins a simulation: room
       // yet) — kept for parity so Phase 2's UI gets the same double-subscribe/
       // auto-cleanup semantics backtest: rooms get, without a second wiring pass.
-      if (room.startsWith('backtest:') || room.startsWith('simulation:') || room.startsWith('optimization:')) {
+      if (room.startsWith('backtest:') || room.startsWith('simulation:') || room.startsWith('optimization:') || room.startsWith('pbo:')) {
         trackedRooms.add(room)
         const [prefix, jobId] = room.split(':')
         const { subscribeToJob } = require('../services/socketEmitter')
@@ -67,7 +67,7 @@ function initSocket(httpServer) {
       trackedRooms.delete(room)
       console.log(`[Socket.IO] ${socket.id} left room: ${room}`)
 
-      if (room.startsWith('backtest:') || room.startsWith('simulation:') || room.startsWith('optimization:')) {
+      if (room.startsWith('backtest:') || room.startsWith('simulation:') || room.startsWith('optimization:') || room.startsWith('pbo:')) {
         const remaining = io.sockets.adapter.rooms.get(room)?.size || 0
         if (remaining === 0) {
           const [, jobId] = room.split(':')
@@ -81,7 +81,7 @@ function initSocket(httpServer) {
       console.log('[Socket.IO] client disconnected:', socket.id)
 
       for (const room of trackedRooms) {
-        if (room.startsWith('backtest:') || room.startsWith('simulation:') || room.startsWith('optimization:')) {
+        if (room.startsWith('backtest:') || room.startsWith('simulation:') || room.startsWith('optimization:') || room.startsWith('pbo:')) {
           const remaining = io.sockets.adapter.rooms.get(room)?.size || 0
           if (remaining === 0) {
             const [, jobId] = room.split(':')

@@ -216,6 +216,134 @@ function buildWalkForwardConfig(input = {}) {
   }
 }
 
+// Plan 10 — PBO (Probability of Backtest Overfitting, CSCV) config. Deliberately NOT a
+// walk-forward variant (no nFolds/trainRatio/mode) — PBO runs ONE full-date-range optimization
+// pass (reusing the same paramGrid/riskLeverageGrid/method/objective shape as the walk-forward
+// wizard for consistency) and subsamples the result into `nBlocks` CSCV blocks itself. See
+// `engine/services/pbo.py`'s own docstring for why this is a separate procedure, not an
+// extension of `buildWalkForwardConfig`.
+const MIN_N_BLOCKS = 4
+const MAX_N_BLOCKS = 12 // must match engine `services/pbo.py`'s own MAX_N_BLOCKS exactly —
+// C(12,6)=924 combinations, pure in-memory math, no I/O; engine re-clamps defensively
+const DEFAULT_N_BLOCKS = 8
+
+function buildPBOConfig(input = {}) {
+  const required = ['strategyFile', 'exchange', 'symbol', 'timeframe', 'startDate', 'endDate', 'capital', 'paramGrid']
+  for (const key of required) {
+    if (input[key] === undefined || input[key] === null || input[key] === '') {
+      throw new Error(`${key} is required`)
+    }
+  }
+  if (typeof input.paramGrid !== 'object' || Array.isArray(input.paramGrid) || Object.keys(input.paramGrid).length === 0) {
+    throw new Error('paramGrid must be a non-empty object')
+  }
+
+  // Same riskLeverageGrid validation as buildWalkForwardConfig (Plan 10 Phase 4b) — kept
+  // identical rather than shared, matching this file's existing tolerance for per-builder
+  // duplication (buildMonteCarloConfig/buildWalkForwardConfig were never deduplicated either).
+  let riskLeverageGrid
+  if (input.riskLeverageGrid !== undefined && input.riskLeverageGrid !== null) {
+    if (typeof input.riskLeverageGrid !== 'object' || Array.isArray(input.riskLeverageGrid)) {
+      throw new Error('riskLeverageGrid must be an object')
+    }
+    const allowedKeys = ['risk_pct', 'leverage']
+    const keys = Object.keys(input.riskLeverageGrid)
+    if (keys.length === 0) {
+      throw new Error('riskLeverageGrid must not be empty when provided')
+    }
+    for (const key of keys) {
+      if (!allowedKeys.includes(key)) {
+        throw new Error(`riskLeverageGrid keys must be one of ${allowedKeys.join(', ')}, got '${key}'`)
+      }
+      if (Object.prototype.hasOwnProperty.call(input.paramGrid, key)) {
+        throw new Error(`riskLeverageGrid key '${key}' collides with a paramGrid key of the same name`)
+      }
+      const spec = input.riskLeverageGrid[key]
+      if (typeof spec !== 'object' || spec === null || Array.isArray(spec)) {
+        throw new Error(`riskLeverageGrid.${key} must be an object (range or values spec)`)
+      }
+      const hasValues = Array.isArray(spec.values) && spec.values.length > 0
+      const hasRange = spec.min !== undefined && spec.max !== undefined
+      if (!hasValues && !hasRange) {
+        throw new Error(`riskLeverageGrid.${key} must specify either 'values' or 'min'/'max'`)
+      }
+    }
+    riskLeverageGrid = input.riskLeverageGrid
+  }
+
+  const method = input.method ?? 'grid'
+  if (method !== 'grid' && method !== 'bayesian') {
+    throw new Error(`method must be 'grid' or 'bayesian', got '${method}'`)
+  }
+
+  const nTrialsNum = Number(input.nTrials ?? DEFAULT_N_TRIALS)
+  if (!Number.isFinite(nTrialsNum) || nTrialsNum < 1) {
+    throw new Error('nTrials must be a positive number')
+  }
+  const nTrials = Math.min(Math.round(nTrialsNum), MAX_N_TRIALS)
+
+  let seed = null
+  if (input.seed !== undefined && input.seed !== null && input.seed !== '') {
+    const seedNum = Number(input.seed)
+    if (!Number.isFinite(seedNum)) {
+      throw new Error('seed must be a number when provided')
+    }
+    seed = Math.round(seedNum)
+  }
+
+  const objective = input.objective ?? 'sharpe'
+
+  const nBlocksNum = Number(input.nBlocks ?? DEFAULT_N_BLOCKS)
+  if (!Number.isFinite(nBlocksNum) || nBlocksNum < MIN_N_BLOCKS || nBlocksNum % 2 !== 0) {
+    throw new Error(`nBlocks must be an even number >= ${MIN_N_BLOCKS}`)
+  }
+  const nBlocks = Math.min(Math.round(nBlocksNum), MAX_N_BLOCKS)
+
+  const maxCombinationsNum = Number(input.maxCombinations ?? 0)
+  if (!Number.isFinite(maxCombinationsNum) || maxCombinationsNum < 0) {
+    throw new Error('maxCombinations must be a non-negative number')
+  }
+  const maxCombinations = maxCombinationsNum > 0
+    ? Math.min(Math.round(maxCombinationsNum), MAX_MAX_COMBINATIONS)
+    : MAX_MAX_COMBINATIONS // same "0 is dangerous, always cap" stance as buildWalkForwardConfig
+
+  const minTradesNum = Number(input.minTrades ?? 0)
+  if (!Number.isFinite(minTradesNum) || minTradesNum < 0) {
+    throw new Error('minTrades must be a non-negative number')
+  }
+
+  const leverageNum = Number(input.leverage ?? 10)
+  const capitalNum = Number(input.capital)
+  if (!Number.isFinite(capitalNum) || capitalNum <= 0) {
+    throw new Error('capital must be a positive number')
+  }
+
+  return {
+    strategyFile: input.strategyFile,
+    exchange: input.exchange,
+    symbol: input.symbol,
+    timeframe: input.timeframe,
+    startDate: input.startDate,
+    endDate: input.endDate,
+    capital: capitalNum,
+    leverage: Number.isFinite(leverageNum) ? Math.round(leverageNum) : 10,
+    feeRate: input.feeRate != null ? Number(input.feeRate) : undefined,
+    slippagePct: input.slippagePct != null ? Number(input.slippagePct) : null,
+    fundingEnabled: !!input.fundingEnabled,
+    fundingRate: input.fundingRate != null ? Number(input.fundingRate) : null,
+    riskParams: input.riskParams ?? {},
+    objective,
+    paramGrid: input.paramGrid,
+    riskLeverageGrid,
+    method,
+    nTrials: method === 'bayesian' ? nTrials : undefined,
+    seed: method === 'bayesian' ? seed : undefined,
+    maxCombinations,
+    minTrades: Math.round(minTradesNum),
+    nBlocks,
+  }
+}
+
 // Deterministic regardless of key insertion order — sorts keys before
 // hashing so `{mode:'block',runs:5000}` and `{runs:5000,mode:'block'}` hash
 // identically (both come from buildMonteCarloConfig's fixed key order in
@@ -229,6 +357,7 @@ function computeConfigHash(sourceJobId, config) {
 module.exports = {
   buildMonteCarloConfig,
   buildWalkForwardConfig,
+  buildPBOConfig,
   computeConfigHash,
   MAX_RUNS,
   DEFAULT_RUNS,
@@ -237,4 +366,7 @@ module.exports = {
   MAX_N_TRIALS,
   MAX_MC_TOP_K,
   DEFAULT_MC_TOP_K,
+  MIN_N_BLOCKS,
+  MAX_N_BLOCKS,
+  DEFAULT_N_BLOCKS,
 }

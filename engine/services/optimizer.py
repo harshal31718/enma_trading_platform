@@ -388,6 +388,7 @@ async def run_optimization(
                 "riskLeverage": dict(rl) if rl else None,
                 "loss": loss,
                 "rank": 0,
+                "jobId": combo_job_id,
                 "metrics": {
                     k: metrics[k]
                     for k in ("totalTrades", "winRate", "netProfit", "netProfitPct",
@@ -555,6 +556,7 @@ async def run_bayesian_optimization(
                 "riskLeverage": dict(rl) if rl else None,
                 "loss": loss,
                 "rank": 0,
+                "jobId": combo_job_id,
                 "metrics": {
                     k: metrics[k]
                     for k in ("totalTrades", "winRate", "netProfit", "netProfitPct",

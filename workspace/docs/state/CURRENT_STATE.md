@@ -3,7 +3,36 @@
 **Authority:** This is the single source of truth for what ENMA currently does.
 Read this before starting any work. If this conflicts with chat history, this document wins.
 
-Last updated: 2026-07-19 (**Plan 10 Phase 4a + 4b shipped** — MC-scored trial selection
+Last updated: 2026-07-19 (**Plan 10 SHIPPED IN FULL — PBO (Probability of Backtest Overfitting,
+CSCV) closes the plan out.** New `engine/services/pbo.py`: `run_lab_pbo()` runs ONE full-date-range
+optimization pass (reusing `optimizer.run_optimization`/`run_bayesian_optimization` directly, no
+walk-forward fold splitting — a genuinely different procedure, per the plan's own scoping notes)
+to get N candidates, each already backtested over the whole range with trades persisted to
+`backtestTrades`; `compute_pbo()` then partitions the date range into `nBlocks` (even, default 8,
+capped 12) contiguous CSCV blocks and scores every `C(nBlocks, nBlocks/2)` train/test combination
+by slicing each candidate's ALREADY-fetched trades in memory (numpy) — zero extra backtests beyond
+the initial N. Small but real engine fix alongside it: `optimizer.py`'s scored-trial dicts now
+carry their own `jobId` (previously lost once `_finalize_optimization` re-sorted by loss), closing
+the gap that made reusing a trial's persisted trades impossible. New Node surface: `POST/GET
+/api/v1/lab/pbo[/:labId]`, `pboQueue`/`pbo.worker.js`, `buildPBOConfig()` (own validator — no
+mode/nFolds/trainRatio, since PBO isn't a walk-forward variant). New "Overfitting (PBO)" tab on
+`/lab`: `PBOWizard.jsx` (mirrors the Optimizer wizard's paramGrid/riskLeverageGrid/method shape
+plus an `nBlocks` control), `PBOVerdictCard.jsx` (severity-colored %, <20% low / 20-50% elevated /
+≥50% high — a judgment call documented in the component, not from a specific citation),
+`PBOCandidatesTable.jsx`. Verified with real Docker access: engine pytest 567/567 (16 new PBO
+tests, including two hand-derived exact-value scenarios — a perfectly anti-correlated IS/OOS
+construction asserting `pbo == 1.0` exactly, and a strictly-ordered construction asserting
+`pbo == 0.0` exactly, not just directional checks), server jest 181/181 (12 new `buildPBOConfig`
+cases), client `vite build` clean, `vitest` 11/11, live-verified end-to-end against the real `/lab`
+PBO tab in a real browser session (a genuine walk-forward-free run completed through the full
+BullMQ→engine→Mongo pipeline, `PBOVerdictCard`/`PBOCandidatesTable` rendered a real 0.0% PBO result
+with zero console errors). One real bug caught and fixed during design, before any code was
+written: the CSCV rank convention (rank 1 = worst OOS performer, ascending) matters for the sign of
+the logit statistic PBO's definition (`P(logit<=0)`) depends on — an initial descending-rank draft
+would have silently inverted the whole statistic (a candidate performing BEST out-of-sample would
+have counted as "overfit"); caught while hand-deriving the two exact test scenarios, fixed before
+being trusted. Plan 10 is now fully shipped — no remaining scoped-but-unbuilt items.)
+Earlier: 2026-07-19 (**Plan 10 Phase 4a + 4b shipped** — MC-scored trial selection
 (`config.mcScoring`, opt-in) OOS-evaluates a fold's top-K eligible trials and ranks them by Monte
 Carlo p5 outcome instead of raw loss, surfacing a robust pick that can differ from the point-metric
 winner; risk_pct/leverage search (`config.riskLeverageGrid`, opt-in) extends the same fold loop to
@@ -236,7 +265,7 @@ Execution & Risk Mechanics, Report UI sections) — this bullet is a pointer, no
 - Cached candles table (TimescaleDB inventory) — demoted into a collapsible section (default closed)
 - **See** `workspace/docs/features/dashboard/SPEC.md` for the full redesign spec.
 
-### Strategy Lab (Plan 10 — `/lab` page, two tabs: Robustness (MC) + Optimizer)
+### Strategy Lab (Plan 10 — `/lab` page, three tabs: Robustness (MC) + Optimizer + Overfitting (PBO))
 Job-based Monte Carlo robustness runs over a completed backtest's trades: `POST
 /api/v1/lab/simulations {sourceJobId, mode, runs, blockLen, ruinThresholdPct, seed}` enqueues a
 BullMQ job (same pattern as backtest), the engine's vectorized block/iid bootstrap
@@ -284,10 +313,21 @@ deep link into `NewBacktestWizard.jsx`'s prefill. The Backtest report page also 
 MC summary strip (`MCSummaryStrip.jsx`, `Backtest.jsx`) — the §4.4 "everywhere else" auto-enqueue
 piece deferred since Phase 2.
 
-**PBO overfitting stats are still not started** — canonical PBO needs every trial's OOS
-performance across multiple resample combinations, which this architecture doesn't collect (only
-each fold's winner, plus Phase 4a's top-K, get OOS-evaluated); real, separate, not-small scope,
-disclosed rather than faked. See `workspace/plan/10_monte-carlo-strategy-lab.md`.
+**PBO (Probability of Backtest Overfitting, CSCV) — shipped 2026-07-19, closes Plan 10 out.**
+Deliberately NOT a walk-forward extension — `POST /api/v1/lab/pbo {strategyId, exchange, symbol,
+timeframe, startDate, endDate, paramGrid, method, nBlocks, ...}` runs `services/pbo.run_lab_pbo()`,
+which calls `optimizer.run_optimization`/`run_bayesian_optimization` DIRECTLY over the full
+requested date range (no fold splitting) to get N candidates, each already backtested once with
+trades persisted to `backtestTrades`; then `compute_pbo()` partitions the range into `nBlocks`
+(even, default 8, capped 12) contiguous blocks and scores every `C(nBlocks, nBlocks/2)` train/test
+combination by slicing each candidate's already-fetched trades in memory — zero extra backtests.
+Reports `results.pbo` (0-1, the fraction of evaluated splits where the in-sample-best candidate's
+OOS performance fell at/below the median — 50%+ means no better than chance) with an
+`insufficientData` guard when too few splits have enough OOS trades to score. New "Overfitting
+(PBO)" tab: `PBOWizard.jsx`, `PBOVerdictCard.jsx` (severity-colored: <20% low, 20-50% elevated,
+≥50% high), `PBOCandidatesTable.jsx`. See `workspace/plan/10_monte-carlo-strategy-lab.md` for the
+full design rationale (resolves both open questions its own scoping notes flagged) and verification
+detail. **Plan 10 is now fully shipped — no remaining scoped-but-unbuilt items.**
 
 ### Risk Intelligence Dashboard
 Centralized `/risk-dashboard` page: Zone 1 real-time portfolio VaR/CVaR + correlation heatmap, Zone 2

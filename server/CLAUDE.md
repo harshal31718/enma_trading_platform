@@ -58,7 +58,7 @@ server/
     │   │                         engine fields (Mixed, never written by server): metrics, equityCurve
     │   ├── BacktestTrade.js   ← split collection backtestTrades (jobId, tradeIndex, …)
     │   ├── BacktestLeverageScenario.js ← Risk Dashboard Zone 3 leverage-sensitivity runs (engine-owned)
-    │   ├── LabResult.js        ← Strategy Lab job results (labId, type: "monte_carlo"|"optimization", sourceJobId?, config, configHash, status, results[engine-owned]) — shared by Phase 1 (MC) and Phase 3a (walk-forward)
+    │   ├── LabResult.js        ← Strategy Lab job results (labId, type: "monte_carlo"|"optimization"|"pbo", sourceJobId?, config, configHash, status, results[engine-owned]) — shared by Phase 1 (MC), Phase 3a (walk-forward), and PBO
     │   ├── LiveSession.js
     │   ├── TradeOrder.js
     │   ├── TradeExecution.js
@@ -74,7 +74,7 @@ server/
     │   ├── dashboard.routes.js  ← /dashboard/stats, /dashboard/performance-calendar
     │   ├── trade.routes.js      ← /trade/* (settings/keys [testnet+mainnet env], balances [testnet+mainnet, read-only mainnet], account, positions, orders, klines, order status)
     │   ├── risk.routes.js         ← /risk/* (settings, live metrics, simulation, overrides)
-    │   ├── lab.routes.js          ← /lab/simulations [POST, GET list, GET :simId] (Plan 10 Phase 1, MC), /lab/optimizations [POST, GET list, GET :labId], /lab/objectives [GET] (Plan 10 Phase 3a, walk-forward)
+    │   ├── lab.routes.js          ← /lab/simulations [POST, GET list, GET :simId] (Plan 10 Phase 1, MC), /lab/optimizations [POST, GET list, GET :labId], /lab/objectives [GET] (Plan 10 Phase 3a, walk-forward), /lab/pbo [POST, GET list, GET :labId] (Plan 10 PBO)
     │   ├── algo.routes.js         ← /algo/sessions [requireAlgoAccess], /algo/chaos [requireAlgoAccess], /algo/access-request, /algo/symbols/locked, /algo/pairlist/preview, /algo/sessions/:id/trading-state
     │   ├── settings.routes.js     ← /settings/exchange
     │   ├── orderHistory.routes.js ← /order-history (GET, paginated, filterable)
@@ -88,7 +88,7 @@ server/
     │   ├── dashboard.controller.js  ← proxies engine /dashboard/stats, /dashboard/performance-calendar
     │   ├── trade.controller.js
     │   ├── risk.controller.js         ← proxies engine /risk/* (settings, live metrics cache, simulation, overrides)
-    │   ├── lab.controller.js          ← runMonteCarlo (enqueues Plan 10 Phase 1 job, configHash cache short-circuit), getSimulation, listSimulations, runOptimization (Phase 3a, resolves strategyId→filePath), getOptimization, listOptimizations, listObjectives
+    │   ├── lab.controller.js          ← runMonteCarlo (enqueues Plan 10 Phase 1 job, configHash cache short-circuit), getSimulation, listSimulations, runOptimization (Phase 3a, resolves strategyId→filePath), getOptimization, listOptimizations, listObjectives, runPBO (same strategyId→filePath resolution, standalone full-range run), getPBO, listPBO
     │   ├── algo.controller.js         ← session CRUD + startChaos + trading-state kill-switch + engine callbacks (handleEngineStats, handleAlgoPlaceOrder, …)
     │   ├── settings.controller.js     ← getExchangeSettings, updateExchangeSettings
     │   └── orderHistory.controller.js ← getOrderHistory (reads tradeRecords; engine is sole writer)
@@ -97,6 +97,7 @@ server/
     │   ├── backtestQueue.js ← BullMQ queue definition for bull:backtest
     │   ├── simulationQueue.js ← BullMQ queue definition for bull:simulation (Plan 10 Phase 1)
     │   ├── optimizationQueue.js ← BullMQ queue definition for bull:optimization (Plan 10 Phase 3a)
+    │   ├── pboQueue.js ← BullMQ queue definition for bull:pbo (Plan 10 PBO)
     │   ├── socketEmitter.js ← Redis pub/sub → Socket.IO relay
     │   ├── symbolService.js ← fetches tiered symbol list from engine (5-min TTL cache)
     │   ├── symbolLock.js    ← Redis-backed symbol lock (bot vs manual)
@@ -104,7 +105,8 @@ server/
     ├── workers/
     │   ├── backtest.worker.js
     │   ├── simulation.worker.js ← Plan 10 Phase 1 — mirrors backtest.worker.js, POSTs engine /simulate/monte-carlo
-    │   └── optimization.worker.js ← Plan 10 Phase 3a — mirrors simulation.worker.js, POSTs engine /simulate/optimize
+    │   ├── optimization.worker.js ← Plan 10 Phase 3a — mirrors simulation.worker.js, POSTs engine /simulate/optimize
+    │   └── pbo.worker.js ← Plan 10 PBO — mirrors optimization.worker.js, POSTs engine /simulate/pbo
     ├── utils/
     │   ├── ApiError.js        ← Custom error class
     │   ├── ApiResponse.js     ← Standard response helpers
@@ -162,7 +164,7 @@ The engine client handles: base URL from env, API key header, timeout, error wra
 - Workers publish progress to Redis pub/sub — never directly to Socket.IO
 - `socketEmitter.js` subscribes to Redis pub/sub and relays to Socket.IO rooms
 - Job IDs are UUIDs (generated before queue submission in the controller)
-- **Three active queues:** `bull:backtest`, `bull:simulation` (Plan 10 Phase 1), `bull:optimization` (Plan 10 Phase 3a) — no candle queue, no live queue
+- **Four active queues:** `bull:backtest`, `bull:simulation` (Plan 10 Phase 1), `bull:optimization` (Plan 10 Phase 3a), `bull:pbo` (Plan 10 PBO) — no candle queue, no live queue
 - Worker only updates `status` and `error` in `backtestResults` — never writes `metrics`, `equityCurve`, or trade records; engine is the sole writer for result data
 
 

@@ -94,3 +94,41 @@ export function useOptimizationsList(limit = 20) {
     },
   })
 }
+
+// Plan 10 — PBO (Probability of Backtest Overfitting). Same lifecycle shape as the
+// optimization hooks above, at /api/v1/lab/pbo instead.
+export function useRunPBO() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (config) => {
+      const res = await api.post('/api/v1/lab/pbo', config)
+      return res.data.data
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['lab', 'pbo', 'list'] })
+    },
+  })
+}
+
+export function usePBO(labId) {
+  return useQuery({
+    queryKey: ['lab', 'pbo', labId],
+    queryFn: async () => {
+      const res = await api.get(`/api/v1/lab/pbo/${labId}`)
+      return res.data.data
+    },
+    enabled: !!labId,
+    staleTime: (query) =>
+      ['completed', 'failed'].includes(query.state.data?.status) ? Infinity : 0,
+  })
+}
+
+export function usePBOList(limit = 20) {
+  return useQuery({
+    queryKey: ['lab', 'pbo', 'list', limit],
+    queryFn: async () => {
+      const res = await api.get(`/api/v1/lab/pbo?limit=${limit}`)
+      return res.data.data.runs
+    },
+  })
+}
