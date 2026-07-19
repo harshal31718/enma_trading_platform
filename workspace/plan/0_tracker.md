@@ -26,13 +26,19 @@ this board no longer duplicates it).
 | 23 | New strategy: high-risk/high-leverage breakout scalper ("MarginSurge") | All — backtest gates can start now; live gated on 21.1–21.4 | Draft | P2 | 21 (live phase), 22.1–22.2 (liq-buffer + governor, soft) | 2026-07-16 |
 | 24 | BestSupertrend fixes (never trades at defaults) | ALL SHIPPED (S-1 through S-5, container-verified 2026-07-17 [353/353 pytest], golden-master re-baselined for S-1 — only BestSupertrend diverges, other 4 strategies byte-identical) — pending live Testnet re-verification only | **Done** (pending live re-verification) | — | — | 2026-07-17 |
 
-**Plus the fixes queue:** F7 (algo-fill detection — 21.1+21.2 shipped, container-verified
-2026-07-17; 2026-07-18 added error-visibility logging + an entry-fill-confirmation hardening fix
-for the FXSUSDT anomaly, code-sound but NOT container-tested or live-verified this session — no
-Docker access — pending both) — **⚠️ FIRST PRIORITY next session: container pytest run + a small
-live/chaos Testnet reproduction (see `0_fixes-queue.md`'s F7 entry). Two sessions have now shipped
-F7 code without either — do this before any other tracker item.** — and F8 (Redis `requirepass`,
-wants a full-stack-restart window) — see `0_fixes-queue.md`.
+**Plus the fixes queue:** F7 (algo-fill detection) — **LIVE-VERIFIED & effectively resolved
+2026-07-19**: container pytest 444/444 (F7's 3 tests pass); live testnet chaos confirmed the
+fill-staleness symptom is FIXED (~0.5s via the A-8 ACCOUNT_UPDATE reconcile, not ~60s); the
+TP/SL-placement 400 root cause is `-2021 Order would immediately trigger` (tight stops at extreme
+leverage — expected & self-healed by A-7 re-arm; the prior `PERCENT_PRICE` hypothesis is
+DISPROVEN). **Two NEW bugs surfaced by the live run:** (a) FIXED — server governor-config coercion
+(`risk.js` `Number(null)===0` armed correlation/VaR/CVaR/margin caps at 0 when the user left the
+field blank; blocked ALL live entries; +5 jest tests, 116/116); (b) FIXED — `-4015` emergency-close
+`clientOrderId` > 36 chars (systemic across ~6 placement sites; new central `_make_client_id()`
+budgets ≤35 chars, engine pytest 450/450, `engine/tests/test_make_client_id.py`). Both fixes are in
+the working tree, uncommitted, pending commit. See `0_fixes-queue.md`'s F7 entry + `handoff.md`
+2026-07-19. — and F8 (Redis
+`requirepass`, wants a full-stack-restart window) — see `0_fixes-queue.md`.
 
 ## Completed / merged (reference only — detail in each plan file)
 

@@ -3,7 +3,17 @@
 **Authority:** This is the single source of truth for what ENMA currently does.
 Read this before starting any work. If this conflicts with chat history, this document wins.
 
-Last updated: 2026-07-17 (**Plan 9 — ALL STEPS SHIPPED (9.1–9.11)**, container-verified 415/415
+Last updated: 2026-07-19 (**F7 LIVE-VERIFIED & resolved on the diagnostic side** — container pytest
+444/444; live testnet chaos confirmed the fill-staleness symptom is fixed (~0.5s via A-8, not ~60s)
+and root-caused the SL/TP-placement 400 as `-2021 Order would immediately trigger` (PERCENT_PRICE
+hypothesis disproven). Two new bugs surfaced live: (a) FIXED — a server governor-config coercion
+(`risk.js` `Number(null)===0`) that armed correlation/VaR/CVaR/margin caps at 0 on blank fields and
+blocked ALL live entries, +5 jest tests → 116/116; (b) FIXED — `-4015` emergency-close
+`clientOrderId`>36 chars, systemic across ~6 placement sites, resolved with a central
+`_make_client_id()` ≤35-char builder (engine pytest 450/450). Both fixes uncommitted in the working
+tree, pending commit. See the Known Technical Debt entries below + `handoff.md` 2026-07-19. Plan 22/24 got incidental live
+re-verification (governor "Reducing" badge, StoplossGuard cooldown, correlation cap, clean stop).
+Earlier: 2026-07-17 (**Plan 9 — ALL STEPS SHIPPED (9.1–9.11)**, container-verified 415/415
 pytest. Same session, in order: 9.11-B decided (cost gate stays opt-in), 9.9's QNT-14 leg-vs-
 round-trip trade-statistics separation (new opt-in `aggregate_legs_to_round_trips()`), 9.10's
 opt-in fill-model ladder (`LadderedTransactionCostModel` — volatility-scaled slippage +
@@ -358,6 +368,28 @@ detail (commands, per-phase byte-equivalence, issue-by-issue fix list) moved to
 
 ## Known Technical Debt
 
+- **FIXED 2026-07-19 (found in live testnet chaos) — emergency-close `clientOrderId` exceeded
+  Binance's 36-char limit (`-4015`).** The F-018 emergency-close order id
+  `enma_{session_id[:8]}_{symbol}_{uuid4_hex8()}_emrg` was 37 chars for a 9-char symbol (e.g.
+  KAITOUSDC), so the emergency MARKET close FAILED with `-4015 Client order id length should be less
+  than 36 chars` on every symbol ≥8 chars (mitigated, not catastrophic, by the A-7 re-arm next
+  candle). Was systemic: the base `enma_{session_id[:8]}_{symbol}_{uuid4_hex8()}` scheme also risked
+  36 for ~13-char symbols. **Fixed** with a central `_make_client_id(session_id, symbol, suffix="")`
+  (`live_bot_manager.py`) that budgets ≤35 chars, keeping as much of the cosmetic symbol segment as
+  fits (nothing parses the symbol back out — only `.startswith("enma_"/"tpsl_"/"oco_")` matters);
+  applied to all 6 `enma_…` sites. `engine/tests/test_make_client_id.py` (6 cases incl. the exact
+  regression); engine pytest 450/450. Change is in the working tree (uncommitted) pending commit.
+- **FIXED 2026-07-19 (found in live testnet chaos) — blank Session-Risk-Governor fields silently
+  armed circuit breakers at 0, blocking ALL live entries.** `server/src/utils/risk.js` used
+  `isFinite(Number(hardLimits.correlationCap?.rho))` etc.; the client sends `null` for a blank "off"
+  field, and `Number(null)===0` (also `Number('')===0`) slipped past `isFinite`, arming
+  `correlation_cap` at `rho=0` ("cluster everything") and `var_limit_pct`/`cvar_limit_pct`/
+  `max_margin_utilization` at 0 (the engine treats 0 as a real limit; only `None`/`""` = off). Live
+  effect: 28 correlation-governor entry vetoes / 0 clean entries at 50x. **Fixed** with an `_optNum`
+  guard (null/undefined/'' → omit; explicit 0 still honored); +5 regression tests; server jest
+  116/116. Live-confirmed: post-fix chaos = 0 correlation blocks, entries flow. Change is in the
+  working tree (uncommitted) pending review/commit.
+
 - **Fixed 2026-07-17 (Plan 24, S-1 through S-4) — BestSupertrend silently never traded at its own
   default settings.** Root cause: `size_by_notional()` (`core/strategy.py`) sized to exactly
   `equity * position_size_pct` capped only by leverage-based `max_qty()` — at the strategy's
@@ -401,23 +433,24 @@ detail (commands, per-phase byte-equivalence, issue-by-issue fix list) moved to
   any OPEN<->FLAT disagreement between Binance's `ACCOUNT_UPDATE` position delta and the local
   view — this path is event-type-agnostic (Binance emits `ACCOUNT_UPDATE` for every position
   change, including algo-order fills, regardless of `ORDER_TRADE_UPDATE` semantics), so it closes
-  the staleness window even if A-2's `ORDER_TRADE_UPDATE` fix turns out to have gaps. **Not yet
-  re-verified against a live Chaos run** — the original ~60s staleness symptom needs to be
-  reproduced again with both fixes in place before F7 is closed. Detail + full timeline:
+  the staleness window even if A-2's `ORDER_TRADE_UPDATE` fix turns out to have gaps. **LIVE-VERIFIED
+  FIXED 2026-07-19** against a real testnet chaos run: a conditional SL fill on KAITOUSDC (50x) was
+  reflected in local state in **~0.5s** (fill 08:11:02.177 → `_on_account_update` fired immediately
+  → "reconciled — exchange has no position, closing local state" 08:11:02.677), versus the original
+  ~60s. Container pytest 444/444 (F7's 3 `test_entry_unconfirmed_fill.py` cases pass). **The F7
+  staleness symptom is resolved.** Detail + full timeline:
   `workspace/docs/features/algo-trading/SPEC.md`'s "Open issues found in a live Chaos run" section,
-  `21_live-algo-industry-standard-audit.md` (A-2, A-8), and `workspace/plan/handoff.md`.
-- **OPEN 2026-07-16 — TP placement failing outright on some symbols (`400 Bad Request`)**, found in
-  the same live Chaos run (`BCHUSDT`, then `ETHUSDT`). Possibly a recurrence of the 2026-07-03
-  stale-tick-size-cache bug (see `algo-trading/SPEC.md`'s "Resilience & Stats") for symbols outside
-  the original tier-cache warm set, or a distinct cause — genuinely unknown because the failure was
-  only ever logged as httpx's generic `"400 Bad Request"` message, discarding Binance's actual
-  `{code, msg}` body. **Logging fixed same day** (`_binance_error_detail()` in
-  `live_bot_manager.py`, wired into entry/SL/TP failure logs) so the next reproduction will show
-  the real cause. Root cause itself still open, but **as of Plan 21.4 (A-7, 2026-07-17) this class
-  self-heals**: a TP-400 leaves a position with only its SL live, which is fine (TP is
-  lower-stakes); a symmetric SL-400/failure that leaves a position genuinely naked is now detected
-  by `_reconcile_exchange_state`'s naked-position re-arm and either re-placed or, after 3
-  consecutive re-arm failures, force-closed — see A-7 below.
+  `21_live-algo-industry-standard-audit.md` (A-2, A-8), and `workspace/plan/handoff.md` (2026-07-19).
+- **ROOT-CAUSED 2026-07-19 (live testnet chaos) — SL/TP placement `400 Bad Request` = `-2021 Order
+  would immediately trigger`.** The `_binance_error_detail()` logging (added earlier, now
+  container- and live-verified) captured the real body: at high leverage the SL/TP trigger price
+  sits within immediate-trigger range of the mark price (~0.03% at 50x), so Binance rejects it.
+  **The prior `PERCENT_PRICE` / stale-tick-size hypotheses are DISPROVEN — do not pursue them.**
+  This is expected exchange behavior at extreme leverage + tight stops, and **self-heals**: the
+  Plan 21.4 A-7 naked-position re-arm re-places the stop on the next candle (once price has moved
+  off the trigger), verified live (KAITOUSDC: SL-400 at entry → re-armed successfully next candle
+  → SL later triggered normally). Not a code bug on its own; the residual real bug found alongside
+  it is the `-4015` emergency-close client-id overflow (below).
 - **Fixed 2026-07-17 (Plan 21.3/21.4, A-4/A-5/A-6/A-7/M-4/M-5)** — bracket/SL integrity gaps found
   by the `21_live-algo-industry-standard-audit.md` audit, all code-side shipped, pending container
   `pytest` run + live re-verification: (1) resting SL/TP algo orders are now cancelled on every

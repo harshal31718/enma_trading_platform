@@ -119,6 +119,40 @@ describe('resolveStrategyRiskParams', () => {
       expect(out.correlation_cap).toBeUndefined()
     })
 
+    // Regression (found in live verification 2026-07-19): the client sends rho:null for a
+    // blank "off" field. Number(null)===0 previously slipped past isFinite() and armed the
+    // cap at rho=0 ("cluster everything"), silently vetoing every live/chaos entry.
+    test('correlationCap omitted when rho is null (blank field = off, not rho=0)', () => {
+      const settings = { globalHardLimits: { correlationCap: { rho: null, maxClusterExposurePct: 0.4 } } }
+      const out = resolveStrategyRiskParams('MyStrat', 'BTCUSDT', settings, {})
+      expect(out.correlation_cap).toBeUndefined()
+    })
+
+    test('correlationCap omitted when rho is empty string (blank field = off)', () => {
+      const settings = { globalHardLimits: { correlationCap: { rho: '', maxClusterExposurePct: 0.4 } } }
+      const out = resolveStrategyRiskParams('MyStrat', 'BTCUSDT', settings, {})
+      expect(out.correlation_cap).toBeUndefined()
+    })
+
+    test('var/cvar/margin/dailyLoss omitted when null (blank = off, not a 0 limit)', () => {
+      const settings = {
+        globalHardLimits: {
+          maxDailyLossPct: null, maxMarginUtilization: null, varLimitPct: null, cvarLimitPct: null,
+        },
+      }
+      const out = resolveStrategyRiskParams('MyStrat', 'BTCUSDT', settings, {})
+      expect(out.max_daily_loss_pct).toBeUndefined()
+      expect(out.max_margin_utilization).toBeUndefined()
+      expect(out.var_limit_pct).toBeUndefined()
+      expect(out.cvar_limit_pct).toBeUndefined()
+    })
+
+    test('an explicitly-typed 0 is still honored (not treated as unset)', () => {
+      const settings = { globalHardLimits: { maxDailyLossPct: 0 } }
+      const out = resolveStrategyRiskParams('MyStrat', 'BTCUSDT', settings, {})
+      expect(out.max_daily_loss_pct).toBe(0)
+    })
+
     test('allocation passes through only when explicitly "inverse_vol"', () => {
       expect(
         resolveStrategyRiskParams('MyStrat', 'BTCUSDT', { globalHardLimits: { allocation: 'inverse_vol' } }, {}).allocation

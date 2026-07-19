@@ -24,7 +24,21 @@ Anything failing one of these lives in **§ Not in this queue** below with the r
 
 ## The queue (work top-down)
 
-### F7 — Algo/conditional fill detection: fix the now-identified root causes · Plan 21 (21.1–21.2) · **21.1+21.2 code-shipped 2026-07-17, live verification pending**
+### F7 — Algo/conditional fill detection: fix the now-identified root causes · Plan 21 (21.1–21.2) · **LIVE-VERIFIED & RESOLVED 2026-07-19**
+- **2026-07-19 closure (container 444/444 + live testnet chaos):** the fill-staleness symptom is
+  FIXED — a conditional SL fill reflected in local state in **~0.5s** via the A-8 `ACCOUNT_UPDATE`
+  reconcile (fill 08:11:02.177 → closed 08:11:02.677), vs the original ~60s. The TP/SL-placement
+  400 root cause is **`-2021 Order would immediately trigger`** (tight stops at extreme leverage —
+  expected & self-healed by the A-7 re-arm; the `PERCENT_PRICE` hypothesis noted below is
+  DISPROVEN — drop it). FXSUSDT-class stuck-open is covered by the entry-fill-confirmation guard
+  (`test_entry_unconfirmed_fill.py`, 3/3). **Two new bugs surfaced by the live run:** (a) FIXED —
+  server governor-config coercion in `risk.js` (`Number(null)===0` armed correlation/VaR/CVaR/margin
+  caps at 0 on blank fields, blocking ALL live entries; +5 jest tests → 116/116, live-confirmed
+  entries then flowed); (b) **FIXED** — `-4015` emergency-close `clientOrderId` > 36 chars, systemic
+  across ~6 placement sites, resolved with a central `_make_client_id()` helper that budgets ≤35
+  chars (engine pytest 450/450, `test_make_client_id.py`). Both fixes are in the working tree,
+  uncommitted, pending commit. See `handoff.md` 2026-07-19 + `CURRENT_STATE.md` Known Technical
+  Debt.
 - **History:** F7 began as "confirm `ORDER_TRADE_UPDATE` emits for algo orders". The 2026-07-16
   live Chaos run answered it (fills NOT reliably caught — ~50-55s UI/state staleness until the
   next candle's REST poll) and surfaced two more bugs (TP-placement 400s, FXSUSDT stuck open

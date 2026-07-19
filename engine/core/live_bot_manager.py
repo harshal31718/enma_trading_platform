@@ -154,6 +154,31 @@ def _safe_float(val, default):
         return default
 
 
+def _make_client_id(session_id: str, symbol: str, suffix: str = "") -> str:
+    """Build a Binance ``newClientOrderId`` guaranteed to stay under the 36-char
+    exchange limit (``-4015 Client order id length should be less than 36 chars``
+    otherwise). Shape: ``enma_<sess8>_<sym...>_<uuid8><suffix>``, trimming the
+    symbol segment to whatever budget remains after the fixed parts.
+
+    The symbol segment is purely cosmetic (for log/trace readability) — nothing
+    parses it back out of the id; the only structural checks anywhere are
+    ``.startswith("enma_")`` / ``"tpsl_"`` / ``"oco_"``, and uniqueness comes from
+    the uuid8 — so trimming the symbol is safe. Found via live testnet chaos
+    2026-07-19: the old ``f"enma_{session_id[:8]}_{symbol}_{uuid4_hex8()}_emrg"``
+    was 37 chars for a 9-char symbol (e.g. KAITOUSDC), so the F-018 emergency
+    close failed with -4015 on every symbol >= 8 chars, leaving the position
+    briefly naked until the next-candle re-arm.
+    """
+    _LIMIT = 35  # Binance requires length < 36
+    uid = uuid4_hex8()
+    sess = session_id[:8]
+    fixed = len("enma_") + len(sess) + 1 + len(uid) + len(suffix)
+    room = _LIMIT - fixed - 1  # -1 for the "_" between the symbol and the uid
+    if room > 0 and symbol:
+        return f"enma_{sess}_{symbol[:room]}_{uid}{suffix}"
+    return f"enma_{sess}_{uid}{suffix}"
+
+
 def _extract_fill_client_id(order_data: dict) -> str:
     """A-2 fix (Plan 21.1): pull the client/algo id off an ORDER_TRADE_UPDATE
     `o` payload safely.
@@ -657,7 +682,7 @@ class LiveAdapter(ExecutionAdapter):
                         # Plan 5 Step 5.3 (ENG-10): deterministic id for
                         # future idempotent-retry support, matching the
                         # entry/exit paths' convention.
-                        "newClientOrderId": f"enma_{self.session_id[:8]}_{symbol}_{uuid4_hex8()}",
+                        "newClientOrderId": _make_client_id(self.session_id, symbol),
                     }
                     result = await _signed(
                         "POST", "/fapi/v1/order",
@@ -723,7 +748,7 @@ class LiveAdapter(ExecutionAdapter):
                 raise RuntimeError("Binance Testnet API credentials not configured")
 
             order_id = None
-            entry_client_order_id = f"enma_{self.session_id[:8]}_{symbol}_{uuid4_hex8()}"
+            entry_client_order_id = _make_client_id(self.session_id, symbol)
             async with (sem if sem else contextlib.nullcontext()):
                 # Step 1: Place the entry MARKET order.
                 #
@@ -891,7 +916,7 @@ class LiveAdapter(ExecutionAdapter):
                         # hand-assembling a rough Position object in this
                         # failure branch. A-7 extends reconcile to also
                         # re-arm a missing stop on a restored naked position.
-                        _emergency_client_id = f"enma_{self.session_id[:8]}_{symbol}_{uuid4_hex8()}_emrg"
+                        _emergency_client_id = _make_client_id(self.session_id, symbol, "_emrg")
                         _close_side = "SELL" if binance_side == "BUY" else "BUY"
                         _close_params = {
                             "symbol": symbol,
@@ -1209,7 +1234,7 @@ class LiveAdapter(ExecutionAdapter):
         # adjust_trade_position() to trigger a scale-out); the id alone is
         # enough for a future reconciliation pass to find the order by client
         # id instead of guessing.
-        reduce_client_order_id = f"enma_{self.session_id[:8]}_{symbol}_{uuid4_hex8()}"
+        reduce_client_order_id = _make_client_id(self.session_id, symbol)
         try:
             from services.binance_testnet import send_signed_request as _signed
             _api_key = session.get("api_key", "")
@@ -1332,7 +1357,7 @@ class LiveAdapter(ExecutionAdapter):
         #   immediate response didn't carry it) instead of the SL/TP
         #   trigger price / last candle close this function was called with.
         sem = self.manager._order_semaphores.get(self.session_id)
-        client_order_id = f"enma_{self.session_id[:8]}_{symbol}_{uuid4_hex8()}"
+        client_order_id = _make_client_id(self.session_id, symbol)
         try:
             from services.binance_testnet import send_signed_request as _signed
             _api_key = session.get("api_key", "")
@@ -2809,7 +2834,7 @@ class LiveBotManager:
 
             if position_amt != 0:
                 close_side = "SELL" if position_amt > 0 else "BUY"
-                client_order_id = f"enma_{session_id[:8]}_{symbol}_{uuid4_hex8()}"
+                client_order_id = _make_client_id(session_id, symbol)
                 close_params = {
                     "symbol": symbol,
                     "side": close_side,

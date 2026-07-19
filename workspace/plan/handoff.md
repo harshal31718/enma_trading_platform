@@ -7,6 +7,72 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
+## 2026-07-19 — F7 LIVE-VERIFIED (container 450/450 + live testnet chaos): TP/SL-400 root cause = -2021 (not PERCENT_PRICE); fill-staleness fixed to ~0.5s; found+fixed TWO bugs — a platform-breaking governor coercion (server) and the -4015 emergency-close clientOrderId overflow (engine)
+
+**Goal:** user picked "clear verification debt" — run F7's blocked steps (container pytest + a
+live testnet reproduction through a TP/SL trigger) now that Docker is available. Mid-session the
+user went out and said to continue in **auto mode** (no input), leaving anything genuinely critical
+pending. All work is Binance **Testnet (paper)**; all sessions stopped at the end.
+
+**Done — F7 fully verified on the diagnostic front:**
+1. **Container pytest: 444/444** (`docker exec enma_trading_platform-engine-1 python -m pytest
+   /app/tests/`, up from last-recorded 441). F7's 3 `test_entry_unconfirmed_fill.py` cases pass,
+   incl. the FXSUSDT zero-avgPrice phantom-fill guard. Closes the "two sessions shipped F7 code
+   with zero container runs" risk.
+2. **TP/SL-placement 400 real cause = `-2021 Order would immediately trigger`** — captured live via
+   the shipped `_binance_error_detail()` logging (KAITOUSDC/others at 50x, SL sits ~0.03% from
+   entry → within immediate-trigger range). **The prior session's `PERCENT_PRICE` hypothesis is
+   DISPROVEN — drop it.** Self-heals via the A-7 naked-position re-arm next candle (verified).
+3. **Fill-staleness (F7's core symptom) FIXED and live-verified: ~0.5s, not ~60s.** KAITOUSDC SL
+   filled 08:11:02.177 → `_on_account_update` (Plan 21.2 A-8) fired *immediately* ("account update
+   reports position FLAT but local view says OPEN — reconciling now") → closed 08:11:02.677.
+4. Also live-verified working: real-fill entry confirmation + slippage log (A-14), naked-position
+   detect+re-arm (A-7), emergency-close retry ladder (A-6), reconcile-from-exchange (21.1 Case 1),
+   `-2011 Unknown order sent` handled gracefully on cancel-of-already-gone (A-4), governor-state
+   "Reducing" badge on SessionCard (22.7), StoplossGuard cooldown protection block (22.3), clean
+   `_close_position_on_stop` using live positionRisk (no orphans).
+
+**Done — a real platform-breaking bug found live AND fixed (server, tested):** at 50x, EVERY chaos
+entry was vetoed by the correlation-concentration governor (`entry blocked by risk governor —
+candidate ... correlation cluster ... rho > 0.0`), 28 blocks / 0 clean entries. Root cause:
+`server/src/utils/risk.js:103` used `isFinite(Number(hardLimits.correlationCap?.rho))` — but the
+client sends `rho: null` for a blank "off" field (RiskDashboard.jsx:132), and `Number(null)===0`
+(same for `''`) slips past `isFinite`, arming the cap at `rho=0` ("cluster everything"). Same
+coercion silently armed `var_limit_pct`/`cvar_limit_pct`/`max_margin_utilization` at 0 too (engine
+treats 0 as a real limit, only `None`/`""` as off). **Fixed** risk.js with an `_optNum` guard that
+treats null/undefined/'' as unset (explicit 0 still honored). Added 5 regression tests. **Server
+jest 116/116** (was 111). **Live-confirmed the fix**: a fresh post-fix chaos = 0 correlation
+blocks, entries flow normally.
+
+**Also done later same session (user returned, green-lit the fix) — `-4015` FIXED:** the emergency-
+close `newClientOrderId` `enma_<sess8>_<symbol>_<uuid8>_emrg` = 37 chars for KAITOUSDC (>36), so the
+F-018 emergency close FAILED with `-4015` on every symbol ≥8 chars (mitigated by the A-7 re-arm, not
+catastrophic). Systemic: the base scheme (23+len(symbol) chars) also risked 36 for ~13-char symbols.
+First confirmed nothing parses the symbol back out of the id (only `.startswith("enma_"/"tpsl_"/
+"oco_")` matters; re-query treats it as opaque) — so shortening is safe. Added a central
+`_make_client_id(session_id, symbol, suffix="")` (engine `live_bot_manager.py`) that budgets ≤35
+chars, keeping as much of the (cosmetic) symbol as fits; applied to all 6 `enma_…` sites
+(660/726/894[emrg]/1212/1335/2837). `tpsl_…` algo ids (~15 chars) untouched. New
+`engine/tests/test_make_client_id.py` (6 cases incl. the exact KAITOUSDC+`_emrg` regression). **Full
+engine suite 450/450.** Not separately live-re-verified — the fix is a pure length guarantee
+(unit-proven, `-4015` is deterministically a length error, new ids are still valid Binance
+clientOrderIds) and launching more unattended 50x chaos had more downside than value; exchange
+confirmed clean/flat + engine healthy post-edit.
+
+**Files changed (uncommitted, in working tree for review):** `server/src/utils/risk.js` (`_optNum`
+guard) + `server/src/utils/__tests__/risk.test.js` (+5 tests) — governor fix, jest 116/116;
+`engine/core/live_bot_manager.py` (`_make_client_id` + 6 call sites) + new
+`engine/tests/test_make_client_id.py` (6 tests) — `-4015` fix, pytest 450/450. Docs:
+`CURRENT_STATE.md`, `0_tracker.md`, `0_fixes-queue.md`, `handoff.md`.
+
+**Next session:** (1) **commit** the two fixes (governor + `-4015`) — user hadn't explicitly said
+commit, so both are staged in the working tree; (2) F7 is now closed on the diagnostic side (the
+`-2021` residual is expected-and-handled at extreme leverage). Plan 22/24 got substantial incidental
+live re-verification this session (governor "Reducing" badge, protections cooldown, correlation cap,
+clean stop) — worth noting in their rows. Optional: a live chaos smoke of the `-4015` fix if you
+want belt-and-braces confirmation, though the unit proof is conclusive.
+
+---
 ## 2026-07-18 — F7 continued: error-visibility logging verified, one real entry-fill-confirmation gap found and fixed (FXSUSDT hypothesis) — TP-400 root cause still open, live verification still blocked
 
 **Goal:** continue F7 (fixes-queue) from a prior session that added `_binance_error_detail()`
@@ -149,95 +215,3 @@ was short, or require the session's `tradingState` wasn't already `halted`), or 
 (Decimal money) — the plan's own text calls it out as needing deliberate scoping + an explicit
 golden-master sign-off owner, not a rush. Plan 22/24's live-Testnet re-verification remain the
 standing genuinely-blocked items across the whole plan set.
-
----
-## 2026-07-17 — Plan 9 fully shipped (9.1–9.11): 9.9 QNT-14 round-trip stats, 9.10 fill-model ladder, 9.8 intrabar detail resolution, 9.7 historical funding ledger — **PLAN 9 COMPLETE within its own defined scope** ✅
-
-**Goal:** user said "complete all 9.1..." — asked once up front (via AskUserQuestion) whether each
-remaining mechanism should ship opt-in/default-off (matching this session's established pattern)
-or activate-by-default with a re-baseline+sign-off per item; got no response within the wait
-window, so proceeded on the recommended default (opt-in/default-off, zero behavior change until
-explicitly activated) per the tool's own guidance to use best judgment. Worked through the four
-remaining Plan 9 steps in size order: 9.9's leftover half, 9.10, 9.8, 9.7 (largest, done last).
-
-**Done — 9.9 (QNT-14 leg-vs-round-trip separation):** new
-`services.metrics.aggregate_legs_to_round_trips()` groups a DCA/scale-out position's partial
-`"scale_out"` legs + final close into one synthetic round-trip record for STATISTICS only (pnl
-summed, qty reconstructed as original position size). Opt-in via
-`run_backtest_simulation(round_trip_stats=True)`, default `False`. Persisted `backtestTrades`/
-`tradeCount` unchanged either way — only `MetricContext`, `bySide`, returns histogram, MFE/MAE
-scatter get the round-trip view when opted in. `"inf"`-string persistence re-audited and left
-alone (genuinely dormant, zero client/server consumption).
-
-**Done — 9.10 (fill-model ladder, QNT-11):** new opt-in `LadderedTransactionCostModel`
-(`core/models/cost.py`) — volatility-scaled slippage (`vol_slip_mult × ATR%`) + square-root market
-impact (`impact_mult × sqrt(notional/ADV)`, ADV approximated from the strategy's own candle
-history). Spread half-cost deliberately NOT modeled — backtesting has zero historical bid/ask
-spread data. Widened `DefaultTransactionCostModel.adverse_fill()`'s signature with an optional
-`qty` param (both `execution.py` call sites already had it in scope). Opt-in via
-`self.cost_model = LadderedTransactionCostModel()` — golden-master-safe by construction, no seeded
-strategy uses it. **Liquidation fee (QNT-4) deliberately NOT implemented** — `engine/CLAUDE.md`
-documents the current "-margin only, no fee on top" behavior as the INTENDED contract, not a bug;
-changing it needs a `DECISIONS.md` product call, left for the user. Warmup fail-loud (QNT-16)
-deferred — this step's own text ties it to Plan 8 coordination.
-
-**Done — 9.8 (intrabar detail resolution, QNT-3 residual/ENG-18):** `ExecutionKernel` gained opt-in
-`intrabar_detail`/`detail_candles_by_symbol`/`base_timeframe_ms`. When both SL and TP wicks hit
-one base candle (the genuinely ambiguous case, previously always resolved SL-first by code order
-alone), `_resolve_intrabar_winner()` scans 1m sub-candles within that candle's window in
-chronological order — whichever level actually triggers first wins, falling back to the SL-first
-default when detail data is missing/doesn't cover the window. `check_exits()` refactored to a
-candidate-then-decide structure, behavior-preserving by construction for the default (off) path.
-`backtest_runner.py` fetches 1m candles only when opted in and the base timeframe isn't already
-1m. **No 1m-fetch size/cost guardrail added** — a long backtest opting in would fetch a very large
-candle set (e.g. ~525k candles for a 1-year 1h backtest), left as a known limitation.
-
-**Done — 9.7 (historical funding ledger, QNT-5), the largest item:** per root `CLAUDE.md` Rule A,
-verified the endpoint against official Binance docs FIRST (`WebFetch` against the official API
-reference) before writing any code — `GET /fapi/v1/fundingRate`, public/no signing,
-`symbol`/`startTime`/`endTime`/`limit` (max 1000), ascending order, rows
-`{symbol, fundingRate, fundingTime, markPrice}`. Documented in `binance-api.md` §2. New
-TimescaleDB `funding_rates` hypertable — added to `docker/timescale/init.sql` for future fresh
-deployments AND applied directly to the LIVE running database (confirmed via `\dt` before/after —
-init.sql only runs on a fresh volume, so a schema-only edit wouldn't have taken effect). New
-`services/funding_importer.py` (idempotent `ON CONFLICT DO NOTHING` upsert, mirrors
-`candle_importer.py` exactly, paginates via Binance's own `fundingTime` cursor since funding has
-no fixed interval) and `services/funding_manager.py` (`ensure_funding_available()`, the single
-entry point, mirrors `candle_manager.py`'s contract). **Manually verified end-to-end against real
-Binance mainnet data**: fetched 22 real BTCUSDT funding events for 2024-01-01..08 (3/day, matching
-expected ~8h cadence, real signed rates and mark prices), confirmed idempotent re-fetch (second
-call hit the cache, zero duplicate rows). Wired into `backtest_runner.py` via a new opt-in
-`historical_funding` param — `BacktestAdapter.charge_funding()` gained an event-driven branch that
-charges each REAL event's own signed rate against its own mark price (not the flat-rate/
-fixed-8h-boundary fallback's one constant rate and assumed-fixed schedule). Default `None`
-reproduces the exact pre-9.7 code path.
-
-**Verification (cumulative across all 4 steps):** golden master re-confirmed byte-identical after
-EVERY step individually (Rule C, not just once at the end) — 5/5 seeded strategies, tol 1e-6 each
-time. New test files: `test_round_trip_aggregation.py` (9 cases), `test_laddered_cost_model.py`
-(11 cases), `test_intrabar_detail_resolution.py` (10 cases), `test_historical_funding.py` (8
-cases) — 38 new tests this arc. Container suite climbed 386 → 397 → 407 → **415/415 passed**.
-
-**Files changed:** `engine/services/metrics.py` (`aggregate_legs_to_round_trips`),
-`engine/services/backtest_runner.py` (all four steps' wiring — `stats_trades`, `intrabar_detail`
-param + kernel construction, `historical_funding` param + `BacktestAdapter` construction),
-`engine/core/models/cost.py` (`LadderedTransactionCostModel`, `adverse_fill` signature widening),
-`engine/core/models/execution.py` (pass `qty` through), `engine/core/models/__init__.py` (export),
-`engine/core/kernel.py` (`_resolve_intrabar_winner`, `check_exits` refactor); new
-`engine/services/funding_importer.py`, `engine/services/funding_manager.py`; new TimescaleDB table
-`funding_rates` (`docker/timescale/init.sql` + applied live); new test files listed above; docs:
-`9_backtest-and-optimizer-correctness.md`, `0_tracker.md`, `CURRENT_STATE.md`, `engine/CLAUDE.md`,
-`binance-api.md`, `handoff.md`. Committed across 4 commits (`1b2779e`, `7430c26`, `2d732a6`,
-`d72d70a`), one per step.
-
-**NOT done — 3 items deliberately deferred, not attempted:** liquidation fee (QNT-4, contradicts a
-documented `engine/CLAUDE.md` contract — genuinely needs the user's product call, not a mechanical
-fix); warmup-insufficiency fail-loud (QNT-16, needs Plan 8 coordination per 9.10's own text);
-`"inf"`-string metric persistence (QNT-13's other half, re-audited, still dormant). None of these
-three block calling Plan 9 "complete" — they were always explicitly out of this plan's committed
-scope, not overlooked.
-
-**Next session:** Plan 9 is done. Remaining work across the whole plan set: Plan 22/24's standing
-live-Testnet-verification gap (genuinely blocked, needs a human-observed session), and whatever the
-user picks next from `0_tracker.md`'s Active work table — nothing else was investigated this
-session beyond Plan 9's own four steps.

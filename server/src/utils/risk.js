@@ -96,15 +96,25 @@ function resolveStrategyRiskParams(strategyName, symbol, savedSettings = {}, wiz
   // (22.1/22.4/22.5/22.6's own wiring), so no engine-side change is needed
   // here. Omitted entirely when unset/null — the governor's own hardcoded
   // default (on or off, per field) takes over, same as today.
-  if (isFinite(Number(hardLimits.maxDailyLossPct))) out.max_daily_loss_pct = Number(hardLimits.maxDailyLossPct);
-  if (isFinite(Number(hardLimits.maxMarginUtilization))) out.max_margin_utilization = Number(hardLimits.maxMarginUtilization);
-  if (isFinite(Number(hardLimits.varLimitPct))) out.var_limit_pct = Number(hardLimits.varLimitPct);
-  if (isFinite(Number(hardLimits.cvarLimitPct))) out.cvar_limit_pct = Number(hardLimits.cvarLimitPct);
-  if (isFinite(Number(hardLimits.correlationCap?.rho))) {
+  // Treat null / undefined / '' as "unset" → omit, so the engine's own off-sentinel
+  // (`raw not in (None, "")`) governs. The client sends `null` for a blank field, but
+  // `Number(null) === 0` (and `Number('') === 0`) slips past a bare `isFinite()` — which
+  // silently ARMS these opt-in circuit breakers at 0: correlation_cap rho=0 clusters every
+  // symbol, var/cvar=0 means "must be < 0%", margin=0 means "0% utilization ceiling" — each
+  // vetoes every entry when the user left the field blank. Found in live verification
+  // 2026-07-19 (a blank Correlation ρ blocked all chaos entries). An explicit 0 the user
+  // typed is still honored (0 !== null/'').
+  const _optNum = (v) => (v !== null && v !== undefined && v !== '' && isFinite(Number(v))) ? Number(v) : null;
+  if (_optNum(hardLimits.maxDailyLossPct) !== null) out.max_daily_loss_pct = _optNum(hardLimits.maxDailyLossPct);
+  if (_optNum(hardLimits.maxMarginUtilization) !== null) out.max_margin_utilization = _optNum(hardLimits.maxMarginUtilization);
+  if (_optNum(hardLimits.varLimitPct) !== null) out.var_limit_pct = _optNum(hardLimits.varLimitPct);
+  if (_optNum(hardLimits.cvarLimitPct) !== null) out.cvar_limit_pct = _optNum(hardLimits.cvarLimitPct);
+  const _rho = _optNum(hardLimits.correlationCap?.rho);
+  if (_rho !== null) {
+    const _cluster = _optNum(hardLimits.correlationCap?.maxClusterExposurePct);
     out.correlation_cap = {
-      rho: Number(hardLimits.correlationCap.rho),
-      max_cluster_exposure_pct: isFinite(Number(hardLimits.correlationCap.maxClusterExposurePct))
-        ? Number(hardLimits.correlationCap.maxClusterExposurePct) : 0.4,
+      rho: _rho,
+      max_cluster_exposure_pct: _cluster !== null ? _cluster : 0.4,
     };
   }
   // allocation is the one governor-adjacent field that IS wizard-overridable
