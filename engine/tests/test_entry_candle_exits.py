@@ -54,8 +54,13 @@ class _FakeStrategy:
 
 
 class _RecordingAdapter(ExecutionAdapter):
-    def __init__(self):
+    def __init__(self, is_live: bool = False):
         self.exits = []
+        self._is_live = is_live
+
+    @property
+    def is_live(self) -> bool:
+        return self._is_live
 
     async def execute_entry(self, *a, **kw):
         return True
@@ -87,7 +92,7 @@ def test_entry_candle_exits_default_off_skips_the_entry_candle():
     assert kernel.entry_candle_exits is False
 
     asyncio.get_event_loop().run_until_complete(
-        kernel.check_exits(strat, "BTCUSDT", CANDLE, is_live=False, index_t=0, time_t=None))
+        kernel.check_exits(strat, "BTCUSDT", CANDLE, index_t=0, time_t=None))
 
     assert adapter.exits == [], "default behavior must stay byte-identical: no exit on the entry candle"
 
@@ -98,7 +103,7 @@ def test_entry_candle_exits_opt_in_evaluates_the_entry_candle():
     kernel = ExecutionKernel(adapter, exec_algo=None, entry_candle_exits=True)
 
     asyncio.get_event_loop().run_until_complete(
-        kernel.check_exits(strat, "BTCUSDT", CANDLE, is_live=False, index_t=0, time_t=None))
+        kernel.check_exits(strat, "BTCUSDT", CANDLE, index_t=0, time_t=None))
 
     assert adapter.exits == ["stop_loss"], "opt-in flag must evaluate SL/TP on the entry candle"
 
@@ -113,10 +118,10 @@ def test_entry_candle_exits_has_no_effect_when_not_freshly_entered():
 
     asyncio.get_event_loop().run_until_complete(
         ExecutionKernel(adapter_off, exec_algo=None, entry_candle_exits=False)
-        .check_exits(strat, "BTCUSDT", CANDLE, is_live=False, index_t=0, time_t=None))
+        .check_exits(strat, "BTCUSDT", CANDLE, index_t=0, time_t=None))
     asyncio.get_event_loop().run_until_complete(
         ExecutionKernel(adapter_on, exec_algo=None, entry_candle_exits=True)
-        .check_exits(strat, "BTCUSDT", CANDLE, is_live=False, index_t=0, time_t=None))
+        .check_exits(strat, "BTCUSDT", CANDLE, index_t=0, time_t=None))
 
     assert adapter_off.exits == adapter_on.exits == ["stop_loss"]
 
@@ -125,10 +130,10 @@ def test_entry_candle_exits_never_applies_live():
     # is_live=True bypasses the whole guard regardless of entry_candle_exits —
     # live SL/TP are exchange-side orders, not this kernel's concern.
     strat = _FakeStrategy()
-    adapter = _RecordingAdapter()
+    adapter = _RecordingAdapter(is_live=True)
     kernel = ExecutionKernel(adapter, exec_algo=None, entry_candle_exits=False)
 
     asyncio.get_event_loop().run_until_complete(
-        kernel.check_exits(strat, "BTCUSDT", CANDLE, is_live=True, index_t=0, time_t=None))
+        kernel.check_exits(strat, "BTCUSDT", CANDLE, index_t=0, time_t=None))
 
     assert adapter.exits == ["stop_loss"]

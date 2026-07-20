@@ -13,17 +13,11 @@ Run with:
 import ast
 import importlib
 import inspect
-import os
 import pkgutil
-import sys
 import textwrap
-from pathlib import Path
 from typing import Iterator
 
 import pytest
-
-if os.name != "nt" and Path("/engine").exists():
-    sys.path.insert(0, "/")
 
 # ── Seeded strategies to check ───────────────────────────────────────────────
 SEEDED_STRATEGIES = [

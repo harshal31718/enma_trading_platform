@@ -7,209 +7,150 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
-## 2026-07-20 — Plan 6: Step 6.1 (4/5 extractions), 6.2 (Exchange interface half), 6.4 (LiveAdapter half), 6.5 (pooled-client half) shipped; F9 (PUT-dispatch bug) fixed — golden-master-verified throughout
+## 2026-07-20 — Plan 6 Step 6.6 SHIPPED FOR REAL — engine_alias import hook replaces the symlink hack, verified via a real image rebuild + container restart
 
-**Goal:** user said "update and then start 6" (Plan 6 was stale-`Blocked` on already-shipped Plan
-5/21.3/21.4), then kept saying "proceed"/"yes"/"keep going" across the session. Golden-master
-baseline `before_plan6.json` captured once at the start, per Rule C, then re-verified
-byte-identical after every single change below (9 successive after-snapshots, 5/5 strategies,
-`MultiDivergence` exact match every time: trades=55/netProfit=-1784.02/winRate=0.36/cagr=-71.32/
-sqn=-2.08).
+**Goal:** user authorized (via AskUserQuestion) a real container rebuild to close out Step 6.6,
+which a prior pass this session had investigated but deliberately left unimplemented pending that
+authorization. Full details/root-cause investigation are in that prior entry (now superseded) and
+the plan file's Step 6.6 section — condensed here.
 
-**Step 6.1 — extracted 4 of `LiveBotManager`'s 5 planned collaborators** (3830→2783 lines):
-`MarketDataFeed` (candle fetching, call sites rewritten directly), `NodeNotifier` (Node stats/
-event transport — 11 test files had to be fixed for monkeypatching the old names, first pass was
-49 failed/5 errored, lesson: **check tests for direct monkeypatching before declaring an
-extraction done**), `SessionRegistry` (lifecycle state — kept old attribute names as delegating
-`@property`s rather than rewriting ~150 call sites, "typed state" half deferred to pair with
-6.3), `Reconciler` (the 943-line reconcile/cancel/amend/governor-breach cluster — same
-delegating-facade trick, zero test breakage this time). Only **OrderRouter** remains, and it's
-scoped as materially harder (execute_entry/reduce/exit/flip, ~1,260 lines tangling order
-placement with risk/governor logic) — needs its own design pass, not a mechanical move.
+**Design, different from the originally-suggested `pyproject.toml`/`pip install -e .` shape**:
+investigation found no packaging change was actually needed. A `sys.meta_path` finder/loader
+(new `core/engine_alias.py`, `install_engine_alias()`) intercepts any `engine`/`engine.X` import
+and reassigns `sys.modules['engine.X']` to the ALREADY-CANONICAL `X` module (`core.X`/
+`services.X`/etc) — genuine single module identity (`engine.core.margin is core.margin` now
+`True`, verified `False` before the fix), zero duplicate state, no symlink, no `sys.path`
+mutation. `engine.*` still resolves for strategy authors (the documented, must-preserve
+convention) — it's just no longer a SEPARATE module object. Installed at every real entry point
+that might dynamically load a strategy file: `main.py` (replacing its symlink+sys.path hack),
+`scripts/golden_master.py`/`scripts/recursive.py`/`scripts/lookahead_sentinel.py`/
+`scripts/_portfolio_check.py` (each had their own independent copy of the same hack — 5 total,
+not just main.py's one), and a new `engine/tests/conftest.py` for the pytest process. Also
+cleaned up the now-redundant dual `try: from engine.X import ... except ImportError: from core.X
+import ...` dance across 16 internal files (all internal code now imports bare `core.X`/
+`services.X`/`utils.X`, the canonical form) and 4 test files with their own inline symlink-hack
+copies (made redundant by `conftest.py`) — closing out ENG-12's stated scope in full, not just
+the packaging-identity half.
 
-**Step 6.4 — partial (`LiveAdapter`'s manager-leak half only).** Re-read the acceptance text and
-found a genuinely separable achievable slice: `LiveAdapter.__init__` now resolves `self._registry`/
-`self._notifier`/`self._reconciler` from `manager` ONCE; all 33 internal `self.manager.<attr>`
-chains rewritten to use those directly. Constructor signature deliberately unchanged (still takes
-`manager`, not injected deps) — this file has zero golden-master coverage and 19 tests construct
-it directly, so a signature change is separate, riskier work. Caught a stale class-level
-monkeypatch in `test_execute_entry_bracket_safety.py` via the full suite run, fixed. Kernel
-`is_live` branching (7 sites in `core/kernel.py`, the ONE piece of Plan 6 touching the
-golden-master-protected backtest path) is untouched — needs its own dedicated pass.
+**Verified via a REAL image rebuild + restart** (not just `docker exec` into the already-running
+container, unlike every other change this session): `docker compose build engine` (clean build,
+all layers cached except the final `COPY . .`), `docker compose up -d --no-deps engine`
+(container recreated), confirmed via `docker logs` — full clean boot, exchange rules cached for
+729 futures + 3649 spot symbols, all 5 strategies seeded successfully (proves the alias resolves
+correctly in the actual live app process, not just an ad-hoc check), `/health` returns 200 with
+Mongo/Timescale both connected. Post-restart: pytest 647/647, golden-master's `MultiDivergence`
+summary line (`trades=55 netProfit=-1784.02 winRate=0.36 cagr=-71.32 sqn=-2.08`) byte-identical
+to every prior golden-master run this session (the `before_packaging_v2.json` file itself didn't
+survive the container recreate — ephemeral filesystem, not a bind mount — but the deterministic
+computed output matching exactly across the restart is the real proof). Zero symlink/`sys.path`
+hack copies remain anywhere in the codebase (verified by grep).
 
-**Step 6.5 — partial (pooled-client half only).** `NodeNotifier` was opening a fresh
-`httpx.AsyncClient()` per call — found `services/binance_testnet.py` already has the exact lazy-
-singleton pattern to mirror (`get_client()`/`close_client()`), copied it, wired `close_client`
-into `main.py`'s shutdown lifespan. Verified via the running dev container's actual logs (not
-just pytest) since this touches app startup/shutdown — `/health` still 200, a real live testnet
-session kept trading normally. Redis-stream ordered/at-least-once delivery (needs new Node-side
-consumer code) is the real remaining half, cross-service, own session.
+**Files changed:** `engine/core/engine_alias.py` (new), `engine/main.py`, `engine/scripts/
+golden_master.py`/`recursive.py`/`lookahead_sentinel.py`/`_portfolio_check.py`, `engine/tests/
+conftest.py` (new), 16 internal files' dual-import cleanup (`core/kernel.py`, `core/live_bot_
+manager.py`, `core/models/{cost,execution,exec_algo,risk}.py`, `core/pipeline.py`, `core/
+strategy.py`, `services/backtest_runner.py`, all 5 `strategies/*/__init__.py`), 4 test files'
+inline hack cleanup (`test_bestsupertrend_direction_filter_rename.py`, `test_bestsupertrend_
+htf_parity.py`, `test_boundaries.py`, `test_exchange_migration.py`, `test_start_session_risk_
+params_shape.py`). Docs: `6_engine-decomposition-and-exchange-abstraction.md` (Step 6.6 section
+replaced with the real outcome), `0_tracker.md` (Plan 6 row), this file.
 
-**F9 (fixes-queue) — found and fixed while scoping 6.2, not bundled into it:** `send_signed_
-request`'s `_dispatch` had no PUT branch, so `user_data_stream.py`'s listen-key keepalive (fires
-every 30 min, calls with `method="PUT"`) silently failed every single time — self-healed via a
-full WS reconnect every ~60 min instead of ever actually renewing the key. One-line fix (add the
-PUT branch), 2 new tests in `test_binance_backpressure.py`.
-
-**Step 6.2 — Exchange interface shipped, NOT wired to any call site yet (deliberate).** New
-`engine/core/exchange.py`: `Exchange` ABC + `BinanceFuturesTestnet`/`BinanceFuturesMainnet`,
-every method (`place_order`/`cancel_order`/`query_order`, algo-order place/cancel/query, position/
-account/user-trades queries, `set_leverage`/`set_margin_type`, listen-key lifecycle,
-`user_data_ws_url`) routes through `send_signed_request` using the INSTANCE's own `mode` — a call
-site can no longer accidentally cross-wire testnet/mainnet via a stray literal. Surface sized by
-grepping every real call site first (24 sites, 9 endpoints), not guessed. Deliberately excludes
-the kline WS (always mainnet-sourced per DECISIONS.md #24, a documented decision not a gap).
-19 parametrized contract tests. **Real remaining scope, and the larger/riskier half**: migrating
-the ~24 existing `send_signed_request(..., mode="testnet")` call sites in `live_bot_manager.py`/
-`reconciler.py`/`user_data_stream.py` to actually use this, and wiring per-session `Exchange`
-selection from config — live-trading-critical, zero golden-master coverage, deliberately left for
-its own pass rather than rushed same-session.
-
-**Verified across everything:** engine pytest 567→578→582→587→593→595→598→600→619 (each piece's
-new tests, zero regressions ever left unresolved). Golden-master byte-identical at every step.
-Container health/logs checked directly for the two changes that touch paths no test suite
-exercises (`main.py` shutdown, F9's live WS keepalive).
-
-**Files changed:** `engine/core/market_data_feed.py`, `node_notifier.py`, `session_registry.py`,
-`reconciler.py`, `exchange.py` (all new); `engine/core/live_bot_manager.py` (3830→2783 + internal
-6.4 rewrite); `engine/main.py` (shutdown wiring); `engine/services/binance_testnet.py` (PUT
-branch); `engine/tests/test_market_data_feed.py`/`test_node_notifier.py`/
-`test_session_registry.py`/`test_reconciler.py`/`test_live_adapter_dependency_wiring.py`/
-`test_exchange.py` (all new, 47 cases total) + `test_binance_backpressure.py` (+2 cases); 12
-existing test files fixed for the NodeNotifier/6.4 renames (`test_live_fill_booking.py`,
-`test_execute_entry_portfolio_risk_and_liq_buffer.py`, `test_entry_unconfirmed_fill.py`,
-`test_execute_entry_risk_check_event.py`, `test_reconcile_fixes.py`,
-`test_execute_entry_correlation_cap.py`, `test_execute_entry_var_breach.py`,
-`test_execute_flip_idempotency.py`, `test_execute_entry_bracket_safety.py` (twice),
-`test_execute_entry_slippage_log.py`, `test_reconcile_naked_position_rearm.py`,
-`test_live_money_accumulation.py`). Docs: `engine/CLAUDE.md`, `6_engine-decomposition-and-
-exchange-abstraction.md`, `0_tracker.md`, `0_fixes-queue.md` (F9), this file.
-
-**Open questions:** none blocking. **Next session — everything remaining is now scoped, not
-unknown:** Step 6.1's OrderRouter (hardest — real design pass); Step 6.2's call-site migration
-(largest remaining mechanical risk — 24 live-trading sites, no golden-master net); Step 6.4's
-kernel `is_live` removal (the one piece touching the backtest-protected path); Step 6.5's
-Redis-stream channel (cross-service, needs Node work); Steps 6.3/6.6 not started. **Patterns that
-held all session, worth repeating:** re-read each step's actual acceptance text before assuming
-it's monolithic — most had a separable easy half (ship now) and a hard half (cross-cutting/
-cross-service/design-needed — document, don't rush); check test files for direct monkeypatching
-before declaring a rename done; a thin delegating-facade beats a risky full rewrite once
-something has too many call sites; for anything touching app startup/shutdown or other
-untested paths, check the running container's real logs, not just pytest green; when a scoping
-pass surfaces an unrelated real bug (F9), surface it to the user explicitly rather than silently
-fixing-or-ignoring it.
+**Open questions:** none blocking — Step 6.6 is fully shipped. Plan 6 status: 6.1, 6.2, 6.4
+(narrower scope), 6.6 all shipped this session. Remaining: 6.3 (needs the user's `BaseStrategy`
+DECISIONS.md call, see the entry two above this one), 6.5's Redis-stream channel (needs Node-side
+consumer code, cross-service).
 
 ---
-## 2026-07-20 — Plan 10 SHIPPED IN FULL — PBO (Probability of Backtest Overfitting) implemented, verified, closes the plan out
+## 2026-07-20 — Plan 6 Step 6.3: investigated, deliberately NOT implemented — the typed value objects already exist, the real gap needs a BaseStrategy DECISIONS.md call
 
-**Goal:** user said "move and implement" on PBO — the one remaining Plan 10 item, previously
-scoped-but-not-started (see `10_monte-carlo-strategy-lab.md`'s "Scoping notes" section). Design
-first (resolve the two open architectural questions it flagged), then implement.
+**Goal:** the last Plan 6 item not blocked on Node work (6.5) or a container rebuild sign-off
+(6.6, prior entry) — "replace the mutable-attribute protocol with an explicit
+OrderIntent/Signal object the strategy returns and the kernel consumes."
 
-**Design resolved both open questions by reading the actual code, not guessing:** (1) subsample
-source is PBO's OWN independent block scheme — `run_lab_pbo()` calls `optimizer.run_optimization`/
-`run_bayesian_optimization` DIRECTLY over the full date range (no walk-forward fold splitting) to
-get N candidates, each backtested once, then partitions the range into `nBlocks` CSCV blocks
-itself; (2) per-trial trade data already existed (confirmed via code reading) — every combo's
-trades are already persisted to `backtestTrades` under `{job_id}_c{idx:04d}`/`_t{idx:04d}`, the
-only real gap was the returned trial dict not carrying that job_id (lost on re-sort by loss) —
-fixed at the source in `optimizer.py` (both search functions now include `"jobId"` in every scored
-trial dict, small/additive/backward-compatible).
+**Finding: the plan text's premise is partly stale.** `core/models/base.py` already defines a
+full typed pipeline — `Signal → RiskConstraints → CostEstimate → TargetPortfolio → OrderPlan`,
+all `@dataclass`, threaded through `pipeline.py`'s `evaluate()` and consumed by `kernel.py`. A
+typo'd field there is already a type error. That part of Step 6.3's acceptance text is already
+satisfied and has been for a while (Narang Five-Model Architecture).
 
-**This avoids the "3,500 extra backtests" cost the scoping notes flagged**: only the initial N
-candidates are ever backtested; every `C(nBlocks, nBlocks/2)` train/test combination is scored by
-slicing each candidate's already-fetched trades in memory (numpy) — zero extra backtests.
+**The real gap**: `DefaultExecution.route()` (`core/models/execution.py`) is documented as the
+"sole writer" of `s.buy`/`s.sell`/`s.stop_loss`/`s.take_profit`/`s._pending_flip`/
+`s._close_at_open`, and writes those SAME fields alongside returning a typed `OrderPlan` — but
+only for its flat→enter path. For maintain/flip/close (3 of its 5 paths) it writes the mutable
+attributes and returns `None`. `kernel.py` then reads a mix of `plan.*` and `strategy.*` for the
+same event — that mixed read pattern is the real "temporal coupling ... spread across
+kernel/adapter/manager" the acceptance text names, not a missing type. Grepped the surface before
+estimating: `_pending_flip` 73 occurrences/48 files, `_close_at_open` 51/32,
+`s.stop_loss`/`s.take_profit` 31+30 across 18/16 files — an order of magnitude bigger than
+anything shipped this session.
 
-**A real bug caught during design, before trusting the implementation**: CSCV's OOS ranking must
-be ascending (rank 1 = worst, matching the paper's own convention) for `P(logit<=0)` to mean what
-PBO's definition says — an initial descending-rank draft would have silently INVERTED the whole
-statistic. Caught by hand-deriving two exact-value test scenarios (perfectly anti-correlated
-IS/OOS -> `pbo==1.0` exactly; strictly-ordered candidates -> `pbo==0.0` exactly) before trusting
-the code, not just asserting a plausible-looking range.
+**Also found, pre-existing and independent of this step**: `kernel.py`'s own exec_algo branch
+(lines ~496-499) already writes `strategy.stop_loss`/`take_profit` directly, violating
+`route()`'s own "sole writer" docstring. Worth its own small fixes-queue item — narrow, doesn't
+need the interface decision below.
 
-**Shipped:** `engine/services/pbo.py` (new — `compute_pbo()` pure CSCV combinatorics,
-`run_lab_pbo()` orchestrator), `optimizer.py` (`jobId` field addition), `routers/simulate.py`
-(`POST /simulate/pbo`). Server: `buildPBOConfig()` (`labConfig.js`, deliberately no
-mode/nFolds/trainRatio — not a walk-forward variant), `pboQueue.js`/`pbo.worker.js`,
-`lab.controller.js` (`runPBO`/`getPBO`/`listPBO`), `lab.routes.js`, `LabResult.type` enum gained
-`'pbo'`, `config/socket.js`/`socketEmitter.js` gained the `pbo:` room prefix. Client: new
-"Overfitting (PBO)" third tab on `/lab` — `PBOWizard.jsx`, `PBOVerdictCard.jsx` (severity card,
-<20%/20-50%/≥50% thresholds, a documented judgment call), `PBOCandidatesTable.jsx`,
-`PBOHistoryRail.jsx`, `useLab.js` gained `useRunPBO`/`usePBO`/`usePBOList`.
+**Why NOT implemented**: `self.buy`/`self.stop_loss`/etc are declared in `BaseStrategy.__init__`
+and documented in `engine/CLAUDE.md`'s "Available properties" as strategy-facing. A real fix means
+`kernel.py`/`LiveAdapter` stop READING these (treating them as `route()`'s write-only internal
+scratch state, consuming `OrderPlan` exclusively instead) — root `CLAUDE.md` requires a
+`DECISIONS.md` entry before changing `BaseStrategy`'s interface, and this reaches all 5 seeded
+strategies on the live-trading path with zero golden-master coverage on the live side. That's the
+user's call, not a background pass's. No code changed; `before_typed_contract.json` golden-master
+baseline was captured but is unused (safe to discard, or reuse whenever implementation starts).
 
-**Verified with real Docker access, this session:** engine pytest 567/567 (551 + 16 new
-`test_pbo.py` — pure unit tests plus the two hand-derived exact-value CSCV scenarios plus 6
-`run_lab_pbo` wiring tests), server jest 181/181 (169 + 12 new `buildPBOConfig` cases), client
-`vite build` clean, `vitest` 11/11. Live-verified end-to-end in a real browser session against the
-actual `/lab` PBO tab: a real run (MicroScalper/BTCUSDT/1h/2023, 6 candidates, 4 CSCV blocks)
-completed through the full BullMQ→engine→MongoDB pipeline, inspected the persisted `labResults`
-doc directly to confirm shape (`pbo: 0.0`, 5/6 combos evaluated), `PBOVerdictCard`/
-`PBOCandidatesTable` rendered the real result correctly with zero console errors. One real copy
-bug (missing space in a JSX line-wrap, `"4-vs-4train/test split"`) found and fixed during this same
-live pass, re-verified after the fix.
+**Files changed:** none (code). Docs: `6_engine-decomposition-and-exchange-abstraction.md` (Step
+6.3 section — full design + recommendation), `0_tracker.md` (Plan 6 row), this file.
 
-**Files changed:** `engine/services/pbo.py` (new), `engine/services/optimizer.py`,
-`engine/routers/simulate.py`, `engine/tests/test_pbo.py` (new), `server/src/services/pboQueue.js`
-(new), `server/src/workers/pbo.worker.js` (new), `server/src/controllers/lab.controller.js`,
-`server/src/routes/lab.routes.js`, `server/src/models/LabResult.js`, `server/src/utils/labConfig.js`,
-`server/src/utils/__tests__/labConfig.test.js`, `server/src/config/socket.js`,
-`server/src/services/socketEmitter.js`, `server/src/server.js`, `client/src/components/lab/
-PBOWizard.jsx`/`PBOVerdictCard.jsx`/`PBOCandidatesTable.jsx`/`PBOHistoryRail.jsx` (all new),
-`client/src/pages/StrategyLab.jsx`, `client/src/hooks/useLab.js`. Docs: `CURRENT_STATE.md`,
-`10_monte-carlo-strategy-lab.md`, `engine/CLAUDE.md`, `server/CLAUDE.md`, `client/CLAUDE.md`,
-`0_tracker.md`, this file.
-
-**Open questions:** none blocking — Plan 10 is fully shipped. The TimescaleDB candle gap found
-during the prior session's golden-master investigation (BTCUSDT/1h only partially cached for some
-historical windows) is still real and worth a full backfill before the next golden-master baseline
-capture, but is an infra/data task separate from Plan 10. Untouched backlog unchanged: 21.5c
-(batched reconcile, P2/small), Plan 6/7 (engine/server decomposition, P2), Plan 23 (MarginSurge
-strategy), Plan 8 (governance cleanup, P3), Plans 5/22/24 (shipped, waiting on human-observed live
-Testnet re-verification).
+**Open questions — for the user, not blocking other work:** should `kernel.py`/`LiveAdapter` stop
+reading `BaseStrategy`'s mutable order-state attributes and consume `OrderPlan` exclusively? If
+yes, this needs a `DECISIONS.md` entry and is likely its own multi-session effort, not a single
+pass. **Plan 6 overall status**: 6.1/6.2/6.4 shipped; 6.3 scoped-but-gated on a user decision; 6.5
+needs Node-side consumer code; 6.6 scoped-but-gated on a container-rebuild sign-off. Nothing left
+in Plan 6 is actionable without either the user's input or cross-service work.
 
 ---
-## 2026-07-19 — Plan 10 Phase 4a/4b real-Docker verification — closes out every gap the sandbox session below flagged
+## 2026-07-20 — Plan 6 Step 6.4: kernel `is_live` parameter-threading killed (deliberately narrower than full timing unification)
 
-**Goal:** a concurrent session (same repo, different account — this session's own token limit had
-been hit) built Phase 4a (MC-scored trial selection) and Phase 4b (risk_pct/leverage search +
-copy-to-backtest + MC summary strip) from a sandbox with no Docker access, disclosing several
-verification gaps (see the entry below this one for full detail). This session had real
-`docker exec` access and closed every one of those gaps.
+**Goal:** user picked kernel `is_live` removal (over 6.3's typed contract) as the next Plan 6 item.
+This is the ONE piece of Plan 6 touching code shared by both the golden-master-protected backtest
+path and the live path — treated with more caution than every other change this session.
 
-**Verified for real:** engine container `pytest /app/tests/` — **551/551** (the 4 failures the
-sandbox saw were confirmed environment-only, don't reproduce inside the real docker-compose
-network). Server container `npm test` — **169/169**, including all new `mcScoring`/`mcTopK`/
-`riskLeverageGrid` `labConfig.test.js` cases. Client `vite build` clean, `vitest run` 11/11.
+**Design:** `ExecutionAdapter` (`core/kernel.py`) gained an abstract `is_live: bool` property.
+`check_exits()`/`evaluate_and_route()` no longer take `is_live` as a parameter — each method reads
+`self.adapter.is_live` once into a local var instead, and every existing internal `if is_live:`
+check downstream is unchanged. `LiveAdapter.is_live` → `True`, `BacktestAdapter.is_live` → `False`.
+This kills the real risk (a caller passing the WRONG `is_live` for the adapter it's driving —
+structurally impossible now) without touching WHAT each branch does or WHEN it runs.
 
-**Golden master investigated, not just run:** flagged real drift on 3 seeded strategies vs the
-`after_dsr` baseline. Root-caused rather than assumed-broken: two independent golden-master
-re-runs against the CURRENT code are byte-identical to each other (determinism intact), and
-TimescaleDB's `candles` table for BTCUSDT/1h has a real gap — only 1,440 of ~8,760 candles cached
-for the golden harness's fixed 2024-01-01→2025-01-01 window — a data-availability change between
-when `after_dsr.json` was captured and now, not a Phase 4 code regression (neither Phase 4a nor 4b
-touches `backtest_runner.py`/strategies/indicators, and the drifted strategies' default runs never
-exercise either phase's opt-in code path). Not chased further — the gap's root cause (partial
-candle backfill vs. a container/volume reset) is flagged for whoever needs full historical data.
+**Deliberately NOT attempted**: a full redesign where the kernel calls one polymorphic method and
+each adapter owns its own execution-timing model (backtest defers to `execute_pending()` on the
+next candle via strategy attributes; live executes inline). Investigated first: confirmed via
+`backtest_runner.py`'s runner loop that `execute_pending → check_exits → evaluate_and_route` runs
+in that exact order every candle, and live never calls `execute_pending` at all. Backtest's
+deferral isn't adapter machinery today — it's `strategy.buy`/`sell`/`_pending_flip`/
+`_close_at_open`/`qty_to_adjust` attributes the runner loop's NEXT iteration reads. Moving that
+into the adapters means giving `BacktestAdapter` authority over candle-loop advancement it doesn't
+have — a materially bigger structural change needing its own dedicated design pass, not something
+to gamble on the no-lookahead invariant for in one session. This is a legitimate, deliberately
+scoped partial result, not an incomplete one — see the plan file's Step 6.4 section for the full
+reasoning.
 
-**Live-verified in a real logged-in browser session** against the actual `/lab` Optimizer wizard:
-mcScoring toggle + top-K input render and correctly extend the cost estimate; a real walk-forward
-job (MicroScalper/BTCUSDT/1h/2023, mcScoring on) completed through the full BullMQ→engine→Mongo
-pipeline; `RobustPickPanel.jsx` correctly rendered the honest "insufficient OOS trades, no
-fabricated percentile" guard path (this run's candidates all had 0-1 OOS trades) with zero console
-errors — the "robust pick differs from raw pick" happy path is covered by the sandbox session's own
-deliberate `test_walk_forward.py` fixture instead, which controls trade counts directly rather than
-depending on what a real market window happens to produce.
+**Verified:** engine pytest 647/647 unchanged (pure refactor — 4 test files' `ExecutionAdapter`
+subclasses gained the `is_live` property, call sites stopped passing `is_live=`, zero new tests
+needed since no behavior changed). Golden-master byte-identical (`before_kernel_is_live.json` vs
+`after_kernel_is_live.json`, 5/5 strategies) — the one change this session that actually touches
+the golden-master-protected path. Container `/health` 200; `core.kernel`/`core.live_bot_manager`/
+`services.backtest_runner` import cleanly.
 
-**Files changed:** `engine/services/monte_carlo.py`/`walk_forward.py` (independently-written, later
-found to already match the concurrent session's own implementation of the same design — reconciled,
-no conflict). Docs: `workspace/docs/state/CURRENT_STATE.md` (new changelog entry + Strategy Lab
-section), `10_monte-carlo-strategy-lab.md` (new "Real Docker verification" section), `engine/
-CLAUDE.md` (services-table entries for `monte_carlo.py`/`walk_forward.py`/`optimizer.py`/
-`test_risk_leverage_search.py`), this file.
+**Files changed:** `engine/core/kernel.py`, `engine/core/live_bot_manager.py`,
+`engine/services/backtest_runner.py`; `engine/tests/test_entry_candle_exits.py`,
+`test_armed_legs_wick_check_skip.py`, `test_intrabar_detail_resolution.py`,
+`test_exec_algo_slicing.py`. Docs: `6_engine-decomposition-and-exchange-abstraction.md` (Step 6.4
+section), `engine/CLAUDE.md` (`kernel.py` folder-structure entry), `0_tracker.md` (Plan 6 row),
+this file.
 
-**Open questions:** PBO remains the only unshipped Plan 10 item — still needs its own design pass
-(does real per-trial OOS trade data exist anywhere to resample over, or does it need new
-persistence — see the scoping notes in `10_monte-carlo-strategy-lab.md`). The TimescaleDB candle
-gap found during golden-master investigation is real and worth a full backfill before the next
-golden-master baseline capture, but is an infra/data task, not a code task — separate from Plan 10.
+**Open questions:** none blocking. The full timing-model unification described above remains
+scoped-but-not-started if ever pursued — needs its own dedicated design pass. Remaining Plan 6
+scope unchanged otherwise: Step 6.5's Redis-stream channel (cross-service, needs Node work), Steps
+6.3/6.6 not started.
 

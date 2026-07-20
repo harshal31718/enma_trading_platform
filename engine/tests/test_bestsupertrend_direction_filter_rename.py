@@ -11,17 +11,6 @@ Run inside the container::
 
     docker exec enma_trading_platform-engine-1 pytest /app/tests/test_bestsupertrend_direction_filter_rename.py
 """
-import os
-import sys
-
-try:
-    if not os.path.exists("/engine"):
-        os.symlink("/app", "/engine")
-except Exception:
-    pass
-if "/" not in sys.path:
-    sys.path.insert(0, "/")
-
 from strategies.BestSupertrend import BestSupertrend
 
 

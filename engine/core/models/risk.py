@@ -55,10 +55,7 @@ class DefaultRiskModel(RiskModel):
         liquidation price so the engine can always fire the stop before the
         exchange force-liquidates the position.
         """
-        try:
-            from engine.core.margin import liquidation_price, initial_margin
-        except ImportError:  # pragma: no cover - top-level module root
-            from core.margin import liquidation_price, initial_margin
+        from core.margin import liquidation_price, initial_margin
         qty = abs(qty)
         if qty <= 0 or entry <= 0:
             return False

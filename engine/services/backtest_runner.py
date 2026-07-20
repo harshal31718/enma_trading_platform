@@ -189,12 +189,8 @@ def _safe_float(val, default):
     except (ValueError, TypeError):
         return default
 
-try:
-    from engine.core.kernel import ExecutionAdapter, ExecutionKernel
-    from engine.core.models import DefaultPortfolioModel, InverseVolatilityPortfolio, compute_realized_volatility
-except ImportError:
-    from core.kernel import ExecutionAdapter, ExecutionKernel
-    from core.models import DefaultPortfolioModel, InverseVolatilityPortfolio, compute_realized_volatility
+from core.kernel import ExecutionAdapter, ExecutionKernel
+from core.models import DefaultPortfolioModel, InverseVolatilityPortfolio, compute_realized_volatility
 
 
 class BacktestAdapter(ExecutionAdapter):
@@ -237,6 +233,10 @@ class BacktestAdapter(ExecutionAdapter):
         self.last_funding_dt = None
         self.equity_timestamps = []
         self.equity_balances = []
+
+    @property
+    def is_live(self) -> bool:
+        return False
 
     async def verify_position(self, strategy, symbol: str) -> None:
         pass
@@ -698,8 +698,8 @@ async def _run_shared_portfolio(
         strategy._external_reserved_margin = _reserved_margin()
 
         await kernel.execute_pending(strategy, sym, candle, t, time_t)
-        await kernel.check_exits(strategy, sym, candle, is_live=False, index_t=t, time_t=time_t)
-        await kernel.evaluate_and_route(strategy, sym, candle, is_live=False, index_t=t, time_t=time_t)
+        await kernel.check_exits(strategy, sym, candle, index_t=t, time_t=time_t)
+        await kernel.evaluate_and_route(strategy, sym, candle, index_t=t, time_t=time_t)
 
         # QNT-1: clears the per-candle `_entered_this_candle` flag (kernel.check_exits
         # early-returns while it's set) and updates trade excursions (_mfe/_mae) — this
@@ -1185,10 +1185,7 @@ async def run_backtest_simulation(
             if exec_algo_cfg and isinstance(exec_algo_cfg, dict):
                 algo_type = exec_algo_cfg.get("type")
                 algo_params = exec_algo_cfg.get("params", {})
-                try:
-                    from core.models.exec_algo import TWAPAlgorithm, VWAPAlgorithm, IcebergAlgorithm
-                except ImportError:
-                    from engine.core.models.exec_algo import TWAPAlgorithm, VWAPAlgorithm, IcebergAlgorithm
+                from core.models.exec_algo import TWAPAlgorithm, VWAPAlgorithm, IcebergAlgorithm
 
                 if algo_type == "twap":
                     exec_algo = TWAPAlgorithm(strategy, sym, algo_params)
@@ -1255,10 +1252,10 @@ async def run_backtest_simulation(
                 await kernel.execute_pending(strategy, sym, candle, t, time_t)
 
                 # Step 2: Exit checking and unrealized P&L / funding update
-                await kernel.check_exits(strategy, sym, candle, is_live=False, index_t=t, time_t=time_t)
+                await kernel.check_exits(strategy, sym, candle, index_t=t, time_t=time_t)
 
                 # Step 3: Candle close - indicators and evaluate
-                await kernel.evaluate_and_route(strategy, sym, candle, is_live=False, index_t=t, time_t=time_t)
+                await kernel.evaluate_and_route(strategy, sym, candle, index_t=t, time_t=time_t)
 
                 # Record equity snapshot
                 adapter.record_equity(strategy, time_t)

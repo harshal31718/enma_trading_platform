@@ -9,20 +9,30 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 import numpy as np
 
-try:
-    from engine.core.models import OrderPlan
-    from engine.core.position import Position
-    from engine.core.pipeline import evaluate
-    from services.fill_model import gap_through_stop_price, bounded_exit_price
-except ImportError:
-    from core.models import OrderPlan
-    from core.position import Position
-    from core.pipeline import evaluate
-    from services.fill_model import gap_through_stop_price, bounded_exit_price
+from core.models import OrderPlan
+from core.position import Position
+from core.pipeline import evaluate
+from services.fill_model import gap_through_stop_price, bounded_exit_price
 
 
 class ExecutionAdapter(ABC):
     """Abstract base class for execution adapters (backtest vs live)."""
+
+    @property
+    @abstractmethod
+    def is_live(self) -> bool:
+        """True for the live adapter, False for backtest. Plan 6 Step 6.4
+        (ENG-5): the kernel used to take `is_live` as a parameter on
+        `check_exits`/`evaluate_and_route`, threaded in by each call site —
+        a caller could pass the wrong value for the adapter it was actually
+        driving. Now the kernel asks the adapter itself, so "is this a live
+        run" has exactly one source of truth (the adapter instance), not a
+        boolean re-stated at every call site. This does NOT change the
+        live/backtest orchestration timing (backtest still defers fills to
+        `execute_pending()` on the next candle via `strategy.buy`/`sell`/
+        `_pending_flip`/`_close_at_open`/`qty_to_adjust`; live still executes
+        inline in `evaluate_and_route()`) — see that method's own note for
+        why that timing split stays kernel-level, not adapter-level."""
 
     @abstractmethod
     async def execute_entry(
@@ -257,7 +267,7 @@ class ExecutionKernel:
                 )
 
     async def check_exits(
-        self, strategy, symbol: str, candle: np.ndarray, is_live: bool, index_t: int, time_t: datetime,
+        self, strategy, symbol: str, candle: np.ndarray, index_t: int, time_t: datetime,
         armed_legs: dict | None = None,
     ) -> None:
         """Verify position on exchange and check SL/TP/liquidation triggers.
@@ -281,6 +291,7 @@ class ExecutionKernel:
         brackets exist there), so default `None` preserves byte-identical
         behavior — no golden master impact.
         """
+        is_live = self.adapter.is_live
         if not is_live and not self.entry_candle_exits and getattr(strategy, "_entered_this_candle", False):
             return
 
@@ -415,9 +426,10 @@ class ExecutionKernel:
             )
 
     async def evaluate_and_route(
-        self, strategy, symbol: str, candle: np.ndarray, is_live: bool, index_t: int, time_t: datetime
+        self, strategy, symbol: str, candle: np.ndarray, index_t: int, time_t: datetime
     ) -> None:
         """Runs prepare, before, evaluate, execution algorithms, routes and runs after hooks."""
+        is_live = self.adapter.is_live
         strategy.index = index_t
 
         # Track session peak equity and drawdown

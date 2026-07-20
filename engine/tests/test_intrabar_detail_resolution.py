@@ -60,6 +60,10 @@ class _RecordingAdapter(ExecutionAdapter):
     def __init__(self):
         self.exits = []
 
+    @property
+    def is_live(self) -> bool:
+        return False
+
     async def execute_entry(self, *a, **kw):
         return True
 
@@ -87,7 +91,7 @@ AMBIGUOUS_CANDLE_SHORT = np.array([0.0, 100.0, 100.0, 112.0, 90.0, 5000.0])
 
 def _run(kernel, strat, candle, symbol="BTCUSDT"):
     asyncio.get_event_loop().run_until_complete(
-        kernel.check_exits(strat, symbol, candle, is_live=False, index_t=0, time_t=None))
+        kernel.check_exits(strat, symbol, candle, index_t=0, time_t=None))
 
 
 def _minute_candle(t_ms, o, c, h, l, v=10.0):

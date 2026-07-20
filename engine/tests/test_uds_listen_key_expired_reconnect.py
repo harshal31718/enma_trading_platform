@@ -25,7 +25,13 @@ import json
 import pytest
 
 import services.user_data_stream as uds_mod
-from services.user_data_stream import UserDataStreamManager, _BINANCE_FUTURES_WS
+from services.user_data_stream import UserDataStreamManager
+from core.exchange import BinanceFuturesTestnet
+
+# Plan 6 Step 6.2 (ENG-4): the module-level `_BINANCE_FUTURES_WS` constant
+# this test used to import was removed when `UserDataStreamManager` started
+# resolving its WS host from an `Exchange` instance instead.
+_BINANCE_FUTURES_WS = BinanceFuturesTestnet().user_data_ws_base
 
 
 class _FakeWSConnection:

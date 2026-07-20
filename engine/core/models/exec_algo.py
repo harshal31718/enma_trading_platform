@@ -11,10 +11,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
-try:
-    from engine.core.models import OrderPlan
-except ImportError:
-    from core.models import OrderPlan
+from core.models import OrderPlan
 
 
 class ExecAlgorithm(ABC):

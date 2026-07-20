@@ -2,25 +2,14 @@ import logging
 from abc import ABC
 import numpy as np
 
-# Five-Model Quant Architecture (see plan.md). Dual import root: strategies are
-# loaded under the ``engine.`` package, but the engine services run with the
-# engine dir itself on sys.path (top-level ``core.``). Mirror the _atr() pattern.
-try:
-    from engine.core.models import (
-        Signal,
-        DefaultRiskModel,
-        DefaultTransactionCostModel as DefaultCostModel,
-        DefaultPortfolioModel,
-        DefaultExecution,
-    )
-except ImportError:  # pragma: no cover - import-root fallback
-    from core.models import (
-        Signal,
-        DefaultRiskModel,
-        DefaultTransactionCostModel as DefaultCostModel,
-        DefaultPortfolioModel,
-        DefaultExecution,
-    )
+# Five-Model Quant Architecture (see plan.md).
+from core.models import (
+    Signal,
+    DefaultRiskModel,
+    DefaultTransactionCostModel as DefaultCostModel,
+    DefaultPortfolioModel,
+    DefaultExecution,
+)
 
 
 class BaseStrategy(ABC):
@@ -328,12 +317,8 @@ class BaseStrategy(ABC):
     # legacy ``self.buy = qty, price`` pattern still works untouched.
 
     def _atr(self, period: int = 14) -> float:
-        """Latest ATR. Lazy-imports indicators to avoid an import cycle and to
-        work under both the ``engine.`` and top-level module roots."""
-        try:
-            import engine.indicators as ta
-        except ImportError:
-            import indicators as ta
+        """Latest ATR. Lazy-imports indicators to avoid an import cycle."""
+        import indicators as ta
         return float(ta.atr(self.candles, period=period))
 
     # ─────────────────────────────────────────
@@ -369,10 +354,7 @@ class BaseStrategy(ABC):
         if timeframe in self._htf_aligned_cache:
             return self._htf_aligned_cache[timeframe]
 
-        try:
-            from engine.utils.timeframes import to_ms
-        except ImportError:
-            from utils.timeframes import to_ms
+        from utils.timeframes import to_ms
 
         base = self._htf_base_candles
         aligned = np.full((len(base), 6), np.nan, dtype=np.float64)

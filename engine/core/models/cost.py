@@ -150,10 +150,7 @@ class LadderedTransactionCostModel(DefaultTransactionCostModel):
 
         n = self.adv_lookback_candles
         if n is None:
-            try:
-                from engine.utils.timeframes import to_ms
-            except ImportError:
-                from utils.timeframes import to_ms
+            from utils.timeframes import to_ms
             tf_ms = to_ms(getattr(s, "timeframe", "1h") or "1h")
             n = max(1, int(86_400_000 / tf_ms)) if tf_ms > 0 else 24
 

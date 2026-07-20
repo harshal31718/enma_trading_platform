@@ -27,13 +27,11 @@ import asyncio
 import os
 import sys
 
-try:
-    if not os.path.exists("/engine"):
-        os.symlink("/app", "/engine")
-except Exception:
-    pass
-sys.path.insert(0, "/")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# See scripts/golden_master.py's identical comment — Plan 6 Step 6.6 (ENG-12).
+from core.engine_alias import install_engine_alias  # noqa: E402
+install_engine_alias()
 
 try:
     from dotenv import load_dotenv

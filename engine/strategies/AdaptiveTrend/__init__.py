@@ -3,10 +3,7 @@ import numpy as np
 from engine.core.strategy import BaseStrategy
 import engine.indicators as ta
 
-try:
-    from engine.core.models import ChandelierRiskModel, RiskBudgetPortfolio, Signal
-except ImportError:
-    from core.models import ChandelierRiskModel, RiskBudgetPortfolio, Signal
+from engine.core.models import ChandelierRiskModel, RiskBudgetPortfolio, Signal
 
 
 class AdaptiveTrend(BaseStrategy):

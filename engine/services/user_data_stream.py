@@ -20,11 +20,10 @@ import time
 import httpx
 import websockets
 
-from services.binance_testnet import send_signed_request
+from core.exchange import Exchange, BinanceFuturesTestnet
 
 logger = logging.getLogger(__name__)
 
-_BINANCE_FUTURES_WS = "wss://fstream.binancefuture.com/ws"
 _KEEPALIVE_INTERVAL = 1800  # 30 minutes — Binance requires keep-alive every 60 min
 
 
@@ -51,9 +50,17 @@ class UserDataStreamManager:
     symbol and invokes it asynchronously.
     """
 
-    def __init__(self, api_key: str = "", api_secret: str = "") -> None:
+    def __init__(
+        self, api_key: str = "", api_secret: str = "",
+        exchange: Exchange | None = None,
+    ) -> None:
         self._api_key = api_key
         self._api_secret = api_secret
+        # Plan 6 Step 6.2 (ENG-4): resolves both the signed listen-key
+        # lifecycle calls AND the WS host (previously a module-level
+        # `_BINANCE_FUTURES_WS` constant hardcoded to testnet regardless of
+        # the caller) from one instance instead of two separate literals.
+        self._exchange = exchange or BinanceFuturesTestnet()
         self._fill_callbacks: dict[str, list[callable]] = {}
         # F7 fix: per-symbol ACCOUNT_UPDATE callbacks. Binance emits an
         # ACCOUNT_UPDATE on *any* position change (plain order, conditional/
@@ -160,7 +167,7 @@ class UserDataStreamManager:
         self._stop_event.clear()
 
         self._listen_key = await self._create_listen_key()
-        ws_url = f"{_BINANCE_FUTURES_WS}/{self._listen_key}"
+        ws_url = self._exchange.user_data_ws_url(self._listen_key)
         logger.info(f"[UserDataStream] Starting — listen_key={self._listen_key[:8]}...")
 
         self._ws_task = asyncio.create_task(self._run_ws(ws_url))
@@ -191,24 +198,14 @@ class UserDataStreamManager:
         """POST /fapi/v1/listenKey returns a listen key."""
         if not self._api_key or not self._api_secret:
             raise RuntimeError("API credentials not set on UserDataStreamManager")
-
-        # Use send_signed_request which handles HMAC; for listenKey a POST
-        # with no params works.
-        data = await send_signed_request(
-            "POST", "/fapi/v1/listenKey",
-            self._api_key, self._api_secret, mode="testnet",
-        )
-        return data["listenKey"]
+        return await self._exchange.create_listen_key(self._api_key, self._api_secret)
 
     async def _delete_listen_key(self) -> None:
         """DELETE /fapi/v1/listenKey to clean up."""
         if not self._api_key or not self._api_secret:
             return
         try:
-            await send_signed_request(
-                "DELETE", "/fapi/v1/listenKey",
-                self._api_key, self._api_secret, mode="testnet",
-            )
+            await self._exchange.close_listen_key(self._api_key, self._api_secret)
         except Exception as e:
             logger.warning(f"[UserDataStream] Listen key delete failed: {e}")
 
@@ -217,10 +214,7 @@ class UserDataStreamManager:
         if not self._api_key or not self._api_secret:
             return
         try:
-            await send_signed_request(
-                "PUT", "/fapi/v1/listenKey",
-                self._api_key, self._api_secret, mode="testnet",
-            )
+            await self._exchange.keepalive_listen_key(self._api_key, self._api_secret)
             logger.debug("[UserDataStream] Listen key keep-alive OK")
         except Exception as e:
             logger.warning(f"[UserDataStream] Keep-alive failed: {e}")
@@ -282,7 +276,7 @@ class UserDataStreamManager:
                         elif etype == _Event.LISTEN_KEY_EXPIRED:
                             logger.warning("[UserDataStream] Listen key expired — reconnecting")
                             self._listen_key = await self._create_listen_key()
-                            ws_url = f"{_BINANCE_FUTURES_WS}/{self._listen_key}"
+                            ws_url = self._exchange.user_data_ws_url(self._listen_key)
                             # A-3 fix: `return` here exited the whole _run_ws
                             # coroutine (there is no caller that re-invokes
                             # it), silently killing the user-data stream for
@@ -316,7 +310,7 @@ class UserDataStreamManager:
                 # Refresh listen key on reconnect
                 try:
                     self._listen_key = await self._create_listen_key()
-                    ws_url = f"{_BINANCE_FUTURES_WS}/{self._listen_key}"
+                    ws_url = self._exchange.user_data_ws_url(self._listen_key)
                 except Exception as ke:
                     logger.warning(f"[UserDataStream] Listen key refresh failed: {ke}")
 

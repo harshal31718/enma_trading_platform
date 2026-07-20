@@ -19,22 +19,8 @@ Run inside the container::
 
     docker exec enma_trading_platform-engine-1 pytest /app/tests/test_bestsupertrend_htf_parity.py
 """
-import os
-import sys
-
 import numpy as np
 import pytest
-
-# Strategy files import `from engine.core...`, which resolves via the
-# container's `/engine -> /app` symlink with `/` on sys.path (see main.py /
-# scripts/golden_master.py for this same precedent).
-try:
-    if not os.path.exists("/engine"):
-        os.symlink("/app", "/engine")
-except Exception:
-    pass
-if "/" not in sys.path:
-    sys.path.insert(0, "/")
 
 from strategies.BestSupertrend import BestSupertrend
 

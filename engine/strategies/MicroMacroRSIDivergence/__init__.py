@@ -3,10 +3,7 @@ import numpy as np
 from engine.core.strategy import BaseStrategy
 import engine.indicators as ta
 
-try:
-    from engine.core.models import AtrBracketRiskModel, RiskBudgetPortfolio, Signal
-except ImportError:
-    from core.models import AtrBracketRiskModel, RiskBudgetPortfolio, Signal
+from engine.core.models import AtrBracketRiskModel, RiskBudgetPortfolio, Signal
 
 
 class MicroMacroRSIDivergence(BaseStrategy):

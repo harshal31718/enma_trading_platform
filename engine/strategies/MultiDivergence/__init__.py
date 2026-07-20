@@ -6,16 +6,9 @@ import engine.indicators as ta
 # Shared, library-agnostic swing-pivot detector (TradingView ta.pivothigh/low).
 # Price pivots go through the public ta.pivot_high / ta.pivot_low convenience
 # functions; oscillator/volume series reuse the same primitive directly so the
-# pivot geometry is identical everywhere. Dual-root import mirrors strategy.py.
-try:
-    from engine.indicators.base import _compute_pivots
-except ImportError:  # pragma: no cover - top-level module root
-    from indicators.base import _compute_pivots
-
-try:
-    from engine.core.models import AtrBracketRiskModel, RiskBudgetPortfolio, Signal
-except ImportError:
-    from core.models import AtrBracketRiskModel, RiskBudgetPortfolio, Signal
+# pivot geometry is identical everywhere.
+from engine.indicators.base import _compute_pivots
+from engine.core.models import AtrBracketRiskModel, RiskBudgetPortfolio, Signal
 
 
 def _last2(series) -> tuple | None:

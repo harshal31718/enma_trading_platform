@@ -31,19 +31,11 @@ import pytest
 
 def _ensure_importable():
     # Strategy files import `from engine.core...` (see strategies/MicroScalper/
-    # __init__.py) which resolves via the container's `/engine -> /app` symlink
-    # (see main.py / scripts/golden_master.py for this same precedent). Only
+    # __init__.py), resolved via the engine_alias hook conftest.py installs
+    # globally for the test process. This function's remaining job is
+    # stubbing optional deps for environments without them installed — only
     # needed because this test drives a REAL dynamic strategy import through
     # `start_session`, unlike the other stub-injection tests in this suite.
-    import os
-    try:
-        if not os.path.exists("/engine"):
-            os.symlink("/app", "/engine")
-    except Exception:
-        pass
-    if "/" not in sys.path:
-        sys.path.insert(0, "/")
-
     try:
         import core.live_bot_manager  # noqa: F401
         return

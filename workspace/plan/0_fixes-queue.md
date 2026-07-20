@@ -157,6 +157,30 @@ Anything failing one of these lives in **§ Not in this queue** below with the r
   chaos session should confirm keepalive success in the logs (`"Listen key keep-alive OK"` instead
   of `"Keep-alive failed"`) and the absence of routine hourly `LISTEN_KEY_EXPIRED` reconnects.
 
+### F10 — `kernel.py`'s exec_algo branch bypasses `route()`'s "sole writer" contract · Plan 6 Step 6.3 (ENG-6) · **filed, NOT a quick fix**
+- **What:** found while investigating Plan 6 Step 6.3 (typed strategy↔engine contract, see
+  DECISIONS.md #28). `core/models/execution.py`'s `route()` docstring claims it is "the sole place
+  that assigns `s.buy`, `s.sell`, `s.stop_loss`, `s.take_profit`, `s._pending_flip`, or
+  `s._close_at_open`." `core/kernel.py`'s `evaluate_and_route()` exec_algo branch (A-016, right
+  after `plan = self.exec_algo.process_order_plan(plan)` / `.step(...)`) writes
+  `strategy.stop_loss`/`strategy.take_profit` directly from the (possibly-sliced) `OrderPlan`,
+  bypassing `route()` entirely for that write.
+- **Why it's not a simple "route through route() instead" fix:** `strategy.stop_loss`/
+  `strategy.take_profit` are the SAME channel `core/live_bot_manager.py`'s `LiveAdapter.
+  execute_entry` reads SL/TP from on the live path — it has no other way to receive them today.
+  The kernel writing them here is currently load-bearing for getting an exec_algo-sliced order's
+  SL/TP to live order placement at all. Removing the kernel's direct write without also giving
+  `LiveAdapter`/`OrderRouter` an explicit SL/TP parameter path would silently break live SL/TP
+  placement for exec_algo-sliced entries.
+- **Correct fix, deferred:** part of DECISIONS.md #28's phased plan — `LiveAdapter`/`OrderRouter`
+  need to accept SL/TP as explicit parameters (sourced from `OrderPlan`) instead of reading
+  `strategy.stop_loss`/`strategy.take_profit`, at which point the kernel's direct write here
+  becomes genuinely removable. Do not attempt this fix in isolation from that larger phase — it
+  needs the same live-path, zero-golden-master-coverage caution as the rest of #28.
+- **Acceptance (once phased in):** `route()` is the only code path that ever assigns these
+  attributes; `test_boundaries.py` or a new equivalent test enforces it structurally, not just by
+  docstring claim.
+
 ### F8 — Redis `requirepass` · Plan 4.5 · **needs an infra window**
 - **What:** The one real infra item deferred from Plan 4 — authenticate Redis (`requirepass` + update
   every client connection string: server BullMQ/ioredis, engine, health check). Wide-ish blast radius

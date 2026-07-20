@@ -8,9 +8,7 @@ import random
 from datetime import datetime, timezone
 from decimal import ROUND_DOWN, ROUND_UP
 from enum import Enum
-from uuid import uuid4
 
-import httpx
 import numpy as np
 import websockets
 
@@ -20,6 +18,16 @@ from core.market_data_feed import MarketDataFeed
 from core.node_notifier import NodeNotifier
 from core.session_registry import SessionRegistry
 from core.reconciler import Reconciler
+from core.exchange import Exchange, BinanceFuturesTestnet
+from core.order_router import (
+    OrderRouter,
+    fmt_num as _fmt_num,
+    make_client_id as _make_client_id,
+    binance_error_detail as _binance_error_detail,
+    extract_fill_price as _extract_fill_price,
+    query_real_fill_price as _query_real_fill_price,
+    uuid4_hex8,
+)
 from core.models import (
     DefaultPortfolioModel, InverseVolatilityPortfolio, compute_realized_volatility,
     LiveExecution, OrderPlan,
@@ -71,8 +79,10 @@ _TF_TO_BINANCE = {
 # already mainnet-sourced, so testnet's live ticks were the one remaining
 # splice point where the price series could step discontinuously on an
 # illiquid testnet symbol. Order EXECUTION is untouched — every signed
-# Binance call in this file still passes mode="testnet"; only the read-only
-# kline stream this constant builds URLs from moves. No auth needed (public
+# Binance call routes through the session's resolved `Exchange` instance
+# (Plan 6 Step 6.2, `core/exchange.py`), which is BinanceFuturesTestnet()
+# today; only the read-only kline stream this constant builds URLs from
+# moves independently of that. No auth needed (public
 # market data), same as the client's own `binanceWS.js` connection.
 # Mirrors that file's routing: kline streams go to /market/ws/ (only @depth*
 # streams use /public/ws/, not relevant here).
@@ -144,31 +154,6 @@ def _safe_float(val, default):
         return default
 
 
-def _make_client_id(session_id: str, symbol: str, suffix: str = "") -> str:
-    """Build a Binance ``newClientOrderId`` guaranteed to stay under the 36-char
-    exchange limit (``-4015 Client order id length should be less than 36 chars``
-    otherwise). Shape: ``enma_<sess8>_<sym...>_<uuid8><suffix>``, trimming the
-    symbol segment to whatever budget remains after the fixed parts.
-
-    The symbol segment is purely cosmetic (for log/trace readability) — nothing
-    parses it back out of the id; the only structural checks anywhere are
-    ``.startswith("enma_")`` / ``"tpsl_"`` / ``"oco_"``, and uniqueness comes from
-    the uuid8 — so trimming the symbol is safe. Found via live testnet chaos
-    2026-07-19: the old ``f"enma_{session_id[:8]}_{symbol}_{uuid4_hex8()}_emrg"``
-    was 37 chars for a 9-char symbol (e.g. KAITOUSDC), so the F-018 emergency
-    close failed with -4015 on every symbol >= 8 chars, leaving the position
-    briefly naked until the next-candle re-arm.
-    """
-    _LIMIT = 35  # Binance requires length < 36
-    uid = uuid4_hex8()
-    sess = session_id[:8]
-    fixed = len("enma_") + len(sess) + 1 + len(uid) + len(suffix)
-    room = _LIMIT - fixed - 1  # -1 for the "_" between the symbol and the uid
-    if room > 0 and symbol:
-        return f"enma_{sess}_{symbol[:room]}_{uid}{suffix}"
-    return f"enma_{sess}_{uid}{suffix}"
-
-
 def _extract_fill_client_id(order_data: dict) -> str:
     """A-2 fix (Plan 21.1): pull the client/algo id off an ORDER_TRADE_UPDATE
     `o` payload safely.
@@ -208,28 +193,6 @@ def _account_update_needs_reconcile(pos_data: dict, has_local_position: bool) ->
     return has_exchange_position != has_local_position
 
 
-def _binance_error_detail(exc: Exception) -> str:
-    """Extract Binance's own {code, msg} body from a failed signed call.
-
-    httpx.HTTPStatusError's default str() is just "Client error '400 Bad
-    Request' for url '...'" — it never surfaces the response body, which is
-    the only place the actual reason (bad precision, filter failure, order
-    would immediately trigger, etc.) lives. `engine/routers/trade.py`'s route
-    handlers already parse `exc.response.json()` themselves; this gives the
-    live-bot's fire-and-forget SL/TP/order call sites the same visibility so
-    failures are diagnosable from logs instead of a generic "400 Bad Request".
-    """
-    if isinstance(exc, httpx.HTTPStatusError):
-        try:
-            body = exc.response.json()
-            code = body.get("code", exc.response.status_code)
-            msg = body.get("msg", "")
-            return f"{code} {msg}".strip()
-        except Exception:
-            return f"{exc.response.status_code} {exc.response.text[:300]}"
-    return str(exc)
-
-
 async def _fetch_available_balance(api_key: str, api_secret: str) -> float | None:
     """Plan 22 Step 22.1 (B-11 engine backstop): query the real Binance
     Testnet available balance once, so `start_session` can defend against a
@@ -248,8 +211,10 @@ async def _fetch_available_balance(api_key: str, api_secret: str) -> float | Non
     if not api_key or not api_secret:
         return None
     try:
-        from services.binance_testnet import send_signed_request as _signed
-        account = await _signed("GET", "/fapi/v2/account", api_key, api_secret, mode="testnet")
+        # Called before start_session resolves this session's own Exchange
+        # (there is no session yet) — always BinanceFuturesTestnet() today,
+        # same as every other call site's default (Plan 6 Step 6.2, ENG-4).
+        account = await BinanceFuturesTestnet().query_account(api_key, api_secret)
         return _safe_float(account.get("availableBalance"), None)
     except Exception as e:
         logger.warning(f"[AlgoBot] capital integrity backstop: balance fetch failed — {e}")
@@ -299,6 +264,14 @@ class LiveAdapter(ExecutionAdapter):
         self._registry = manager._registry
         self._notifier = manager._notifier
         self._reconciler = manager._reconciler
+        # Plan 6 Step 6.1 (ENG-1): raw order-placement plumbing (place
+        # MARKET/algo orders, confirm real fill price) — stateless, so a
+        # fresh instance per adapter is fine (no session state to share).
+        self._order_router = OrderRouter()
+
+    @property
+    def is_live(self) -> bool:
+        return True
 
     async def verify_position(self, strategy, symbol: str) -> None:
         # Reconciliation is now handled by _reconcile_exchange_state() called
@@ -312,6 +285,9 @@ class LiveAdapter(ExecutionAdapter):
         session = self._registry.sessions.get(self.session_id)
         if not session:
             return False
+        # Plan 6 Step 6.2 (ENG-4): resolved once per call, threaded through
+        # every OrderRouter call below instead of a hardcoded mode="testnet".
+        exchange = session.get("exchange") or BinanceFuturesTestnet()
 
         # DCA scale-in (A-014): skip new-entry guards when adding to existing position
         is_dca = intent == "add" and strategy.position is not None and strategy.position.is_open
@@ -533,10 +509,7 @@ class LiveAdapter(ExecutionAdapter):
             # the actual liq price for the log itself rather than trusting
             # only the bool, per this step's acceptance criterion.
             try:
-                try:
-                    from core.margin import liquidation_price as _liq_price_fn, initial_margin as _im_fn
-                except ImportError:  # pragma: no cover - top-level module root
-                    from engine.core.margin import liquidation_price as _liq_price_fn, initial_margin as _im_fn
+                from core.margin import liquidation_price as _liq_price_fn, initial_margin as _im_fn
                 _liq_margin = _im_fn(qty * fill_price, strategy.leverage)
                 _liq_price = _liq_price_fn(direction, qty, fill_price, _liq_margin)
                 _liq_respected = strategy.risk_model.respects_liq_buffer(
@@ -587,7 +560,8 @@ class LiveAdapter(ExecutionAdapter):
             try:
                 from services.portfolio_risk import compute_var_cvar as _compute_var_cvar
                 _var_amount, _cvar_amount = await _compute_var_cvar(
-                    session.get("api_key", ""), session.get("api_secret", ""), mode="testnet",
+                    session.get("api_key", ""), session.get("api_secret", ""),
+                    mode=session["exchange"].mode if session.get("exchange") else "testnet",
                 )
                 _equity_var, _ = self._reconciler.compute_session_equity_and_margin(session)
                 _var_verdict = risk_governor.check_var(
@@ -670,29 +644,19 @@ class LiveAdapter(ExecutionAdapter):
         # DCA scale-in: skip SL/TP placement and use existing brackets
         if is_dca:
             try:
-                from services.binance_testnet import send_signed_request as _signed
                 _api_key = session.get("api_key", "")
                 _api_secret = session.get("api_secret", "")
                 if not _api_key or not _api_secret:
                     raise RuntimeError("Binance Testnet API credentials not configured")
 
                 async with (sem if sem else contextlib.nullcontext()):
-                    add_params = {
-                        "symbol": symbol,
-                        "side": binance_side,
-                        "type": "MARKET",
-                        "quantity": _fmt_num(qty),
-                        "newOrderRespType": "RESULT",
-                        # Plan 5 Step 5.3 (ENG-10): deterministic id for
-                        # future idempotent-retry support, matching the
-                        # entry/exit paths' convention.
-                        "newClientOrderId": _make_client_id(self.session_id, symbol),
-                    }
-                    result = await _signed(
-                        "POST", "/fapi/v1/order",
-                        _api_key, _api_secret,
-                        params=add_params,
-                        mode="testnet",
+                    # Plan 5 Step 5.3 (ENG-10): deterministic id for future
+                    # idempotent-retry support, matching the entry/exit
+                    # paths' convention.
+                    result = await self._order_router.place_market_order(
+                        _api_key, _api_secret, symbol, binance_side, qty,
+                        _make_client_id(self.session_id, symbol),
+                        exchange=exchange,
                     )
                     fill_price = float(result.get("avgPrice", ref_price))
                     logger.info(
@@ -745,7 +709,6 @@ class LiveAdapter(ExecutionAdapter):
         try:
             # F-003: Place orders directly on Binance instead of routing
             # through the engine→Node→engine→Binance hop chain.
-            from services.binance_testnet import send_signed_request as _signed
             _api_key = session.get("api_key", "")
             _api_secret = session.get("api_secret", "")
             if not _api_key or not _api_secret:
@@ -765,27 +728,19 @@ class LiveAdapter(ExecutionAdapter):
                 # the strategy would retry next candle, and a second real
                 # position could be opened — the exact duplication ENG-10
                 # exists to prevent (mirrors 5.2's close-path re-query).
-                entry_params = {
-                    "symbol": symbol,
-                    "side": binance_side,
-                    "type": "MARKET",
-                    "quantity": _fmt_num(qty),
-                    "newOrderRespType": "RESULT",
-                    "newClientOrderId": entry_client_order_id,
-                }
                 try:
-                    entry_result = await _signed(
-                        "POST", "/fapi/v1/order",
-                        _api_key, _api_secret,
-                        params=entry_params,
-                        mode="testnet",
+                    entry_result = await self._order_router.place_market_order(
+                        _api_key, _api_secret, symbol, binance_side, qty, entry_client_order_id,
+                        exchange=exchange,
                     )
                 except Exception as entry_e:
                     logger.warning(
                         f"[AlgoBot] {symbol}: entry order call raised ({_binance_error_detail(entry_e)}) — "
                         f"querying by clientOrderId={entry_client_order_id} before concluding it failed"
                     )
-                    _real_fill = await _query_real_fill_price(_api_key, _api_secret, symbol, entry_client_order_id)
+                    _real_fill = await _query_real_fill_price(
+                        _api_key, _api_secret, symbol, entry_client_order_id, exchange=exchange,
+                    )
                     if _real_fill is None:
                         raise
                     logger.warning(
@@ -804,13 +759,12 @@ class LiveAdapter(ExecutionAdapter):
                 # (a pre-trade candle-close estimate) and opened a local Position
                 # anyway — a phantom/mispriced position never confirmed against a
                 # real Binance fill. Mirrors the ENG-2 contract already applied to
-                # every close path (_extract_fill_price + re-query, never a silent
+                # every close path (confirm_fill + re-query, never a silent
                 # estimate fallback) but which the entry path never got.
-                _confirmed_fill = _extract_fill_price(entry_result)
-                if _confirmed_fill is None:
-                    _confirmed_fill = await _query_real_fill_price(
-                        _api_key, _api_secret, symbol, entry_client_order_id
-                    )
+                _confirmed_fill = await self._order_router.confirm_fill(
+                    entry_result, _api_key, _api_secret, symbol, entry_client_order_id,
+                    exchange=exchange,
+                )
                 if _confirmed_fill is None:
                     logger.error(
                         f"[AlgoBot] {symbol}: entry order {order_id} returned no confirmed "
@@ -871,21 +825,9 @@ class LiveAdapter(ExecutionAdapter):
 
                 if sl_price is not None:
                     try:
-                        sl_params = {
-                            "algoType": "CONDITIONAL",
-                            "symbol": symbol,
-                            "side": close_side,
-                            "type": "STOP_MARKET",
-                            "triggerPrice": _fmt_num(sl_price),
-                            "workingType": "MARK_PRICE",
-                            "closePosition": "true",
-                            "clientAlgoId": f"{tpsl_prefix}sl",
-                        }
-                        sl_result = await _signed(
-                            "POST", "/fapi/v1/algoOrder",
-                            _api_key, _api_secret,
-                            params=sl_params,
-                            mode="testnet",
+                        sl_result = await self._order_router.place_algo_order(
+                            _api_key, _api_secret, symbol, close_side, "STOP_MARKET",
+                            sl_price, f"{tpsl_prefix}sl", exchange=exchange,
                         )
                         logger.info(f"[AlgoBot] SL placed for {symbol}: algoId={sl_result.get('algoId')}")
                         # Track algo order ID for OUO peer-cancel (F-019)
@@ -922,25 +864,14 @@ class LiveAdapter(ExecutionAdapter):
                         # re-arm a missing stop on a restored naked position.
                         _emergency_client_id = _make_client_id(self.session_id, symbol, "_emrg")
                         _close_side = "SELL" if binance_side == "BUY" else "BUY"
-                        _close_params = {
-                            "symbol": symbol,
-                            "side": _close_side,
-                            "type": "MARKET",
-                            "quantity": _fmt_num(qty),
-                            "reduceOnly": "true",
-                            "newOrderRespType": "RESULT",
-                            "newClientOrderId": _emergency_client_id,
-                        }
                         _emergency_result = None
                         _emergency_last_error: Exception | None = None
                         _EMERGENCY_CLOSE_ATTEMPTS = 3
                         for _attempt in range(1, _EMERGENCY_CLOSE_ATTEMPTS + 1):
                             try:
-                                _emergency_result = await _signed(
-                                    "POST", "/fapi/v1/order",
-                                    _api_key, _api_secret,
-                                    params=_close_params,
-                                    mode="testnet",
+                                _emergency_result = await self._order_router.place_market_order(
+                                    _api_key, _api_secret, symbol, _close_side, qty,
+                                    _emergency_client_id, reduce_only=True, exchange=exchange,
                                 )
                                 logger.warning(
                                     f"[AlgoBot] {symbol}: emergency MARKET close sent "
@@ -998,11 +929,10 @@ class LiveAdapter(ExecutionAdapter):
 
                         # Emergency close succeeded (possibly after retrying)
                         # — book the REAL fill price, not the entry price.
-                        _real_exit_price = _extract_fill_price(_emergency_result)
-                        if _real_exit_price is None:
-                            _real_exit_price = await _query_real_fill_price(
-                                _api_key, _api_secret, symbol, _emergency_client_id,
-                            )
+                        _real_exit_price = await self._order_router.confirm_fill(
+                            _emergency_result, _api_key, _api_secret, symbol, _emergency_client_id,
+                            exchange=exchange,
+                        )
                         if _real_exit_price is None:
                             logger.error(
                                 f"[AlgoBot] {symbol}: emergency close accepted but no real fill "
@@ -1083,21 +1013,9 @@ class LiveAdapter(ExecutionAdapter):
 
                 if tp_price is not None:
                     try:
-                        tp_params = {
-                            "algoType": "CONDITIONAL",
-                            "symbol": symbol,
-                            "side": close_side,
-                            "type": "TAKE_PROFIT_MARKET",
-                            "triggerPrice": _fmt_num(tp_price),
-                            "workingType": "MARK_PRICE",
-                            "closePosition": "true",
-                            "clientAlgoId": f"{tpsl_prefix}tp",
-                        }
-                        tp_result = await _signed(
-                            "POST", "/fapi/v1/algoOrder",
-                            _api_key, _api_secret,
-                            params=tp_params,
-                            mode="testnet",
+                        tp_result = await self._order_router.place_algo_order(
+                            _api_key, _api_secret, symbol, close_side, "TAKE_PROFIT_MARKET",
+                            tp_price, f"{tpsl_prefix}tp", exchange=exchange,
                         )
                         logger.info(f"[AlgoBot] TP placed for {symbol}: algoId={tp_result.get('algoId')}")
                         _placed_algo_ids["tp"] = tp_result.get("algoId")
@@ -1212,6 +1130,7 @@ class LiveAdapter(ExecutionAdapter):
             return
         if qty <= 0 or qty >= strategy.position.qty:
             return
+        exchange = session.get("exchange") or BinanceFuturesTestnet()
 
         # Plan 5 Step 5.3 / Plan 20 (ENG-10): floor the reduce qty to the
         # symbol's stepSize before sending it to Binance. Unlike every other
@@ -1240,26 +1159,14 @@ class LiveAdapter(ExecutionAdapter):
         # id instead of guessing.
         reduce_client_order_id = _make_client_id(self.session_id, symbol)
         try:
-            from services.binance_testnet import send_signed_request as _signed
             _api_key = session.get("api_key", "")
             _api_secret = session.get("api_secret", "")
 
             sem = self._registry.order_semaphores.get(self.session_id)
             async with (sem if sem else contextlib.nullcontext()):
-                reduce_params = {
-                    "symbol": symbol,
-                    "side": reduce_side,
-                    "type": "MARKET",
-                    "quantity": _fmt_num(qty),
-                    "reduceOnly": "true",
-                    "newOrderRespType": "RESULT",
-                    "newClientOrderId": reduce_client_order_id,
-                }
-                result = await _signed(
-                    "POST", "/fapi/v1/order",
-                    _api_key, _api_secret,
-                    params=reduce_params,
-                    mode="testnet",
+                result = await self._order_router.place_market_order(
+                    _api_key, _api_secret, symbol, reduce_side, qty,
+                    reduce_client_order_id, reduce_only=True, exchange=exchange,
                 )
                 fill_price = float(result.get("avgPrice", exit_price))
                 logger.info(
@@ -1332,6 +1239,7 @@ class LiveAdapter(ExecutionAdapter):
         session = self._registry.sessions.get(self.session_id)
         if not session or strategy.position is None:
             return
+        exchange = session.get("exchange") or BinanceFuturesTestnet()
 
         pos = strategy.position
         sl_price = strategy.stop_loss[1] if strategy.stop_loss else None
@@ -1363,7 +1271,6 @@ class LiveAdapter(ExecutionAdapter):
         sem = self._registry.order_semaphores.get(self.session_id)
         client_order_id = _make_client_id(self.session_id, symbol)
         try:
-            from services.binance_testnet import send_signed_request as _signed
             _api_key = session.get("api_key", "")
             _api_secret = session.get("api_secret", "")
             if not _api_key or not _api_secret:
@@ -1371,24 +1278,14 @@ class LiveAdapter(ExecutionAdapter):
 
             close_side = "SELL" if strategy.is_long else "BUY"
             async with (sem if sem else contextlib.nullcontext()):
-                close_params = {
-                    "symbol": symbol,
-                    "side": close_side,
-                    "type": "MARKET",
-                    "quantity": _fmt_num(abs(pos.qty)),
-                    "reduceOnly": "true",
-                    "newOrderRespType": "RESULT",
-                    "newClientOrderId": client_order_id,
-                }
-                order_result = await _signed(
-                    "POST", "/fapi/v1/order",
-                    _api_key, _api_secret,
-                    params=close_params,
-                    mode="testnet",
+                order_result = await self._order_router.place_market_order(
+                    _api_key, _api_secret, symbol, close_side, abs(pos.qty),
+                    client_order_id, reduce_only=True, exchange=exchange,
                 )
-            real_fill_price = _extract_fill_price(order_result)
-            if real_fill_price is None:
-                real_fill_price = await _query_real_fill_price(_api_key, _api_secret, symbol, client_order_id)
+            real_fill_price = await self._order_router.confirm_fill(
+                order_result, _api_key, _api_secret, symbol, client_order_id,
+                exchange=exchange,
+            )
             if real_fill_price is None:
                 # The order was accepted (no exception above) but no fill price
                 # is discoverable — extremely unlikely for a MARKET order, but
@@ -1703,6 +1600,15 @@ class LiveBotManager:
         leverage = int(session_config.get("leverage", 1))
         fee_rate = float(session_config.get("fee_rate", 0.0005))
 
+        # Plan 6 Step 6.2 (ENG-4): resolve this session's Exchange ONCE here
+        # instead of every call site hardcoding mode="testnet" — every order/
+        # reconcile/user-data-stream call for this session routes through
+        # this instance. Always BinanceFuturesTestnet() today: nothing in
+        # session_config selects mainnet yet (BinanceFuturesMainnet is
+        # constructible per Step 6.2's own scope, but enabling it is a
+        # separate, deliberate product gate, not this step's call).
+        session_exchange = BinanceFuturesTestnet()
+
         # Dynamic import of strategy class
         import importlib
         module = importlib.import_module(f"strategies.{strategy_name}")
@@ -1715,7 +1621,7 @@ class LiveBotManager:
         self._order_semaphores[session_id] = asyncio.Semaphore(2)
 
         # Per-session user data stream with the user's own credentials
-        uds = UserDataStreamManager(api_key=api_key, api_secret=api_secret)
+        uds = UserDataStreamManager(api_key=api_key, api_secret=api_secret, exchange=session_exchange)
         try:
             await uds.start()
             logger.info(f"[AlgoBot] Session {session_id}: user data stream started")
@@ -1791,6 +1697,7 @@ class LiveBotManager:
             "user_id": user_id,
             "api_key": api_key,
             "api_secret": api_secret,
+            "exchange": session_exchange,
             "uds": uds,
             "strategy_name": strategy_name,
             "symbols": symbols,
@@ -2071,7 +1978,8 @@ class LiveBotManager:
         api_secret = session.get("api_secret", "") if session else ""
         effective_leverage = await clamp_leverage(
             leverage, "Binance Futures", symbol,
-            api_key=api_key, api_secret=api_secret, mode="testnet",
+            api_key=api_key, api_secret=api_secret,
+            mode=session["exchange"].mode if session and session.get("exchange") else "testnet",
         )
 
         # The leverageBracket probe above may have just confirmed this symbol is
@@ -2206,7 +2114,6 @@ class LiveBotManager:
         # Register user data stream callback for event-driven fill detection
         # (F-020).  Triggers immediate reconciliation when an order fills
         # between candles — no need to wait for the next kline close.
-        from services.binance_testnet import send_signed_request as _uds_signed
         _uds = session.get("uds") if session else None
         _fill_cb_registered = False
         _account_cb_registered = False
@@ -2250,11 +2157,10 @@ class LiveBotManager:
                                     _api_key = session.get("api_key", "") if session else ""
                                     _api_secret = session.get("api_secret", "") if session else ""
                                     if _api_key and _api_secret:
-                                        await _uds_signed(
-                                            "DELETE", "/fapi/v1/algoOrder",
+                                        _uds_exchange = (session.get("exchange") if session else None) or BinanceFuturesTestnet()
+                                        await _uds_exchange.cancel_algo_order(
                                             _api_key, _api_secret,
                                             params={"symbol": symbol, "algoId": _peer_id},
-                                            mode="testnet",
                                         )
                                         logger.info(
                                             f"[AlgoBot] {symbol}: cancelled peer algo {_peer_id} "
@@ -2497,10 +2403,7 @@ class LiveBotManager:
                                     if exec_algo_cfg and isinstance(exec_algo_cfg, dict):
                                         algo_type = exec_algo_cfg.get("type")
                                         algo_params = exec_algo_cfg.get("params", {})
-                                        try:
-                                            from core.models.exec_algo import TWAPAlgorithm, VWAPAlgorithm, IcebergAlgorithm
-                                        except ImportError:
-                                            from engine.core.models.exec_algo import TWAPAlgorithm, VWAPAlgorithm, IcebergAlgorithm
+                                        from core.models.exec_algo import TWAPAlgorithm, VWAPAlgorithm, IcebergAlgorithm
 
                                         if algo_type == "twap":
                                             exec_algo = TWAPAlgorithm(strategy, symbol, algo_params)
@@ -2530,7 +2433,6 @@ class LiveBotManager:
                                         strategy=strategy,
                                         symbol=symbol,
                                         candle=candle,
-                                        is_live=True,
                                         index_t=strategy.index,
                                         time_t=time_t,
                                         armed_legs=_armed_legs,
@@ -2540,7 +2442,6 @@ class LiveBotManager:
                                         strategy=strategy,
                                         symbol=symbol,
                                         candle=candle,
-                                        is_live=True,
                                         index_t=strategy.index,
                                         time_t=time_t,
                                     )
@@ -2667,7 +2568,8 @@ class LiveBotManager:
                 try:
                     from services.portfolio_risk import compute_var_cvar as _compute_var_cvar
                     _var_amount, _cvar_amount = await _compute_var_cvar(
-                        session.get("api_key", ""), session.get("api_secret", ""), mode="testnet",
+                        session.get("api_key", ""), session.get("api_secret", ""),
+                        mode=session["exchange"].mode if session.get("exchange") else "testnet",
                     )
                     _var_verdict = risk_governor.check_var(
                         var_amount=_var_amount, cvar_amount=_cvar_amount, equity=equity,
@@ -2705,46 +2607,9 @@ class LiveBotManager:
             "positionDetails": position_details,
         })
 
-def _fmt_num(value: float) -> str:
-    """Format a numeric value for Binance API (strip trailing zeros/dot)."""
-    s = f"{value:.8f}".rstrip('0').rstrip('.')
-    return s if s else '0'
-
-
-def _extract_fill_price(order_result: dict) -> float | None:
-    """Real avgPrice from a Binance order response, or None if unusable.
-
-    Plan 5 Step 5.2 (ENG-2): the caller must NEVER fall back to a candle/
-    trigger-price estimate silently — None here means "go query the order
-    for its real fill," not "use the estimate and move on."
-    """
-    try:
-        price = float(order_result.get("avgPrice", 0) or 0)
-    except (TypeError, ValueError):
-        return None
-    return price if price > 0 else None
-
-
-async def _query_real_fill_price(api_key: str, api_secret: str, symbol: str, client_order_id: str) -> float | None:
-    """Fallback when the order response itself didn't carry a usable avgPrice
-    (can happen if Binance processes the fill a beat after the ACK/RESULT
-    response) — queries the order directly by its client id."""
-    try:
-        from services.binance_testnet import send_signed_request as _signed
-        order = await _signed(
-            "GET", "/fapi/v1/order",
-            api_key, api_secret,
-            params={"symbol": symbol, "origClientOrderId": client_order_id},
-            mode="testnet",
-        )
-        return _extract_fill_price(order)
-    except Exception as e:
-        logger.error(f"[AlgoBot] {symbol}: fill-price re-query failed: {e}")
-        return None
-
-
 async def _query_real_exit_from_user_trades(
     api_key: str, api_secret: str, symbol: str, entry_time: datetime,
+    exchange: "Exchange | None" = None,
 ) -> tuple[float, float] | None:
     """Plan 5 Step 5.2 (ENG-2): reconstruct a close the engine didn't itself
     execute (SL/TP fired exchange-side, or state drifted) from Binance's own
@@ -2754,14 +2619,15 @@ async def _query_real_exit_from_user_trades(
     Binance's own realizedPnl minus its own commission for the matched
     fills, i.e. already the authoritative post-fee number — or None if no
     matching fills are found.
+
+    `exchange` (Plan 6 Step 6.2, ENG-4) defaults to `BinanceFuturesTestnet()`
+    — `Reconciler.reconcile_exchange_state` passes the session's own resolved
+    instance; the default only matters for direct/test callers.
     """
     try:
-        from services.binance_testnet import send_signed_request as _signed
-        trades = await _signed(
-            "GET", "/fapi/v1/userTrades",
-            api_key, api_secret,
-            params={"symbol": symbol, "limit": 20},
-            mode="testnet",
+        _exchange = exchange or BinanceFuturesTestnet()
+        trades = await _exchange.query_user_trades(
+            api_key, api_secret, params={"symbol": symbol, "limit": 20},
         )
     except Exception as e:
         logger.error(f"[AlgoBot] {symbol}: userTrades query failed: {e}")
@@ -2785,11 +2651,6 @@ async def _query_real_exit_from_user_trades(
     total_realized_pnl = sum(_safe_float(t.get("realizedPnl"), 0) for t in relevant)
     total_commission = sum(_safe_float(t.get("commission"), 0) for t in relevant)
     return avg_price, total_realized_pnl - total_commission
-
-
-def uuid4_hex8() -> str:
-    """Return the first 8 hex chars of a random UUID — short unique prefix."""
-    return uuid4().hex[:8]
 
 
 # Singleton instance

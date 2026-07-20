@@ -13,7 +13,7 @@ import asyncio
 
 import pytest
 
-import core.exchange as exchange_mod
+import services.binance_testnet as binance_mod
 from core.exchange import BinanceFuturesTestnet, BinanceFuturesMainnet
 
 
@@ -32,7 +32,7 @@ def _capture_signed(monkeypatch, return_value=None):
                        "api_secret": api_secret, "params": params, "mode": mode})
         return return_value
 
-    monkeypatch.setattr(exchange_mod, "send_signed_request", fake_signed)
+    monkeypatch.setattr(binance_mod, "send_signed_request", fake_signed)
     return calls
 
 

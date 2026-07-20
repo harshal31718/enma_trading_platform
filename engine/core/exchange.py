@@ -31,7 +31,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-from services.binance_testnet import send_signed_request
+from services import binance_testnet as _binance_testnet
 
 
 class Exchange(ABC):
@@ -67,7 +67,13 @@ class Exchange(ABC):
     async def _signed(
         self, method: str, path: str, api_key: str, api_secret: str, params: dict | None = None,
     ) -> Any:
-        return await send_signed_request(method, path, api_key, api_secret, params=params, mode=self.mode)
+        # Module-qualified call (not a bound-at-import name) so tests that
+        # monkeypatch `services.binance_testnet.send_signed_request` — the
+        # convention every other call site in this codebase already uses —
+        # actually take effect here too, regardless of import order.
+        return await _binance_testnet.send_signed_request(
+            method, path, api_key, api_secret, params=params, mode=self.mode,
+        )
 
     # ── Orders ───────────────────────────────────────────────────────────
     async def place_order(self, api_key: str, api_secret: str, params: dict) -> Any:

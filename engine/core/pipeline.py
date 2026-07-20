@@ -10,10 +10,7 @@ Call sites must pass current_holding as a signed quantity:
 """
 from __future__ import annotations
 
-try:
-    from engine.core.models import OrderPlan
-except ImportError:
-    from core.models import OrderPlan
+from core.models import OrderPlan
 
 
 def evaluate(s, current_holding: float = 0.0) -> "OrderPlan | None":

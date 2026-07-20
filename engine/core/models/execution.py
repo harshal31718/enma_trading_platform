@@ -24,10 +24,7 @@ from .base import (
 
 
 def _initial_margin(notional: float, leverage: float) -> float:
-    try:
-        from engine.core.margin import initial_margin
-    except ImportError:  # pragma: no cover - top-level module root
-        from core.margin import initial_margin
+    from core.margin import initial_margin
     return initial_margin(notional, leverage)
 
 

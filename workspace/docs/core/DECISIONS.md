@@ -473,3 +473,86 @@ engine never calls `publish_progress` for a sub-second job — same reasoning.
 **Scope:** only the `block` (default) and `iid` bootstrap modes are implemented; skip-trades/
 cost-stress/start-date-perturbation (plan §2.1 modes 3–5) are real remaining scope, not rejected —
 add them when Phase 2's UI needs a mode picker for them.
+
+## 28. Typed strategy↔engine contract — target state authorized, phased implementation (Plan 6 Step 6.3, ENG-6, decided 2026-07-20)
+
+**Decision:** `ExecutionKernel`/`ExecutionAdapter` should eventually consume the pipeline's typed
+`OrderPlan` (`core/models/base.py`) exclusively for order-intent data, with `strategy.buy`/`sell`/
+`stop_loss`/`take_profit`/`_pending_flip`/`_close_at_open`/`qty_to_adjust` demoted to
+`ExecutionModel.route()`'s internal write-only scratch state (and whatever strategy-authored
+`update_position()`-style hooks still need to read, e.g. `trail_stop()`/`move_to_breakeven()`
+reading `self.stop_loss` to compute a tightened value). This is authorized by the user as the
+target design, NOT yet implemented — see "Why phased, not shipped this session" below.
+
+**What already satisfies the plan's original acceptance text ("an explicit OrderIntent/Signal
+object the strategy returns"):** it already exists. `core/models/base.py` defines
+`Signal → RiskConstraints → CostEstimate → TargetPortfolio → OrderPlan`, all typed `@dataclass`,
+threaded through `pipeline.py`'s `evaluate()`. A typo'd field on any of these is already a type
+error, not a silent no-op.
+
+**The real remaining gap, found by reading `core/models/execution.py`'s `route()`:** `route()`
+only returns a populated `OrderPlan` for Path 3 (flat→enter). Paths 2 (close), 4 (flip), and 5
+(maintain) write straight to the mutable strategy attributes and return `None`. `kernel.py`'s
+`evaluate_and_route()`/`execute_pending()` then read a MIX of `plan.*` (for entries) and
+`strategy.*` mutable attributes (for everything else) to drive the exact same event — that mixed
+read pattern, not a missing type, is the real "temporal coupling ... spread across
+kernel/adapter/manager" the plan names.
+
+**Why this is phased rather than shipped in the same session as this decision:**
+1. **A newly-confirmed coupling makes the full fix larger than originally scoped.**
+   `core/live_bot_manager.py`'s `LiveAdapter.execute_entry` reads `strategy.stop_loss`/
+   `strategy.take_profit` directly as its ONLY channel for SL/TP data on the live path — it is not
+   handed an `OrderPlan`. Making the kernel stop writing/reading these mutable attributes for
+   entries means `LiveAdapter`'s order-placement methods (and `OrderRouter`, Plan 6 Step 6.1) would
+   also need to accept SL/TP as explicit parameters instead of reading them off `strategy`. That is
+   a change to the live order-placement path with **zero golden-master coverage** (live-only, no
+   backtest import overlap, per Plan 5.3's own note) — the same risk class every live-file change
+   this session has had to navigate deliberately narrowly.
+2. **`evaluate_and_route()`'s exec_algo integration (A-016) would need re-verification if `route()`
+   starts returning non-`None` for close/flip/maintain paths.** Today, `self.exec_algo.
+   process_order_plan(plan)` only ever receives a plan when Path 3 fired — `exec_algo` was built
+   and tested only for slicing an ENTRY. `kernel.py`'s two `if plan is not None:` gates
+   (the exec_algo re-routing gate and the live-entry gate) both currently use "plan is non-`None`"
+   as an implicit "this is an entry" signal. Making `route()` return a typed, non-`None` `OrderPlan`
+   for every path — the natural way to close the typed-contract gap — requires updating both gates
+   to check `plan.intent == "enter"` explicitly, AND auditing that `exec_algo.process_order_plan`/
+   `.step()` never receive a close/flip/maintain-intent plan by accident. This is a small, bounded
+   two-file change in isolation, but it sits directly upstream of every live and backtest order
+   the pipeline places — exactly the kind of >3-file pipeline change Rule C exists for, and
+   deserves its own dedicated implementation pass with golden-master verification at each
+   incremental step, not a same-session bundle with the design decision itself.
+3. **Independent, smaller finding — NOT the same bug as the above, do not conflate:**
+   `kernel.py`'s `evaluate_and_route()` exec_algo branch (`core/kernel.py`, the block right after
+   `plan = self.exec_algo.process_order_plan(plan)` / `.step(...)`) writes
+   `strategy.stop_loss`/`strategy.take_profit` directly from the (possibly-sliced) `OrderPlan`,
+   which is itself a bypass of `route()`'s own "sole writer" docstring contract. Investigated
+   whether this is a simple, independently-fixable violation (as a prior pass in this same session
+   recommended filing to the fixes queue) — it is NOT simple: `strategy.stop_loss`/
+   `strategy.take_profit` are the SAME live channel `LiveAdapter.execute_entry` reads from (see
+   point 1), so kernel writing them here is not incidental — it's currently load-bearing for
+   getting a sliced order's SL/TP to the live order-placement path at all. "Fixing" it by having
+   the kernel stop writing these would silently break live SL/TP placement for any
+   exec_algo-sliced entry unless done together with the LiveAdapter parameterization in point 1.
+   Filed to `0_fixes-queue.md` as a scoped, documented item — explicitly NOT a quick fix, tracked
+   alongside the main phased work rather than attempted in isolation.
+
+**Rationale for authorizing the target design now, without implementing it now:** the user
+explicitly approved the direction ("kernel reads exclusively off the typed OrderPlan, mutable
+strategy.buy/stop_loss/etc. become internal implementation detail") via an explicit sign-off this
+session. Recording that decision here means the next implementation session executes against an
+already-settled design question instead of re-litigating it — the only remaining work is the
+phased, carefully-verified mechanical migration (route() contract completeness → kernel.py's two
+gate sites → `LiveAdapter`/`OrderRouter` SL/TP parameterization → the wider mutable-attribute
+read-site cleanup across `~48` files), not a design decision.
+
+**What does NOT change for strategy authors, regardless of how this phases in:** `self.buy`,
+`self.stop_loss`, `self.take_profit`, `self.flip_position()`, `self.liquidate()` and every other
+documented `BaseStrategy` writer/reader in `engine/CLAUDE.md`'s "Available properties" section keep
+their exact current read/write semantics from a strategy author's point of view — `route()` (the
+"sole writer") still ends up setting them for `update_position()`-style hooks
+(`trail_stop()`/`move_to_breakeven()`) to read. What changes is only which ENGINE-internal
+component (`kernel.py` vs. `route()`'s own return value) is the source of truth the kernel itself
+consults — an internal wiring change, not a `BaseStrategy` API break. No `DECISIONS.md`-gated
+interface break has shipped as part of this entry; a future entry should record it explicitly if
+the phased implementation ever needs to change what a strategy author reads/writes, not just who
+inside the engine consumes it.

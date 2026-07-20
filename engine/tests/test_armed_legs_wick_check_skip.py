@@ -64,8 +64,13 @@ class _FakeStrategy:
 
 
 class _RecordingAdapter(ExecutionAdapter):
-    def __init__(self):
+    def __init__(self, is_live: bool = True):
         self.exits = []
+        self._is_live = is_live
+
+    @property
+    def is_live(self) -> bool:
+        return self._is_live
 
     async def execute_entry(self, *a, **kw):
         return True
@@ -91,9 +96,9 @@ class _RecordingAdapter(ExecutionAdapter):
 CANDLE = np.array([1_700_000_000_000.0, 100.0, 100.0, 115.0, 90.0, 5000.0])
 
 
-def _run(kernel, strat, armed_legs=None, is_live=True):
+def _run(kernel, strat, armed_legs=None):
     return asyncio.get_event_loop().run_until_complete(
-        kernel.check_exits(strat, "BTCUSDT", CANDLE, is_live=is_live, index_t=0, time_t=None, armed_legs=armed_legs)
+        kernel.check_exits(strat, "BTCUSDT", CANDLE, index_t=0, time_t=None, armed_legs=armed_legs)
     )
 
 
@@ -170,10 +175,10 @@ def test_armed_legs_never_applies_to_backtest_even_if_somehow_passed():
     exit-price math for the still-unarmed leg must be unaffected — this just
     confirms the armed check composes with is_live rather than replacing it."""
     strat = _FakeStrategy(is_long=True)
-    adapter = _RecordingAdapter()
+    adapter = _RecordingAdapter(is_live=False)
     kernel = ExecutionKernel(adapter, exec_algo=None)
 
-    _run(kernel, strat, armed_legs={"sl": False, "tp": False}, is_live=False)
+    _run(kernel, strat, armed_legs={"sl": False, "tp": False})
 
     assert adapter.exits == ["stop_loss"]
 

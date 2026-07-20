@@ -4,10 +4,7 @@ from engine.core.strategy import BaseStrategy
 import engine.indicators as ta
 from engine.indicators.base import HIGH, LOW, CLOSE
 
-try:
-    from engine.core.models import AtrBracketRiskModel, NotionalPortfolio, Signal
-except ImportError:
-    from core.models import AtrBracketRiskModel, NotionalPortfolio, Signal
+from engine.core.models import AtrBracketRiskModel, NotionalPortfolio, Signal
 
 
 class BestSupertrend(BaseStrategy):

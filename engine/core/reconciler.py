@@ -19,11 +19,22 @@ from decimal import ROUND_DOWN, ROUND_UP
 
 from core.position import Position
 from core.money import add_money
+from core.exchange import Exchange, BinanceFuturesTestnet
 from services.trade_recorder import record_trade, build_trade_record
 from services.event_log import append_event
 from utils.symbols import round_price, get_ticker_data
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_exchange(session: dict) -> Exchange:
+    """Plan 6 Step 6.2 (ENG-4): every method below used to hardcode
+    `mode="testnet"` on each `send_signed_request` call — this resolves the
+    session's own `Exchange` instance instead (set once in `start_session`),
+    falling back to `BinanceFuturesTestnet()` for sessions/tests that don't
+    carry one (defensive default, matches today's only-ever-testnet reality
+    exactly — mainnet selection is a separate, later product gate)."""
+    return session.get("exchange") or BinanceFuturesTestnet()
 
 
 class Reconciler:
@@ -84,7 +95,7 @@ class Reconciler:
         if not api_key or not api_secret:
             return
 
-        from services.binance_testnet import send_signed_request as _signed
+        exchange = _resolve_exchange(session)
 
         ids_to_cancel: list[str] = []
         if algo_ids:
@@ -92,11 +103,8 @@ class Reconciler:
 
         if not ids_to_cancel:
             try:
-                open_algo = await _signed(
-                    "GET", "/fapi/v1/openAlgoOrders",
-                    api_key, api_secret,
-                    params={"symbol": symbol},
-                    mode="testnet",
+                open_algo = await exchange.query_open_algo_orders(
+                    api_key, api_secret, params={"symbol": symbol},
                 )
                 if isinstance(open_algo, list):
                     ids_to_cancel = [str(ao.get("algoId")) for ao in open_algo if ao.get("algoId")]
@@ -109,11 +117,8 @@ class Reconciler:
 
         for algo_id in ids_to_cancel:
             try:
-                await _signed(
-                    "DELETE", "/fapi/v1/algoOrder",
-                    api_key, api_secret,
-                    params={"symbol": symbol, "algoId": algo_id},
-                    mode="testnet",
+                await exchange.cancel_algo_order(
+                    api_key, api_secret, params={"symbol": symbol, "algoId": algo_id},
                 )
                 logger.info(f"[AlgoBot] {symbol}: cancelled resting algo order {algo_id} after close")
             except Exception as e:
@@ -190,7 +195,7 @@ class Reconciler:
         if not api_key or not api_secret:
             return
 
-        from services.binance_testnet import send_signed_request as _signed
+        exchange = _resolve_exchange(session)
 
         sl_rounding = ROUND_DOWN if is_long else ROUND_UP
         rounded_sl = round_price(symbol, "Binance Futures", new_sl_price, rounding=sl_rounding)
@@ -207,11 +212,8 @@ class Reconciler:
             # got here) that's fine, proceed to place the new one anyway.
             if old_sl_id:
                 try:
-                    await _signed(
-                        "DELETE", "/fapi/v1/algoOrder",
-                        api_key, api_secret,
-                        params={"symbol": symbol, "algoId": old_sl_id},
-                        mode="testnet",
+                    await exchange.cancel_algo_order(
+                        api_key, api_secret, params={"symbol": symbol, "algoId": old_sl_id},
                     )
                 except Exception as _cancel_e:
                     logger.info(
@@ -220,8 +222,7 @@ class Reconciler:
                     )
 
             close_side = "SELL" if is_long else "BUY"
-            result = await _signed(
-                "POST", "/fapi/v1/algoOrder",
+            result = await exchange.place_algo_order(
                 api_key, api_secret,
                 params={
                     "algoType": "CONDITIONAL",
@@ -233,7 +234,6 @@ class Reconciler:
                     "closePosition": "true",
                     "clientAlgoId": f"tpsl_{uuid4_hex8()}_sl",
                 },
-                mode="testnet",
             )
             old_algo_ids["sl"] = result.get("algoId")
             pos_info["algo_ids"] = old_algo_ids
@@ -273,18 +273,15 @@ class Reconciler:
         real_fill_price = None
 
         try:
-            from services.binance_testnet import send_signed_request as _signed
+            exchange = _resolve_exchange(session)
             _api_key = session.get("api_key", "")
             _api_secret = session.get("api_secret", "")
             if not _api_key or not _api_secret:
                 raise RuntimeError("Binance Testnet API credentials not configured")
 
             # Query current position on exchange to determine close side
-            pos_data = await _signed(
-                "GET", "/fapi/v2/positionRisk",
-                _api_key, _api_secret,
-                params={"symbol": symbol},
-                mode="testnet",
+            pos_data = await exchange.query_position_risk(
+                _api_key, _api_secret, params={"symbol": symbol},
             )
             position_amt = 0.0
             for p in (pos_data if isinstance(pos_data, list) else []):
@@ -304,15 +301,12 @@ class Reconciler:
                     "newOrderRespType": "RESULT",
                     "newClientOrderId": client_order_id,
                 }
-                order_result = await _signed(
-                    "POST", "/fapi/v1/order",
-                    _api_key, _api_secret,
-                    params=close_params,
-                    mode="testnet",
-                )
+                order_result = await exchange.place_order(_api_key, _api_secret, close_params)
                 real_fill_price = _extract_fill_price(order_result)
                 if real_fill_price is None:
-                    real_fill_price = await _query_real_fill_price(_api_key, _api_secret, symbol, client_order_id)
+                    real_fill_price = await _query_real_fill_price(
+                        _api_key, _api_secret, symbol, client_order_id, exchange=exchange,
+                    )
                 logger.info(f"[AlgoBot] Close-position filled for {symbol} on stop (amt={position_amt}) @ {real_fill_price}")
             else:
                 logger.info(f"[AlgoBot] {symbol}: no position to close on stop")
@@ -430,7 +424,7 @@ class Reconciler:
             return {"position": None, "open_orders": []}
 
         # ── 1. Query exchange state directly (F-003: no Node hop) ────────────
-        from services.binance_testnet import send_signed_request as _signed
+        exchange = _resolve_exchange(session)
         _api_key = session.get("api_key", "")
         _api_secret = session.get("api_secret", "")
 
@@ -448,11 +442,8 @@ class Reconciler:
 
         if _api_key and _api_secret:
             try:
-                pos_data = await _signed(
-                    "GET", "/fapi/v2/positionRisk",
-                    _api_key, _api_secret,
-                    params={"symbol": symbol},
-                    mode="testnet",
+                pos_data = await exchange.query_position_risk(
+                    _api_key, _api_secret, params={"symbol": symbol},
                 )
                 position_query_ok = True
                 if isinstance(pos_data, list):
@@ -464,21 +455,15 @@ class Reconciler:
                 logger.warning(f"[AlgoBot] {symbol}: reconcile (position) failed — {e}")
 
             try:
-                order_data = await _signed(
-                    "GET", "/fapi/v1/openOrders",
-                    _api_key, _api_secret,
-                    params={"symbol": symbol},
-                    mode="testnet",
+                order_data = await exchange.query_open_orders(
+                    _api_key, _api_secret, params={"symbol": symbol},
                 )
                 if isinstance(order_data, list):
                     open_orders = order_data
                     # Also fetch algo orders (SL/TP)
                     try:
-                        algo_orders = await _signed(
-                            "GET", "/fapi/v1/openAlgoOrders",
-                            _api_key, _api_secret,
-                            params={"symbol": symbol},
-                            mode="testnet",
+                        algo_orders = await exchange.query_open_algo_orders(
+                            _api_key, _api_secret, params={"symbol": symbol},
                         )
                         if isinstance(algo_orders, list):
                             for ao in algo_orders:
@@ -618,7 +603,9 @@ class Reconciler:
             api_key = session.get("api_key", "")
             api_secret = session.get("api_secret", "")
             if api_key and api_secret:
-                real_exit_result = await _query_real_exit_from_user_trades(api_key, api_secret, symbol, entry_time)
+                real_exit_result = await _query_real_exit_from_user_trades(
+                    api_key, api_secret, symbol, entry_time, exchange=exchange,
+                )
                 if real_exit_result is not None:
                     real_exit, net_realized_pnl_from_exchange = real_exit_result
 
@@ -777,8 +764,7 @@ class Reconciler:
                     if _api_key and _api_secret and _sl_price_new:
                         try:
                             _rearm_side = "SELL" if strategy.position.type == "long" else "BUY"
-                            _rearm_result = await _signed(
-                                "POST", "/fapi/v1/algoOrder",
+                            _rearm_result = await exchange.place_algo_order(
                                 _api_key, _api_secret,
                                 params={
                                     "algoType": "CONDITIONAL",
@@ -790,7 +776,6 @@ class Reconciler:
                                     "closePosition": "true",
                                     "clientAlgoId": f"tpsl_{uuid4_hex8()}_sl",
                                 },
-                                mode="testnet",
                             )
                             logger.warning(
                                 f"[AlgoBot] {symbol}: naked-position SL re-armed @ "
@@ -891,11 +876,9 @@ class Reconciler:
                         _peer_id = _tracked_algo_ids.get(_peer_leg)
                         if _peer_id and _peer_id in _still_open_algo_ids:
                             try:
-                                await _signed(
-                                    "DELETE", "/fapi/v1/algoOrder",
+                                await exchange.cancel_algo_order(
                                     _api_key, _api_secret,
                                     params={"symbol": symbol, "algoId": _peer_id},
-                                    mode="testnet",
                                 )
                                 logger.info(
                                     f"[AlgoBot] {symbol}: reconciled — cancelled peer algo "

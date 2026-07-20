@@ -1,16 +1,11 @@
-import sys
-import os
-try:
-    if not os.path.exists('/engine'):
-        os.symlink('/app', '/engine')
-except Exception:
-    pass
-sys.path.insert(0, '/')
+from core.engine_alias import install_engine_alias
+install_engine_alias()
 
 import asyncio
 import contextvars
 import hmac
 import logging
+import os
 import uuid
 from contextlib import asynccontextmanager
 

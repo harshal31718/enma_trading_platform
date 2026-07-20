@@ -28,19 +28,20 @@ import json
 import os
 import sys
 
-# Replicate the engine's production import environment (see main.py): seeded
-# strategies import ``from engine.core...`` / ``import engine.indicators``, which
-# resolve via the ``/engine -> /app`` symlink with ``/`` on sys.path. ``python -m``
-# already puts /app (cwd) on the path so ``core``/``services`` resolve; we add the
-# symlink + ``/`` so ``engine`` resolves too — otherwise the harness loads the
-# strategies in a different import root than the real runner and every load fails.
-try:
-    if not os.path.exists("/engine"):
-        os.symlink("/app", "/engine")
-except Exception:
-    pass
-sys.path.insert(0, "/")
+# Run as a plain script (``python /app/scripts/golden_master.py``, not
+# ``python -m``), so only /app/scripts (this file's own dir) is on sys.path
+# by default — add /app itself so ``core``/``services`` bare imports resolve.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # engine/
+
+# Seeded strategies import ``from engine.core...`` / ``import engine.
+# indicators`` (engine/CLAUDE.md's documented strategy-author convention) —
+# install the alias so that resolves to the exact same module objects as the
+# ``core.xxx``/``services.xxx`` imports the real runner uses (Plan 6 Step 6.6,
+# ENG-12 — replaces the old ``/engine -> /app`` symlink + ``sys.path.insert(0,
+# '/')`` hack, which created a SEPARATE, duplicate module identity for the
+# same source files instead of a single canonical one).
+from core.engine_alias import install_engine_alias  # noqa: E402
+install_engine_alias()
 
 try:
     from dotenv import load_dotenv

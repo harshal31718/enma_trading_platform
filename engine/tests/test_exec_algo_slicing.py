@@ -88,6 +88,10 @@ class _RecordingAdapter(ExecutionAdapter):
     def __init__(self):
         self.fills = []  # list of (intent, qty)
 
+    @property
+    def is_live(self) -> bool:
+        return False
+
     async def execute_entry(self, strategy, symbol, direction, qty, ref_price,
                             time_t, index_t, intent="enter", adjust_tag=""):
         self.fills.append((intent, qty))
@@ -138,9 +142,9 @@ def _run_backtest(algo_factory, parent_qty, n_candles=8):
             asyncio.get_event_loop().run_until_complete(
                 kernel.execute_pending(strat, "BTCUSDT", candle, t, None))
             asyncio.get_event_loop().run_until_complete(
-                kernel.check_exits(strat, "BTCUSDT", candle, False, t, None))
+                kernel.check_exits(strat, "BTCUSDT", candle, t, None))
             asyncio.get_event_loop().run_until_complete(
-                kernel.evaluate_and_route(strat, "BTCUSDT", candle, False, t, None))
+                kernel.evaluate_and_route(strat, "BTCUSDT", candle, t, None))
     finally:
         kernel_mod.evaluate = orig
     return adapter, strat
@@ -179,6 +183,10 @@ class _ExitRecordingAdapter(ExecutionAdapter):
     def __init__(self):
         self.exits = []
         self.flips = []
+
+    @property
+    def is_live(self) -> bool:
+        return False
 
     async def execute_entry(self, strategy, symbol, direction, qty, ref_price,
                             time_t, index_t, intent="enter", adjust_tag=""):
@@ -221,7 +229,7 @@ def test_twap_close_at_open_survives_exec_algo_clear():
         # Candle t: route() (faked) sets _close_at_open — the exec-algo clear
         # must not erase it.
         asyncio.get_event_loop().run_until_complete(
-            kernel.evaluate_and_route(strat, "BTCUSDT", candle, False, 0, None))
+            kernel.evaluate_and_route(strat, "BTCUSDT", candle, 0, None))
         assert strat._close_at_open is True, (
             "QNT-2 regression: exec-algo clear erased _close_at_open")
 
@@ -252,7 +260,7 @@ def test_twap_pending_flip_survives_exec_algo_clear():
     try:
         candle = np.array([1_700_000_000_000.0, 100.0, 100.0, 101.0, 99.0, 5000.0])
         asyncio.get_event_loop().run_until_complete(
-            kernel.evaluate_and_route(strat, "BTCUSDT", candle, False, 0, None))
+            kernel.evaluate_and_route(strat, "BTCUSDT", candle, 0, None))
         assert strat._pending_flip is not None, (
             "QNT-2 regression: exec-algo clear erased _pending_flip")
 
