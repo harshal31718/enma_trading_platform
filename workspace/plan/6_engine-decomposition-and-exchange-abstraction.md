@@ -355,9 +355,24 @@ not the risk/decision logic living alongside it in the same methods, actually mo
     `test_exec_algo_slicing.py`'s two fake adapters (`is_live=False`, so the new-kwarg call site
     is never reached by them). `execute_pending()`'s backtest-path `execute_entry` calls (lines
     ~195/247/259) were deliberately left untouched — different adapter (`BacktestAdapter`),
-    different mechanism entirely, already covered by golden-master. F10's kernel-write (the
-    exec_algo branch writing `strategy.stop_loss`/`take_profit` directly) is NOT yet removed —
-    that's phase (c), gated on this phase being verified first.
+    different mechanism entirely, already covered by golden-master.
+  - **Phase (c) investigated 2026-07-20, NOT implemented — F10's kernel-write is not
+    independently removable, even with phase (b) shipped.** The original plan assumed removing
+    `kernel.py`'s exec_algo-branch write to `strategy.stop_loss`/`take_profit` (F10) would become
+    safe once `LiveAdapter.execute_entry` had its own explicit SL/TP channel. Investigating the
+    actual removal found a bigger, previously-unstated reason it can't be removed:
+    `check_exits()` (`core/kernel.py` ~lines 343-344, 383-384) ALSO reads `strategy.stop_loss`/
+    `strategy.take_profit` directly — as the canonical trigger levels checked on **every
+    subsequent candle**, for both backtest and live. `OrderPlan` is computed fresh each candle and
+    never persisted, so there is no typed replacement for `check_exits()` to fall back on. Phase
+    (b) only gave `LiveAdapter.execute_entry` an alternative *same-candle* read — it did nothing
+    for candle N+1, N+2, etc. Deleting the kernel-write now would silently stop SL/TP exits from
+    ever triggering for exec_algo-sliced positions after the entry candle — a real regression
+    dressed up as a cleanup, not attempted. **F10/phase (c) is therefore entangled with phase
+    (d)'s wider mutable-attribute-read cleanup (the ~48-file surface), not a standalone next
+    step.** See `0_fixes-queue.md`'s F10 entry (updated same pass) for the full writeup. No code
+    changed this pass — surfaced to the user, who chose to stop and document rather than push
+    into phase (d)'s larger scope in this session.
     `DefaultExecution.route()` (`core/models/execution.py`) now returns a typed `OrderPlan` for
     Paths 2/4/5 (close/flip/maintain), not just Path 3 (enter) — additive only, every existing
     mutable-attribute write (`s._close_at_open`, `s.flip_position()`, `s.stop_loss`/`take_profit`

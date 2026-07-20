@@ -556,3 +556,22 @@ consults — an internal wiring change, not a `BaseStrategy` API break. No `DECI
 interface break has shipped as part of this entry; a future entry should record it explicitly if
 the phased implementation ever needs to change what a strategy author reads/writes, not just who
 inside the engine consumes it.
+
+**Addendum (2026-07-20, after phases (a) and (b) shipped) — phase (c)'s premise needs correcting.**
+Phases (a) and (b) shipped as planned: `route()` returns a complete `OrderPlan` for every path,
+`kernel.py`'s two gates check `plan.intent == "enter"` explicitly, and `LiveAdapter.execute_entry`
+gained explicit `stop_loss`/`take_profit` params sourced from `OrderPlan` — `OrderRouter` needed
+no change (it never read the strategy attributes itself). Investigating phase (c) — "now F10's
+kernel-write becomes removable" — found that premise incomplete: `check_exits()` (`core/kernel.py`)
+reads `strategy.stop_loss`/`strategy.take_profit` directly too, as the trigger levels checked on
+**every candle after the entry**, for both backtest and live. `OrderPlan` is never persisted
+across candles, so there is no typed source `check_exits()` could fall back on if the kernel
+stopped writing these attributes. Phase (b) closed the gap for the *same-candle* `execute_entry`
+read, but did nothing for `check_exits()`'s cross-candle read — a materially different consumer
+this decision's original writeup did not separately account for. **F10/phase (c) is therefore not
+independently closeable — it is entangled with the wider mutable-attribute-read cleanup (phase (d),
+the ~48-file surface) rather than a standalone step**, since a real fix means giving
+`check_exits()` its own persisted, typed source of truth too, not just `LiveAdapter`. No code
+changed for this addendum. Surfaced to the user, who chose to stop and document rather than push
+into phase (d)'s larger scope this session. See `0_fixes-queue.md`'s F10 entry and the plan file's
+Step 6.3 section for the full writeup.

@@ -7,6 +7,47 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
+## 2026-07-20 (later same day, part 3) — Plan 6 Step 6.3 phase (c) NOT implemented — F10 needs re-scoping; phase (b)'s golden-master still unconfirmed
+
+**Goal:** continue Step 6.3 to phase (c) — per DECISIONS.md #28's original plan, F10's kernel-write
+(the exec_algo branch in `kernel.py` writing `strategy.stop_loss`/`take_profit` directly) should
+become removable once `LiveAdapter.execute_entry` has its own explicit SL/TP channel (phase (b),
+prior entry below).
+
+**Verification status inherited from phase (b), still open**: the user ran the rebuild + pytest
+(647/647 clean) but the conversation moved on before confirming the golden-master
+`run --label after_6.3b` output matched phase (a)'s `MultiDivergence` line
+(`trades=55 netProfit=-1784.02 winRate=0.36 cagr=-71.32 sqn=-2.08`). Not re-verified this pass —
+flag it before treating phase (b) as fully closed.
+
+**Finding — phase (c) as scoped is not safe to implement, and NOT attempted.** Investigated
+removing F10's kernel-write (the natural next step now that phase (b) shipped) and found a bigger
+reason it can't be removed than DECISIONS.md #28 stated: `check_exits()` (`core/kernel.py`
+~lines 343-344, 383-384) ALSO reads `strategy.stop_loss`/`strategy.take_profit` directly — as the
+canonical SL/TP trigger levels checked on **every candle after the entry**, for both backtest and
+live. `OrderPlan` is computed fresh each candle and never persisted, so there's no typed fallback
+`check_exits()` could use if the kernel stopped writing these attributes. Phase (b) only closed the
+gap for `LiveAdapter.execute_entry`'s *same-candle* read — it did nothing for `check_exits()`'s
+cross-candle read, which is a materially different consumer of the same two attributes. Deleting
+the kernel-write now would silently stop SL/TP exits from ever triggering for exec_algo-sliced
+positions after the entry candle — a real regression, not a cleanup, so it was not attempted.
+
+**Asked the user how to proceed (AskUserQuestion: document-and-stop / investigate phase (d) now /
+leave Plan 6 entirely) — they chose document-and-stop.** No code changed this pass. Updated:
+`workspace/docs/core/DECISIONS.md` (#28 addendum), `0_fixes-queue.md` (F10 entry re-scoped),
+`6_engine-decomposition-and-exchange-abstraction.md` (Step 6.3 section), `0_tracker.md`
+(Plan 6 row), this file.
+
+**Open questions:** (1) confirm phase (b)'s golden-master line before calling it fully verified —
+see above. (2) F10/phase (c) is now understood to be entangled with phase (d) (the wider
+mutable-attribute-read cleanup across the ~48-file surface the original Step 6.3 investigation
+sized) rather than a standalone step — a real fix means giving `check_exits()` its own persisted,
+typed source of truth, not just `LiveAdapter`. That's a materially bigger, dedicated effort, not
+something to squeeze into a "phase (c)" slot. Plan 6 status: 6.1/6.2/6.4/6.6 shipped; 6.3 phases
+(a) shipped-and-verified, (b) code-written-verification-incomplete, (c) blocked/re-scoped into
+(d), (d) not started; 6.5 needs Node-side consumer code.
+
+---
 ## 2026-07-20 (later same day, part 2) — Plan 6 Step 6.3 phase (b): code written, verification pending — run these commands next
 
 **Goal:** continue Step 6.3's phased implementation now that phase (a) shipped (prior entry
@@ -122,59 +163,5 @@ row), this file.
 parameters sourced from `OrderPlan` instead of reading `strategy.stop_loss`/`take_profit` directly —
 verify against all 19+ existing `LiveAdapter` tests. Do not attempt (b) in the same pass as
 re-verifying (a) — each phase gets its own golden-master/pytest confirmation per DECISIONS.md #28.
-
----
-## 2026-07-20 — Plan 6 Step 6.6 SHIPPED FOR REAL — engine_alias import hook replaces the symlink hack, verified via a real image rebuild + container restart
-
-**Goal:** user authorized (via AskUserQuestion) a real container rebuild to close out Step 6.6,
-which a prior pass this session had investigated but deliberately left unimplemented pending that
-authorization. Full details/root-cause investigation are in that prior entry (now superseded) and
-the plan file's Step 6.6 section — condensed here.
-
-**Design, different from the originally-suggested `pyproject.toml`/`pip install -e .` shape**:
-investigation found no packaging change was actually needed. A `sys.meta_path` finder/loader
-(new `core/engine_alias.py`, `install_engine_alias()`) intercepts any `engine`/`engine.X` import
-and reassigns `sys.modules['engine.X']` to the ALREADY-CANONICAL `X` module (`core.X`/
-`services.X`/etc) — genuine single module identity (`engine.core.margin is core.margin` now
-`True`, verified `False` before the fix), zero duplicate state, no symlink, no `sys.path`
-mutation. `engine.*` still resolves for strategy authors (the documented, must-preserve
-convention) — it's just no longer a SEPARATE module object. Installed at every real entry point
-that might dynamically load a strategy file: `main.py` (replacing its symlink+sys.path hack),
-`scripts/golden_master.py`/`scripts/recursive.py`/`scripts/lookahead_sentinel.py`/
-`scripts/_portfolio_check.py` (each had their own independent copy of the same hack — 5 total,
-not just main.py's one), and a new `engine/tests/conftest.py` for the pytest process. Also
-cleaned up the now-redundant dual `try: from engine.X import ... except ImportError: from core.X
-import ...` dance across 16 internal files (all internal code now imports bare `core.X`/
-`services.X`/`utils.X`, the canonical form) and 4 test files with their own inline symlink-hack
-copies (made redundant by `conftest.py`) — closing out ENG-12's stated scope in full, not just
-the packaging-identity half.
-
-**Verified via a REAL image rebuild + restart** (not just `docker exec` into the already-running
-container, unlike every other change this session): `docker compose build engine` (clean build,
-all layers cached except the final `COPY . .`), `docker compose up -d --no-deps engine`
-(container recreated), confirmed via `docker logs` — full clean boot, exchange rules cached for
-729 futures + 3649 spot symbols, all 5 strategies seeded successfully (proves the alias resolves
-correctly in the actual live app process, not just an ad-hoc check), `/health` returns 200 with
-Mongo/Timescale both connected. Post-restart: pytest 647/647, golden-master's `MultiDivergence`
-summary line (`trades=55 netProfit=-1784.02 winRate=0.36 cagr=-71.32 sqn=-2.08`) byte-identical
-to every prior golden-master run this session (the `before_packaging_v2.json` file itself didn't
-survive the container recreate — ephemeral filesystem, not a bind mount — but the deterministic
-computed output matching exactly across the restart is the real proof). Zero symlink/`sys.path`
-hack copies remain anywhere in the codebase (verified by grep).
-
-**Files changed:** `engine/core/engine_alias.py` (new), `engine/main.py`, `engine/scripts/
-golden_master.py`/`recursive.py`/`lookahead_sentinel.py`/`_portfolio_check.py`, `engine/tests/
-conftest.py` (new), 16 internal files' dual-import cleanup (`core/kernel.py`, `core/live_bot_
-manager.py`, `core/models/{cost,execution,exec_algo,risk}.py`, `core/pipeline.py`, `core/
-strategy.py`, `services/backtest_runner.py`, all 5 `strategies/*/__init__.py`), 4 test files'
-inline hack cleanup (`test_bestsupertrend_direction_filter_rename.py`, `test_bestsupertrend_
-htf_parity.py`, `test_boundaries.py`, `test_exchange_migration.py`, `test_start_session_risk_
-params_shape.py`). Docs: `6_engine-decomposition-and-exchange-abstraction.md` (Step 6.6 section
-replaced with the real outcome), `0_tracker.md` (Plan 6 row), this file.
-
-**Open questions:** none blocking — Step 6.6 is fully shipped. Plan 6 status: 6.1, 6.2, 6.4
-(narrower scope), 6.6 all shipped this session. Remaining: 6.3 (needs the user's `BaseStrategy`
-DECISIONS.md call, see the entry two above this one), 6.5's Redis-stream channel (needs Node-side
-consumer code, cross-service).
 
 

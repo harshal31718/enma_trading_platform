@@ -25,7 +25,14 @@ this board no longer duplicates it).
 `take_profit` params (mirrors `execute_flip`'s existing pattern), `kernel.py`'s live-entry call
 site passes `plan.stop_loss`/`plan.take_profit` explicitly — provably a no-op by construction
 (same value, different read path), `OrderRouter` needed no change (never reads strategy attrs
-itself). Phases (c)/(d) not started. | In progress | P2 | 5 (shipped 2026-07-18), 21.3/21.4 (shipped 2026-07-17) — unblocked | 2026-07-20 |
+itself). **Phase (c) investigated 2026-07-20, NOT implemented — F10 is not independently
+closeable**: `check_exits()` also reads `strategy.stop_loss`/`take_profit` directly, as the
+trigger state checked every candle after entry (backtest + live) — `OrderPlan` isn't persisted
+across candles, so deleting the kernel-write (phase (c)'s original goal) would silently break
+exit triggering for exec_algo-sliced positions. Entangled with phase (d)'s wider cleanup instead
+of standalone — see `0_fixes-queue.md` F10 / DECISIONS.md #28 addendum. Stopped here per user
+choice; phase (b)'s golden-master confirmation also still outstanding (user ran pytest 647/647 on
+the rebuilt image but didn't confirm the golden-master line — see handoff.md). | In progress | P2 | 5 (shipped 2026-07-18), 21.3/21.4 (shipped 2026-07-17) — unblocked | 2026-07-20 |
 | 7  | Server & client structure | All | Ready | P2 | 2 (done), 5 (shipped) — unblocked, should land after 6 per execution-order notes | 2026-07-20 |
 | 8  | Governance, correctness & cleanup | 8.2–8.5, 8.7 (8.3/8.4 golden-master; SYS-3 doc item carried from F6) — 8.6 verified-already-shipped 2026-07-18, no code needed | In progress | P3 | 3 (done), 5, 6 | 2026-07-18 |
 | 23 | New strategy: high-risk/high-leverage breakout scalper ("MarginSurge") | All — backtest gates can start now; live gated on 21.1–21.4 | Draft | P2 | 21 (live phase), 22.1–22.2 (liq-buffer + governor, soft) | 2026-07-16 |

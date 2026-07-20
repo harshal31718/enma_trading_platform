@@ -177,9 +177,25 @@ Anything failing one of these lives in **§ Not in this queue** below with the r
   `strategy.stop_loss`/`strategy.take_profit`, at which point the kernel's direct write here
   becomes genuinely removable. Do not attempt this fix in isolation from that larger phase — it
   needs the same live-path, zero-golden-master-coverage caution as the rest of #28.
+- **RE-SCOPED 2026-07-20, after phase (b) shipped — the kernel-write is NOT removable yet, for a
+  bigger reason than originally stated.** Phase (b) (`LiveAdapter.execute_entry` gaining explicit
+  `stop_loss`/`take_profit` params) is done — see DECISIONS.md #28 / the plan file's Step 6.3
+  section. That closes the gap this entry originally described (LiveAdapter's *same-candle* read).
+  But investigating phase (c) — "now delete the kernel's write" — found `check_exits()`
+  (`core/kernel.py` lines ~343-344 and ~383-384) ALSO reads `strategy.stop_loss`/
+  `strategy.take_profit` directly, as the canonical SL/TP trigger levels on **every subsequent
+  candle**, for both backtest and live. There is no persisted, typed alternative to these two
+  attributes across candles — `OrderPlan` is computed fresh each candle and never stored. Deleting
+  the kernel's write (lines ~519-522) without giving `check_exits()` its own persisted source of
+  truth would silently stop SL/TP exits from ever triggering, on candle 2 onward, for any
+  exec_algo-sliced position — a real regression, not a cleanup. **F10/phase (c) is therefore not
+  closeable in isolation — it's entangled with phase (d)'s wider mutable-attribute-read cleanup**
+  (the ~48-file surface `_pending_flip`/`_close_at_open`/`s.stop_loss`/`s.take_profit` sized in the
+  original Step 6.3 investigation), not a standalone next step. No code changed this pass.
 - **Acceptance (once phased in):** `route()` is the only code path that ever assigns these
-  attributes; `test_boundaries.py` or a new equivalent test enforces it structurally, not just by
-  docstring claim.
+  attributes AND the only code path anything else ever reads them from (i.e. `check_exits()` also
+  needs its own typed/persisted source, not just `LiveAdapter`); `test_boundaries.py` or a new
+  equivalent test enforces it structurally, not just by docstring claim.
 
 ### F8 — Redis `requirepass` · Plan 4.5 · **needs an infra window**
 - **What:** The one real infra item deferred from Plan 4 — authenticate Redis (`requirepass` + update
