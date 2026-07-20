@@ -336,7 +336,10 @@ not the risk/decision logic living alongside it in the same methods, actually mo
     winRate=0.36 cagr=-71.32 sqn=-2.08`) — a live pre/post diff wasn't obtainable since the
     `engine` container has no bind mount (code is baked in at build time), so the already-recorded
     6.6 baseline served as the "before." See `handoff.md` for the exact commands used.
-  - **Phase (b) code written 2026-07-20 — verification pending.** `LiveAdapter.execute_entry`
+  - **Phase (b) SHIPPED 2026-07-20 — verified via real rebuild: pytest 647/647,
+    golden-master `MultiDivergence` byte-identical to phase (a)'s baseline
+    (`trades=55 netProfit=-1784.02 winRate=0.36 cagr=-71.32 sqn=-2.08`).**
+    `LiveAdapter.execute_entry`
     (`core/live_bot_manager.py`) and its abstract declaration (`ExecutionAdapter.execute_entry`,
     `core/kernel.py`) gained optional `stop_loss`/`take_profit` params, mirroring the pattern
     `execute_flip` already used. `kernel.py`'s single live-entry call site in

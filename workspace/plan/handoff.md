@@ -7,7 +7,7 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
-## 2026-07-20 (later same day, part 4) — Plan 6 Step 6.3 phase (d) SCOPED (docs only, not authorized) — phase (b)'s golden-master still unconfirmed mid-re-check
+## 2026-07-20 (later same day, part 4) — Plan 6 Step 6.3 phase (d) SCOPED (docs only, not authorized); phase (b) now fully verified
 
 **Goal:** continue Step 6.3 to phase (c) — per DECISIONS.md #28's original plan, F10's kernel-write
 (the exec_algo branch in `kernel.py` writing `strategy.stop_loss`/`take_profit` directly) should
@@ -71,13 +71,14 @@ that still needs its own `DECISIONS.md` entry per the original Step 6.3 investig
 in the plan file's Step 6.3 section. Not authorized, not started — this is scope for a future
 decision, not a commitment.**
 
-**Open questions:** (1) confirm phase (b)'s golden-master line — re-check was in progress when
-this entry was written; get the actual result before calling phase (b) fully verified. (2) decide
-whether phase (d)'s multi-session effort (d1-d5 above) is worth pursuing, and if so get a
-`DECISIONS.md` sign-off on the `active_bracket` design direction before d1 starts. Plan 6 status:
-6.1/6.2/6.4/6.6 shipped; 6.3 phases (a) shipped-and-verified, (b) code-written/verification
-re-checking, (c) blocked/re-scoped into (d), (d) scoped-but-not-authorized; 6.5 needs Node-side
-consumer code.
+**Phase (b) golden-master re-check came back clean**: `MultiDivergence: trades=55
+netProfit=-1784.02 winRate=0.36 cagr=-71.32 sqn=-2.08` — byte-identical to phase (a)'s baseline.
+Phase (b) is now fully shipped and verified, no loose ends.
+
+**Open questions:** decide whether phase (d)'s multi-session effort (d1-d5 above) is worth
+pursuing, and if so get a `DECISIONS.md` sign-off on the `active_bracket` design direction before
+d1 starts. Plan 6 status: 6.1/6.2/6.4/6.6 shipped; 6.3 phases (a)/(b) shipped-and-verified, (c)
+blocked/re-scoped into (d), (d) scoped-but-not-authorized; 6.5 needs Node-side consumer code.
 
 ---
 ## 2026-07-20 (later same day, part 2) — Plan 6 Step 6.3 phase (b): code written, verification pending — run these commands next
