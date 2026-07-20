@@ -330,8 +330,12 @@ not the risk/decision logic living alongside it in the same methods, actually mo
     `LiveAdapter` tests; (c) only then does F10's kernel-write become removable; (d) the wider
     mutable-attribute-read cleanup across the ~48-file surface the first pass sized. Each phase
     independently golden-master-verified — do not attempt (a)+(b)+(c) as one change.
-  - **Phase (a) implemented 2026-07-20 — code written, golden-master/pytest verification NOT YET
-    RUN (this session had no Docker access; needs the user to run it — see handoff.md).**
+  - **Phase (a) SHIPPED 2026-07-20 — verified via a real `docker compose build` + `up -d --no-deps
+    engine` rebuild.** Engine pytest 647/647; golden-master `MultiDivergence` summary line
+    byte-identical to the number recorded in Step 6.6's rebuild (`trades=55 netProfit=-1784.02
+    winRate=0.36 cagr=-71.32 sqn=-2.08`) — a live pre/post diff wasn't obtainable since the
+    `engine` container has no bind mount (code is baked in at build time), so the already-recorded
+    6.6 baseline served as the "before." See `handoff.md` for the exact commands used.
     `DefaultExecution.route()` (`core/models/execution.py`) now returns a typed `OrderPlan` for
     Paths 2/4/5 (close/flip/maintain), not just Path 3 (enter) — additive only, every existing
     mutable-attribute write (`s._close_at_open`, `s.flip_position()`, `s.stop_loss`/`take_profit`

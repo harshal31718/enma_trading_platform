@@ -7,7 +7,7 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
-## 2026-07-20 (later same day) — Plan 6 Step 6.3 phase (a): code written, verification BLOCKED — needs Docker, run these commands next
+## 2026-07-20 (later same day) — Plan 6 Step 6.3 phase (a) SHIPPED — verified via real rebuild, golden-master + pytest clean
 
 **Goal:** the user picked up this session after hitting CLI session limits and asked to continue
 from where the prior session left off. Prior session's last state (see the two entries below):
@@ -37,21 +37,20 @@ Checked before writing: grepped all test files calling `.route(` directly — no
 returns `None` for Paths 2/4/5, so this shouldn't be a test-breaking change, but that's inference,
 not verification.
 
-**NOT done — golden-master/pytest verification (Rule C, mandatory for this class of change).** This
-session has no Docker access (the shell tool's sandbox has no `docker` binary, no TA-Lib — checked
-before concluding this, not assumed). **Next thing to do, before anything else touches Plan 6**: run
-in a real terminal with Docker access —
-```
-docker exec enma_trading_platform-engine-1 python engine/scripts/golden_master.py --out /tmp/before_6.3a.json
-# (if a `before` baseline from this exact working tree doesn't already exist — check first)
-docker exec enma_trading_platform-engine-1 pytest -q
-docker exec enma_trading_platform-engine-1 python engine/scripts/golden_master.py --out /tmp/after_6.3a.json
-diff <(python -m json.tool /tmp/before_6.3a.json) <(python -m json.tool /tmp/after_6.3a.json)
-```
-Expect pytest 647/647 unchanged and the golden-master diff empty (byte-identical) — this phase
-changes what `route()` **returns**, never what the mutable attributes end up holding, so backtest
-output should be untouched. If either check fails, do NOT proceed to phase (b) — the phase (a)
-design itself needs re-examination.
+**Verified — golden-master/pytest (Rule C), via a real image rebuild, run by the user (this
+session's sandbox has no Docker access — confirmed before asking, not assumed).**
+`docker compose build engine` + `docker compose up -d --no-deps engine` (picks up phase (a)'s
+code — the `engine` service has `volumes: []`, code is baked in at build time via `COPY . .`, so
+`docker exec` against a stale container silently runs OLD code — this cost one wasted round-trip
+before being caught). `docker exec ... pytest -q` → 647/647. `docker exec ... python
+scripts/golden_master.py run --label after_6.3a` (note: subcommand-based CLI —
+`run --label X` / `compare --a X --b Y`, not `--out`, another wasted round-trip) →
+`MultiDivergence: trades=55 netProfit=-1784.02 winRate=0.36 cagr=-71.32 sqn=-2.08` — byte-identical
+to the number recorded in the 6.6 entry above (captured on the pre-phase-(a) rebuild). Since the
+`engine` container has no bind mount, a live pre/post-this-exact-change baseline wasn't obtainable
+(the rebuilt image already has phase (a) in it) — comparing against the already-recorded 6.6
+baseline is the valid substitute here, since phase (a) only changes what `route()` **returns**,
+never the mutable attributes that drive backtest math.
 
 **Files changed:** `engine/core/models/execution.py` (route(), all 3 non-enter paths + docstrings),
 `engine/core/models/base.py` (`OrderPlan.intent` docstring), `engine/core/kernel.py` (2 gate sites
@@ -59,8 +58,7 @@ design itself needs re-examination.
 `6_engine-decomposition-and-exchange-abstraction.md` (Step 6.3 section), `0_tracker.md` (Plan 6
 row), this file.
 
-**Open questions:** none design-wise — phase (a)'s design is settled per DECISIONS.md #28. The only
-open item is the verification run above. Once that's green, phase (b) is next: `LiveAdapter`/
+**Open questions:** none — phase (a) is fully shipped and verified. Phase (b) is next: `LiveAdapter`/
 `OrderRouter` (`core/live_bot_manager.py`, Step 6.1's `order_router.py`) gain explicit SL/TP
 parameters sourced from `OrderPlan` instead of reading `strategy.stop_loss`/`take_profit` directly —
 verify against all 19+ existing `LiveAdapter` tests. Do not attempt (b) in the same pass as
