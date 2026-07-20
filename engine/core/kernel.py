@@ -38,11 +38,16 @@ class ExecutionAdapter(ABC):
     async def execute_entry(
         self, strategy, symbol: str, direction: str, qty: float, ref_price: float,
         time_t: datetime, index_t: int, intent: str = "enter", adjust_tag: str = "",
+        stop_loss: float | None = None, take_profit: float | None = None,
     ) -> bool:
         """Execute a market entry order. Returns True if entered.
 
         intent: "enter" for new position, "add" for DCA scale-in.
         adjust_tag: label from strategy.adjust_trade_position() for per-tag analytics.
+        stop_loss/take_profit (Plan 6 Step 6.3 phase (b)): optional explicit values
+        from the typed OrderPlan. Implementations that don't use them may ignore
+        them (e.g. BacktestAdapter, which reads strategy.buy/sell/stop_loss via
+        its own deferred execute_pending() mechanism, not this method).
         """
 
     @abstractmethod
@@ -557,6 +562,12 @@ class ExecutionKernel:
             # (Plan 6 Step 6.3 phase (a)) since route() now returns a non-None
             # OrderPlan for those paths as well.
             if strategy.position is None and plan is not None and plan.intent == "enter":
+                # Plan 6 Step 6.3 phase (b): pass the typed OrderPlan's SL/TP
+                # explicitly instead of relying on the adapter reading
+                # strategy.stop_loss/take_profit internally. Provably a
+                # no-op here: plan.stop_loss/take_profit are the same values
+                # already written to strategy.stop_loss/take_profit for this
+                # exact event (see execute_entry's own comment).
                 await self.adapter.execute_entry(
                     strategy=strategy,
                     symbol=symbol,
@@ -565,6 +576,8 @@ class ExecutionKernel:
                     ref_price=strategy.price,
                     time_t=time_t,
                     index_t=index_t,
+                    stop_loss=plan.stop_loss,
+                    take_profit=plan.take_profit,
                 )
             elif strategy.has_pending_flip:
                 flip = strategy._pending_flip

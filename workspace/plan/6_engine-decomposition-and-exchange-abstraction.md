@@ -336,6 +336,28 @@ not the risk/decision logic living alongside it in the same methods, actually mo
     winRate=0.36 cagr=-71.32 sqn=-2.08`) — a live pre/post diff wasn't obtainable since the
     `engine` container has no bind mount (code is baked in at build time), so the already-recorded
     6.6 baseline served as the "before." See `handoff.md` for the exact commands used.
+  - **Phase (b) code written 2026-07-20 — verification pending.** `LiveAdapter.execute_entry`
+    (`core/live_bot_manager.py`) and its abstract declaration (`ExecutionAdapter.execute_entry`,
+    `core/kernel.py`) gained optional `stop_loss`/`take_profit` params, mirroring the pattern
+    `execute_flip` already used. `kernel.py`'s single live-entry call site in
+    `evaluate_and_route()` now passes `stop_loss=plan.stop_loss, take_profit=plan.take_profit`
+    explicitly. Scoped narrower than the original finding suggested: `OrderRouter` (Step 6.1)
+    needed no change — it never reads `strategy.stop_loss`/`take_profit` itself, only
+    `LiveAdapter.execute_entry` does (confirmed by grep before writing). Provably a no-op by
+    construction: for `intent="enter"`, `plan.stop_loss`/`plan.take_profit` are always equal to
+    `strategy.stop_loss[1]`/`strategy.take_profit[1]` at the point `execute_entry` is called —
+    `route()`'s Path 3 writes both from the same `sl`/`tp` locals, and the exec_algo slice path
+    (kernel.py) writes `strategy.stop_loss` from `plan.stop_loss` immediately before this call —
+    so this changes WHERE the value is read from, never WHAT value is used. All other call sites
+    (DCA "add", flip, `execute_pending()`'s deferred backtest path, all 19+ existing `LiveAdapter`
+    tests) don't pass the new params and fall back to the strategy attributes exactly as before —
+    confirmed by grep across every `execute_entry(` call site before writing, and by checking
+    `test_exec_algo_slicing.py`'s two fake adapters (`is_live=False`, so the new-kwarg call site
+    is never reached by them). `execute_pending()`'s backtest-path `execute_entry` calls (lines
+    ~195/247/259) were deliberately left untouched — different adapter (`BacktestAdapter`),
+    different mechanism entirely, already covered by golden-master. F10's kernel-write (the
+    exec_algo branch writing `strategy.stop_loss`/`take_profit` directly) is NOT yet removed —
+    that's phase (c), gated on this phase being verified first.
     `DefaultExecution.route()` (`core/models/execution.py`) now returns a typed `OrderPlan` for
     Paths 2/4/5 (close/flip/maintain), not just Path 3 (enter) — additive only, every existing
     mutable-attribute write (`s._close_at_open`, `s.flip_position()`, `s.stop_loss`/`take_profit`

@@ -281,6 +281,7 @@ class LiveAdapter(ExecutionAdapter):
     async def execute_entry(
         self, strategy, symbol: str, direction: str, qty: float, ref_price: float,
         time_t: datetime, index_t: int, intent: str = "enter", adjust_tag: str = "",
+        stop_loss: float | None = None, take_profit: float | None = None,
     ) -> bool:
         session = self._registry.sessions.get(self.session_id)
         if not session:
@@ -375,9 +376,19 @@ class LiveAdapter(ExecutionAdapter):
 
         fill_price = ref_price
 
-        # Retrieve SL/TP values from strategy (updated by evaluate pipeline or exec_algo)
-        sl_raw = strategy.stop_loss[1] if strategy.stop_loss else None
-        tp_raw = strategy.take_profit[1] if strategy.take_profit else None
+        # Plan 6 Step 6.3 phase (b): prefer the explicit stop_loss/take_profit
+        # params (sourced from the typed OrderPlan at the kernel.py call site)
+        # over reading strategy.stop_loss/take_profit directly. Callers that
+        # don't pass them (DCA "add", flip, and pre-existing tests) fall back
+        # to the strategy attributes exactly as before — this is additive,
+        # not a removal of the mutable-attribute channel. By construction the
+        # two sources hold the same value for intent="enter" at this point
+        # (route()'s Path 3 writes both from the same sl/tp locals; the
+        # exec_algo slice path writes strategy.stop_loss from plan.stop_loss
+        # immediately before this call), so this changes WHERE the value is
+        # read from, not WHAT value is used.
+        sl_raw = stop_loss   if stop_loss   is not None else (strategy.stop_loss[1]   if strategy.stop_loss   else None)
+        tp_raw = take_profit if take_profit is not None else (strategy.take_profit[1] if strategy.take_profit else None)
         sl_pct = abs(fill_price - sl_raw) / fill_price if sl_raw else None
 
         exchange_name = "Binance Futures"

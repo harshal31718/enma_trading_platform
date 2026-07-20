@@ -7,6 +7,65 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
+## 2026-07-20 (later same day, part 2) — Plan 6 Step 6.3 phase (b): code written, verification pending — run these commands next
+
+**Goal:** continue Step 6.3's phased implementation now that phase (a) shipped (prior entry
+below). Phase (b), per DECISIONS.md #28: give `LiveAdapter`/`OrderRouter` explicit SL/TP
+parameters sourced from `OrderPlan`, instead of `LiveAdapter.execute_entry` reading
+`strategy.stop_loss`/`take_profit` directly as its only channel.
+
+**Done:** `LiveAdapter.execute_entry` (`core/live_bot_manager.py`) and the abstract
+`ExecutionAdapter.execute_entry` declaration (`core/kernel.py`) gained optional
+`stop_loss`/`take_profit` params — mirrors `execute_flip`'s existing pattern exactly.
+`kernel.py`'s one live-entry call site (`evaluate_and_route()`, gated by `plan.intent == "enter"`
+from phase (a)) now passes `stop_loss=plan.stop_loss, take_profit=plan.take_profit` explicitly.
+Turned out narrower than DECISIONS.md #28 anticipated: grepped `OrderRouter` first — it never
+reads `strategy.stop_loss`/`take_profit` itself (only `place_market_order`/`place_algo_order`/
+`confirm_fill`, no strategy-attribute reads at all), so it needed no change; the "OrderRouter
+parameterization" concern turned out to be entirely inside `LiveAdapter.execute_entry`.
+
+**Why this is safe despite touching the live path with zero golden-master coverage**: provably a
+no-op by construction, not just by inspection. For `intent="enter"`, `plan.stop_loss`/
+`plan.take_profit` are ALWAYS equal to `strategy.stop_loss[1]`/`strategy.take_profit[1]` at the
+moment `execute_entry` is called — `route()`'s Path 3 writes both the plan and the mutable
+attributes from the same `sl`/`tp` locals (unchanged since before phase (a)), and the exec_algo
+slice path (`kernel.py`) writes `strategy.stop_loss` from `plan.stop_loss` immediately before this
+call. So the change is WHERE the value is read from, never WHAT value is used. Checked every
+`execute_entry(` call site by grep before writing (5 in `kernel.py`, 1 in `live_bot_manager.py`
+itself, ~13 in tests): the DCA "add" call, the flip call, `execute_pending()`'s 2 backtest-only
+calls (different adapter — `BacktestAdapter`, different mechanism, unaffected), and all 19+
+existing `LiveAdapter` tests don't pass the new params — they fall back to reading the strategy
+attributes exactly as before (default `None` → old behavior). Specifically checked
+`test_exec_algo_slicing.py`'s two fake adapters, since that file's tests exercise the exec_algo
+branch most directly — both have `is_live=False`, so the new-kwarg call site (inside kernel.py's
+`if is_live:` block) is never reached by them.
+
+**NOT done — golden-master/pytest verification.** Same Docker-access limitation as phase (a) (this
+session's sandbox has no `docker` binary). Run, from `C:\Users\harsh\Desktop\enma_trading_platform`:
+```powershell
+docker compose build engine
+docker compose up -d --no-deps engine
+docker exec enma_trading_platform-engine-1 pytest -q
+docker exec enma_trading_platform-engine-1 python scripts/golden_master.py run --label after_6.3b
+```
+Expect pytest 647/647 (no new tests added this phase — the change is provably a no-op for every
+existing call site, so no new regression test was written; consider whether one should exist
+before phase (c)) and the `MultiDivergence` golden-master line matching phase (a)'s
+`trades=55 netProfit=-1784.02 winRate=0.36 cagr=-71.32 sqn=-2.08` exactly, same as last time.
+
+**Files changed:** `engine/core/kernel.py` (abstract `execute_entry` signature + docstring, the
+one live-entry call site), `engine/core/live_bot_manager.py` (`LiveAdapter.execute_entry`
+signature + the `sl_raw`/`tp_raw` two lines). Docs:
+`6_engine-decomposition-and-exchange-abstraction.md` (Step 6.3 section), `0_tracker.md` (Plan 6
+row), this file.
+
+**Open questions:** none design-wise. Once verification is green, phase (c) is next: F10's
+kernel-write (the exec_algo branch in `kernel.py` writing `strategy.stop_loss`/`take_profit`
+directly from a sliced plan) becomes removable now that `LiveAdapter` has its own explicit
+channel — but confirm phase (b) is actually green first, do not stack phase (c) on unverified
+phase (b).
+
+---
 ## 2026-07-20 (later same day) — Plan 6 Step 6.3 phase (a) SHIPPED — verified via real rebuild, golden-master + pytest clean
 
 **Goal:** the user picked up this session after hitting CLI session limits and asked to continue
@@ -118,51 +177,4 @@ replaced with the real outcome), `0_tracker.md` (Plan 6 row), this file.
 DECISIONS.md call, see the entry two above this one), 6.5's Redis-stream channel (needs Node-side
 consumer code, cross-service).
 
----
-## 2026-07-20 — Plan 6 Step 6.3: investigated, deliberately NOT implemented — the typed value objects already exist, the real gap needs a BaseStrategy DECISIONS.md call
-
-**Goal:** the last Plan 6 item not blocked on Node work (6.5) or a container rebuild sign-off
-(6.6, prior entry) — "replace the mutable-attribute protocol with an explicit
-OrderIntent/Signal object the strategy returns and the kernel consumes."
-
-**Finding: the plan text's premise is partly stale.** `core/models/base.py` already defines a
-full typed pipeline — `Signal → RiskConstraints → CostEstimate → TargetPortfolio → OrderPlan`,
-all `@dataclass`, threaded through `pipeline.py`'s `evaluate()` and consumed by `kernel.py`. A
-typo'd field there is already a type error. That part of Step 6.3's acceptance text is already
-satisfied and has been for a while (Narang Five-Model Architecture).
-
-**The real gap**: `DefaultExecution.route()` (`core/models/execution.py`) is documented as the
-"sole writer" of `s.buy`/`s.sell`/`s.stop_loss`/`s.take_profit`/`s._pending_flip`/
-`s._close_at_open`, and writes those SAME fields alongside returning a typed `OrderPlan` — but
-only for its flat→enter path. For maintain/flip/close (3 of its 5 paths) it writes the mutable
-attributes and returns `None`. `kernel.py` then reads a mix of `plan.*` and `strategy.*` for the
-same event — that mixed read pattern is the real "temporal coupling ... spread across
-kernel/adapter/manager" the acceptance text names, not a missing type. Grepped the surface before
-estimating: `_pending_flip` 73 occurrences/48 files, `_close_at_open` 51/32,
-`s.stop_loss`/`s.take_profit` 31+30 across 18/16 files — an order of magnitude bigger than
-anything shipped this session.
-
-**Also found, pre-existing and independent of this step**: `kernel.py`'s own exec_algo branch
-(lines ~496-499) already writes `strategy.stop_loss`/`take_profit` directly, violating
-`route()`'s own "sole writer" docstring. Worth its own small fixes-queue item — narrow, doesn't
-need the interface decision below.
-
-**Why NOT implemented**: `self.buy`/`self.stop_loss`/etc are declared in `BaseStrategy.__init__`
-and documented in `engine/CLAUDE.md`'s "Available properties" as strategy-facing. A real fix means
-`kernel.py`/`LiveAdapter` stop READING these (treating them as `route()`'s write-only internal
-scratch state, consuming `OrderPlan` exclusively instead) — root `CLAUDE.md` requires a
-`DECISIONS.md` entry before changing `BaseStrategy`'s interface, and this reaches all 5 seeded
-strategies on the live-trading path with zero golden-master coverage on the live side. That's the
-user's call, not a background pass's. No code changed; `before_typed_contract.json` golden-master
-baseline was captured but is unused (safe to discard, or reuse whenever implementation starts).
-
-**Files changed:** none (code). Docs: `6_engine-decomposition-and-exchange-abstraction.md` (Step
-6.3 section — full design + recommendation), `0_tracker.md` (Plan 6 row), this file.
-
-**Open questions — for the user, not blocking other work:** should `kernel.py`/`LiveAdapter` stop
-reading `BaseStrategy`'s mutable order-state attributes and consume `OrderPlan` exclusively? If
-yes, this needs a `DECISIONS.md` entry and is likely its own multi-session effort, not a single
-pass. **Plan 6 overall status**: 6.1/6.2/6.4 shipped; 6.3 scoped-but-gated on a user decision; 6.5
-needs Node-side consumer code; 6.6 scoped-but-gated on a container-rebuild sign-off. Nothing left
-in Plan 6 is actionable without either the user's input or cross-service work.
 
