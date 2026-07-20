@@ -1,6 +1,6 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import toast from 'react-hot-toast'
+import { useQuery } from '@tanstack/react-query'
 import api from '../lib/axios'
+import { useApiMutation } from '../lib/apiMutation'
 
 export function useAlgoSessions() {
   return useQuery({
@@ -25,87 +25,62 @@ export function useAlgoSession(id) {
 }
 
 export function useStartSession() {
-  const qc = useQueryClient()
-  return useMutation({
+  return useApiMutation({
     mutationFn: async (payload) => {
       const res = await api.post('/api/v1/algo/sessions', payload)
       return res.data.data
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['algo', 'sessions'] })
-      toast.success('Trading session started successfully')
-    },
-    onError: (err) => {
-      toast.error(err.response?.data?.error?.message || err.message || 'Failed to start trading session')
-    }
+    invalidateKeys: [['algo', 'sessions']],
+    successMessage: 'Trading session started successfully',
+    errorFallback: 'Failed to start trading session',
   })
 }
 
 export function useStopSession() {
-  const qc = useQueryClient()
-  return useMutation({
+  return useApiMutation({
     mutationFn: async (id) => {
       const res = await api.post(`/api/v1/algo/sessions/${id}/stop`)
       return res.data.data
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['algo', 'sessions'] })
-      toast.success('Trading session stopped')
-    },
-    onError: (err) => {
-      toast.error(err.response?.data?.error?.message || err.message || 'Failed to stop trading session')
-    }
+    invalidateKeys: [['algo', 'sessions']],
+    successMessage: 'Trading session stopped',
+    errorFallback: 'Failed to stop trading session',
   })
 }
 
 export function useDeleteSession() {
-  const qc = useQueryClient()
-  return useMutation({
+  return useApiMutation({
     mutationFn: async (id) => {
       const res = await api.delete(`/api/v1/algo/sessions/${id}`)
       return res.data.data
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['algo', 'sessions'] })
-      toast.success('Trading session deleted')
-    },
-    onError: (err) => {
-      toast.error(err.response?.data?.error?.message || err.message || 'Failed to delete trading session')
-    }
+    invalidateKeys: [['algo', 'sessions']],
+    successMessage: 'Trading session deleted',
+    errorFallback: 'Failed to delete trading session',
   })
 }
 
 export function useDeleteAllStopped() {
-  const qc = useQueryClient()
-  return useMutation({
+  return useApiMutation({
     mutationFn: async () => {
       const res = await api.delete('/api/v1/algo/sessions')
       return res.data.data
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['algo', 'sessions'] })
-      toast.success('All stopped trading sessions cleared')
-    },
-    onError: (err) => {
-      toast.error(err.response?.data?.error?.message || err.message || 'Failed to clear stopped sessions')
-    }
+    invalidateKeys: [['algo', 'sessions']],
+    successMessage: 'All stopped trading sessions cleared',
+    errorFallback: 'Failed to clear stopped sessions',
   })
 }
 
 export function useStartChaos() {
-  const qc = useQueryClient()
-  return useMutation({
+  return useApiMutation({
     mutationFn: async (config = {}) => {
       const res = await api.post('/api/v1/algo/chaos', config)
       return res.data.data
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['algo', 'sessions'] })
-      toast.success('Chaos mode started successfully')
-    },
-    onError: (err) => {
-      toast.error(err.response?.data?.error?.message || err.message || 'Failed to start Chaos mode')
-    }
+    invalidateKeys: [['algo', 'sessions']],
+    successMessage: 'Chaos mode started successfully',
+    errorFallback: 'Failed to start Chaos mode',
   })
 }
 

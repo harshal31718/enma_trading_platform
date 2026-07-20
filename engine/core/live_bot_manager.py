@@ -1253,8 +1253,14 @@ class LiveAdapter(ExecutionAdapter):
         exchange = session.get("exchange") or BinanceFuturesTestnet()
 
         pos = strategy.position
-        sl_price = strategy.stop_loss[1] if strategy.stop_loss else None
-        tp_price = strategy.take_profit[1] if strategy.take_profit else None
+        # Plan 6 Step 6.3 phase (d4): read from the persisted typed
+        # active_bracket instead of the mutable stop_loss/take_profit tuples
+        # — equivalent by construction, same invariant as check_exits' d2
+        # migration (active_bracket is kept in sync with these tuples on
+        # every candle route()/the rounding block runs).
+        _ab = strategy.active_bracket
+        sl_price = _ab.stop_loss if _ab is not None else None
+        tp_price = _ab.take_profit if _ab is not None else None
         entry_time_str = session["open_positions"].get(symbol, {}).get("timestamp")
         entry_time = datetime.fromisoformat(entry_time_str.replace("Z", "+00:00")) if entry_time_str else datetime.now(timezone.utc)
         executed_by = session.get("strategy_name", "unknown")
@@ -2403,9 +2409,16 @@ class LiveBotManager:
                                     # Self-heals when engine wrongly believes it is flat (F-004),
                                     # reconciles open orders (F-002), and uses exchange data
                                     # as single source of truth (F-001).
+                                    # Plan 21 Step 21.5c: wave_key = this closed candle's own
+                                    # open-time (ms) — identical across every symbol in this
+                                    # session (shared timeframe), so it's a free, exact cache key
+                                    # for the session-wide batched positionRisk/openOrders/
+                                    # openAlgoOrders snapshot instead of this symbol paying for
+                                    # its own 3 signed calls every candle.
                                     await self._reconcile_exchange_state(
                                         session_id, strategy, symbol,
                                         candle_high=candle[3], candle_low=candle[4],
+                                        wave_key=int(candle[0]),
                                     )
 
                                     # Setup execution algorithm if configured (A-016 parity with backtest path)
@@ -2538,8 +2551,11 @@ class LiveBotManager:
     async def _reconcile_exchange_state(
         self, session_id: str, strategy, symbol: str,
         candle_high: float | None = None, candle_low: float | None = None,
+        wave_key: int | None = None,
     ) -> dict:
-        return await self._reconciler.reconcile_exchange_state(session_id, strategy, symbol, candle_high, candle_low)
+        return await self._reconciler.reconcile_exchange_state(
+            session_id, strategy, symbol, candle_high, candle_low, wave_key,
+        )
 
     @staticmethod
     def _compute_session_equity_and_margin(session: dict) -> tuple[float, float]:

@@ -13,6 +13,7 @@ out of scope for this mechanical extraction, documented rather than hidden.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from decimal import ROUND_DOWN, ROUND_UP
@@ -164,14 +165,22 @@ class Reconciler:
             _fmt_num, _make_client_id, _query_real_exit_from_user_trades, _query_real_fill_price,
             _safe_float, uuid4_hex8, _NAKED_POSITION_MAX_REARM_ATTEMPTS,
         )
-        if strategy.position is None or not strategy.position.is_open or strategy.stop_loss is None:
+        # Plan 6 Step 6.3 phase (d3): read from active_bracket (persisted by
+        # route()/kernel every candle) instead of strategy.stop_loss directly
+        # — this method runs from _run_symbol_loop AFTER kernel.evaluate_and_
+        # route() for this same candle, so active_bracket already reflects
+        # whatever route() just wrote, same as strategy.stop_loss would.
+        if (
+            strategy.position is None or not strategy.position.is_open
+            or strategy.active_bracket is None or strategy.active_bracket.stop_loss is None
+        ):
             return
 
         pos_info = session.get("open_positions", {}).get(symbol)
         if not pos_info:
             return
 
-        new_sl_price = strategy.stop_loss[1]
+        new_sl_price = strategy.active_bracket.stop_loss
         if new_sl_price is None:
             return
 
@@ -317,8 +326,11 @@ class Reconciler:
         # Update local PnL tracking if the engine knew about this position
         if strategy and strategy.position:
             pos = strategy.position
-            sl_price = strategy.stop_loss[1] if strategy.stop_loss else None
-            tp_price = strategy.take_profit[1] if strategy.take_profit else None
+            # Plan 6 Step 6.3 phase (d3): active_bracket instead of the
+            # mutable tuples — see maybe_amend_exchange_sl's comment above.
+            _ab = strategy.active_bracket
+            sl_price = _ab.stop_loss if _ab else None
+            tp_price = _ab.take_profit if _ab else None
             entry_time_str = session["open_positions"].get(symbol, {}).get("timestamp")
             entry_time = datetime.fromisoformat(entry_time_str.replace("Z", "+00:00")) if entry_time_str else datetime.now(timezone.utc)
             executed_by = session.get("strategy_name", "unknown")
@@ -396,9 +408,116 @@ class Reconciler:
         session["open_positions"].pop(symbol, None)
         return True
 
+    async def _get_batched_reconcile_snapshot(
+        self, session: dict, wave_key: int, exchange: Exchange, api_key: str, api_secret: str,
+    ) -> tuple[bool, dict, dict]:
+        """Plan 21 Step 21.5c (A-9c): one un-parametered `positionRisk` +
+        `openOrders` + `openAlgoOrders` call per session per candle wave,
+        shared by every symbol's `reconcile_exchange_state` call for that
+        wave, instead of each symbol paying for its own per-symbol calls.
+
+        Confirmed against Binance's own docs before implementing (not
+        assumed): `positionRisk` is a FLAT weight-5 call regardless of
+        whether `symbol` is given — batching it is a pure win, N calls of
+        weight 5 collapse to one. `openOrders`/`openAlgoOrders` are weight 1
+        per-symbol but weight 40 when `symbol` is omitted — batching only
+        nets a win once a session has enough symbols that
+        `7*N > 5+40+40=85`, i.e. **N > ~13 symbols**. That's exactly this
+        step's own stated target ("the big weight win for Chaos runs"), not
+        small manual sessions — this is a deliberate, session-wide batch
+        call, not a universally cheaper one.
+
+        `wave_key` is the closed candle's own open-time in ms
+        (`int(candle[0])`) — identical across every symbol in a session
+        since they all share one `timeframe`, so it's a natural, free
+        cache key with no extra coordination needed. Cached per session in
+        `session["_reconcile_batch"]`; a per-session `asyncio.Lock` ensures
+        that when many symbol tasks arrive for the same wave at once, only
+        the first one actually calls Binance — the rest await the same
+        in-flight fetch instead of triggering their own redundant batch call
+        (which would defeat the whole point).
+
+        Returns `(position_query_ok, positions_by_symbol, orders_by_symbol)`
+        — `position_query_ok` mirrors A-15's per-call flag: True only if the
+        batched `positionRisk` call itself succeeded, so a symbol absent
+        from a successful batch is genuinely flat (safe for Case 2), while a
+        failed batch leaves every symbol's `position_query_ok=False` (Case 2
+        must not fire on an unconfirmed query, same invariant as the
+        per-symbol path).
+        """
+        if "_reconcile_batch" not in session:
+            session["_reconcile_batch"] = {
+                "wave_key": None, "position_query_ok": False,
+                "positions": {}, "orders": {}, "lock": asyncio.Lock(),
+            }
+        batch = session["_reconcile_batch"]
+
+        if batch["wave_key"] == wave_key:
+            return batch["position_query_ok"], batch["positions"], batch["orders"]
+
+        async with batch["lock"]:
+            # Re-check: another symbol's task may have already fetched this
+            # exact wave while we were waiting for the lock.
+            if batch["wave_key"] == wave_key:
+                return batch["position_query_ok"], batch["positions"], batch["orders"]
+
+            position_query_ok = False
+            positions_by_symbol: dict = {}
+            orders_by_symbol: dict = {}
+
+            try:
+                pos_data = await exchange.query_position_risk(api_key, api_secret, params={})
+                position_query_ok = True
+                if isinstance(pos_data, list):
+                    for p in pos_data:
+                        _sym = p.get("symbol")
+                        if _sym:
+                            positions_by_symbol[_sym] = p
+            except Exception as e:
+                logger.warning(f"[AlgoBot] batched reconcile (wave={wave_key}): positionRisk (all symbols) failed — {e}")
+
+            try:
+                order_data = await exchange.query_open_orders(api_key, api_secret, params={})
+                if isinstance(order_data, list):
+                    for o in order_data:
+                        _sym = o.get("symbol")
+                        if _sym:
+                            orders_by_symbol.setdefault(_sym, []).append(o)
+                    try:
+                        algo_orders = await exchange.query_open_algo_orders(api_key, api_secret, params={})
+                        if isinstance(algo_orders, list):
+                            for ao in algo_orders:
+                                _sym = ao.get("symbol")
+                                if not _sym:
+                                    continue
+                                normalized = {
+                                    "orderId": ao.get("algoId"),
+                                    "clientOrderId": ao.get("clientAlgoId"),
+                                    "symbol": ao.get("symbol"),
+                                    "type": ao.get("orderType"),
+                                    "status": ao.get("orderStatus"),
+                                    "stopPrice": ao.get("triggerPrice"),
+                                    "origQty": ao.get("quantity"),
+                                    "executedQty": "0",
+                                    "side": ao.get("side"),
+                                    "time": ao.get("createTime"),
+                                }
+                                orders_by_symbol.setdefault(_sym, []).append(normalized)
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.warning(f"[AlgoBot] batched reconcile (wave={wave_key}): openOrders (all symbols) failed — {e}")
+
+            batch["wave_key"] = wave_key
+            batch["position_query_ok"] = position_query_ok
+            batch["positions"] = positions_by_symbol
+            batch["orders"] = orders_by_symbol
+            return position_query_ok, positions_by_symbol, orders_by_symbol
+
     async def reconcile_exchange_state(
         self, session_id: str, strategy, symbol: str,
         candle_high: float | None = None, candle_low: float | None = None,
+        wave_key: int | None = None,
     ) -> dict:
         """Unified state reconciliation (F-001/F-002/F-004).
 
@@ -413,6 +532,15 @@ class Reconciler:
              record trade with ``exchange_sync`` reason.
           3. Both have a position → update unrealised PnL from exchange mark
              price.
+
+        Plan 21 Step 21.5c (A-9c): pass ``wave_key`` (the closed candle's own
+        open-time in ms) from the routine per-candle-close call site to use
+        one session-wide batched query (shared across every symbol closing
+        that same candle) instead of this symbol's own 3 signed calls — see
+        `_get_batched_reconcile_snapshot`. Event-driven call sites (`_on_fill`,
+        `_on_account_update`) deliberately omit it — they need this symbol's
+        state fresh, not a wave-cached snapshot possibly seconds old, and are
+        rare/per-symbol by nature so batching wouldn't save anything anyway.
         """
         from core.live_bot_manager import (
             _binance_error_detail, _classify_exchange_sync_exit_reason, _extract_fill_price,
@@ -441,49 +569,65 @@ class Reconciler:
         position_query_ok = False
 
         if _api_key and _api_secret:
-            try:
-                pos_data = await exchange.query_position_risk(
-                    _api_key, _api_secret, params={"symbol": symbol},
-                )
-                position_query_ok = True
-                if isinstance(pos_data, list):
-                    for p in pos_data:
-                        if p.get("symbol") == symbol:
-                            exchange_pos = p
-                            break
-            except Exception as e:
-                logger.warning(f"[AlgoBot] {symbol}: reconcile (position) failed — {e}")
-
-            try:
-                order_data = await exchange.query_open_orders(
-                    _api_key, _api_secret, params={"symbol": symbol},
-                )
-                if isinstance(order_data, list):
-                    open_orders = order_data
-                    # Also fetch algo orders (SL/TP)
-                    try:
-                        algo_orders = await exchange.query_open_algo_orders(
-                            _api_key, _api_secret, params={"symbol": symbol},
+            if wave_key is not None:
+                # Plan 21 Step 21.5c: session-wide batched snapshot for this
+                # candle wave — see `_get_batched_reconcile_snapshot`'s
+                # docstring for the weight math and the position_query_ok
+                # semantics this mirrors exactly.
+                try:
+                    position_query_ok, _positions_by_symbol, _orders_by_symbol = (
+                        await self._get_batched_reconcile_snapshot(
+                            session, wave_key, exchange, _api_key, _api_secret,
                         )
-                        if isinstance(algo_orders, list):
-                            for ao in algo_orders:
-                                normalized = {
-                                    "orderId": ao.get("algoId"),
-                                    "clientOrderId": ao.get("clientAlgoId"),
-                                    "symbol": ao.get("symbol"),
-                                    "type": ao.get("orderType"),
-                                    "status": ao.get("orderStatus"),
-                                    "stopPrice": ao.get("triggerPrice"),
-                                    "origQty": ao.get("quantity"),
-                                    "executedQty": "0",
-                                    "side": ao.get("side"),
-                                    "time": ao.get("createTime"),
-                                }
-                                open_orders.append(normalized)
-                    except Exception:
-                        pass
-            except Exception as e:
-                logger.warning(f"[AlgoBot] {symbol}: reconcile (orders) failed — {e}")
+                    )
+                    exchange_pos = _positions_by_symbol.get(symbol)
+                    open_orders = list(_orders_by_symbol.get(symbol, []))
+                except Exception as e:
+                    logger.warning(f"[AlgoBot] {symbol}: batched reconcile (wave={wave_key}) failed — {e}")
+            else:
+                try:
+                    pos_data = await exchange.query_position_risk(
+                        _api_key, _api_secret, params={"symbol": symbol},
+                    )
+                    position_query_ok = True
+                    if isinstance(pos_data, list):
+                        for p in pos_data:
+                            if p.get("symbol") == symbol:
+                                exchange_pos = p
+                                break
+                except Exception as e:
+                    logger.warning(f"[AlgoBot] {symbol}: reconcile (position) failed — {e}")
+
+                try:
+                    order_data = await exchange.query_open_orders(
+                        _api_key, _api_secret, params={"symbol": symbol},
+                    )
+                    if isinstance(order_data, list):
+                        open_orders = order_data
+                        # Also fetch algo orders (SL/TP)
+                        try:
+                            algo_orders = await exchange.query_open_algo_orders(
+                                _api_key, _api_secret, params={"symbol": symbol},
+                            )
+                            if isinstance(algo_orders, list):
+                                for ao in algo_orders:
+                                    normalized = {
+                                        "orderId": ao.get("algoId"),
+                                        "clientOrderId": ao.get("clientAlgoId"),
+                                        "symbol": ao.get("symbol"),
+                                        "type": ao.get("orderType"),
+                                        "status": ao.get("orderStatus"),
+                                        "stopPrice": ao.get("triggerPrice"),
+                                        "origQty": ao.get("quantity"),
+                                        "executedQty": "0",
+                                        "side": ao.get("side"),
+                                        "time": ao.get("createTime"),
+                                    }
+                                    open_orders.append(normalized)
+                        except Exception:
+                            pass
+                except Exception as e:
+                    logger.warning(f"[AlgoBot] {symbol}: reconcile (orders) failed — {e}")
 
         # ── 2. Parse exchange data ──────────────────────────────────────────
         exchange_amt = 0.0
@@ -589,8 +733,11 @@ class Reconciler:
         elif has_local_position and not has_exchange_position and position_query_ok:
             logger.warning(f"[AlgoBot] {symbol}: reconciled — exchange has no position, closing local state")
             pos = strategy.position
-            sl_price = strategy.stop_loss[1] if strategy.stop_loss else None
-            tp_price = strategy.take_profit[1] if strategy.take_profit else None
+            # Plan 6 Step 6.3 phase (d3): active_bracket instead of the
+            # mutable tuples — see maybe_amend_exchange_sl's comment above.
+            _ab = strategy.active_bracket
+            sl_price = _ab.stop_loss if _ab else None
+            tp_price = _ab.take_profit if _ab else None
             exit_time = datetime.now(timezone.utc)
             entry_time_str = session["open_positions"].get(symbol, {}).get("timestamp")
             entry_time = datetime.fromisoformat(entry_time_str.replace("Z", "+00:00")) if entry_time_str else exit_time
@@ -743,7 +890,9 @@ class Reconciler:
             # class), and A-6 emergency-close-failure survivors can all end
             # up running naked, silently, forever. freqtrade re-places a
             # missing exchange stoploss on every iteration; mirror that here.
-            if strategy.stop_loss is not None:
+            # Plan 6 Step 6.3 phase (d3): active_bracket instead of the
+            # mutable tuple — see maybe_amend_exchange_sl's comment above.
+            if strategy.active_bracket is not None and strategy.active_bracket.stop_loss is not None:
                 _has_live_sl = any(
                     "STOP" in str(_o.get("type") or "").upper()
                     or str(_o.get("clientOrderId") or "").endswith("sl")
@@ -757,7 +906,7 @@ class Reconciler:
                         f"stop_loss but no live SL algo order exists on the exchange "
                         f"(re-arm attempt {_attempt_n})"
                     )
-                    _sl_qty, _sl_price_raw = strategy.stop_loss
+                    _sl_price_raw = strategy.active_bracket.stop_loss
                     _sl_rounding = ROUND_DOWN if strategy.position.type == "long" else ROUND_UP
                     _sl_price_new = round_price(symbol, "Binance Futures", _sl_price_raw, rounding=_sl_rounding) if _sl_price_raw else None
                     _rearmed = False
@@ -935,12 +1084,13 @@ class Reconciler:
         the session's other open symbols (Plan 21 audit finding: despite the
         name, `max_portfolio_risk` there is a per-symbol check).
 
-        Reads each symbol's *current* `strategy.stop_loss` (not a stale
-        entry-time snapshot) so a trailing/breakeven-tightened stop is
-        reflected immediately — the same live value `_maybe_amend_exchange_sl`
-        pushes to the exchange. `sum(breakdown.values())` is the aggregate;
-        callers needing to name contributing symbols in a veto log use the
-        breakdown directly (see `execute_entry`).
+        Reads each symbol's *current* `strategy.active_bracket.stop_loss`
+        (Plan 6 Step 6.3 phase (d3); not a stale entry-time snapshot) so a
+        trailing/breakeven-tightened stop is reflected immediately — the
+        same live value `_maybe_amend_exchange_sl` pushes to the exchange.
+        `sum(breakdown.values())` is the aggregate; callers needing to name
+        contributing symbols in a veto log use the breakdown directly (see
+        `execute_entry`).
         """
         from core.live_bot_manager import (
             _binance_error_detail, _classify_exchange_sync_exit_reason, _extract_fill_price,
@@ -951,9 +1101,11 @@ class Reconciler:
         for symbol, strat in session.get("strategy_instances", {}).items():
             if strat.position is None or not strat.position.is_open:
                 continue
-            if strat.stop_loss is None:
+            # Plan 6 Step 6.3 phase (d3): active_bracket instead of the
+            # mutable tuple — see maybe_amend_exchange_sl's comment above.
+            if strat.active_bracket is None or strat.active_bracket.stop_loss is None:
                 continue
-            _, stop_price = strat.stop_loss
+            stop_price = strat.active_bracket.stop_loss
             breakdown[symbol] = abs(strat.position.entry_price - stop_price) * strat.position.qty
         return breakdown
 

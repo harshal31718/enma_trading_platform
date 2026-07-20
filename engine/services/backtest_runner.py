@@ -356,8 +356,17 @@ class BacktestAdapter(ExecutionAdapter):
                             intent: str = "enter", adjust_tag: str = "") -> bool:
         exchange_name = strategy.exchange or "Binance Futures"
         sl_pct = None
-        if strategy.stop_loss is not None:
-            _, sl_price = strategy.stop_loss
+        # Plan 6 Step 6.3 phase (d4): read from the persisted typed
+        # active_bracket instead of the mutable stop_loss tuple. Equivalent
+        # by construction — route()/kernel's exec_algo branch and check_exits'
+        # rounding block keep active_bracket in sync with strategy.stop_loss
+        # on every candle (see d1/d2), and this read happens in
+        # execute_pending() before evaluate_and_route() runs for this candle,
+        # so active_bracket still holds exactly what the prior candle's
+        # route() (or, for an open position, this candle's DCA adjust) set it to.
+        _ab = strategy.active_bracket
+        if _ab is not None and _ab.stop_loss is not None:
+            sl_price = _ab.stop_loss
             sl_pct = abs(ref_price - sl_price) / ref_price
 
         qty = clamp_and_round_qty(symbol, exchange_name, qty, ref_price, stop_loss_pct=sl_pct)

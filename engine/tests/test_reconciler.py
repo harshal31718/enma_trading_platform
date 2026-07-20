@@ -62,8 +62,8 @@ def test_manager_cancel_symbol_algo_orders_delegates(monkeypatch):
 def test_manager_reconcile_exchange_state_delegates(monkeypatch):
     calls = []
 
-    async def fake_reconcile(session_id, strategy, symbol, candle_high, candle_low):
-        calls.append((session_id, strategy, symbol, candle_high, candle_low))
+    async def fake_reconcile(session_id, strategy, symbol, candle_high, candle_low, wave_key=None):
+        calls.append((session_id, strategy, symbol, candle_high, candle_low, wave_key))
         return {"position": None, "open_orders": []}
 
     mgr = LiveBotManager()
@@ -71,7 +71,7 @@ def test_manager_reconcile_exchange_state_delegates(monkeypatch):
     result = _run(mgr._reconcile_exchange_state("sess1", "STRAT", "BTCUSDT", 101.0, 99.0))
 
     assert result == {"position": None, "open_orders": []}
-    assert calls == [("sess1", "STRAT", "BTCUSDT", 101.0, 99.0)]
+    assert calls == [("sess1", "STRAT", "BTCUSDT", 101.0, 99.0, None)]
 
 
 def test_manager_compute_session_equity_and_margin_matches_reconciler_static():

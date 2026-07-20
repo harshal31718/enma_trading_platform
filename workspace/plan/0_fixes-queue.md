@@ -36,9 +36,8 @@ Anything failing one of these lives in **§ Not in this queue** below with the r
   caps at 0 on blank fields, blocking ALL live entries; +5 jest tests → 116/116, live-confirmed
   entries then flowed); (b) **FIXED** — `-4015` emergency-close `clientOrderId` > 36 chars, systemic
   across ~6 placement sites, resolved with a central `_make_client_id()` helper that budgets ≤35
-  chars (engine pytest 450/450, `test_make_client_id.py`). Both fixes are in the working tree,
-  uncommitted, pending commit. See `handoff.md` 2026-07-19 + `CURRENT_STATE.md` Known Technical
-  Debt.
+  chars (engine pytest 450/450, `test_make_client_id.py`). Both fixes committed (`bedd8dc`).
+  See `handoff.md` 2026-07-19 + `CURRENT_STATE.md` Known Technical Debt.
 - **History:** F7 began as "confirm `ORDER_TRADE_UPDATE` emits for algo orders". The 2026-07-16
   live Chaos run answered it (fills NOT reliably caught — ~50-55s UI/state staleness until the
   next candle's REST poll) and surfaced two more bugs (TP-placement 400s, FXSUSDT stuck open
@@ -239,7 +238,7 @@ honest. Full detail in each plan file; sequencing in [`0_roadmap.md`](0_roadmap.
 | Informative / multi-timeframe `self.htf()` | 13 | Genuinely new *feature* work, not a "fix." Own focused pass, then 17. |
 | Recursive-formula / warmup-insufficiency analysis | 17 | New analysis tool; **sequence after 13** so it also sweeps multi-TF indicators. |
 | Session Risk Governor (all of Plan 22) | 22 | Multi-step new subsystem; **depends on 21.1–21.4 landing first** (a governor over a wrong-state fill path enforces limits against fiction). |
-| Plan 21 remaining fixes (21.5c only — 21.3/21.4/21.7 all shipped 2026-07-17) | 21 | 21.5c (batched reconcile) needs a session-level concurrency restructure of `_run_symbol_loop`, deliberately deferred, not a squeeze-in. |
+| ~~Plan 21 remaining fixes~~ | 21 | **All shipped 2026-07-20** — 21.5c (batched reconcile) shipped, container-verified [653/653 pytest, golden-master byte-identical]. Plan 21 is fully shipped in code; only live Testnet re-verification remains. |
 
 **Rule of thumb:** if an item needs a golden-master sign-off, a Plan-5-complete precondition, or more
 than a session, it belongs to a phase in `0_roadmap.md`, not to this queue.

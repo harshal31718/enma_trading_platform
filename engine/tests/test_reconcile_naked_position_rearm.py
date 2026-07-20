@@ -24,6 +24,7 @@ import pytest
 import services.binance_testnet as binance_mod
 import core.live_bot_manager as lbm_module
 from core.live_bot_manager import LiveBotManager, _NAKED_POSITION_MAX_REARM_ATTEMPTS
+from core.models.base import OrderPlan
 from core.node_notifier import NodeNotifier
 from core.position import Position
 
@@ -45,6 +46,12 @@ class _FakeStrategy:
         self.position = position
         self.stop_loss = stop_loss
         self.take_profit = None
+        # Plan 6 Step 6.3 phase (d3): the naked-position re-arm detector
+        # reads active_bracket now, not stop_loss directly.
+        self.active_bracket = (
+            OrderPlan(direction=1, qty=stop_loss[0], entry_price=100.0, stop_loss=stop_loss[1])
+            if stop_loss is not None else None
+        )
         self._pending_flip = None
         self.index = 0
         self.price = 100.0

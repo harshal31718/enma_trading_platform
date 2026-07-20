@@ -7,6 +7,81 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
+## 2026-07-20 (later same day, part 17) — Plan 7 COMPLETE: ChaosWizard.jsx + hooks factory
+
+**Goal:** user said "proceed with completion of 7," then mid-task "do not stop without completing
+plan 7." Finished the two remaining items from the prior entry: ChaosWizard.jsx's decomposition
+and the "hooks share a factory" sub-item.
+
+**ChaosWizard.jsx (677 lines, one ~600-line function + `ScopedSymbolPicker` helper) → 413 lines.**
+Same pattern as Backtest.jsx's tabs: `ScopedSymbolPicker` moved as-is to `components/algo/`
+(sibling to the existing `SymbolPicker.jsx`), the 4 wizard steps each became their own component
+under `components/algo/chaos/`, all state/handlers/the allocation-preview `useMemo` stayed in
+ChaosWizard.jsx as the container. Verified in a real browser, not just the smoke test: opened the
+dialog from `/algo`'s "Chaos Mode" button, selected MicroScalper, toggled Manual on the Allocation
+step (confirms `ScopedSymbolPicker` renders and responds inside `Step2Allocation`), advanced
+through Parameters (confirms `RiskParamsFields` still wires correctly) to Review (confirms every
+value — timeframe/capital/leverage/risk/deployment summary — reflects the actual selections made
+2 steps earlier), zero console errors specific to the new components.
+
+**Hooks factory — surveyed before designing, not assumed.** The plan's "collapse duplicated
+loading/error/toast logic across the 15 per-domain hooks" reads like it wants ~15 files touched.
+Grepped for the actual toast-mutation pattern first (`toast.success`/`onError: (err) =>`) and
+found it concentrated in exactly 2 files: `useAlgoSessions.js` (5 near-identical mutations) and
+`useAlgoAccess.js` (2, invalidate-only, no toast). Every other hook file's mutations either do
+something genuinely different per call, or — like `useTrade.js`'s 9 mutations, all toast-free —
+deliberately leave error handling to the calling component's local `errorMessage` state, which is
+client/CLAUDE.md's own documented convention (`Always use local errorMessage state... rendered as
+an inline error banner`). Building one factory and mechanically routing all ~15 files through it
+would have blurred that intentional split, not fixed a real duplication.
+
+**Done:** new `client/src/lib/apiMutation.js`'s `useApiMutation({ mutationFn, invalidateKeys,
+successMessage, errorFallback })`. Both `successMessage` and `errorFallback` are optional
+specifically so the factory never forces a toast onto a mutation that never had one (this mattered
+in practice: `useAlgoAccess.js`'s 2 mutations invalidate but never toast — the factory has to
+support that shape, not just the toast-having one). Migrated all 7 mutations across the 2 files;
+removed both files' now-dead `useMutation`/`useQueryClient` imports.
+
+**Tests:** new `client/src/lib/__tests__/apiMutation.test.jsx` (7 cases, using
+`@testing-library/react`'s `renderHook`) — mutationFn receives its argument and resolves the
+response, success toast fires only when `successMessage` is given, no success toast when omitted,
+error toast prefers the server's own message when `errorFallback` is given, falls back to
+`errorFallback` when the error carries no server message, no error toast when `errorFallback` is
+omitted, and every key in `invalidateKeys` gets invalidated. One TanStack Query v5 gotcha hit and
+fixed: `mutationFn` receives a second context-object argument now, so asserting
+`toHaveBeenCalledWith('payload')` failed — switched to checking `mock.calls[0][0]` instead.
+
+**Verified:** `vite build` stable bundle size, `vitest` 22/22 (15 existing + 7 new), real-browser
+check of `/algo` (which uses the migrated `useAlgoSessions()` hook file) — hard-reloaded, zero
+console errors, page renders correctly.
+
+**Files changed:** new `client/src/components/algo/ScopedSymbolPicker.jsx`, new
+`client/src/components/algo/chaos/{Step1Strategies,Step2Allocation,Step3Parameters,
+Step4Review}.jsx`, `client/src/components/algo/ChaosWizard.jsx` (rewritten), new
+`client/src/lib/apiMutation.js`, new `client/src/lib/__tests__/apiMutation.test.jsx`,
+`client/src/hooks/useAlgoSessions.js` (5 mutations migrated), `client/src/hooks/useAlgoAccess.js`
+(2 mutations migrated), `client/CLAUDE.md`. Docs: `0_tracker.md` (Plan 7 row now **Done**), this
+file.
+
+**Also this round:** the user asked for a background agent to independently verify the
+pre-existing uncommitted Plan 6 Step 6.3 (d3/d4, `active_bracket` migration) + Plan 21.5c
+(batched-reconcile) engine changes that had been sitting in the working tree since before this
+session started (I'd deliberately left them uncommitted in earlier commits, since I hadn't
+reviewed or verified them myself). The agent read every diff, ran the touched tests in the real
+Docker container (68/68 targeted, 653/653 full suite), and re-ran the golden master fresh
+(byte-identical to the documented baseline) — verdict: clean, complete, matches the docs exactly,
+safe to commit. Committed together with this session's Plan 7 work per the user's explicit `git
+add .` instruction (see commit `<hash filled in below>`).
+
+**Open questions:** none. **Plan 7 (server & client structure) is now fully shipped** — all of
+7.1–7.5's stated scope is done: thin controllers with a tested service layer (7.1), no engine call
+inherits the 1-hour timeout budget (7.2), `verifyJWT` splits 503/401 with a cached lookup (7.3),
+all 4 named god-components decomposed (7.4), one documented realtime-price source + the
+concentrated hooks-toast duplication collapsed + `dist/` already untracked (7.5). Plan 7 was the
+last item astride the "Server & client structure" track in `0_roadmap.md`; check that file plus
+`0_tracker.md`'s Execution order section for what's next in priority order.
+
+---
 ## 2026-07-20 (later same day, part 16) — Plan 7 Step 7.4 continued: Settings.jsx + Backtest.jsx
 
 **Goal:** user's follow-up after the prior entry's report ("did not attempt
@@ -170,84 +245,3 @@ resolved via AskUserQuestion before any code. What's left of Plan 7: the hooks f
 the 3 remaining god-components' internal decomposition (7.4) — both real, both explicitly scoped
 out this session rather than rushed, both good candidates for a dedicated follow-up pass with
 their own browser verification budget.
-
----
-## 2026-07-20 (later same day, part 14) — Plan 7 Step 7.3 shipped: auth robustness (SRV-4)
-
-**Goal:** user asked for 7.2 then 7.3 "back to back, do not stop till then." 7.2 is the prior
-entry below; this one covers 7.3 (auth robustness).
-
-**Done — 503 vs 401 split:** `verifyJWT` (`middleware/auth.middleware.js`) used to wrap
-`jwt.verify` AND `User.findById` in one try/catch, so a Mongo outage produced the identical 401
-UNAUTHORIZED a bad token would — sending a client into a pointless re-login loop when the actual
-problem is the DB. Split into two try/catches: bad/expired token stays 401; a `User.findById`
-throw now returns `ApiError(503, 'SERVICE_UNAVAILABLE', ...)`. Checked the client before shipping
-this — `client/src/hooks/useAuth.js` only special-cases 401 for its logged-out redirect, so a 503
-surfaces as a plain error instead of silently logging the user out, which is exactly the point.
-
-**Done — short-TTL user cache:** added a 5-second in-memory `Map` cache for the per-request
-`User.findById` lookup (every protected route runs this every request — e.g. Trade's 4s position
-poll), mirroring `symbolService.js`'s existing cache-with-TTL shape. Cache hits return a *shallow
-copy*, never the shared cached object — `verifyJWT` mutates `.id` onto `req.user`, and two
-concurrent requests hitting the same cache entry must never alias the same object underneath.
-
-**The one subtlety that mattered:** server/CLAUDE.md documents "since `verifyJWT` reloads the user
-each request, grants/revokes apply immediately — no JWT re-issue needed" as a designed invariant.
-A naive TTL cache would silently weaken that to "applies within 5 seconds." Fixed by having
-`admin.controller.js`'s `setUserAlgoAccess` call a newly-exported `invalidateUserCache(userId)`
-immediately after its `User.updateOne` — so the immediate-apply guarantee holds exactly, and the
-TTL only smooths over the case where nothing changed between two requests moments apart. Checked
-this is the only User-mutation site that matters: `isActive`/`role` are never toggled outside
-login/creation, no deactivate-user route exists.
-
-**Done — bare `catch {}` removal (explicitly called out in the plan's own Step 7.3 bullet, not
-scope creep):** the `.catch(() => {})` silent-swallow pattern, sitewide — 18 call sites across
-`algo.controller.js` (4), `trade.controller.js` (3), `algoSessionService.js` (7),
-`reconciliation.js` (4). All are fire-and-forget lock-release/DB-write/log-push operations that
-must stay non-blocking on failure (that part is correct, unchanged) but previously had zero
-observability when they failed. Each now logs via `console.error` with enough context (symbol,
-session id, or user id) to actually debug a real failure — pure "replace silence with a log
-line," no control-flow change, nothing that could alter a test's observable outcome besides the
-new log line itself.
-
-**Deliberately left alone, checked each one:** `app.js`'s 2 health-check catches (already write
-`'error'` into the response body — not silent), `config/socket.js`'s auth catch (rejects the
-socket connection with an explicit error — not silent), `constants/top_symbols.js`'s 2 catches
-and `symbolService.js`'s 1 catch (each falls through to a documented static/cached fallback,
-already commented explaining why). None of these are the discard-and-forget anti-pattern the
-plan's own example (`$push` log `.catch(()=>{})`) called out — they're deliberate fallback
-behavior with an observable effect already, just not a console line.
-
-**Tests:** 7 new cases in `auth.middleware.test.js` (503-not-401 on DB failure, bad-token-stays-
-distinct-from-503, cache-hit-skips-a-second-`User.findById`, cache-never-shares-object-references-
-across-requests, `invalidateUserCache`-forces-a-fresh-read) plus a new `admin.controller.test.js`
-(4 cases: invalidates on grant, invalidates on revoke, does NOT invalidate when rejected before
-the update on a bad status or an admin target — the negative cases matter as much as the positive
-ones here, since a false invalidate call would be silently harmless but a missing one would leak
-the bug this whole slice exists to prevent). The `auth.middleware.test.js` suite needed a
-`_clearUserCacheForTests()` export and `afterEach` hook — several existing cases reuse userId
-`'abc123'` with a different `User.findById` mock per case, and the module-scoped cache would
-otherwise leak a stale entry from one test into the next.
-
-**Verified:** full server jest suite 233/233 (224 existing + 9 new) — zero regressions. Docker
-logs confirm nodemon restarted clean, `/health` 200 throughout.
-
-**Files changed:** `server/src/middleware/auth.middleware.js`,
-`server/src/controllers/admin.controller.js`, `server/src/controllers/algo.controller.js`,
-`server/src/controllers/trade.controller.js`, `server/src/services/algoSessionService.js`,
-`server/src/services/reconciliation.js`, `server/src/middleware/__tests__/auth.middleware.test.js`
-(updated), new `server/src/controllers/__tests__/admin.controller.test.js`. Docs: `0_tracker.md`
-(Plan 7 row), this file.
-
-**Open questions:** none design-wise. Both acceptance checks from the plan doc are met: a
-simulated Mongo outage yields 503 not 401 (tested); user lookups are cached (tested, with the
-grant/revoke-immediacy invariant explicitly preserved, not just assumed fine). **Plan 7 Steps
-7.1–7.3 are now all shipped.** What remains is 7.4 (decompose `Trade.jsx`/`Backtest.jsx`/
-`Settings.jsx`/`ChaosWizard.jsx` god-components) and 7.5 (single owner for realtime market state)
-— both client-side, both larger efforts than anything shipped this session (7.4 in particular:
-`Trade.jsx` alone is 1,760 lines / 29 `useState`). 7.5 has a standing open design question
-(Zustand+TanStack-Query-plus-thin-store vs TanStack-Query-only for the realtime-market-state
-owner) that the plan file itself says needs explicit user sign-off before any code — do not just
-pick one without asking. Recommend pausing Plan 7 here for the user to review this session's
-server-side diff before starting the client-side work, which is a different risk profile
-(UI regressions need visual/interaction verification the way server unit tests can't provide).

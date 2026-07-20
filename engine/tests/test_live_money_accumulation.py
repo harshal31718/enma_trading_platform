@@ -33,6 +33,7 @@ class _FakeStrategy:
         self.position = None
         self.stop_loss = None
         self.take_profit = None
+        self.active_bracket = None
         self._pending_flip = None
         self.entry_tag = ""
         self.exit_tag = ""

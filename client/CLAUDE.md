@@ -62,7 +62,13 @@ client/
 │   │   ├── algo/        ← AlgoTrading feature components
 │   │   │   ├── NewSessionWizard.jsx  ← multi-step wizard for starting a bot session
 │   │   │   ├── SessionCard.jsx       ← single live session display card
-│   │   │   ├── ChaosWizard.jsx       ← 4-step Chaos Mode wizard dialog
+│   │   │   ├── ChaosWizard.jsx       ← 4-step Chaos Mode wizard shell (state/handlers/allocation-preview only, 677→413 lines — Plan 7 Step 7.4); step bodies live in `chaos/`
+│   │   │   ├── ScopedSymbolPicker.jsx ← manual-pick symbol grid for Chaos Wizard's Allocation step (tiered, locked/claimed-aware) — extracted alongside the step split
+│   │   │   ├── chaos/
+│   │   │   │   ├── Step1Strategies.jsx  ← strategy multi-select
+│   │   │   │   ├── Step2Allocation.jsx  ← per-strategy auto/manual symbol allocation + preview
+│   │   │   │   ├── Step3Parameters.jsx  ← timeframe/capital/leverage + shared risk defaults
+│   │   │   │   └── Step4Review.jsx      ← launch summary + testnet warning
 │   │   │   ├── SymbolPicker.jsx      ← symbol multi-select for bot session
 │   │   │   └── ParamsForm.jsx        ← strategy param inputs for bot session
 │   ├── RiskParamsFields.jsx       ← shared risk-model parameter fields (pre-filled from settings, used by backtest & algo wizards)
@@ -117,13 +123,13 @@ client/
 │   │   ├── useBacktest.js         ← TanStack Query hooks: useRunBacktest(), useBacktestsList(), useBacktestResult(id), useBacktestTrades(id, page, limit), useAllBacktestTrades(id), useBacktestBenchmark(id), useCancelBacktest()
 │   │   ├── useStrategies.js       ← TanStack Query hooks: useStrategies(), useStrategyCode(id)
 │   │   ├── useTrade.js            ← TanStack Query hooks: useTradeAccount(), useAccountBalances() (testnet+mainnet, GET /trade/balances), useTradePositions(), useTradeOpenOrders(), useTradeStream(), useTradeSymbolConfig(symbol), useChangeLeverage(), useChangeMarginType(), usePlaceOrder(), usePlaceOrderWithTpSl(), useCancelOrder(), useClosePosition(), useCancelAllOrders()
-│   │   ├── useAlgoSessions.js     ← TanStack Query hooks for /api/v1/algo/* endpoints (includes useStartChaos)
+│   │   ├── useAlgoSessions.js     ← TanStack Query hooks for /api/v1/algo/* endpoints (includes useStartChaos); mutations built on `lib/apiMutation.js`'s `useApiMutation`
 │   │   ├── useExchangeSettings.js ← TanStack Query hooks for /api/v1/settings/exchange
 │   │   ├── useOcoMonitor.js       ← monitors OCO order fill/cancel state via polling
 │   │   ├── useTableSort.js        ← generic column-sort state hook for table components
 │   │   ├── useOrderHistory.js     ← useOrderHistory({ page, limit, filters }) → GET /api/v1/order-history
 │   │   ├── useAuth.js             ← TanStack Query: useAuth() (GET /api/v1/auth/me, 5-min stale, 401→null; exposes hasAlgoAccess), useLogout()
-│   │   ├── useAlgoAccess.js       ← useRequestAlgoAccess() (POST /algo/access-request), useAdminUsers() (GET /admin/users), useSetUserAlgoAccess() (PATCH /admin/users/:id/algo-access)
+│   │   ├── useAlgoAccess.js       ← useRequestAlgoAccess() (POST /algo/access-request), useAdminUsers() (GET /admin/users), useSetUserAlgoAccess() (PATCH /admin/users/:id/algo-access) — the 2 mutations built on `useApiMutation`
 │   │   ├── useRiskSettings.js     ← TanStack Query hooks for /api/v1/risk/* (settings, live metrics, simulation, overrides)
 │   │   ├── useLab.js              ← TanStack Query hooks for /api/v1/lab/* (simulations + optimizations + pbo, Plan 10)
 │   │   └── useBinanceWS.js        ← registers/unregisters callbacks on the binanceWS singleton
@@ -135,6 +141,16 @@ client/
 │   │   ├── socket.js      ← Socket.IO client instance
 │   │   ├── binanceWS.js   ← Binance WebSocket singleton connection manager
 │   │   ├── queryClient.js ← TanStack Query client config
+│   │   ├── apiMutation.js ← `useApiMutation({ mutationFn, invalidateKeys, successMessage, errorFallback })` —
+│   │   │                     shared invalidate-on-success(+optional toast) / extract-and-toast-on-error
+│   │   │                     wrapper (Plan 7 Step 7.5, "hooks share a factory"). Both `successMessage` and
+│   │   │                     `errorFallback` are optional — omit either to match a hook that never toasted
+│   │   │                     on that outcome (e.g. invalidate-only mutations, or ones that push error
+│   │   │                     handling to the calling component's local `errorMessage` state per the
+│   │   │                     Error handling rules below). Scoped to `useAlgoSessions.js`/`useAlgoAccess.js`
+│   │   │                     only — surveyed first and confirmed the toast pattern is concentrated in
+│   │   │                     those 2 files, not spread across all ~15 hooks; other hooks' mutations have
+│   │   │                     genuinely different per-call side effects and were left as-is.
 │   │   └── utils.js       ← misc utility helpers (cn classname merger, etc.)
 │   ├── pages/             ← route-level page components
 │   │   ├── Dashboard.jsx      ← route: /

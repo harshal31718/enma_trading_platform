@@ -32,7 +32,7 @@ across candles, so deleting the kernel-write (phase (c)'s original goal) would s
 exit triggering for exec_algo-sliced positions. Entangled with phase (d)'s wider cleanup instead
 of standalone — see `0_fixes-queue.md` F10 / DECISIONS.md #28 addendum. Stopped here per user
 choice. **Phase (d) scoped 2026-07-20 (docs only), then AUTHORIZED — d1+d2+d3+d4 SHIPPED same day, all 4 clusters now migrated.** Read-site surface breaks into 4 clusters: `kernel.py check_exits()` (cross-candle trigger), `reconciler.py` (exchange-bracket amendment, live-only, different call frame), `execute_exit`/`BacktestAdapter.execute_entry` (logging/sizing), `kernel.py`'s rounding block. d1: new persisted `strategy.active_bracket` field, written additively by `route()`/exec_algo. d2: `check_exits()` + rounding migrated to read/write it instead of the mutable tuples. d3: all 5 `reconciler.py` read sites (SL-tighten amend, trade-record booking ×2, naked-position re-arm, `compute_open_risk_breakdown()`) migrated too — live-only, zero golden-master coverage for this cluster. d4: `LiveAdapter.execute_exit` (trade-record logging) and `BacktestAdapter.execute_entry`'s sizing-percent read migrated — the first phase to touch actual backtest code, so golden-master coverage was real (not incidental); safety argument mirrors phase (b)'s (`execute_pending()` runs before `evaluate_and_route()` each candle, so `active_bracket` still holds the prior candle's value at read time). All four verified via real rebuild (pytest 647/647, golden-master `MultiDivergence` byte-identical every time: `trades=55 netProfit=-1784.02 winRate=0.36 cagr=-71.32 sqn=-2.08`) — d2 needed 4 test fixtures fixed, d3 needed 8 more, d4 needed 3 more, same root cause every time (`_FakeStrategy`/manually-constructed doubles that bypass `route()` and never got `active_bracket` populated: `test_armed_legs_wick_check_skip.py`/`test_entry_candle_exits.py`/`test_intrabar_detail_resolution.py`/`test_multi_symbol_portfolio_exits.py` for d2; `test_execute_entry_correlation_cap.py`/`test_execute_entry_portfolio_risk_and_liq_buffer.py`/`test_execute_entry_risk_check_event.py`/`test_execute_entry_var_breach.py`/`test_maybe_amend_exchange_sl.py`/`test_reconcile_fixes.py`/`test_reconcile_naked_position_rearm.py` for d3; `test_execute_flip_idempotency.py`/`test_live_fill_booking.py`/`test_live_money_accumulation.py` for d4). Only d5 (retiring `stop_loss`/`take_profit` as strategy-facing API) remains, needs its own `DECISIONS.md` entry — see plan file's Step 6.3 section. | In progress | P2 | 5 (shipped 2026-07-18), 21.3/21.4 (shipped 2026-07-17) — unblocked | 2026-07-20 |
-| 7  | Server & client structure | 7.1/7.2/7.3 SHIPPED IN FULL 2026-07-20. 7.5's core (single ticker-price owner) SHIPPED 2026-07-20; its "hooks share a factory" sub-item not attempted. 7.4: Trade.jsx/Settings.jsx/Backtest.jsx decomposed 2026-07-20; ChaosWizard.jsx not attempted. See below for detail. | In progress | P2 | 2 (done), 5 (shipped), 6 (done in every way that mattered — 6.5's Node consumer is unrelated) | 2026-07-20 |
+| 7  | Server & client structure | **ALL STEPS SHIPPED 2026-07-20** — 7.1/7.2/7.3 (server) + 7.4 (all 4 god components decomposed) + 7.5 (single ticker-price owner + hooks factory). See below for detail. | **Done** | — | 2 (done), 5 (shipped), 6 (done in every way that mattered — 6.5's Node consumer is unrelated) | 2026-07-20 |
 | 8  | Governance, correctness & cleanup | 8.2–8.5, 8.7 (8.3/8.4 golden-master; SYS-3 doc item carried from F6) — 8.6 verified-already-shipped 2026-07-18, no code needed | In progress | P3 | 3 (done), 5, 6 | 2026-07-18 |
 | 23 | New strategy: high-risk/high-leverage breakout scalper ("MarginSurge") | All — backtest gates can start now; live gated on 21.1–21.4 | Draft | P2 | 21 (live phase), 22.1–22.2 (liq-buffer + governor, soft) | 2026-07-16 |
 | 24 | BestSupertrend fixes (never trades at defaults) | ALL SHIPPED (S-1 through S-5, container-verified 2026-07-17 [353/353 pytest], golden-master re-baselined for S-1 — only BestSupertrend diverges, other 4 strategies byte-identical) — pending live Testnet re-verification only | **Done** (pending live re-verification) | — | — | 2026-07-17 |
@@ -570,14 +570,40 @@ pipeline-touching steps) a golden-master check per Rule C.
   identical `key={tr.id}` was already in the pre-refactor committed code, so this is a pre-existing
   trade-data quality issue (likely duplicate/undefined `id` on some rows), not a regression from
   the extraction. Flagged, not silently fixed (would be scope creep for a decomposition task).
-  **Deliberately still not attempted**: ChaosWizard.jsx's internal decomposition (677 lines, one
-  ~600-line function + one helper — same monolithic-body shape as Settings.jsx/Backtest.jsx was,
-  its own dedicated pass); the "hooks share a factory" sub-item from 7.5 (collapsing duplicated
-  `api.get/post`-and-unwrap boilerplate across ~15 per-domain hooks); the remaining WS-entangled
-  Trade.jsx components (TickerBar, ChartContainer, OrderBook, RecentTrades, OrderForm,
-  LeverageModal, `TradeInner`) — already touched for 7.5's price-store work, further splitting
-  trades more regression risk for less file-size benefit than the tables did. See `handoff.md` for
-  the resume point.
+  **7.4/7.5 completed same day — ChaosWizard.jsx decomposed + hooks factory shipped**, per the
+  user's explicit "proceed with completion of 7" + "do not stop without completing plan 7"
+  instructions. ChaosWizard.jsx (677 lines, one ~600-line function + `ScopedSymbolPicker` helper)
+  split into `client/src/components/algo/ScopedSymbolPicker.jsx` (moved as-is) + 4 new files under
+  `chaos/` (`Step1Strategies`, `Step2Allocation`, `Step3Parameters`, `Step4Review`) — same
+  container-owns-state/steps-are-presentational pattern used for Backtest.jsx's tabs. **ChaosWizard.jsx:
+  677 → 413 lines.** Verified in a real browser: opened the wizard from `/algo`, selected a
+  strategy, toggled Manual allocation (confirms `ScopedSymbolPicker` inside `Step2Allocation`),
+  walked all 4 steps to Review with every value correctly reflected, zero console errors.
+  **Hooks factory**: surveyed the actual duplication before designing anything — the plan's "hooks
+  share a factory" framing suggested ~15 files needed touching, but the concrete toast-mutation
+  pattern (`onSuccess: invalidate + toast.success` / `onError: extract-message + toast.error`) is
+  concentrated in exactly 2 files (`useAlgoSessions.js`'s 5 mutations, `useAlgoAccess.js`'s 2) —
+  every other hook file's mutations either have genuinely different per-call side effects or
+  deliberately push error handling to the calling component's local `errorMessage` state (client/
+  CLAUDE.md's documented error-banner convention, e.g. `useTrade.js`'s 9 mutations, all
+  toast-free). New `client/src/lib/apiMutation.js`'s `useApiMutation({ mutationFn, invalidateKeys,
+  successMessage, errorFallback })` — both message params optional, so it doesn't force a toast
+  onto a mutation that never had one. Migrated all 7 mutations across the 2 files; both files'
+  now-unused `useMutation`/`useQueryClient` imports removed. New
+  `client/src/lib/__tests__/apiMutation.test.jsx` (7 cases: calls mutationFn correctly, success
+  toast only when `successMessage` given, no success toast when omitted, error toast uses the
+  server's message when `errorFallback` given, falls back to `errorFallback` when the error has no
+  server message, no error toast when `errorFallback` omitted, invalidates every key in
+  `invalidateKeys`). Verified: `vite build` stable bundle size, `vitest` 22/22, real-browser check
+  of `/algo` (uses the migrated `useAlgoSessions()` query + mutations) with zero console errors
+  after a hard reload.
+  **Deliberately still not touched**: the remaining WS-entangled Trade.jsx components (TickerBar,
+  ChartContainer, OrderBook, RecentTrades, OrderForm, LeverageModal, `TradeInner`) — already
+  touched for 7.5's price-store work, further splitting trades more regression risk for less
+  file-size benefit than the tables/steps did; not required for Plan 7's stated acceptance
+  criteria (thin controllers, tested services, jobbed long work, split 401/503, decomposed god
+  components, one documented realtime-price source, `dist/` untracked). **Plan 7 is now fully
+  shipped.** See `handoff.md` for detail.
 - **8** — 8.1 shipped (F6). Remaining: 8.2–8.6 + the SYS-3 named-volume documentation item
   carried from F6. 8.3/8.4 are golden-master-touching. 8.6 resolved 2026-07-18 — no code
   needed, see Step 8.6 in the plan doc.

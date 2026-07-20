@@ -29,6 +29,7 @@ class _FakeStrategy:
         self.leverage = leverage
         self.stop_loss = None
         self.take_profit = None
+        self.active_bracket = None  # Plan 6 Step 6.3 phase (d3)
         self._pending_flip = None
 
 

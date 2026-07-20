@@ -461,8 +461,39 @@ not the risk/decision logic living alongside it in the same methods, actually mo
       bypasses `route()`) updated to set `active_bracket` consistently with their existing
       `stop_loss`/`take_profit` fixtures. `test_exec_algo_slicing.py` got the field defensively
       too (was passing already, but for safety). After the fixture fix: pytest 647/647, golden-master
-      `MultiDivergence` byte-identical again. **d3 (reconciler.py, live-only, no golden-master
-      coverage) and d4 (`execute_exit`/`BacktestAdapter.execute_entry`) not started.**
+      `MultiDivergence` byte-identical again. **d3 SHIPPED and verified 2026-07-20 (later same
+      day)**: migrated cluster #2 — all 5 `strategy.stop_loss`/`take_profit` read sites in
+      `core/reconciler.py` (`maybe_amend_exchange_sl()`, two trade-record-booking sites, the
+      naked-position re-arm detector, `compute_open_risk_breakdown()`) to read
+      `strategy.active_bracket` instead — to `active_bracket`. Live-only, zero golden-master
+      coverage for this cluster specifically, so pytest was the real check. Same fixture-gap
+      pattern as d2, caught proactively this time by grepping the reconciler/risk-governor test
+      files before handing off: 8 fixtures across `test_execute_entry_correlation_cap.py`,
+      `test_execute_entry_portfolio_risk_and_liq_buffer.py`,
+      `test_execute_entry_risk_check_event.py`, `test_execute_entry_var_breach.py`,
+      `test_maybe_amend_exchange_sl.py`, `test_reconcile_fixes.py`,
+      `test_reconcile_naked_position_rearm.py` needed `active_bracket` added, consistent with each
+      fixture's existing `stop_loss`/`take_profit` shape. Verified via real Docker rebuild: pytest
+      647/647, golden-master `MultiDivergence` byte-identical
+      (`trades=55 netProfit=-1784.02 winRate=0.36 cagr=-71.32 sqn=-2.08`) — expected, since this
+      cluster is live-only and backtest code was untouched. **d4 SHIPPED and verified 2026-07-20
+      (same day)**: migrated cluster #3's two read sites — `LiveAdapter.execute_exit`
+      (SL/TP-to-trade-record logging) and `BacktestAdapter.execute_entry`'s sizing-percent read
+      (clamps/rounds qty against the stop distance) — to `active_bracket`. First d-phase to touch
+      actual backtest code, not just live-only; golden-master coverage was real here. Safety
+      argument for the backtest side: `BacktestAdapter.execute_entry` is called from
+      `execute_pending()`, which runs BEFORE `evaluate_and_route()` for a given candle, so
+      `active_bracket` still holds exactly what the prior candle's `route()` (or, for an
+      open-position DCA add, the pipeline's adjust step) wrote — same value `strategy.stop_loss`
+      held at that read point, same proof-by-construction pattern as phase (b). 3 more
+      `_FakeStrategy` doubles needed `active_bracket = None` added
+      (`test_execute_flip_idempotency.py`, `test_live_fill_booking.py`,
+      `test_live_money_accumulation.py` — 7 failing tests, same fixture-gap root cause as d2/d3).
+      Verified: pytest 647/647, golden-master `MultiDivergence` byte-identical to every prior
+      checkpoint. **d1-d4 of the proposed sub-phasing are all now shipped — every read site the
+      phase (d) scoping addendum identified reads from `active_bracket`. Only d5 (retiring
+      `stop_loss`/`take_profit` as strategy-facing API) remains, and it needs its own separate
+      `DECISIONS.md` entry.**
     `DefaultExecution.route()` (`core/models/execution.py`) now returns a typed `OrderPlan` for
     Paths 2/4/5 (close/flip/maintain), not just Path 3 (enter) — additive only, every existing
     mutable-attribute write (`s._close_at_open`, `s.flip_position()`, `s.stop_loss`/`take_profit`

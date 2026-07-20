@@ -23,6 +23,7 @@ import pytest
 
 import services.binance_testnet as binance_mod
 from core.live_bot_manager import LiveBotManager
+from core.models.base import OrderPlan
 from core.position import Position
 
 SYM = "FAKEUSDT"
@@ -37,6 +38,13 @@ class _FakeStrategy:
     def __init__(self, position, stop_loss):
         self.position = position
         self.stop_loss = stop_loss
+        # Plan 6 Step 6.3 phase (d3): maybe_amend_exchange_sl() reads
+        # active_bracket now, not stop_loss directly — keep this fixture
+        # consistent with the fixture's own stop_loss param.
+        self.active_bracket = (
+            OrderPlan(direction=1, qty=stop_loss[0], entry_price=100.0, stop_loss=stop_loss[1])
+            if stop_loss is not None else None
+        )
 
 
 def _session(pos_info):

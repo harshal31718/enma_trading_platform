@@ -74,6 +74,7 @@ class _FakeStrategy:
         self.position = None
         self.stop_loss = stop_loss
         self.take_profit = take_profit
+        self.active_bracket = None  # Plan 6 Step 6.3 phase (d3): defensive - strategy_instances is always {} in this file
         self.buy = 1.0
         self.sell = None
         self.entry_tag = ""

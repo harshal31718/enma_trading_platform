@@ -1,6 +1,6 @@
 # 21 — Live Algo-Trading Industry-Standard Audit (signals → orders → SL/TP → monitoring)
 
-**Status:** In progress (21.1–21.4 shipped 2026-07-17, container-verified 2026-07-17 [301/301 pytest], pending live re-verification only; 21.5 partially shipped 2026-07-17 — (a)+(b) done + container-verified, (c) batched reconcile deferred; **21.7 fully shipped 2026-07-17** — A-11/A-12/A-13/A-14 all code-complete and container-verified, pending live re-verification only) · **Created:** 2026-07-16
+**Status:** In progress (21.1–21.4 shipped 2026-07-17, container-verified 2026-07-17 [301/301 pytest], pending live re-verification only; **21.5 SHIPPED IN FULL 2026-07-20** — (a)+(b) done+container-verified 2026-07-17, (c) batched reconcile shipped+container-verified 2026-07-20 [653/653 pytest, golden-master byte-identical]; **21.7 fully shipped 2026-07-17** — A-11/A-12/A-13/A-14 all code-complete and container-verified, pending live re-verification only). **Plan 21 is now fully shipped in code** — only live Testnet re-verification remains across all sub-items. · **Created:** 2026-07-16
 **Scope:** the full autonomous live-trading path — signal generation (five-model pipeline),
 order placement, SL/TP bracket placement, fill detection, reconciliation, monitoring, and
 session stop — audited against industry-standard failproof expectations (freqtrade /
@@ -287,14 +287,39 @@ closes on ANY query failure, not just backpressure, which A-15 fixes. Tests:
 against a fake httpx client in this session's sandbox, not just `ast.parse`, since
 `binance_testnet.py` has no TA-Lib/numpy dependency chain; all 18 passed).
 
-**Not shipped — (c) batched reconcile:** deliberately deferred. Batching `positionRisk`/
-`openAlgoOrders` into one un-parametered call per session per candle wave requires restructuring
-how `_run_symbol_loop` orchestrates reconcile — today each symbol runs as an independent
-`asyncio` task calling `_reconcile_exchange_state(session_id, strategy, symbol)` on its own
-per-symbol lock; a batched design needs a session-level fan-out/fan-in point feeding each
-per-symbol task its slice of one shared response, which is a materially larger concurrency
-refactor than (a)/(b) and higher-risk without a way to live-verify it this session. Left as
-21.5's remaining scope rather than rushed.
+**Shipped (c) — batched reconcile — 2026-07-20:** verified against Binance's actual documented
+weights before implementing (not assumed) — `positionRisk` is a **flat weight-5 call regardless
+of whether `symbol` is given** (not per-symbol scaling as the original framing implied);
+`openOrders`/`openAlgoOrders` are weight 1 per-symbol but weight **40** when `symbol` is omitted.
+That means the crossover math is `7×N` (today's per-symbol cost: 5+1+1) vs a flat `85`
+(5+40+40, batched) — **batching only wins above ~13 symbols**, exactly the "big weight win for
+Chaos runs" this item was scoped for, not small manual sessions. New
+`Reconciler._get_batched_reconcile_snapshot(session, wave_key, exchange, api_key, api_secret)`:
+caches one un-parametered `positionRisk`/`openOrders`/`openAlgoOrders` fetch per session per
+`wave_key` (the closed candle's own open-time in ms — identical across every symbol in a session
+since they share one `timeframe`, so it's a free, exact cache key with no extra coordination),
+guarded by a per-session `asyncio.Lock` so when many symbol tasks arrive for the same wave near-
+simultaneously, only the first one fetches and the rest await/reuse that same in-flight result.
+`reconcile_exchange_state` gained an optional `wave_key: int | None = None` param — when given
+(the routine per-candle-close call site only), it uses the batched snapshot; when omitted (the
+`_on_fill`/`_on_account_update` event-driven call sites, unchanged), it keeps doing its own
+fresh per-symbol query exactly as before — those need fresh state immediately, not a
+wave-cached snapshot, and are rare/per-symbol by nature so batching wouldn't help them anyway.
+A-15's `position_query_ok` invariant (Case 2 must never fabricate a close on an unconfirmed
+query) is preserved exactly: the batch's own `position_query_ok` flag reflects whether the
+*shared* `positionRisk` call succeeded, and propagates to every symbol reading that wave's
+cached snapshot, not just the one that triggered the fetch. New
+`engine/tests/test_batched_reconcile_snapshot.py` (6 cases): same-wave symbols share one fetch,
+different waves refetch, correct per-symbol slicing from a multi-symbol batch response, a failed
+batched `positionRisk` call blocks Case 2 for every symbol on that wave (not just the fetcher),
+concurrent same-wave reconciles from multiple symbols issue exactly one underlying fetch (the
+actual concurrency-safety claim, not just the cache-hit case), and the event-driven
+no-`wave_key` path stays fully unbatched/unchanged. Verified via real Docker rebuild: pytest
+653/653 (647 + 6 new), golden-master `MultiDivergence` byte-identical
+(`trades=55 netProfit=-1784.02 winRate=0.36 cagr=-71.32 sqn=-2.08`) — expected, this is a
+live-only change with zero backtest import overlap, same caution class as Plan 6's d3. **Plan
+21.5 is now fully shipped** — only live Testnet re-verification remains (same as every other
+Plan 21 sub-item).
 
 ### A-15 · Reconcile Case 2 fabricates a close on ANY positionRisk query failure, not just a confirmed-flat exchange · [Certain] · **High** — **fixed 2026-07-17 (Plan 21.5, found while shipping A-9)**
 

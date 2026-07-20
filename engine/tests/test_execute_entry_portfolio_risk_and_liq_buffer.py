@@ -71,6 +71,7 @@ _ensure_importable()
 import services.binance_testnet as binance_mod
 import core.live_bot_manager as lbm_module
 from core.live_bot_manager import LiveBotManager, LiveAdapter
+from core.models.base import OrderPlan
 from core.models.governor import SessionRiskGovernor
 from core.position import Position
 
@@ -88,6 +89,14 @@ class _FakeStrategy:
         self.position = position
         self.stop_loss = stop_loss
         self.take_profit = take_profit
+        # Plan 6 Step 6.3 phase (d3): compute_open_risk_breakdown() reads
+        # active_bracket now, not stop_loss directly.
+        self.active_bracket = (
+            OrderPlan(
+                direction=1, qty=stop_loss[0], entry_price=100.0,
+                stop_loss=stop_loss[1], take_profit=take_profit[1] if take_profit else None,
+            ) if stop_loss is not None else None
+        )
         self.buy = 1.0
         self.sell = None
         self.entry_tag = ""
