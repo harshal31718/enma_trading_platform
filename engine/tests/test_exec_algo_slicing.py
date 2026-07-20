@@ -50,6 +50,7 @@ class _FakeStrategy:
         self.sell = None
         self.stop_loss = None
         self.take_profit = None
+        self.active_bracket = None  # Plan 6 Step 6.3 phase (d2): check_exits() reads this now
         self._pending_flip = None
         self._close_at_open = False
         self.qty_to_adjust = 0.0

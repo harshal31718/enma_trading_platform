@@ -441,8 +441,28 @@ not the risk/decision logic living alongside it in the same methods, actually mo
       documented in `engine/CLAUDE.md`'s "Available properties" as strategy-facing, used by
       `trail_stop()`/`move_to_breakeven()`-style strategy hooks directly. Each of d1-d5 is its own
       session, independently golden-master/test-verified — not a single pass.
-    - **Not authorized, not started.** This is scope, not a commitment — the user should decide
-      whether this multi-session effort is worth pursuing before any of d1-d5 begins.
+    - **Authorized 2026-07-20 (later same day) — d1 and d2 SHIPPED, verified via real rebuilds.**
+      User reviewed the scoping and authorized proceeding (recorded as a DECISIONS.md #28 second
+      addendum). **d1**: `BaseStrategy` (`core/strategy.py`) gained `self.active_bracket = None`;
+      `route()` (`core/models/execution.py`) mirrors its returned `OrderPlan` onto it for every
+      path (including `None` for Path 1); kernel.py's exec_algo branch mirrors the actual
+      (possibly-sliced) plan the same way it already overwrites `stop_loss`/`take_profit`. Purely
+      additive — verified pytest 647/647, golden-master `MultiDivergence` byte-identical
+      (`trades=55 netProfit=-1784.02 winRate=0.36 cagr=-71.32 sqn=-2.08`). **d2**: migrated cluster
+      #1 (`check_exits()`'s is_long/is_short SL/TP trigger reads, ~lines 343-344/383-384 pre-d2)
+      and #4 (the rounding block) to read/write `active_bracket` instead of the mutable tuples
+      directly — the highest-risk migration in the set (the actual live+backtest exit-trigger
+      logic). Found and fixed a real gap while verifying: 4 test files use `_FakeStrategy` test
+      doubles that set `stop_loss`/`take_profit` directly (bypassing `route()` entirely) and
+      therefore never got `active_bracket` populated —
+      `test_armed_legs_wick_check_skip.py`/`test_entry_candle_exits.py`/
+      `test_intrabar_detail_resolution.py`/`test_multi_symbol_portfolio_exits.py` all needed their
+      fixtures (and one monkeypatched `fake_evaluate` in the multi-symbol test, which also
+      bypasses `route()`) updated to set `active_bracket` consistently with their existing
+      `stop_loss`/`take_profit` fixtures. `test_exec_algo_slicing.py` got the field defensively
+      too (was passing already, but for safety). After the fixture fix: pytest 647/647, golden-master
+      `MultiDivergence` byte-identical again. **d3 (reconciler.py, live-only, no golden-master
+      coverage) and d4 (`execute_exit`/`BacktestAdapter.execute_entry`) not started.**
     `DefaultExecution.route()` (`core/models/execution.py`) now returns a typed `OrderPlan` for
     Paths 2/4/5 (close/flip/maintain), not just Path 3 (enter) — additive only, every existing
     mutable-attribute write (`s._close_at_open`, `s.flip_position()`, `s.stop_loss`/`take_profit`

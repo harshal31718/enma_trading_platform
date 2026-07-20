@@ -21,6 +21,7 @@ import numpy as np
 import pytest
 
 from core.kernel import ExecutionKernel, ExecutionAdapter
+from core.models.base import OrderPlan
 
 
 class _FakePosition:
@@ -51,6 +52,13 @@ class _FakeStrategy:
         # isolate exactly which leg fired (or didn't) via armed_legs.
         self.stop_loss = (1.0, 95.0) if is_long else (1.0, 105.0)
         self.take_profit = (1.0, 110.0) if is_long else (1.0, 90.0)
+        # Plan 6 Step 6.3 phase (d2): check_exits() reads active_bracket now,
+        # not the tuples above directly — keep this fixture consistent with
+        # what route() would have written.
+        self.active_bracket = OrderPlan(
+            direction=1 if is_long else -1, qty=1.0, entry_price=100.0,
+            stop_loss=self.stop_loss[1], take_profit=self.take_profit[1],
+        )
         self.candles = None
         self._is_long = is_long
 

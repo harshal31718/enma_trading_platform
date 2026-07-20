@@ -30,6 +30,7 @@ import pytest
 
 import core.kernel as kernel_mod
 from core.kernel import ExecutionKernel
+from core.models.base import OrderPlan
 from core.models.cost import DefaultTransactionCostModel
 from services.backtest_runner import BacktestAdapter, _run_shared_portfolio
 
@@ -48,6 +49,7 @@ class _FakeStrategy:
         self.sell = None
         self.stop_loss = None
         self.take_profit = None
+        self.active_bracket = None  # Plan 6 Step 6.3 phase (d2): check_exits() reads this now
         self._pending_flip = None
         self._close_at_open = False
         self.qty_to_adjust = 0.0
@@ -173,6 +175,13 @@ def test_multi_symbol_portfolio_fires_stop_loss_and_conserves_cash():
             entered[sym] = True
             strategy.buy = (1.0, strategy.price)
             strategy.stop_loss = (1.0, stop_prices[sym])
+            # Plan 6 Step 6.3 phase (d2): this fake bypasses route() entirely,
+            # so it must set active_bracket itself too (check_exits() reads
+            # it now, not strategy.stop_loss directly).
+            strategy.active_bracket = OrderPlan(
+                direction=1, qty=1.0, entry_price=strategy.price,
+                stop_loss=stop_prices[sym], take_profit=None,
+            )
         return None
 
     orig = kernel_mod.evaluate

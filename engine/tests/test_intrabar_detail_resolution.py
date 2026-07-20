@@ -18,6 +18,7 @@ import numpy as np
 import pytest
 
 from core.kernel import ExecutionKernel, ExecutionAdapter
+from core.models.base import OrderPlan
 
 HOUR_MS = 3_600_000.0
 
@@ -45,6 +46,11 @@ class _FakeStrategy:
         self._entered_this_candle = False
         self.stop_loss = (1.0, sl) if sl is not None else None
         self.take_profit = (1.0, tp) if tp is not None else None
+        # Plan 6 Step 6.3 phase (d2): check_exits() reads active_bracket now.
+        self.active_bracket = OrderPlan(
+            direction=1 if is_long else -1, qty=1.0, entry_price=100.0,
+            stop_loss=sl, take_profit=tp,
+        )
         self.candles = None
 
     @property

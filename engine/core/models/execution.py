@@ -18,6 +18,12 @@ Callers that only care about entries (e.g. exec_algo slicing) must check
 `plan.intent == "enter"` rather than `plan is not None` — see kernel.py's
 evaluate_and_route().
 
+As of phase (d1), the same value is also mirrored onto `s.active_bracket`
+(`None` for Path 1) — a persisted field, unlike the return value, which is
+a per-call transient. This is purely additive scaffolding for a future
+migration (see the plan file's Step 6.3 phase (d) scoping) — nothing reads
+`active_bracket` yet.
+
 DCA scale-in/out (A-014) is handled externally by evaluate_and_route():
 the strategy's adjust_trade_position() hook sets qty_to_adjust on the
 strategy object, which the adapter processes as a separate order. route()
@@ -80,13 +86,14 @@ class DefaultExecution(ExecutionModel):
 
         # Path 1: flat → flat
         if desired == 0.0 and not is_holding:
+            s.active_bracket = None
             return None
 
         # Path 2: holding → flat (guaranteed next-open close; see BUG-03)
         if desired == 0.0 and is_holding:
             s._close_at_open = True
             close_direction = 1 if current_holding > 0 else -1
-            return OrderPlan(
+            s.active_bracket = OrderPlan(
                 direction=close_direction,
                 qty=abs(current_holding),
                 entry_price=s.price,
@@ -95,6 +102,7 @@ class DefaultExecution(ExecutionModel):
                 order_type=getattr(s, "order_type", "market"),
                 intent="exit",
             )
+            return s.active_bracket
 
         # Path 5: maintain bracket (same direction, holding)
         if is_holding and same_sign:
@@ -103,7 +111,7 @@ class DefaultExecution(ExecutionModel):
                     s.stop_loss = s.stop_loss[0], constraints.stop_price
                 if constraints.take_profit_price is not None and s.take_profit is not None:
                     s.take_profit = s.take_profit[0], constraints.take_profit_price
-            return OrderPlan(
+            s.active_bracket = OrderPlan(
                 direction=1 if current_holding > 0 else -1,
                 qty=abs(current_holding),
                 entry_price=s.price,
@@ -112,6 +120,7 @@ class DefaultExecution(ExecutionModel):
                 order_type=getattr(s, "order_type", "market"),
                 intent="maintain",
             )
+            return s.active_bracket
 
         sl  = constraints.stop_price        if constraints else None
         tp  = constraints.take_profit_price if constraints else None
@@ -121,7 +130,7 @@ class DefaultExecution(ExecutionModel):
         # Path 4: flip (holding, opposite direction)
         if is_holding and not same_sign:
             s.flip_position(qty, stop_loss=sl, take_profit=tp)
-            return OrderPlan(
+            s.active_bracket = OrderPlan(
                 direction=direction,
                 qty=qty,
                 entry_price=s.price,
@@ -130,6 +139,7 @@ class DefaultExecution(ExecutionModel):
                 order_type=getattr(s, "order_type", "market"),
                 intent="flip",
             )
+            return s.active_bracket
 
         # Path 3: flat → enter
         if desired > 0:
@@ -145,7 +155,7 @@ class DefaultExecution(ExecutionModel):
             if tp is not None:
                 s.take_profit = qty, tp
 
-        return OrderPlan(
+        s.active_bracket = OrderPlan(
             direction=direction,
             qty=qty,
             entry_price=s.price,
@@ -153,6 +163,7 @@ class DefaultExecution(ExecutionModel):
             take_profit=tp,
             order_type=getattr(s, "order_type", "market"),
         )
+        return s.active_bracket
 
     # ── Deprecated plan() shim ────────────────────────────────────────────────
 

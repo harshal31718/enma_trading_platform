@@ -17,6 +17,7 @@ import numpy as np
 import pytest
 
 from core.kernel import ExecutionKernel, ExecutionAdapter
+from core.models.base import OrderPlan
 
 
 class _FakePosition:
@@ -42,6 +43,10 @@ class _FakeStrategy:
         self._entered_this_candle = True  # just filled this candle
         self.stop_loss = (1.0, 95.0)      # breached by the candle's low below
         self.take_profit = None
+        # Plan 6 Step 6.3 phase (d2): check_exits() reads active_bracket now.
+        self.active_bracket = OrderPlan(
+            direction=1, qty=1.0, entry_price=100.0, stop_loss=95.0, take_profit=None,
+        )
         self.candles = None
 
     @property

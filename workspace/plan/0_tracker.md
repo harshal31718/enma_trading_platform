@@ -31,14 +31,7 @@ trigger state checked every candle after entry (backtest + live) — `OrderPlan`
 across candles, so deleting the kernel-write (phase (c)'s original goal) would silently break
 exit triggering for exec_algo-sliced positions. Entangled with phase (d)'s wider cleanup instead
 of standalone — see `0_fixes-queue.md` F10 / DECISIONS.md #28 addendum. Stopped here per user
-choice. **Phase (d) scoped
-2026-07-20 (docs only, not authorized/not implemented)**: read-site surface breaks into 4 clusters
-— `kernel.py check_exits()` (cross-candle trigger, same call frame as `OrderPlan`), `reconciler.py`
-(exchange-bracket amendment, DIFFERENT call frame — needs `OrderPlan` persisted, not just
-returned), `execute_exit`/`BacktestAdapter.execute_entry` (logging/sizing, lower risk), and
-`kernel.py`'s own rounding block. Recommended direction: a new persisted `strategy.active_bracket`
-field `route()` writes additively, then migrate each cluster's reads to it one at a time (d1-d5,
-each independently verified). See plan file's Step 6.3 section for full writeup. | In progress | P2 | 5 (shipped 2026-07-18), 21.3/21.4 (shipped 2026-07-17) — unblocked | 2026-07-20 |
+choice. **Phase (d) scoped 2026-07-20 (docs only), then AUTHORIZED — d1+d2 SHIPPED same day.** Read-site surface breaks into 4 clusters: `kernel.py check_exits()` (cross-candle trigger), `reconciler.py` (exchange-bracket amendment, live-only, different call frame), `execute_exit`/`BacktestAdapter.execute_entry` (logging/sizing), `kernel.py`'s rounding block. d1: new persisted `strategy.active_bracket` field, written additively by `route()`/exec_algo. d2: `check_exits()` + rounding migrated to read/write it instead of the mutable tuples. Both verified via real rebuild (pytest 647/647, golden-master `MultiDivergence` byte-identical each time) — d2 needed 4 test fixtures fixed (`_FakeStrategy` doubles that bypass `route()` and never got `active_bracket`: `test_armed_legs_wick_check_skip.py`/`test_entry_candle_exits.py`/`test_intrabar_detail_resolution.py`/`test_multi_symbol_portfolio_exits.py`). d3 (reconciler.py, live-only, no golden-master coverage) and d4 not started — see plan file's Step 6.3 section. | In progress | P2 | 5 (shipped 2026-07-18), 21.3/21.4 (shipped 2026-07-17) — unblocked | 2026-07-20 |
 | 7  | Server & client structure | All | Ready | P2 | 2 (done), 5 (shipped) — unblocked, should land after 6 per execution-order notes | 2026-07-20 |
 | 8  | Governance, correctness & cleanup | 8.2–8.5, 8.7 (8.3/8.4 golden-master; SYS-3 doc item carried from F6) — 8.6 verified-already-shipped 2026-07-18, no code needed | In progress | P3 | 3 (done), 5, 6 | 2026-07-18 |
 | 23 | New strategy: high-risk/high-leverage breakout scalper ("MarginSurge") | All — backtest gates can start now; live gated on 21.1–21.4 | Draft | P2 | 21 (live phase), 22.1–22.2 (liq-buffer + governor, soft) | 2026-07-16 |

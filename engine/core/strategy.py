@@ -58,6 +58,16 @@ class BaseStrategy(ABC):
         # cleared by the engine. Never mutate directly from strategy code.
         self._pending_flip: dict | None = None
 
+        # Plan 6 Step 6.3 phase (d1) — persisted typed mirror of the last
+        # OrderPlan route() built (or the exec_algo-sliced replacement, when
+        # configured), for EVERY path including exit/flip/maintain, not just
+        # enter. Written by DefaultExecution.route() (core/models/execution.py)
+        # additively, alongside (not instead of) the mutable tuples above —
+        # this field has NO readers yet (d2+ migrates read sites one cluster
+        # at a time per the phase (d) scoping doc; see DECISIONS.md). Engine-
+        # internal; not documented as a strategy-facing property.
+        self.active_bracket = None  # OrderPlan | None
+
         # Candle index counter — incremented by engine on each candle
         self.index: int = 0
 

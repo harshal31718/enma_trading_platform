@@ -340,10 +340,16 @@ class ExecutionKernel:
 
         if not closed:
             if strategy.is_long:
-                sl = strategy.stop_loss
-                tp = strategy.take_profit
-                sl_price = sl[1] if (sl is not None and not _sl_armed) else None
-                tp_price = tp[1] if (tp is not None and not _tp_armed) else None
+                # Plan 6 Step 6.3 phase (d2): read from the persisted typed
+                # active_bracket instead of the mutable stop_loss/take_profit
+                # tuples. Equivalent by construction — route()/kernel's
+                # exec_algo branch write active_bracket from the same values
+                # at the same call sites (see d1), and active_bracket is only
+                # ever None while flat, which this method already returns
+                # early for (strategy.position is not None, checked above).
+                _ab = strategy.active_bracket
+                sl_price = _ab.stop_loss   if (_ab is not None and not _sl_armed) else None
+                tp_price = _ab.take_profit if (_ab is not None and not _tp_armed) else None
                 sl_hit = sl_price is not None and low_t <= sl_price
                 tp_hit = tp_price is not None and high_t >= tp_price
 
@@ -380,10 +386,10 @@ class ExecutionKernel:
                     exit_reason = "take_profit"
                     closed = True
             elif strategy.is_short:
-                sl = strategy.stop_loss
-                tp = strategy.take_profit
-                sl_price = sl[1] if (sl is not None and not _sl_armed) else None
-                tp_price = tp[1] if (tp is not None and not _tp_armed) else None
+                # See the is_long branch above (Plan 6 Step 6.3 phase (d2)).
+                _ab = strategy.active_bracket
+                sl_price = _ab.stop_loss   if (_ab is not None and not _sl_armed) else None
+                tp_price = _ab.take_profit if (_ab is not None and not _tp_armed) else None
                 sl_hit = sl_price is not None and high_t >= sl_price
                 tp_hit = tp_price is not None and low_t <= tp_price
 
@@ -521,6 +527,13 @@ class ExecutionKernel:
                 if plan.take_profit is not None:
                     strategy.take_profit = (plan.qty, plan.take_profit)
 
+                # Plan 6 Step 6.3 phase (d1): mirror the ACTUAL slice being
+                # placed onto active_bracket, not the original parent plan
+                # route() set it to — consistent with strategy.stop_loss/
+                # take_profit above, which also get overwritten with the
+                # slice's values here.
+                strategy.active_bracket = plan
+
         # For live trading, execute immediately on this candle close
         if is_live:
             # Live DCA / position adjustment (A-014)
@@ -632,13 +645,17 @@ class ExecutionKernel:
             exchange_name = strategy.exchange or "Binance Futures"
             if strategy.stop_loss is not None:
                 sl_qty, sl_price = strategy.stop_loss
-                strategy.stop_loss = (
-                    sl_qty,
-                    round_price(symbol, exchange_name, sl_price, rounding=sl_rounding),
-                )
+                rounded_sl = round_price(symbol, exchange_name, sl_price, rounding=sl_rounding)
+                strategy.stop_loss = (sl_qty, rounded_sl)
+                # Plan 6 Step 6.3 phase (d2): keep active_bracket in sync with
+                # the rounded value too, since check_exits() now reads from it
+                # (see above) — otherwise active_bracket would go stale
+                # (holding the pre-rounding price) as soon as this block runs.
+                if strategy.active_bracket is not None:
+                    strategy.active_bracket.stop_loss = rounded_sl
             if strategy.take_profit is not None:
                 tp_qty, tp_price = strategy.take_profit
-                strategy.take_profit = (
-                    tp_qty,
-                    round_price(symbol, exchange_name, tp_price, rounding=tp_rounding),
-                )
+                rounded_tp = round_price(symbol, exchange_name, tp_price, rounding=tp_rounding)
+                strategy.take_profit = (tp_qty, rounded_tp)
+                if strategy.active_bracket is not None:
+                    strategy.active_bracket.take_profit = rounded_tp

@@ -575,3 +575,20 @@ the ~48-file surface) rather than a standalone step**, since a real fix means gi
 changed for this addendum. Surfaced to the user, who chose to stop and document rather than push
 into phase (d)'s larger scope this session. See `0_fixes-queue.md`'s F10 entry and the plan file's
 Step 6.3 section for the full writeup.
+
+**Second addendum (2026-07-20, same day) — phase (d)'s `active_bracket` design authorized; d1
+shipped.** User authorized proceeding with phase (d) after reviewing its scoping (the four
+read-site clusters and the recommended `active_bracket` persisted-field direction — see the first
+addendum above and the plan file's Step 6.3 section). d1 (of the proposed d1-d5 sub-phasing):
+`BaseStrategy` (`core/strategy.py`) gains `self.active_bracket = None` — a new field, not
+documented as strategy-facing (unlike `self.stop_loss`/`self.take_profit`, which strategy hooks
+like `trail_stop()`/`move_to_breakeven()` read/write directly and remain untouched). `route()`
+(`core/models/execution.py`) mirrors the same `OrderPlan` it already returns onto
+`s.active_bracket` for every path, including `None` for Path 1 — purely additive, no read sites
+touched. `kernel.py`'s exec_algo branch also mirrors the ACTUAL (possibly-sliced) plan onto
+`active_bracket`, consistent with how it already overwrites `strategy.stop_loss`/`take_profit`
+with the slice's values. **Nothing reads `active_bracket` yet** — that's d2 (cluster #1:
+`check_exits()` + rounding) through d4 (cluster #3), each its own golden-master/test-verified
+pass, per the sub-phasing in the scoping addendum above. d5 (whether `self.stop_loss`/
+`self.take_profit` can ever be retired as strategy-facing API) remains unauthorized and would need
+its own separate `DECISIONS.md` entry, since it reaches `BaseStrategy`'s documented public surface.
