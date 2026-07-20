@@ -124,7 +124,7 @@ def test_close_order_failure_does_not_fabricate_a_close(monkeypatch):
     sid = "sess_fail"
     mgr.sessions[sid] = _make_session()
     notified = _Notified()
-    monkeypatch.setattr(mgr, "_notify_node", notified)
+    monkeypatch.setattr(mgr._notifier, "notify", notified)
 
     pos = _make_position()
     strat = _FakeStrategy(pos)
@@ -162,7 +162,7 @@ def test_close_order_success_books_the_real_fill_not_the_trigger_price(monkeypat
     sid = "sess_ok"
     mgr.sessions[sid] = _make_session()
     notified = _Notified()
-    monkeypatch.setattr(mgr, "_notify_node", notified)
+    monkeypatch.setattr(mgr._notifier, "notify", notified)
 
     pos = _make_position(entry=100.0, qty=1.0, direction="long")
     strat = _FakeStrategy(pos)
@@ -207,7 +207,7 @@ def test_close_order_falls_back_to_order_query_when_avg_price_missing(monkeypatc
     mgr = LiveBotManager()
     sid = "sess_requery"
     mgr.sessions[sid] = _make_session()
-    monkeypatch.setattr(mgr, "_notify_node", _Notified())
+    monkeypatch.setattr(mgr._notifier, "notify", _Notified())
 
     pos = _make_position(entry=100.0, qty=1.0, direction="long")
     strat = _FakeStrategy(pos)
@@ -292,7 +292,7 @@ def test_entry_order_timeout_then_actually_filled_does_not_report_failure(monkey
     mgr.sessions[sid] = _make_session()
     mgr.sessions[sid]["open_positions"] = {}
     notified = _Notified()
-    monkeypatch.setattr(mgr, "_notify_node", notified)
+    monkeypatch.setattr(mgr._notifier, "notify", notified)
 
     strat = _make_flat_strategy()
     adapter = LiveAdapter(mgr, sid)
@@ -327,7 +327,7 @@ def test_entry_order_genuine_failure_still_reports_failure(monkeypatch):
     sid = "sess_entry_fail"
     mgr.sessions[sid] = _make_session()
     mgr.sessions[sid]["open_positions"] = {}
-    monkeypatch.setattr(mgr, "_notify_node", _Notified())
+    monkeypatch.setattr(mgr._notifier, "notify", _Notified())
 
     strat = _make_flat_strategy()
     adapter = LiveAdapter(mgr, sid)
@@ -359,7 +359,7 @@ def test_entry_blocked_when_session_at_max_open_positions(monkeypatch):
     session["max_open_positions"] = 2
     session["open_positions"] = {"BTCUSDT": {}, "ETHUSDT": {}}  # already at cap
     mgr.sessions[sid] = session
-    monkeypatch.setattr(mgr, "_notify_node", _Notified())
+    monkeypatch.setattr(mgr._notifier, "notify", _Notified())
 
     strat = _make_flat_strategy()
     adapter = LiveAdapter(mgr, sid)
@@ -390,7 +390,7 @@ def test_entry_allowed_for_already_open_symbol_even_at_cap(monkeypatch):
     session["max_open_positions"] = 1
     session["open_positions"] = {SYM: {}}  # SYM itself already counted
     mgr.sessions[sid] = session
-    monkeypatch.setattr(mgr, "_notify_node", _Notified())
+    monkeypatch.setattr(mgr._notifier, "notify", _Notified())
 
     strat = _make_flat_strategy()
     adapter = LiveAdapter(mgr, sid)
@@ -417,7 +417,7 @@ def test_entry_allowed_when_max_open_positions_unset(monkeypatch):
     session = _make_session()
     session["open_positions"] = {"BTCUSDT": {}, "ETHUSDT": {}, "SOLUSDT": {}, "ADAUSDT": {}}
     mgr.sessions[sid] = session  # no max_open_positions key at all
-    monkeypatch.setattr(mgr, "_notify_node", _Notified())
+    monkeypatch.setattr(mgr._notifier, "notify", _Notified())
 
     strat = _make_flat_strategy()
     adapter = LiveAdapter(mgr, sid)

@@ -125,7 +125,7 @@ def test_flip_exit_failure_never_attempts_entry(monkeypatch):
     mgr = LiveBotManager()
     sid = "sess_flip_exit_fail"
     mgr.sessions[sid] = _make_session()
-    monkeypatch.setattr(mgr, "_notify_node", _Notified())
+    monkeypatch.setattr(mgr._notifier, "notify", _Notified())
 
     pos = _make_position(direction="long")
     strat = _FakeStrategy(pos)
@@ -166,7 +166,7 @@ def test_flip_entry_ambiguous_timeout_still_completes_the_flip(monkeypatch):
     sid = "sess_flip_entry_timeout"
     mgr.sessions[sid] = _make_session()
     notified = _Notified()
-    monkeypatch.setattr(mgr, "_notify_node", notified)
+    monkeypatch.setattr(mgr._notifier, "notify", notified)
 
     pos = _make_position(direction="long")
     strat = _FakeStrategy(pos)
@@ -208,7 +208,7 @@ def test_flip_entry_genuine_failure_leaves_flat_not_reentered(monkeypatch):
     mgr = LiveBotManager()
     sid = "sess_flip_entry_genuine_fail"
     mgr.sessions[sid] = _make_session()
-    monkeypatch.setattr(mgr, "_notify_node", _Notified())
+    monkeypatch.setattr(mgr._notifier, "notify", _Notified())
 
     pos = _make_position(direction="long")
     strat = _FakeStrategy(pos)

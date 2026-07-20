@@ -189,6 +189,10 @@ class _FakeClient:
         self.calls.append(("DELETE", url))
         return self._responses.pop(0)
 
+    async def put(self, url, headers=None):
+        self.calls.append(("PUT", url))
+        return self._responses.pop(0)
+
 
 @pytest.fixture(autouse=True)
 def _stub_time_offset(monkeypatch):
@@ -251,3 +255,35 @@ def test_send_signed_request_order_call_bypasses_pause(monkeypatch):
 
     assert result == {"orderId": 1}
     assert len(fake.calls) == 1
+
+
+def test_send_signed_request_supports_put_for_listen_key_keepalive(monkeypatch):
+    """Regression: `_dispatch` previously had no PUT branch — every real
+    listen-key keepalive (`user_data_stream.py`'s `_keepalive_listen_key`,
+    which calls this with method="PUT" every 30 min) silently raised
+    ValueError, was swallowed by that method's own try/except, and the
+    listen key expired every ~60 min instead of being renewed — the system
+    self-healed via the LISTEN_KEY_EXPIRED full-reconnect path (A-3, Plan
+    21.1) but never actually renewed anything. Fixed by adding a PUT branch
+    to `_dispatch`, mirroring GET/POST/DELETE exactly."""
+    fake = _FakeClient([
+        _FakeResponse(200, {}, headers={}),
+    ])
+    monkeypatch.setattr(bt, "get_client", lambda: fake)
+
+    result = _run(bt.send_signed_request(
+        "PUT", "/fapi/v1/listenKey", "key", "secret", mode="testnet",
+    ))
+
+    assert result == {}
+    assert fake.calls == [("PUT", fake.calls[0][1])]
+
+
+def test_send_signed_request_still_rejects_unsupported_methods(monkeypatch):
+    fake = _FakeClient([])
+    monkeypatch.setattr(bt, "get_client", lambda: fake)
+
+    with pytest.raises(ValueError, match="Unsupported HTTP method"):
+        _run(bt.send_signed_request(
+            "PATCH", "/fapi/v1/order", "key", "secret", mode="testnet",
+        ))

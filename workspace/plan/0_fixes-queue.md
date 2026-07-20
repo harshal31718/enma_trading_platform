@@ -133,6 +133,30 @@ Anything failing one of these lives in **§ Not in this queue** below with the r
     live reproduction; the verification debt itself is the risk at this point, not just the
     underlying bugs.
 
+### F9 — `send_signed_request` silently dropped PUT, breaking listen-key keepalive · **SHIPPED 2026-07-20**
+- **What:** found while scoping Plan 6 Step 6.2 (Exchange abstraction) — `services/binance_
+  testnet.py`'s `send_signed_request`'s `_dispatch` only had branches for GET/POST/DELETE;
+  `services/user_data_stream.py`'s `_keepalive_listen_key()` calls it with `method="PUT"` every
+  30 minutes (Binance requires renewal within 60). Every real call hit the `raise ValueError`
+  fallback, silently swallowed by that method's own `try/except` (logged as a warning, never
+  surfaced). Practical impact: every live session's listen key expired every ~60 minutes instead
+  of being renewed, forcing a full WS reconnect via the already-shipped `LISTEN_KEY_EXPIRED`
+  handler (A-3, Plan 21.1) — self-healing, not catastrophic, but never actually doing what the
+  keepalive was for, and a real gap in live session continuity (brief tick gaps every reconnect
+  cycle instead of none).
+- **Fixed:** added a `PUT` branch to `_dispatch`, identical shape to the existing GET/POST/DELETE
+  branches. New tests in `test_binance_backpressure.py`: `test_send_signed_request_supports_put_
+  for_listen_key_keepalive` (confirms PUT now dispatches and returns) and
+  `test_send_signed_request_still_rejects_unsupported_methods` (confirms the fallback
+  `ValueError` still fires for a genuinely unsupported verb, not silently swallowed everywhere).
+- **Acceptance:** engine pytest 600/600 (598 + 2 new), golden-master byte-identical
+  (`before_plan6.json` vs `after_fixq_put.json`) — this file has no backtest import overlap, so
+  the check confirms no accidental import-time side effect, not pipeline behavior.
+- **Not yet observed live:** no session in this repo's current runtime has been open long enough
+  to hit the 30-minute keepalive interval since the fix landed — the next real multi-hour live/
+  chaos session should confirm keepalive success in the logs (`"Listen key keep-alive OK"` instead
+  of `"Keep-alive failed"`) and the absence of routine hourly `LISTEN_KEY_EXPIRED` reconnects.
+
 ### F8 — Redis `requirepass` · Plan 4.5 · **needs an infra window**
 - **What:** The one real infra item deferred from Plan 4 — authenticate Redis (`requirepass` + update
   every client connection string: server BullMQ/ioredis, engine, health check). Wide-ish blast radius

@@ -142,7 +142,7 @@ def _make_mgr_adapter(monkeypatch, session, notified=None):
     mgr = LiveBotManager()
     sid = "sess_portfolio_risk"
     mgr.sessions[sid] = session
-    monkeypatch.setattr(mgr, "_notify_node", notified or _Notified())
+    monkeypatch.setattr(mgr._notifier, "notify", notified or _Notified())
     return mgr, LiveAdapter(mgr, sid)
 
 
@@ -201,7 +201,7 @@ def test_portfolio_risk_past_budget_vetoes_no_order_placed(monkeypatch):
     session["capital"] = 100.0  # small equity so the candidate risk alone blows the budget
     mgr, adapter = _make_mgr_adapter(monkeypatch, session)
     notified = _Notified()
-    monkeypatch.setattr(mgr, "_notify_node", notified)
+    monkeypatch.setattr(mgr._notifier, "notify", notified)
     # risk = |100-50|*1 = 50; equity=100 -> 50% >> 6% budget.
     strat = _FakeStrategy(stop_loss=(1.0, 50.0))
 
@@ -234,7 +234,7 @@ def test_portfolio_risk_names_contributing_symbols_in_the_veto_log(monkeypatch):
     session["capital"] = 500.0
     mgr, adapter = _make_mgr_adapter(monkeypatch, session)
     notified = _Notified()
-    monkeypatch.setattr(mgr, "_notify_node", notified)
+    monkeypatch.setattr(mgr._notifier, "notify", notified)
     strat = _FakeStrategy(stop_loss=(1.0, 50.0))
 
     ok = _run_entry(adapter, strat, direction="long", ref_price=100.0)
@@ -274,7 +274,7 @@ def test_stop_inside_liquidation_buffer_vetoes_with_liq_price_in_log(monkeypatch
     session = _make_session(risk_governor=gov)
     mgr, adapter = _make_mgr_adapter(monkeypatch, session)
     notified = _Notified()
-    monkeypatch.setattr(mgr, "_notify_node", notified)
+    monkeypatch.setattr(mgr._notifier, "notify", notified)
     # entry=100, leverage=10 -> liq ~= 90.36, safe SL floor ~= 90.86 (0.5%
     # buffer). SL=90 is on the correct side of entry (M-5 passes) but still
     # inside the liquidation buffer.

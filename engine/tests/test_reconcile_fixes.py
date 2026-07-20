@@ -76,7 +76,7 @@ def test_restore_uses_exchange_leverage_and_rebuilds_brackets(monkeypatch):
     mgr = LiveBotManager()
     sid = "sess1"
     mgr.sessions[sid] = _make_session()
-    monkeypatch.setattr(mgr, "_notify_node", lambda *a, **k: asyncio.sleep(0))
+    monkeypatch.setattr(mgr._notifier, "notify", lambda *a, **k: asyncio.sleep(0))
     strat = _FakeStrategy(leverage=5)
 
     _run(mgr, sid, strat)
@@ -106,7 +106,7 @@ def test_price_missing_true_when_no_usable_price(monkeypatch):
     mgr = LiveBotManager()
     sid = "sess2"
     mgr.sessions[sid] = _make_session()
-    monkeypatch.setattr(mgr, "_notify_node", lambda *a, **k: asyncio.sleep(0))
+    monkeypatch.setattr(mgr._notifier, "notify", lambda *a, **k: asyncio.sleep(0))
     strat = _FakeStrategy(price=None)  # no engine last-price fallback
 
     _run(mgr, sid, strat)

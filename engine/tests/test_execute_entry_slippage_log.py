@@ -94,7 +94,7 @@ def _make_mgr_adapter(monkeypatch, notified=None):
     mgr = LiveBotManager()
     sid = "sess_entry_slippage"
     mgr.sessions[sid] = _make_session()
-    monkeypatch.setattr(mgr, "_notify_node", notified or _Notified())
+    monkeypatch.setattr(mgr._notifier, "notify", notified or _Notified())
     return mgr, LiveAdapter(mgr, sid)
 
 

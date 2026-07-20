@@ -212,6 +212,8 @@ async def send_signed_request(
             return await client.post(url, headers=headers)
         if method_upper == "DELETE":
             return await client.delete(url, headers=headers)
+        if method_upper == "PUT":
+            return await client.put(url, headers=headers)
         raise ValueError(f"Unsupported HTTP method: {method}")
 
     offset = await _get_time_offset(base_url)

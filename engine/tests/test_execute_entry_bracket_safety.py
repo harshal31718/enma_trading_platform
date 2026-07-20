@@ -30,6 +30,7 @@ import pytest
 import services.binance_testnet as binance_mod
 import core.live_bot_manager as lbm_module
 from core.live_bot_manager import LiveBotManager, LiveAdapter
+from core.reconciler import Reconciler
 
 SYM = "FAKEUSDT"
 
@@ -93,7 +94,7 @@ def _make_mgr_adapter(monkeypatch, notified=None):
     mgr = LiveBotManager()
     sid = "sess_entry_bracket"
     mgr.sessions[sid] = _make_session()
-    monkeypatch.setattr(mgr, "_notify_node", notified or _Notified())
+    monkeypatch.setattr(mgr._notifier, "notify", notified or _Notified())
     return mgr, LiveAdapter(mgr, sid)
 
 
@@ -321,7 +322,7 @@ def test_emergency_close_cancels_any_already_placed_algo_orders(monkeypatch):
 
     async def _counting_cancel(self, session, symbol, algo_ids=None):
         cancel_calls["n"] += 1
-    monkeypatch.setattr(LiveBotManager, "_cancel_symbol_algo_orders", _counting_cancel)
+    monkeypatch.setattr(Reconciler, "cancel_symbol_algo_orders", _counting_cancel)
 
     strat = _FakeStrategy(stop_loss=(1.0, 95.0))
     ok = _run_entry(adapter, strat, direction="long", ref_price=100.0)

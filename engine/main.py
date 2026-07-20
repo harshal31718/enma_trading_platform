@@ -33,6 +33,7 @@ from routers.optimize import router as optimize_router
 from routers.simulate import router as simulate_router
 from services.strategy_seeder import seed_strategies
 from services.binance_testnet import close_client
+from core.node_notifier import close_client as close_node_notifier_client
 from utils.symbols import load_exchange_rules, load_symbol_volume_tiers, load_book_tickers
 
 load_dotenv()
@@ -155,6 +156,7 @@ async def lifespan(app: FastAPI):
     close_mongo()
     await close_pool()
     await close_client()
+    await close_node_notifier_client()
     logger.info("Engine shutdown complete")
 
 

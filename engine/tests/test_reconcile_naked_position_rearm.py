@@ -24,6 +24,7 @@ import pytest
 import services.binance_testnet as binance_mod
 import core.live_bot_manager as lbm_module
 from core.live_bot_manager import LiveBotManager, _NAKED_POSITION_MAX_REARM_ATTEMPTS
+from core.node_notifier import NodeNotifier
 from core.position import Position
 
 SYM = "FAKEUSDT"
@@ -92,7 +93,7 @@ def _stub_side_effects(monkeypatch):
 
     async def _noop_notify(self, session_id, payload):
         return None
-    monkeypatch.setattr(LiveBotManager, "_notify_node", _noop_notify)
+    monkeypatch.setattr(NodeNotifier, "notify", _noop_notify)
 
     async def _noop_record_trade(*args, **kwargs):
         return None

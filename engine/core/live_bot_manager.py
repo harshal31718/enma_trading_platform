@@ -14,9 +14,12 @@ import httpx
 import numpy as np
 import websockets
 
-from config.timescale import get_pool
 from core.position import Position
 from core.money import add_money
+from core.market_data_feed import MarketDataFeed
+from core.node_notifier import NodeNotifier
+from core.session_registry import SessionRegistry
+from core.reconciler import Reconciler
 from core.models import (
     DefaultPortfolioModel, InverseVolatilityPortfolio, compute_realized_volatility,
     LiveExecution, OrderPlan,
@@ -31,7 +34,7 @@ from services.trade_recorder import record_trade, build_trade_record
 from services.event_log import append_event, reset_session_seq, fetch_events, fold_events
 from services.user_data_stream import UserDataStreamManager
 from services.pairlist import pairlist_from_config
-from utils.symbols import round_price, clamp_and_round_qty, clamp_leverage, get_ticker_data, is_symbol_invalid
+from utils.symbols import round_price, clamp_and_round_qty, clamp_leverage, is_symbol_invalid
 from core.kernel import ExecutionAdapter, ExecutionKernel
 
 logger = logging.getLogger(__name__)
@@ -81,19 +84,6 @@ def _kline_ws_url(symbol: str, timeframe: str) -> str:
     (A-12). `symbol` is the trading pair (any case), `timeframe` a Binance
     interval string (e.g. "1h") — same stream-name format testnet used."""
     return f"{_MAINNET_WS_BASE}/{symbol.lower()}@kline_{timeframe}"
-
-# Server URL for callbacks
-SERVER_URL = os.getenv("SERVER_URL", "http://server:5000")
-
-# Plan 3 Step 3.1 (SEC-1): shared secret authenticating engine -> Node
-# /internal/* calls (distinct from ENGINE_API_KEY, which authenticates the
-# other direction, Node -> engine).
-INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "")
-
-
-def _internal_headers() -> dict:
-    return {"X-Internal-Key": INTERNAL_API_KEY}
-
 
 TRADING_STATES = ("active", "reducing", "halted")
 
@@ -293,8 +283,22 @@ async def _seed_pnl_from_event_log(session_id: str, symbols: list[str]) -> float
 
 class LiveAdapter(ExecutionAdapter):
     def __init__(self, manager: LiveBotManager, session_id: str):
+        # Plan 6 Step 6.4 (ENG-5, partial): resolve the actual collaborators
+        # once here instead of chaining `self.manager.<attr>` through every
+        # method body — kills the "reaches into manager internals" pattern
+        # for registry/notifier/reconciler-owned state. Constructor still
+        # accepts `manager` (not a full injected-dependency signature) —
+        # deliberate: this file has zero golden-master coverage (live-only,
+        # no import overlap with the backtest path per Plan 5.3's own note),
+        # and 19 existing tests construct `LiveAdapter(mgr, sid)` directly,
+        # so a constructor-signature change is a materially larger, riskier
+        # move left for a dedicated pass alongside the kernel's `is_live`
+        # branch removal (this step's other, unattempted half).
         self.manager = manager
         self.session_id = session_id
+        self._registry = manager._registry
+        self._notifier = manager._notifier
+        self._reconciler = manager._reconciler
 
     async def verify_position(self, strategy, symbol: str) -> None:
         # Reconciliation is now handled by _reconcile_exchange_state() called
@@ -305,7 +309,7 @@ class LiveAdapter(ExecutionAdapter):
         self, strategy, symbol: str, direction: str, qty: float, ref_price: float,
         time_t: datetime, index_t: int, intent: str = "enter", adjust_tag: str = "",
     ) -> bool:
-        session = self.manager.sessions.get(self.session_id)
+        session = self._registry.sessions.get(self.session_id)
         if not session:
             return False
 
@@ -317,7 +321,7 @@ class LiveAdapter(ExecutionAdapter):
             trading_state = session.get("trading_state", "active")
             if trading_state in ("halted", "reducing"):
                 logger.warning(f"[AlgoBot] {symbol}: entry blocked, trading_state={trading_state}")
-                await self.manager._notify_node(self.session_id, {
+                await self._notifier.notify(self.session_id, {
                     "event": "log",
                     "eventData": {"type": "warning", "message": f"{symbol}: entry blocked (trading_state={trading_state})"}
                 })
@@ -331,7 +335,7 @@ class LiveAdapter(ExecutionAdapter):
                 lock = protection_manager.check_entry(symbol, direction, session.get("capital", 0))
                 if lock is not None:
                     logger.warning(f"[AlgoBot] {symbol}: entry blocked by protection: {lock.reason}")
-                    await self.manager._notify_node(self.session_id, {
+                    await self._notifier.notify(self.session_id, {
                         "event": "log",
                         "eventData": {"type": "warning", "message": f"{symbol}: entry blocked — {lock.reason}"}
                     })
@@ -343,7 +347,7 @@ class LiveAdapter(ExecutionAdapter):
             rate_limiter = session.get("rate_limiter")
             if rate_limiter is not None and not rate_limiter.allow():
                 logger.warning(f"[AlgoBot] {symbol}: order rate limited, skipping")
-                await self.manager._notify_node(self.session_id, {
+                await self._notifier.notify(self.session_id, {
                     "event": "log",
                     "eventData": {"type": "warning", "message": f"{symbol}: order rate limited, skipping"}
                 })
@@ -357,13 +361,13 @@ class LiveAdapter(ExecutionAdapter):
             # unlike the per-symbol risk models above/below this gate.
             risk_governor = session.get("risk_governor")
             if risk_governor is not None:
-                _equity, _used_margin = self.manager._compute_session_equity_and_margin(session)
+                _equity, _used_margin = self._reconciler.compute_session_equity_and_margin(session)
                 verdict = risk_governor.check_pre_trade(
                     equity=_equity, used_margin=_used_margin, now=datetime.now(timezone.utc),
                 )
                 if not verdict.ok:
                     logger.warning(f"[AlgoBot] {symbol}: entry blocked by risk governor — {verdict.reason}")
-                    await self.manager._notify_node(self.session_id, {
+                    await self._notifier.notify(self.session_id, {
                         "event": "log",
                         "eventData": {
                             "type": "warning",
@@ -430,7 +434,7 @@ class LiveAdapter(ExecutionAdapter):
                 f"[AlgoBot] {symbol}: notional ${notional:.2f} exceeds leveraged buying power "
                 f"${strategy.balance * strategy.leverage:.2f} (leverage {strategy.leverage}x) after min-notional bump, skipping"
             )
-            await self.manager._notify_node(self.session_id, {
+            await self._notifier.notify(self.session_id, {
                 "event": "log",
                 "eventData": {
                     "type": "error",
@@ -493,9 +497,9 @@ class LiveAdapter(ExecutionAdapter):
         # above) since a scale-in also changes committed risk/notional.
         risk_governor = session.get("risk_governor")
         if risk_governor is not None and sl_price is not None:
-            _open_risk_breakdown = self.manager._compute_open_risk_breakdown(session)
+            _open_risk_breakdown = self._reconciler.compute_open_risk_breakdown(session)
             _candidate_risk = abs(fill_price - sl_price) * qty
-            _equity_pr, _ = self.manager._compute_session_equity_and_margin(session)
+            _equity_pr, _ = self._reconciler.compute_session_equity_and_margin(session)
             _pr_verdict = risk_governor.check_portfolio_risk(
                 open_risk=sum(_open_risk_breakdown.values()) + _candidate_risk,
                 equity=_equity_pr,
@@ -508,7 +512,7 @@ class LiveAdapter(ExecutionAdapter):
                     f"[AlgoBot] {symbol}: entry blocked by risk governor — {_pr_verdict.reason}; "
                     f"existing contributors: {_contributors}; candidate {symbol}(${_candidate_risk:.2f})"
                 )
-                await self.manager._notify_node(self.session_id, {
+                await self._notifier.notify(self.session_id, {
                     "event": "log",
                     "eventData": {
                         "type": "warning",
@@ -552,7 +556,7 @@ class LiveAdapter(ExecutionAdapter):
                     f"liquidation buffer (computed liq price ${_liq_price:.4f}, direction={direction}, "
                     f"leverage={strategy.leverage}x)"
                 )
-                await self.manager._notify_node(self.session_id, {
+                await self._notifier.notify(self.session_id, {
                     "event": "log",
                     "eventData": {
                         "type": "warning",
@@ -585,7 +589,7 @@ class LiveAdapter(ExecutionAdapter):
                 _var_amount, _cvar_amount = await _compute_var_cvar(
                     session.get("api_key", ""), session.get("api_secret", ""), mode="testnet",
                 )
-                _equity_var, _ = self.manager._compute_session_equity_and_margin(session)
+                _equity_var, _ = self._reconciler.compute_session_equity_and_margin(session)
                 _var_verdict = risk_governor.check_var(
                     var_amount=_var_amount, cvar_amount=_cvar_amount, equity=_equity_var,
                 )
@@ -597,7 +601,7 @@ class LiveAdapter(ExecutionAdapter):
 
             if not _var_verdict.ok:
                 logger.warning(f"[AlgoBot] {symbol}: entry blocked by risk governor — {_var_verdict.reason}")
-                await self.manager._notify_node(self.session_id, {
+                await self._notifier.notify(self.session_id, {
                     "event": "log",
                     "eventData": {
                         "type": "warning",
@@ -627,7 +631,7 @@ class LiveAdapter(ExecutionAdapter):
                         _open_notionals[_sym] = abs(_pos.entry_price * _pos.qty)
                 from services.portfolio_risk import fetch_correlation_matrix as _fetch_corr
                 _corr_matrix = await _fetch_corr(list(_open_notionals.keys()) + [symbol])
-                _equity_corr, _ = self.manager._compute_session_equity_and_margin(session)
+                _equity_corr, _ = self._reconciler.compute_session_equity_and_margin(session)
                 _corr_verdict = risk_governor.check_correlation_concentration(
                     candidate_symbol=symbol,
                     candidate_notional=qty * fill_price,
@@ -644,7 +648,7 @@ class LiveAdapter(ExecutionAdapter):
 
             if not _corr_verdict.ok:
                 logger.warning(f"[AlgoBot] {symbol}: entry blocked by risk governor — {_corr_verdict.reason}")
-                await self.manager._notify_node(self.session_id, {
+                await self._notifier.notify(self.session_id, {
                     "event": "log",
                     "eventData": {
                         "type": "warning",
@@ -658,7 +662,7 @@ class LiveAdapter(ExecutionAdapter):
                 return False
 
         binance_side = "BUY" if direction == "long" else "SELL"
-        sem = self.manager._order_semaphores.get(self.session_id)
+        sem = self._registry.order_semaphores.get(self.session_id)
 
         # ── F-019: Track placed algo order IDs for OUO peer-cancel ──
         _placed_algo_ids: dict[str, str | None] = {"sl": None, "tp": None}
@@ -718,7 +722,7 @@ class LiveAdapter(ExecutionAdapter):
                     client_order_id=str(result.get("orderId")) if result.get("orderId") else None,
                 )
 
-                await self.manager._notify_node(self.session_id, {
+                await self._notifier.notify(self.session_id, {
                     "pnl": str(round(session["pnl"], 2)),
                     "openPositions": list(session["open_positions"].keys()),
                     "status": "running",
@@ -814,7 +818,7 @@ class LiveAdapter(ExecutionAdapter):
                         f"status={entry_result.get('status')!r}) — treating as a failed entry, "
                         f"NOT opening a local position on an unconfirmed fill"
                     )
-                    await self.manager._notify_node(self.session_id, {
+                    await self._notifier.notify(self.session_id, {
                         "event": "log",
                         "eventData": {
                             "type": "error",
@@ -844,7 +848,7 @@ class LiveAdapter(ExecutionAdapter):
                             f"(ref={ref_price}, fill={fill_price}) exceeds "
                             f"{_SLIPPAGE_ALERT_THRESHOLD_PCT * 100:.0f}% alert threshold"
                         )
-                        await self.manager._notify_node(self.session_id, {
+                        await self._notifier.notify(self.session_id, {
                             "event": "log",
                             "eventData": {
                                 "type": "warning",
@@ -960,7 +964,7 @@ class LiveAdapter(ExecutionAdapter):
                         # but cancel-all is cheap and correct even if that
                         # ordering ever changes, so call it unconditionally
                         # rather than assuming the ordering invariant holds.
-                        await self.manager._cancel_symbol_algo_orders(session, symbol, _placed_algo_ids)
+                        await self._reconciler.cancel_symbol_algo_orders(session, symbol, _placed_algo_ids)
 
                         if _emergency_result is None:
                             # All attempts failed. Do NOT fabricate a close —
@@ -976,7 +980,7 @@ class LiveAdapter(ExecutionAdapter):
                                 f"{_binance_error_detail(_emergency_last_error) if _emergency_last_error else 'unknown'}). "
                                 f"Reconciliation will restore it next candle."
                             )
-                            await self.manager._notify_node(self.session_id, {
+                            await self._notifier.notify(self.session_id, {
                                 "event": "log",
                                 "eventData": {
                                     "type": "error",
@@ -1058,7 +1062,7 @@ class LiveAdapter(ExecutionAdapter):
                             session_id=self.session_id, symbol=symbol, event_type="fill",
                             payload={"side": "exit", "qty": qty, "price": _real_exit_price, "realizedPnl": _rpnl_e, "reason": "emergency_exit"},
                         )
-                        await self.manager._notify_node(self.session_id, {
+                        await self._notifier.notify(self.session_id, {
                             "pnl": str(round(session["pnl"], 2)),
                             "openPositions": list(session["open_positions"].keys()),
                             "status": "running",
@@ -1100,7 +1104,7 @@ class LiveAdapter(ExecutionAdapter):
                     except Exception as tp_e:
                         _tp_detail = _binance_error_detail(tp_e)
                         logger.warning(f"[AlgoBot] TP placement failed for {symbol}: {_tp_detail}")
-                        await self.manager._notify_node(self.session_id, {
+                        await self._notifier.notify(self.session_id, {
                             "event": "log",
                             "eventData": {"type": "warning", "message": f"{symbol}: TP skipped — {_tp_detail}"},
                         })
@@ -1108,7 +1112,7 @@ class LiveAdapter(ExecutionAdapter):
         except Exception as e:
             _order_detail = _binance_error_detail(e)
             logger.error(f"[AlgoBot] Testnet order failed for {symbol}: {_order_detail}")
-            await self.manager._notify_node(self.session_id, {
+            await self._notifier.notify(self.session_id, {
                 "event": "log",
                 "eventData": {"type": "error", "message": f"Order failed {symbol}: {_order_detail}"}
             })
@@ -1176,7 +1180,7 @@ class LiveAdapter(ExecutionAdapter):
         # threshold this step's acceptance criterion names, so a user
         # actually sees it in the UI, not just the engine log.
         if _qty_inflation_factor > 1.1:
-            await self.manager._notify_node(self.session_id, {
+            await self._notifier.notify(self.session_id, {
                 "event": "log",
                 "eventData": {
                     "type": "warning",
@@ -1187,7 +1191,7 @@ class LiveAdapter(ExecutionAdapter):
                 },
             })
 
-        await self.manager._notify_node(self.session_id, {
+        await self._notifier.notify(self.session_id, {
             "pnl": str(round(session["pnl"], 2)),
             "openPositions": list(session["open_positions"].keys()),
             "status": "running",
@@ -1203,7 +1207,7 @@ class LiveAdapter(ExecutionAdapter):
         self, strategy, symbol: str, qty: float, exit_price: float,
         time_t: datetime, index_t: int, adjust_tag: str = "",
     ) -> None:
-        session = self.manager.sessions.get(self.session_id)
+        session = self._registry.sessions.get(self.session_id)
         if not session or strategy.position is None or not strategy.position.is_open:
             return
         if qty <= 0 or qty >= strategy.position.qty:
@@ -1240,7 +1244,7 @@ class LiveAdapter(ExecutionAdapter):
             _api_key = session.get("api_key", "")
             _api_secret = session.get("api_secret", "")
 
-            sem = self.manager._order_semaphores.get(self.session_id)
+            sem = self._registry.order_semaphores.get(self.session_id)
             async with (sem if sem else contextlib.nullcontext()):
                 reduce_params = {
                     "symbol": symbol,
@@ -1304,7 +1308,7 @@ class LiveAdapter(ExecutionAdapter):
             except Exception as e:
                 logger.error(f"on_reduced_position error: {e}")
 
-            await self.manager._notify_node(self.session_id, {
+            await self._notifier.notify(self.session_id, {
                 "pnl": str(round(session["pnl"], 2)),
                 "openPositions": list(session["open_positions"].keys()),
                 "status": "running",
@@ -1325,7 +1329,7 @@ class LiveAdapter(ExecutionAdapter):
         self, strategy, symbol: str, qty: float, exit_price: float, reason: str, time_t: datetime, index_t: int,
         high_t: float, low_t: float
     ) -> None:
-        session = self.manager.sessions.get(self.session_id)
+        session = self._registry.sessions.get(self.session_id)
         if not session or strategy.position is None:
             return
 
@@ -1356,7 +1360,7 @@ class LiveAdapter(ExecutionAdapter):
         #   from the fill (falling back to a direct order query if the
         #   immediate response didn't carry it) instead of the SL/TP
         #   trigger price / last candle close this function was called with.
-        sem = self.manager._order_semaphores.get(self.session_id)
+        sem = self._registry.order_semaphores.get(self.session_id)
         client_order_id = _make_client_id(self.session_id, symbol)
         try:
             from services.binance_testnet import send_signed_request as _signed
@@ -1406,7 +1410,7 @@ class LiveAdapter(ExecutionAdapter):
                 payload={"reason": reason, "error": str(e)},
                 client_order_id=client_order_id,
             )
-            await self.manager._notify_node(self.session_id, {
+            await self._notifier.notify(self.session_id, {
                 "status": "running",
                 "event": "close_failed",
                 "eventData": {
@@ -1482,7 +1486,7 @@ class LiveAdapter(ExecutionAdapter):
         strategy.take_profit = None
         strategy._pending_flip = None
         session["open_positions"].pop(symbol, None)
-        await self.manager._cancel_symbol_algo_orders(session, symbol, _closed_algo_ids)
+        await self._reconciler.cancel_symbol_algo_orders(session, symbol, _closed_algo_ids)
 
         # Persist the trade record BEFORE notifying Node so the server's
         # per-symbol aggregation (computeSymbolStats) sees this closed trade.
@@ -1494,7 +1498,7 @@ class LiveAdapter(ExecutionAdapter):
             client_order_id=client_order_id,
         )
 
-        await self.manager._notify_node(self.session_id, {
+        await self._notifier.notify(self.session_id, {
             "pnl": str(round(session["pnl"], 2)),
             "openPositions": list(session["open_positions"].keys()),
             "status": "running",
@@ -1562,28 +1566,39 @@ class LiveAdapter(ExecutionAdapter):
 
 class LiveBotManager:
     def __init__(self):
-        self.sessions: dict[str, dict] = {}
-        self._stop_signals: dict[str, asyncio.Event] = {}
-        self._tasks: dict[str, list[asyncio.Task]] = {}
-        # Limit concurrent Binance testnet calls per session to avoid overwhelming
-        # the testnet when many symbols fire signals on the same candle close.
-        self._order_semaphores: dict[str, asyncio.Semaphore] = {}
-        # Plan 5 Step 5.4 (ENG-3): the per-candle loop (reconcile -> check_exits
-        # -> evaluate_and_route) and the user-data WS fill callback (_on_fill,
-        # which also calls _reconcile_exchange_state) both mutate the same
-        # strategy.position / session["pnl"] / session["open_positions"] state
-        # and can interleave at any await point — a fill landing mid-candle-
-        # loop is a real double-close/double-count race. One lock per
-        # (session_id, symbol) serializes them.
-        self._symbol_state_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        self._registry = SessionRegistry()
+        self._market_data = MarketDataFeed()
+        self._notifier = NodeNotifier()
+        self._reconciler = Reconciler(self._registry, self._notifier, self)
+
+    # Thin delegating properties (Plan 6 Step 6.1, ENG-1): session lifecycle
+    # state now lives in `SessionRegistry`, but every existing call site
+    # (this file's own methods, `LiveAdapter.manager.sessions`/
+    # `.manager._order_semaphores`, and tests that poke `mgr.sessions[...]`
+    # directly) keeps working unchanged — same dict objects, just owned by
+    # the registry instead of `LiveBotManager` itself.
+    @property
+    def sessions(self) -> dict[str, dict]:
+        return self._registry.sessions
+
+    @property
+    def _stop_signals(self) -> dict[str, asyncio.Event]:
+        return self._registry.stop_signals
+
+    @property
+    def _tasks(self) -> dict[str, list[asyncio.Task]]:
+        return self._registry.tasks
+
+    @property
+    def _order_semaphores(self) -> dict[str, asyncio.Semaphore]:
+        return self._registry.order_semaphores
+
+    @property
+    def _symbol_state_locks(self) -> dict[tuple[str, str], asyncio.Lock]:
+        return self._registry.symbol_state_locks
 
     def _get_symbol_lock(self, session_id: str, symbol: str) -> asyncio.Lock:
-        key = (session_id, symbol)
-        lock = self._symbol_state_locks.get(key)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._symbol_state_locks[key] = lock
-        return lock
+        return self._registry.get_symbol_lock(session_id, symbol)
 
     async def start_session(self, session_config: dict) -> None:
         """Start a new live bot session. session_config from Node."""
@@ -1622,7 +1637,7 @@ class LiveBotManager:
 
         if not symbols:
             logger.error(f"[AlgoBot] Session {session_id}: no symbols provided and pairlist yielded none")
-            await self._notify_node(session_id, {
+            await self._notifier.notify(session_id, {
                 "event": "log",
                 "eventData": {"type": "error", "message": "No symbols available for session"},
             })
@@ -1643,7 +1658,7 @@ class LiveBotManager:
                 f"exceeds available balance ${available_balance:.2f} — clamping to the real "
                 f"balance (server-side capital gate should have caught this; this is the backstop)"
             )
-            await self._notify_node(session_id, {
+            await self._notifier.notify(session_id, {
                 "event": "log",
                 "eventData": {
                     "type": "warning",
@@ -1827,7 +1842,7 @@ class LiveBotManager:
             self._tasks[session_id].append(task)
 
         # Notify Node that session is now running
-        await self._notify_node(session_id, {
+        await self._notifier.notify(session_id, {
             "pnl": "0",
             "openPositions": [],
             "status": "running",
@@ -1917,7 +1932,7 @@ class LiveBotManager:
         remaining_pnl = str(round(session["pnl"], 2))
         remaining_open = list(session.get("open_positions", {}).keys())
 
-        await self._notify_node(session_id, {
+        await self._notifier.notify(session_id, {
             "pnl": remaining_pnl,
             "openPositions": remaining_open,
             "status": "stopped",
@@ -1965,7 +1980,7 @@ class LiveBotManager:
         old_state = session.get("trading_state", "active")
         session["trading_state"] = new_state
         logger.info(f"[AlgoBot] Session {session_id}: trading_state {old_state} -> {new_state}")
-        await self._notify_node(session_id, {
+        await self._notifier.notify(session_id, {
             "event": "log",
             "eventData": {"type": "info", "message": f"Trading state changed: {old_state} -> {new_state}"}
         })
@@ -2066,7 +2081,7 @@ class LiveBotManager:
         # repeatedly hammering a doomed order every candle close.
         if is_symbol_invalid("Binance Futures", symbol):
             logger.warning(f"[AlgoBot] {symbol}: confirmed not tradable on this environment, skipping")
-            await self._notify_node(session_id, {
+            await self._notifier.notify(session_id, {
                 "event": "log",
                 "eventData": {"type": "error", "message": f"{symbol}: not tradable on this environment — skipping"}
             })
@@ -2077,7 +2092,7 @@ class LiveBotManager:
                 f"[AlgoBot] {symbol}: leverage clamped {leverage}→{effective_leverage} "
                 f"(symbol max exceeded)"
             )
-            await self._notify_node(session_id, {
+            await self._notifier.notify(session_id, {
                 "event": "log",
                 "eventData": {
                     "type": "info",
@@ -2089,7 +2104,7 @@ class LiveBotManager:
 
         # Set leverage on Binance Testnet before entering
         try:
-            await self._call_node_internal(
+            await self._notifier.call_internal(
                 session_id, f"/internal/algo/sessions/{session_id}/set-leverage",
                 {"symbol": symbol, "leverage": leverage}
             )
@@ -2110,7 +2125,7 @@ class LiveBotManager:
             if _inf_tf == timeframe:
                 continue
             try:
-                strategy._htf_raw[_inf_tf] = await self._fetch_htf_candles(symbol, _inf_tf, 500)
+                strategy._htf_raw[_inf_tf] = await self._market_data.fetch_htf_candles(symbol, _inf_tf, 500)
                 logger.info(
                     f"[AlgoBot] {symbol}: informative timeframe {_inf_tf!r} candles loaded: "
                     f"{len(strategy._htf_raw[_inf_tf])}"
@@ -2121,10 +2136,10 @@ class LiveBotManager:
 
         # Fetch initial warmup candles from TimescaleDB
         try:
-            candles = await self._fetch_warmup_candles(symbol, timeframe, WARMUP_CANDLES)
+            candles = await self._market_data.fetch_warmup_candles(symbol, timeframe, WARMUP_CANDLES)
             if candles is None or len(candles) < 20:
                 logger.warning(f"[AlgoBot] Not enough warmup candles for {symbol}, fetching from Binance REST")
-                candles = await self._fetch_candles_from_rest(symbol, timeframe, WARMUP_CANDLES)
+                candles = await self._market_data.fetch_candles_from_rest(symbol, timeframe, WARMUP_CANDLES)
             strategy.candles = candles
             # Warmup: replay last 3 historical candles to prime indicator state only.
             # No orders are placed — warmup is read-only so all symbols can initialise
@@ -2166,7 +2181,7 @@ class LiveBotManager:
                 _pd = getattr(strategy, "pd", None)
                 _required = (_pd + 2) if isinstance(_pd, int) else None
                 try:
-                    htf_candles = await self._fetch_htf_candles(symbol, htf_interval, 50)
+                    htf_candles = await self._market_data.fetch_htf_candles(symbol, htf_interval, 50)
                     strategy._htf_candles = htf_candles
                     logger.info(f"[AlgoBot] {symbol}: HTF ({htf_interval}) candles loaded: {len(htf_candles)}")
                     if _required is not None and len(htf_candles) < _required:
@@ -2176,14 +2191,14 @@ class LiveBotManager:
                             f"until enough history exists"
                         )
                         logger.error(f"[AlgoBot] {_msg}")
-                        await self._notify_node(session_id, {
+                        await self._notifier.notify(session_id, {
                             "event": "log",
                             "eventData": {"type": "error", "message": _msg},
                         })
                 except Exception as e:
                     _msg = f"{symbol}: HTF ({htf_interval}) candle fetch failed — {e}. Falling back to live-window resampling, which may never accumulate enough buckets for tf={htf_tf!r}."
                     logger.error(f"[AlgoBot] {_msg}")
-                    await self._notify_node(session_id, {
+                    await self._notifier.notify(session_id, {
                         "event": "log",
                         "eventData": {"type": "error", "message": _msg},
                     })
@@ -2335,7 +2350,7 @@ class LiveBotManager:
                     ) as ws:
                         logger.info(f"[AlgoBot] {symbol}: WS connected → {ws_url}")
                         reconnect_backoff = 1  # Reset on successful connect
-                        await self._notify_node(session_id, {
+                        await self._notifier.notify(session_id, {
                             "event": "log",
                             "eventData": {"type": "info", "message": f"{symbol}: WS connected · waiting for {timeframe} candle closes"}
                         })
@@ -2368,7 +2383,7 @@ class LiveBotManager:
                                 float(kline["l"]),  # low
                                 float(kline["v"]),  # volume
                             ], dtype=np.float64)
-                            strategy.candles = self._append_candle(strategy.candles, candle)
+                            strategy.candles = self._market_data.append_candle(strategy.candles, candle)
 
                             min_required = _get_min_candles_required(strategy)
                             if len(strategy.candles) < min_required:
@@ -2379,7 +2394,7 @@ class LiveBotManager:
                             # Emit "ready" once when warmup completes
                             if not warmed_up:
                                 warmed_up = True
-                                await self._notify_node(session_id, {
+                                await self._notifier.notify(session_id, {
                                     "event": "log",
                                     "eventData": {"type": "info", "message": f"{symbol}: Ready · {len(strategy.candles)} candles loaded"}
                                 })
@@ -2390,11 +2405,11 @@ class LiveBotManager:
                                 _htf_interval = _TF_TO_BINANCE.get(_htf_tf.lower())
                                 if _htf_interval and _htf_interval != timeframe:
                                     try:
-                                        _new_htf = await self._fetch_htf_candles(symbol, _htf_interval, 2)
+                                        _new_htf = await self._market_data.fetch_htf_candles(symbol, _htf_interval, 2)
                                         if len(_new_htf) > 0:
                                             _last_ts = strategy._htf_candles[-1, 0] if len(strategy._htf_candles) > 0 else 0
                                             if _new_htf[-1, 0] > _last_ts:
-                                                strategy._htf_candles = self._append_candle(strategy._htf_candles, _new_htf[-1])
+                                                strategy._htf_candles = self._market_data.append_candle(strategy._htf_candles, _new_htf[-1])
                                                 if len(strategy._htf_candles) > 100:
                                                     strategy._htf_candles = strategy._htf_candles[-100:]
                                     except Exception as _e:
@@ -2407,12 +2422,12 @@ class LiveBotManager:
                                 if _inf_tf == timeframe:
                                     continue
                                 try:
-                                    _new_inf = await self._fetch_htf_candles(symbol, _inf_tf, 2)
+                                    _new_inf = await self._market_data.fetch_htf_candles(symbol, _inf_tf, 2)
                                     if len(_new_inf) > 0:
                                         _cur = strategy._htf_raw.get(_inf_tf, np.empty((0, 6), dtype=np.float64))
                                         _last_ts = _cur[-1, 0] if len(_cur) > 0 else 0
                                         if _new_inf[-1, 0] > _last_ts:
-                                            strategy._htf_raw[_inf_tf] = self._append_candle(_cur, _new_inf[-1])
+                                            strategy._htf_raw[_inf_tf] = self._market_data.append_candle(_cur, _new_inf[-1])
                                 except Exception as _e:
                                     logger.warning(f"[AlgoBot] {symbol}: informative timeframe {_inf_tf!r} update failed — {_e}")
 
@@ -2457,7 +2472,7 @@ class LiveBotManager:
                                                 f"history exists; check the tf/timeframe combo"
                                             )
                                             logger.warning(f"[AlgoBot] {_msg}")
-                                            await self._notify_node(session_id, {
+                                            await self._notifier.notify(session_id, {
                                                 "event": "log",
                                                 "eventData": {"type": "warning", "message": _msg},
                                             })
@@ -2548,7 +2563,7 @@ class LiveBotManager:
                                     logger.error(
                                         f"[AlgoBot] {symbol} exceeded max errors, stopping."
                                     )
-                                    await self._notify_node(session_id, {
+                                    await self._notifier.notify(session_id, {
                                         "status": "error",
                                         "errorMessage": f"Strategy loop failed on {symbol}: {e}"
                                     })
@@ -2569,7 +2584,7 @@ class LiveBotManager:
                         f"[AlgoBot] {symbol}: WS disconnected ({e}), reconnecting in {delay:.1f}s "
                         f"(backoff={reconnect_backoff}s)"
                     )
-                    await self._notify_node(session_id, {
+                    await self._notifier.notify(session_id, {
                         "event": "log",
                         "eventData": {"type": "error", "message": f"{symbol}: WS disconnected — reconnecting in {delay:.1f}s"}
                     })
@@ -2592,949 +2607,38 @@ class LiveBotManager:
                 except Exception:
                     pass
 
+    # Thin delegating wrappers (Plan 6 Step 6.1, ENG-1): exchange-truth
+    # reconciliation, algo-order cancel/amend, and governor-breach
+    # application now live in `Reconciler` — kept under these same old
+    # names so every existing call site (this file's own methods,
+    # `LiveAdapter.manager.<name>`, and every test that drives these
+    # methods directly, e.g. `mgr._reconcile_exchange_state(...)`) keeps
+    # working unchanged, same pattern as the `SessionRegistry` facade above.
+    async def _cancel_symbol_algo_orders(self, session: dict, symbol: str, algo_ids: dict | None = None) -> None:
+        return await self._reconciler.cancel_symbol_algo_orders(session, symbol, algo_ids)
 
-    async def _cancel_symbol_algo_orders(
-        self, session: dict, symbol: str, algo_ids: dict | None = None,
-    ) -> None:
-        """Plan 21 Step 21.3 (A-4/A-5): cancel every resting SL/TP conditional
-        (`/fapi/v1/algoOrder`) order for *symbol* after any close.
+    async def _maybe_amend_exchange_sl(self, session: dict, session_id: str, strategy, symbol: str) -> None:
+        return await self._reconciler.maybe_amend_exchange_sl(session, session_id, strategy, symbol)
 
-        These brackets are placed with `closePosition:"true"` — a stale
-        trigger left armed after a close will market-close *whatever
-        position exists on that symbol later*: the same session re-entering,
-        a later bot session on the same symbol, or a user manually trading
-        it once the Redis lock releases. This is a wrong-money-outcome bug,
-        not hygiene, and industry-standard (freqtrade cancels the exchange
-        stoploss on every exit; nautilus ties bracket lifecycle to the
-        position via `ContingencyType`).
-
-        Call from every close path: `execute_exit` success, session-stop
-        close, the F-018 emergency-exit path, and reconcile Case 2 (the
-        exchange-side SL/TP-fired case, where the WS/reconcile OUO
-        peer-cancel structurally can't fire — see A-5).
-
-        If *algo_ids* (the `{"sl": id, "tp": id}` dict this engine tracked
-        for the position, from `session["open_positions"][symbol]
-        ["algo_ids"]`) is given and has at least one id, cancel exactly
-        those — no extra Binance call. Otherwise fall back to
-        `GET /fapi/v1/openAlgoOrders` for the symbol and cancel everything
-        found, so untracked/orphaned brackets (a restored position, a
-        session-stop close on a symbol the engine never fully tracked)
-        don't survive either.
-
-        Best-effort: failures are logged, never raised. The position this
-        bracket protected is already closed by the time this runs, so a
-        cancel failure here is a "loose resting order" alert, not a reason
-        to fail the close that triggered it. An already-triggered/expired
-        id failing to cancel is an expected, common case (e.g. the peer leg
-        already died via OUO peer-cancel) — not worth a warning-level log.
-        """
-        api_key = session.get("api_key", "")
-        api_secret = session.get("api_secret", "")
-        if not api_key or not api_secret:
-            return
-
-        from services.binance_testnet import send_signed_request as _signed
-
-        ids_to_cancel: list[str] = []
-        if algo_ids:
-            ids_to_cancel = [str(v) for v in algo_ids.values() if v]
-
-        if not ids_to_cancel:
-            try:
-                open_algo = await _signed(
-                    "GET", "/fapi/v1/openAlgoOrders",
-                    api_key, api_secret,
-                    params={"symbol": symbol},
-                    mode="testnet",
-                )
-                if isinstance(open_algo, list):
-                    ids_to_cancel = [str(ao.get("algoId")) for ao in open_algo if ao.get("algoId")]
-            except Exception as e:
-                logger.warning(
-                    f"[AlgoBot] {symbol}: openAlgoOrders lookup for post-close bracket "
-                    f"cleanup failed — {_binance_error_detail(e)}"
-                )
-                return
-
-        for algo_id in ids_to_cancel:
-            try:
-                await _signed(
-                    "DELETE", "/fapi/v1/algoOrder",
-                    api_key, api_secret,
-                    params={"symbol": symbol, "algoId": algo_id},
-                    mode="testnet",
-                )
-                logger.info(f"[AlgoBot] {symbol}: cancelled resting algo order {algo_id} after close")
-            except Exception as e:
-                logger.info(
-                    f"[AlgoBot] {symbol}: algo order {algo_id} cancel skipped (likely already "
-                    f"gone) — {_binance_error_detail(e)}"
-                )
-
-    async def _maybe_amend_exchange_sl(
-        self, session: dict, session_id: str, strategy, symbol: str,
-    ) -> None:
-        """M-4 fix (Plan 21.4): cancel+replace the resting exchange SL algo
-        order when the risk model's maintain path (`DefaultExecution.route()`
-        Path 5, `engine/core/models/execution.py` — shared with backtest, NOT
-        touched by this fix) tightens `strategy.stop_loss` — trailing stops,
-        breakeven moves, Chandelier exits. Previously the tightened value
-        was written to `strategy.stop_loss` LOCALLY ONLY; the exchange-side
-        `closePosition:"true"` STOP_MARKET order stayed at its ORIGINAL,
-        widest trigger for the position's entire life. Between candles, only
-        the stale wide stop protected the position on Binance — real
-        enforcement of the tightened stop was entirely the engine's own
-        candle-close wick check (`kernel.check_exits`), up to one candle
-        late, and it market-closes while the stale conditional stays armed
-        (compounding A-4/A-5's hazard class). Industry pattern (freqtrade
-        `stoploss_on_exchange` adjustment): amend the exchange stop on every
-        tighten ≥ 1 tick.
-
-        Deliberately live-only — this method is called from
-        `_run_symbol_loop` after `kernel.evaluate_and_route()`, never from
-        the backtest path, so it cannot affect backtest outputs (no
-        golden-master re-baseline needed, matching the rest of Plan 21).
-
-        No-ops if there's no open position, no `stop_loss`, or the stop
-        hasn't tightened since the last amend (tracked via
-        `open_positions[symbol]["armed_sl_price"]` — direction-aware: a
-        higher SL is a tighten for longs, a lower SL is a tighten for
-        shorts; anything else, including a widening, is left alone since
-        `move_to_breakeven`/`trail_stop` are themselves documented to only
-        ever tighten, never loosen).
-        """
-        if strategy.position is None or not strategy.position.is_open or strategy.stop_loss is None:
-            return
-
-        pos_info = session.get("open_positions", {}).get(symbol)
-        if not pos_info:
-            return
-
-        new_sl_price = strategy.stop_loss[1]
-        if new_sl_price is None:
-            return
-
-        armed_sl_price = _safe_float(pos_info.get("armed_sl_price"), None)
-        if armed_sl_price is None:
-            # Nothing recorded yet (session just started, or the first pass
-            # after a Case-1 restore) — the entry-time placement or the
-            # restore is already the armed order; record the baseline
-            # without amending anything.
-            pos_info["armed_sl_price"] = str(new_sl_price)
-            session["open_positions"][symbol] = pos_info
-            return
-
-        is_long = strategy.position.type == "long"
-        tightened = (new_sl_price > armed_sl_price) if is_long else (new_sl_price < armed_sl_price)
-        if not tightened:
-            return
-
-        api_key = session.get("api_key", "")
-        api_secret = session.get("api_secret", "")
-        if not api_key or not api_secret:
-            return
-
-        from services.binance_testnet import send_signed_request as _signed
-
-        sl_rounding = ROUND_DOWN if is_long else ROUND_UP
-        rounded_sl = round_price(symbol, "Binance Futures", new_sl_price, rounding=sl_rounding)
-        if rounded_sl is None:
-            return
-
-        old_algo_ids = dict(pos_info.get("algo_ids") or {})
-        old_sl_id = old_algo_ids.get("sl")
-
-        try:
-            # closePosition:"true" conditional orders don't support amend-
-            # in-place — cancel+replace is the only path. Cancel first; if
-            # the old id is already gone (e.g. it triggered right before we
-            # got here) that's fine, proceed to place the new one anyway.
-            if old_sl_id:
-                try:
-                    await _signed(
-                        "DELETE", "/fapi/v1/algoOrder",
-                        api_key, api_secret,
-                        params={"symbol": symbol, "algoId": old_sl_id},
-                        mode="testnet",
-                    )
-                except Exception as _cancel_e:
-                    logger.info(
-                        f"[AlgoBot] {symbol}: old SL {old_sl_id} cancel-before-amend "
-                        f"skipped (likely already gone) — {_binance_error_detail(_cancel_e)}"
-                    )
-
-            close_side = "SELL" if is_long else "BUY"
-            result = await _signed(
-                "POST", "/fapi/v1/algoOrder",
-                api_key, api_secret,
-                params={
-                    "algoType": "CONDITIONAL",
-                    "symbol": symbol,
-                    "side": close_side,
-                    "type": "STOP_MARKET",
-                    "triggerPrice": _fmt_num(rounded_sl),
-                    "workingType": "MARK_PRICE",
-                    "closePosition": "true",
-                    "clientAlgoId": f"tpsl_{uuid4_hex8()}_sl",
-                },
-                mode="testnet",
-            )
-            old_algo_ids["sl"] = result.get("algoId")
-            pos_info["algo_ids"] = old_algo_ids
-            pos_info["armed_sl_price"] = str(rounded_sl)
-            session["open_positions"][symbol] = pos_info
-            logger.info(
-                f"[AlgoBot] {symbol}: exchange SL amended (tighten) "
-                f"{armed_sl_price} -> {rounded_sl} algoId={result.get('algoId')}"
-            )
-        except Exception as e:
-            logger.warning(
-                f"[AlgoBot] {symbol}: exchange SL amend-on-tighten failed — "
-                f"{_binance_error_detail(e)} (engine-side candle-close wick-check "
-                f"remains as fallback protection until the next successful amend)"
-            )
-
-    async def _close_position_on_stop(
-        self, session_id: str, symbol: str, _pos_info: dict | None, session: dict
-    ) -> bool:
-        """Force-close a position on Binance during session stop (F-003: direct).
-
-        Called for every session symbol, not just those in open_positions, so
-        that real Binance positions that the engine lost track of are still
-        closed. Uses the engine's own Binance credentials — no Node hop.
-
-        Returns True only if the symbol is confirmed flat on Binance after
-        this call (no position existed, or the close order was accepted).
-        Returns False on any failure — callers must NOT drop the symbol from
-        open_positions tracking in that case, since it may still be open.
-        """
-        strategy = session.get("strategy_instances", {}).get(symbol)
-        real_fill_price = None
-
-        try:
-            from services.binance_testnet import send_signed_request as _signed
-            _api_key = session.get("api_key", "")
-            _api_secret = session.get("api_secret", "")
-            if not _api_key or not _api_secret:
-                raise RuntimeError("Binance Testnet API credentials not configured")
-
-            # Query current position on exchange to determine close side
-            pos_data = await _signed(
-                "GET", "/fapi/v2/positionRisk",
-                _api_key, _api_secret,
-                params={"symbol": symbol},
-                mode="testnet",
-            )
-            position_amt = 0.0
-            for p in (pos_data if isinstance(pos_data, list) else []):
-                if p.get("symbol") == symbol:
-                    position_amt = float(p.get("positionAmt", 0))
-                    break
-
-            if position_amt != 0:
-                close_side = "SELL" if position_amt > 0 else "BUY"
-                client_order_id = _make_client_id(session_id, symbol)
-                close_params = {
-                    "symbol": symbol,
-                    "side": close_side,
-                    "type": "MARKET",
-                    "quantity": _fmt_num(abs(position_amt)),
-                    "reduceOnly": "true",
-                    "newOrderRespType": "RESULT",
-                    "newClientOrderId": client_order_id,
-                }
-                order_result = await _signed(
-                    "POST", "/fapi/v1/order",
-                    _api_key, _api_secret,
-                    params=close_params,
-                    mode="testnet",
-                )
-                real_fill_price = _extract_fill_price(order_result)
-                if real_fill_price is None:
-                    real_fill_price = await _query_real_fill_price(_api_key, _api_secret, symbol, client_order_id)
-                logger.info(f"[AlgoBot] Close-position filled for {symbol} on stop (amt={position_amt}) @ {real_fill_price}")
-            else:
-                logger.info(f"[AlgoBot] {symbol}: no position to close on stop")
-        except Exception as e:
-            logger.error(f"[AlgoBot] Close-position failed for {symbol} on stop: {_binance_error_detail(e)}")
-            return False
-
-        # Update local PnL tracking if the engine knew about this position
-        if strategy and strategy.position:
-            pos = strategy.position
-            sl_price = strategy.stop_loss[1] if strategy.stop_loss else None
-            tp_price = strategy.take_profit[1] if strategy.take_profit else None
-            entry_time_str = session["open_positions"].get(symbol, {}).get("timestamp")
-            entry_time = datetime.fromisoformat(entry_time_str.replace("Z", "+00:00")) if entry_time_str else datetime.now(timezone.utc)
-            executed_by = session.get("strategy_name", "unknown")
-            exit_time = datetime.now(timezone.utc)
-            # Plan 5 Step 5.2 (ENG-2): real fill price when the exchange gave
-            # us one; strategy.price (last candle close) only as a documented
-            # last resort when the close order response never carried it.
-            exit_price = real_fill_price if real_fill_price is not None else strategy.price
-            if real_fill_price is None:
-                logger.warning(f"[AlgoBot] {symbol}: no real fill price on stop-close, booking with last price ${exit_price}")
-
-            fee = strategy.execution_model.exit_fee(strategy, pos.qty, exit_price)
-            pos.close(exit_price)
-            realized_pnl = pos.pnl - fee
-            strategy.balance = add_money(strategy.balance, realized_pnl)
-            session["pnl"] = add_money(session["pnl"], realized_pnl)
-            if session.get("risk_governor") is not None:
-                session["risk_governor"].record_realized_pnl(realized_pnl, datetime.now(timezone.utc))
-
-            # Plan 22 Step 22.3: a session-stop force-close is a deliberate
-            # user action, not a stoploss — CooldownPeriod still applies (the
-            # symbol shouldn't be immediately re-entered by a fresh session),
-            # but this never counts toward StoplossGuard's tally (exit_reason
-            # "session_stop" isn't in its tracked set).
-            _protection_manager_s = session.get("protection_manager")
-            if _protection_manager_s is not None:
-                _protection_manager_s.record_trade_close(
-                    pair=symbol, side=pos.type, exit_reason="session_stop",
-                    profit=realized_pnl, close_timestamp=exit_time.timestamp(),
-                )
-
-            trade_record = build_trade_record(
-                source="bot",
-                executed_by=executed_by,
-                symbol=symbol,
-                side=pos.type,
-                qty=str(pos.qty),
-                entry_price=str(pos.entry_price),
-                exit_price=str(exit_price),
-                sl_order_price=str(sl_price) if sl_price is not None else None,
-                tp_order_price=str(tp_price) if tp_price is not None else None,
-                margin=str(pos.margin) if pos.margin else None,
-                liquidation_price=str(pos.liquidation_price) if pos.liquidation_price else None,
-                leverage=pos.leverage if pos.leverage else None,
-                net_pnl=str(round(realized_pnl, 2)),
-                pnl_pct=str(round(pos.pnl_pct, 2)) if pos.pnl_pct else None,
-                fee=str(round(fee, 2)) if fee else None,
-                exit_reason="session_stop",
-                user_id=session.get("user_id", ""),
-                session_id=session_id,
-                strategy_name=session.get("strategy_name"),
-                entry_time=entry_time,
-                exit_time=exit_time,
-            )
-
-            strategy.position = None
-            strategy.stop_loss = None
-            strategy.take_profit = None
-
-            await record_trade(trade_record)
-            await append_event(
-                session_id=session_id, symbol=symbol, event_type="fill",
-                payload={"side": "exit", "qty": pos.qty, "price": exit_price, "realizedPnl": realized_pnl, "reason": "session_stop"},
-            )
-
-        # A-4 fix (Plan 21.3): cancel any resting SL/TP brackets for this
-        # symbol before dropping local tracking — called for every session
-        # symbol (not just ones the engine still tracked), so pass tracked
-        # ids if we have them (cheap) and let the helper fall back to
-        # discovering + cancelling untracked ones otherwise.
-        await self._cancel_symbol_algo_orders(
-            session, symbol, (_pos_info or {}).get("algo_ids"),
-        )
-
-        session["open_positions"].pop(symbol, None)
-        return True
+    async def _close_position_on_stop(self, session_id: str, symbol: str, _pos_info: dict | None, session: dict) -> bool:
+        return await self._reconciler.close_position_on_stop(session_id, symbol, _pos_info, session)
 
     async def _reconcile_exchange_state(
         self, session_id: str, strategy, symbol: str,
         candle_high: float | None = None, candle_low: float | None = None,
     ) -> dict:
-        """Unified state reconciliation (F-001/F-002/F-004).
-
-        Queries Binance for the current position AND open orders on this symbol
-        and reconciles the engine's local state to match exchange truth.  Runs
-        unconditionally every loop (self-healing even when the engine wrongly
-        believes it is flat).  Returns the reconciled state dict.
-
-        Three cases handled:
-          1. Exchange has a position but engine does not → restore it.
-          2. Engine has a position but exchange does not → close locally,
-             record trade with ``exchange_sync`` reason.
-          3. Both have a position → update unrealised PnL from exchange mark
-             price.
-        """
-        session = self.sessions.get(session_id)
-        if not session:
-            return {"position": None, "open_orders": []}
-
-        # ── 1. Query exchange state directly (F-003: no Node hop) ────────────
-        from services.binance_testnet import send_signed_request as _signed
-        _api_key = session.get("api_key", "")
-        _api_secret = session.get("api_secret", "")
-
-        exchange_pos = None
-        open_orders = []
-        # A-15 fix (Plan 21.5): Case 2 below ("exchange has no position, close
-        # locally") must only fire when we actually CONFIRMED the exchange is
-        # flat — not whenever the positionRisk query merely failed (network
-        # blip, timeout, or the new A-9 backpressure defer). Before this flag,
-        # ANY query failure defaulted exchange_amt to 0.0, which Case 2 read as
-        # "confirmed closed" and fabricated a real close on a position that may
-        # still be open. Extends Plan 5.2 / A-6's real-fills-not-fabricated-
-        # closes invariant to the query-failure case.
-        position_query_ok = False
-
-        if _api_key and _api_secret:
-            try:
-                pos_data = await _signed(
-                    "GET", "/fapi/v2/positionRisk",
-                    _api_key, _api_secret,
-                    params={"symbol": symbol},
-                    mode="testnet",
-                )
-                position_query_ok = True
-                if isinstance(pos_data, list):
-                    for p in pos_data:
-                        if p.get("symbol") == symbol:
-                            exchange_pos = p
-                            break
-            except Exception as e:
-                logger.warning(f"[AlgoBot] {symbol}: reconcile (position) failed — {e}")
-
-            try:
-                order_data = await _signed(
-                    "GET", "/fapi/v1/openOrders",
-                    _api_key, _api_secret,
-                    params={"symbol": symbol},
-                    mode="testnet",
-                )
-                if isinstance(order_data, list):
-                    open_orders = order_data
-                    # Also fetch algo orders (SL/TP)
-                    try:
-                        algo_orders = await _signed(
-                            "GET", "/fapi/v1/openAlgoOrders",
-                            _api_key, _api_secret,
-                            params={"symbol": symbol},
-                            mode="testnet",
-                        )
-                        if isinstance(algo_orders, list):
-                            for ao in algo_orders:
-                                normalized = {
-                                    "orderId": ao.get("algoId"),
-                                    "clientOrderId": ao.get("clientAlgoId"),
-                                    "symbol": ao.get("symbol"),
-                                    "type": ao.get("orderType"),
-                                    "status": ao.get("orderStatus"),
-                                    "stopPrice": ao.get("triggerPrice"),
-                                    "origQty": ao.get("quantity"),
-                                    "executedQty": "0",
-                                    "side": ao.get("side"),
-                                    "time": ao.get("createTime"),
-                                }
-                                open_orders.append(normalized)
-                    except Exception:
-                        pass
-            except Exception as e:
-                logger.warning(f"[AlgoBot] {symbol}: reconcile (orders) failed — {e}")
-
-        # ── 2. Parse exchange data ──────────────────────────────────────────
-        exchange_amt = 0.0
-        exchange_entry = 0.0
-        exchange_side = None
-        exchange_unrealized_pnl = None
-        exchange_mark_price = None
-        exchange_leverage = None
-        exchange_iso_wallet = None
-        exchange_liq_price = None
-
-        if exchange_pos:
-            exchange_amt = float(exchange_pos.get("positionAmt", 0))
-            if exchange_amt != 0:
-                exchange_entry = float(exchange_pos.get("entryPrice", 0))
-                exchange_side = "long" if exchange_amt > 0 else "short"
-                # I-05: unRealizedProfit of 0.0 is legitimate (flat PnL) — keep it
-                # as a number; only a missing/invalid value becomes None.
-                exchange_unrealized_pnl = _safe_float(exchange_pos.get("unRealizedProfit"), None)
-                # I-05: markPrice fallback chain (mark → cached last → engine last).
-                # Do NOT coerce a missing key to 0.0 — that made price_missing dead.
-                exchange_mark_price = _safe_float(exchange_pos.get("markPrice"), None)
-                if exchange_mark_price is not None and exchange_mark_price <= 0:
-                    exchange_mark_price = None
-                if exchange_mark_price is None:
-                    _tk = get_ticker_data("Binance Futures", symbol)
-                    if _tk and _tk.get("lastPrice"):
-                        exchange_mark_price = _tk.get("lastPrice")
-                    elif getattr(strategy, "price", None):
-                        exchange_mark_price = float(strategy.price)
-                # I-07: exchange-truth leverage / isolated wallet / liq price for restore
-                exchange_leverage = _safe_float(exchange_pos.get("leverage"), None)
-                exchange_iso_wallet = _safe_float(exchange_pos.get("isolatedWallet"), None)
-                exchange_liq_price = _safe_float(exchange_pos.get("liquidationPrice"), None)
-
-        has_exchange_position = exchange_amt != 0
-        has_local_position = strategy.position is not None
-
-        # ── 3. Case 1 — position on exchange but not locally (recover) ──────
-        if has_exchange_position and not has_local_position:
-            logger.info(f"[AlgoBot] {symbol}: reconciled — restoring {exchange_side} position from exchange")
-            # I-07: restore with exchange-truth leverage / isolated wallet so margin,
-            # ROE and liquidation price are correct — not a bare qty/entry position
-            # with leverage=1 and a liquidation price computed from nothing.
-            _restored_lev = exchange_leverage if exchange_leverage and exchange_leverage > 0 else strategy.leverage
-            strategy.position = Position(
-                exchange_side, abs(exchange_amt), exchange_entry,
-                leverage=_restored_lev,
-                isolated_wallet=exchange_iso_wallet,
-            )
-            if exchange_liq_price and exchange_liq_price > 0:
-                strategy.position.liquidation_price = exchange_liq_price
-
-            # I-07: rebuild SL/TP brackets + algo_ids from the open algo orders so the
-            # engine view is protected and the F-019 OUO peer-cancel can fire for a
-            # restored position (it keys off algo_ids).
-            restored_algo_ids = {"sl": None, "tp": None}
-            for order in open_orders:
-                _cid = str(order.get("clientOrderId") or "")
-                _otype = str(order.get("type") or "").upper()
-                _trigger = _safe_float(order.get("stopPrice"), None)
-                if _trigger is None or _trigger <= 0:
-                    continue
-                is_sl = _cid.endswith("sl") or "STOP" in _otype
-                is_tp = _cid.endswith("tp") or "TAKE_PROFIT" in _otype
-                if is_tp:
-                    strategy.take_profit = (abs(exchange_amt), _trigger)
-                    restored_algo_ids["tp"] = order.get("orderId")
-                elif is_sl:
-                    strategy.stop_loss = (abs(exchange_amt), _trigger)
-                    restored_algo_ids["sl"] = order.get("orderId")
-
-            pos_info = {
-                "symbol": symbol,
-                "side": exchange_side,
-                "qty": str(abs(exchange_amt)),
-                "price": str(exchange_entry),
-                "leverage": _restored_lev,
-                "algo_ids": restored_algo_ids,
-                "mark_price": str(exchange_mark_price) if exchange_mark_price is not None else None,
-                "unrealized_pnl": str(round(exchange_unrealized_pnl, 2)) if exchange_unrealized_pnl is not None else None,
-                "price_missing": exchange_mark_price is None,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-            session["open_positions"][symbol] = pos_info
-            reconcile_seq = await append_event(
-                session_id=session_id, symbol=symbol, event_type="reconcile_adjustment",
-                payload={"nowOpen": True, "qty": abs(exchange_amt), "price": exchange_entry, "reason": "exchange_had_position_engine_did_not"},
-            )
-            await self._notify_node(session_id, {
-                "pnl": str(round(session["pnl"], 2)),
-                "openPositions": list(session["open_positions"].keys()),
-                "status": "running",
-                "seq": reconcile_seq,
-                "event": "position:open",
-                "eventData": pos_info,
-            })
-
-        # ── 4. Case 2 — position locally but not on exchange (closed) ───────
-        # A-15: gated on position_query_ok — an unconfirmed (failed/deferred)
-        # positionRisk query must never fabricate a close (see the flag's
-        # definition above in step 1).
-        elif has_local_position and not has_exchange_position and position_query_ok:
-            logger.warning(f"[AlgoBot] {symbol}: reconciled — exchange has no position, closing local state")
-            pos = strategy.position
-            sl_price = strategy.stop_loss[1] if strategy.stop_loss else None
-            tp_price = strategy.take_profit[1] if strategy.take_profit else None
-            exit_time = datetime.now(timezone.utc)
-            entry_time_str = session["open_positions"].get(symbol, {}).get("timestamp")
-            entry_time = datetime.fromisoformat(entry_time_str.replace("Z", "+00:00")) if entry_time_str else exit_time
-
-            # Plan 5 Step 5.2 (ENG-2): reconstruct the real close from
-            # Binance's own trade history first — the candle/SL-TP guess
-            # below is now a last-resort fallback, not the primary path.
-            real_exit = None
-            net_realized_pnl_from_exchange = None
-            api_key = session.get("api_key", "")
-            api_secret = session.get("api_secret", "")
-            if api_key and api_secret:
-                real_exit_result = await _query_real_exit_from_user_trades(api_key, api_secret, symbol, entry_time)
-                if real_exit_result is not None:
-                    real_exit, net_realized_pnl_from_exchange = real_exit_result
-
-            if real_exit is not None:
-                estimated_exit = real_exit
-            else:
-                logger.warning(f"[AlgoBot] {symbol}: no Binance trade history found for this close — falling back to candle/SL-TP estimate")
-                estimated_exit = strategy.price
-                if pos.type == "long":
-                    if sl_price is not None and candle_low is not None and candle_low <= sl_price:
-                        estimated_exit = sl_price
-                    elif tp_price is not None and candle_high is not None and candle_high >= tp_price:
-                        estimated_exit = tp_price
-                else:
-                    if sl_price is not None and candle_high is not None and candle_high >= sl_price:
-                        estimated_exit = sl_price
-                    elif tp_price is not None and candle_low is not None and candle_low <= tp_price:
-                        estimated_exit = tp_price
-
-            fee = strategy.execution_model.exit_fee(strategy, pos.qty, estimated_exit)
-            pos.close(estimated_exit)
-            # Prefer Binance's own realizedPnl (already net of its commission)
-            # when we have it — it's the authoritative number, not our
-            # recomputation from an average fill price.
-            realized_pnl = net_realized_pnl_from_exchange if net_realized_pnl_from_exchange is not None else (pos.pnl - fee)
-            strategy.balance = add_money(strategy.balance, realized_pnl)
-            session["pnl"] = add_money(session["pnl"], realized_pnl)
-            if session.get("risk_governor") is not None:
-                session["risk_governor"].record_realized_pnl(realized_pnl, exit_time)
-
-            # Plan 22 Step 22.3: feed protections (A-001) from this path too —
-            # see _classify_exchange_sync_exit_reason's docstring for why this
-            # matters more since A-13 (exchange brackets are now the sole
-            # trigger while armed, so most real stoploss closes land here).
-            # Internal classification only; the outward notification below
-            # keeps the generic "exchange_sync" label unchanged.
-            _protection_manager_r = session.get("protection_manager")
-            if _protection_manager_r is not None:
-                _inferred_reason = _classify_exchange_sync_exit_reason(estimated_exit, sl_price, tp_price)
-                _protection_manager_r.record_trade_close(
-                    pair=symbol, side=pos.type, exit_reason=_inferred_reason,
-                    profit=realized_pnl, close_timestamp=exit_time.timestamp(),
-                )
-
-            event_data = {
-                "symbol": symbol,
-                "pnl": str(round(realized_pnl, 2)),
-                "exitPrice": str(estimated_exit),
-                "exitReason": "exchange_sync",
-                "timestamp": exit_time.isoformat(),
-            }
-
-            trade_record = build_trade_record(
-                source="bot",
-                executed_by=session.get("strategy_name", "unknown"),
-                symbol=symbol,
-                side=pos.type,
-                qty=str(pos.qty),
-                entry_price=str(pos.entry_price),
-                exit_price=str(estimated_exit),
-                sl_order_price=str(sl_price) if sl_price is not None else None,
-                tp_order_price=str(tp_price) if tp_price is not None else None,
-                margin=str(pos.margin) if pos.margin else None,
-                liquidation_price=str(pos.liquidation_price) if pos.liquidation_price else None,
-                leverage=pos.leverage if pos.leverage else None,
-                net_pnl=str(round(realized_pnl, 2)),
-                pnl_pct=str(round(pos.pnl_pct, 2)) if pos.pnl_pct else None,
-                fee=str(round(fee, 2)) if fee else None,
-                exit_reason="exchange_sync",
-                user_id=session.get("user_id", ""),
-                session_id=session_id,
-                strategy_name=session.get("strategy_name"),
-                entry_time=entry_time,
-                exit_time=exit_time,
-            )
-
-            # A-5 fix (Plan 21.3): Case 2 means the exchange SL/TP already
-            # fired — the surviving peer leg is exactly the bracket that
-            # section 6's OUO peer-cancel below CANNOT reach (it's guarded
-            # by has_exchange_position, which is False here by definition).
-            # Capture the tracked ids before dropping local tracking and
-            # cancel both — whichever leg triggered is already gone on
-            # Binance's side, cancelling it again is a harmless no-op.
-            _closed_algo_ids = (session["open_positions"].get(symbol) or {}).get("algo_ids")
-
-            strategy.position = None
-            strategy.stop_loss = None
-            strategy.take_profit = None
-            strategy._pending_flip = None
-            session["open_positions"].pop(symbol, None)
-            await self._cancel_symbol_algo_orders(session, symbol, _closed_algo_ids)
-
-            await record_trade(trade_record)
-            exchange_sync_seq = await append_event(
-                session_id=session_id, symbol=symbol, event_type="reconcile_adjustment",
-                payload={"nowFlat": True, "realizedPnl": realized_pnl, "price": estimated_exit, "reason": "exchange_had_no_position_engine_did"},
-            )
-
-            await self._notify_node(session_id, {
-                "pnl": str(round(session["pnl"], 2)),
-                "openPositions": list(session["open_positions"].keys()),
-                "status": "running",
-                "seq": exchange_sync_seq,
-                "event": "position:close",
-                "eventData": event_data,
-            })
-
-        elif has_local_position and not has_exchange_position and not position_query_ok:
-            # A-15: query failed/deferred (e.g. A-9 backpressure) and we have a
-            # local position — do NOT guess either way. Leave local state
-            # exactly as-is and try again next candle; this mirrors 5.2's
-            # "ambiguous → leave open, don't fabricate" invariant.
-            logger.info(
-                f"[AlgoBot] {symbol}: reconcile skipped — positionRisk query unconfirmed "
-                f"(failed or deferred), local position left untouched pending next pass"
-            )
-
-        # ── 5. Case 3 — both have a position: update PnL from exchange mark price ──
-        elif has_local_position and has_exchange_position:
-            if exchange_mark_price is not None:
-                strategy.position.update_pnl(exchange_mark_price)
-
-            # Update cached position info with exchange-truth data
-            existing_info = session["open_positions"].get(symbol, {})
-            existing_info["mark_price"] = str(exchange_mark_price) if exchange_mark_price is not None else existing_info.get("mark_price")
-            existing_info["unrealized_pnl"] = str(round(exchange_unrealized_pnl, 2)) if exchange_unrealized_pnl is not None else existing_info.get("unrealized_pnl")
-            existing_info["price_missing"] = exchange_mark_price is None
-            if symbol in session["open_positions"]:
-                session["open_positions"][symbol] = existing_info
-
-            # ── A-7 fix (Plan 21.4): naked-position detection + re-arm ──
-            # Nothing previously verified an open position still has a live
-            # protective stop on the exchange. Restored orphans (Case 1 with
-            # no open algo orders), TP/SL-placement 400s (F7 item 2's
-            # class), and A-6 emergency-close-failure survivors can all end
-            # up running naked, silently, forever. freqtrade re-places a
-            # missing exchange stoploss on every iteration; mirror that here.
-            if strategy.stop_loss is not None:
-                _has_live_sl = any(
-                    "STOP" in str(_o.get("type") or "").upper()
-                    or str(_o.get("clientOrderId") or "").endswith("sl")
-                    for _o in open_orders
-                )
-                _rearm_counters = session.setdefault("_naked_position_rearm_attempts", {})
-                if not _has_live_sl:
-                    _attempt_n = _rearm_counters.get(symbol, 0) + 1
-                    logger.warning(
-                        f"[AlgoBot] {symbol}: naked position detected — strategy has a "
-                        f"stop_loss but no live SL algo order exists on the exchange "
-                        f"(re-arm attempt {_attempt_n})"
-                    )
-                    _sl_qty, _sl_price_raw = strategy.stop_loss
-                    _sl_rounding = ROUND_DOWN if strategy.position.type == "long" else ROUND_UP
-                    _sl_price_new = round_price(symbol, "Binance Futures", _sl_price_raw, rounding=_sl_rounding) if _sl_price_raw else None
-                    _rearmed = False
-                    if _api_key and _api_secret and _sl_price_new:
-                        try:
-                            _rearm_side = "SELL" if strategy.position.type == "long" else "BUY"
-                            _rearm_result = await _signed(
-                                "POST", "/fapi/v1/algoOrder",
-                                _api_key, _api_secret,
-                                params={
-                                    "algoType": "CONDITIONAL",
-                                    "symbol": symbol,
-                                    "side": _rearm_side,
-                                    "type": "STOP_MARKET",
-                                    "triggerPrice": _fmt_num(_sl_price_new),
-                                    "workingType": "MARK_PRICE",
-                                    "closePosition": "true",
-                                    "clientAlgoId": f"tpsl_{uuid4_hex8()}_sl",
-                                },
-                                mode="testnet",
-                            )
-                            logger.warning(
-                                f"[AlgoBot] {symbol}: naked-position SL re-armed @ "
-                                f"{_sl_price_new} algoId={_rearm_result.get('algoId')}"
-                            )
-                            _existing_pi = session["open_positions"].get(symbol, {})
-                            _aids = dict(_existing_pi.get("algo_ids") or {"sl": None, "tp": None})
-                            _aids["sl"] = _rearm_result.get("algoId")
-                            _existing_pi["algo_ids"] = _aids
-                            session["open_positions"][symbol] = _existing_pi
-                            _rearmed = True
-                            _rearm_counters.pop(symbol, None)
-                            await self._notify_node(session_id, {
-                                "event": "log",
-                                "eventData": {
-                                    "type": "warning",
-                                    "message": f"{symbol}: naked position detected — SL re-armed @ {_sl_price_new}",
-                                },
-                            })
-                        except Exception as _rearm_e:
-                            logger.error(
-                                f"[AlgoBot] {symbol}: naked-position SL re-arm attempt "
-                                f"{_attempt_n}/{_NAKED_POSITION_MAX_REARM_ATTEMPTS} FAILED: "
-                                f"{_binance_error_detail(_rearm_e)}"
-                            )
-                    if not _rearmed:
-                        _rearm_counters[symbol] = _attempt_n
-                        await self._notify_node(session_id, {
-                            "event": "log",
-                            "eventData": {
-                                "type": "error",
-                                "message": (
-                                    f"{symbol}: naked position — SL re-arm failed "
-                                    f"({_attempt_n}/{_NAKED_POSITION_MAX_REARM_ATTEMPTS})"
-                                ),
-                            },
-                        })
-                        if _attempt_n >= _NAKED_POSITION_MAX_REARM_ATTEMPTS:
-                            logger.error(
-                                f"[AlgoBot] {symbol}: naked position SL re-arm failed "
-                                f"{_NAKED_POSITION_MAX_REARM_ATTEMPTS}x — force-closing for safety "
-                                f"rather than continuing to run unprotected"
-                            )
-                            await self._notify_node(session_id, {
-                                "event": "log",
-                                "eventData": {
-                                    "type": "error",
-                                    "message": (
-                                        f"{symbol}: force-closing after "
-                                        f"{_NAKED_POSITION_MAX_REARM_ATTEMPTS} failed SL re-arm "
-                                        f"attempts — position was running unprotected too long"
-                                    ),
-                                },
-                            })
-                            _rearm_counters.pop(symbol, None)
-                            _force_close_adapter = LiveAdapter(self, session_id)
-                            await _force_close_adapter.execute_exit(
-                                strategy=strategy, symbol=symbol,
-                                qty=strategy.position.qty,
-                                exit_price=exchange_mark_price if exchange_mark_price is not None else strategy.position.entry_price,
-                                reason="naked_position_force_close",
-                                time_t=datetime.now(timezone.utc),
-                                index_t=getattr(strategy, "index", 0),
-                                high_t=0.0, low_t=0.0,
-                            )
-                else:
-                    _rearm_counters.pop(symbol, None)
-
-        # ── 6. Check for orders filled on exchange that engine hasn't processed ──
-        _tracked_algo_ids: dict[str, str | None] = {"sl": None, "tp": None}
-        _pos_info_stored = session.get("open_positions", {}).get(symbol, {})
-        if "algo_ids" in _pos_info_stored:
-            _tracked_algo_ids = _pos_info_stored["algo_ids"]
-
-        if open_orders and has_local_position and has_exchange_position:
-            # ── F-019: OUO — find which tracked algo orders are still open ──
-            _still_open_algo_ids: set[str] = set()
-            for order in open_orders:
-                order_status = order.get("status", "")
-                _cid = order.get("clientOrderId", "")
-                if _cid and (_cid.startswith("tpsl_") or _cid.startswith("oco_")):
-                    if order_status in ("NEW", "PARTIALLY_FILLED"):
-                        _still_open_algo_ids.add(order.get("orderId", ""))
-
-                orig_qty = abs(float(order.get("origQty", 0)))
-                executed_qty = abs(float(order.get("executedQty", 0)))
-                order_type = order.get("type", "")
-
-                if executed_qty > 0 and orig_qty > 0 and (order_status == "FILLED" or executed_qty >= orig_qty):
-                    logger.info(f"[AlgoBot] {symbol}: detected filled order {order.get('orderId')} ({order_type}) on exchange")
-
-            # If a tracked algo leg is no longer open, cancel its peer
-            if has_exchange_position:
-                for _leg, _id in _tracked_algo_ids.items():
-                    if _id and _id not in _still_open_algo_ids:
-                        _peer_leg = "tp" if _leg == "sl" else "sl"
-                        _peer_id = _tracked_algo_ids.get(_peer_leg)
-                        if _peer_id and _peer_id in _still_open_algo_ids:
-                            try:
-                                await _signed(
-                                    "DELETE", "/fapi/v1/algoOrder",
-                                    _api_key, _api_secret,
-                                    params={"symbol": symbol, "algoId": _peer_id},
-                                    mode="testnet",
-                                )
-                                logger.info(
-                                    f"[AlgoBot] {symbol}: reconciled — cancelled peer algo "
-                                    f"{_peer_id} ({_leg} triggered, OUO)"
-                                )
-                            except Exception as _re_cancel_e:
-                                logger.warning(
-                                    f"[AlgoBot] {symbol}: reconcile peer-cancel failed: {_re_cancel_e}"
-                                )
-
-        return {
-            "position": {
-                "has_position": has_exchange_position,
-                "side": exchange_side,
-                "qty": abs(exchange_amt),
-                "entry_price": exchange_entry,
-                "unrealized_pnl": exchange_unrealized_pnl,
-                "mark_price": exchange_mark_price,
-                "price_missing": has_exchange_position and exchange_mark_price is None,
-            } if has_exchange_position else None,
-            "open_orders": open_orders,
-        }
+        return await self._reconciler.reconcile_exchange_state(session_id, strategy, symbol, candle_high, candle_low)
 
     @staticmethod
     def _compute_session_equity_and_margin(session: dict) -> tuple[float, float]:
-        """Plan 22 Step 22.1: session-level aggregates the Session Risk
-        Governor needs — equity (allocated capital + realized + unrealized
-        PnL across ALL symbols) and total committed margin. Shared by
-        `execute_entry`'s pre-trade check and `_push_stats`'s periodic
-        check so the two never compute this differently.
-        """
-        instances = session.get("strategy_instances", {}).values()
-        total_pnl = sum(
-            strat.position.pnl if strat.position else 0.0 for strat in instances
-        ) + session.get("pnl", 0.0)
-        equity = session.get("capital", 0.0) + total_pnl
-        used_margin = sum(
-            strat.position.margin if strat.position else 0.0 for strat in instances
-        )
-        return equity, used_margin
+        return Reconciler.compute_session_equity_and_margin(session)
 
     @staticmethod
     def _compute_open_risk_breakdown(session: dict) -> dict[str, float]:
-        """Plan 22 Step 22.2: per-symbol `|entry - stop| * qty` for every
-        currently-open position, keyed by symbol. This is the TRUE
-        cross-symbol aggregate `DefaultPortfolioModel.construct()`
-        (`core/models/portfolio.py`) structurally cannot compute — each
-        symbol's pipeline call only ever sees its own strategy instance, not
-        the session's other open symbols (Plan 21 audit finding: despite the
-        name, `max_portfolio_risk` there is a per-symbol check).
+        return Reconciler.compute_open_risk_breakdown(session)
 
-        Reads each symbol's *current* `strategy.stop_loss` (not a stale
-        entry-time snapshot) so a trailing/breakeven-tightened stop is
-        reflected immediately — the same live value `_maybe_amend_exchange_sl`
-        pushes to the exchange. `sum(breakdown.values())` is the aggregate;
-        callers needing to name contributing symbols in a veto log use the
-        breakdown directly (see `execute_entry`).
-        """
-        breakdown: dict[str, float] = {}
-        for symbol, strat in session.get("strategy_instances", {}).items():
-            if strat.position is None or not strat.position.is_open:
-                continue
-            if strat.stop_loss is None:
-                continue
-            _, stop_price = strat.stop_loss
-            breakdown[symbol] = abs(strat.position.entry_price - stop_price) * strat.position.qty
-        return breakdown
-
-    async def _apply_governor_breach(
-        self, session_id: str, session: dict, verdict,
-    ) -> None:
-        """Plan 22 Step 22.1: apply a periodic Session Risk Governor breach —
-        edge-triggered (only fires the transition once, when trading_state is
-        still "active"; a manual reset back to active via the existing
-        update-trading-state endpoint re-arms it). Auto-flattens on `halted`
-        only if the governor's `auto_flatten_on_halt` is set (DECISIONS.md
-        #23 — opt-in, off by default). The governor itself never places
-        orders (Part C's design constraint) — this method is the caller
-        acting on its verdict, same relationship `ProtectionManager` already
-        has with `execute_entry`.
-        """
-        risk_governor = session.get("risk_governor")
-        new_state = risk_governor.breach_action if risk_governor else "reducing"
-        session["trading_state"] = new_state
-        logger.error(
-            f"[AlgoBot] Session {session_id}: RISK GOVERNOR BREACH ({verdict.check_name}) — "
-            f"{verdict.reason} — trading_state -> {new_state}"
-        )
-        await self._notify_node(session_id, {
-            "event": "risk_breach",
-            "eventData": {
-                "checkName": verdict.check_name,
-                "reason": verdict.reason,
-                "newState": new_state,
-            },
-        })
-        if new_state == "halted" and risk_governor is not None and risk_governor.auto_flatten_on_halt:
-            logger.warning(f"[AlgoBot] Session {session_id}: auto-flatten enabled — force-closing all positions")
-            for symbol in list(session.get("open_positions", {}).keys()):
-                try:
-                    await self._close_position_on_stop(
-                        session_id, symbol, session["open_positions"].get(symbol), session,
-                    )
-                except Exception as e:
-                    logger.error(f"[AlgoBot] Session {session_id}: auto-flatten close failed for {symbol}: {e}")
+    async def _apply_governor_breach(self, session_id: str, session: dict, verdict) -> None:
+        return await self._reconciler.apply_governor_breach(session_id, session, verdict)
 
     async def _push_stats(self, session_id: str) -> None:
         """Push periodic stats update to Node including exchange-truth position
@@ -3593,151 +2697,13 @@ class LiveBotManager:
                 "unrealized_pnl": unrealized,
                 "price_missing": info.get("price_missing", False) or (unrealized is None and pos_obj is not None),
             }
-        await self._notify_node(session_id, {
+        await self._notifier.notify(session_id, {
             "pnl": str(round(total_pnl, 2)),
             "openPositions": list(session.get("open_positions", {}).keys()),
             "status": "running",
             "trading_state": session.get("trading_state", "active"),
             "positionDetails": position_details,
         })
-
-    async def _notify_node(self, session_id: str, data: dict) -> None:
-        """Send stats/event update to Node server via HTTP PATCH."""
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                await client.patch(
-                    f"{SERVER_URL}/internal/algo/sessions/{session_id}/stats",
-                    json=data,
-                    headers=_internal_headers(),
-                )
-        except Exception as e:
-            logger.warning(f"[AlgoBot] Failed to notify Node for session {session_id}: {e}")
-
-    async def _call_node_internal(self, session_id: str, path: str, body: dict) -> dict:
-        """Call a Node internal endpoint and return parsed JSON response."""
-        try:
-            async with httpx.AsyncClient(timeout=45.0) as client:
-                resp = await client.post(f"{SERVER_URL}{path}", json=body, headers=_internal_headers())
-                return resp.json()
-        except Exception as e:
-            logger.error(f"[AlgoBot] Node internal call failed ({path}): {e}")
-            return {"success": False, "error": str(e)}
-
-    async def _fetch_warmup_candles(
-        self, symbol: str, timeframe: str, limit: int
-    ) -> np.ndarray | None:
-        """Fetch recent candles from TimescaleDB for indicator warmup."""
-        pool = get_pool()
-        try:
-            async with pool.acquire() as conn:
-                rows = await conn.fetch(
-                    """
-                    SELECT time, open, close, high, low, volume
-                    FROM candles
-                    WHERE exchange = $1 AND symbol = $2 AND timeframe = $3
-                    ORDER BY time DESC
-                    LIMIT $4
-                    """,
-                    "Binance Futures",
-                    symbol,
-                    timeframe,
-                    limit,
-                )
-            if not rows:
-                return None
-            # Reverse so oldest first, build numpy array
-            rows = list(reversed(rows))
-            candles = np.empty((len(rows), 6), dtype=np.float64)
-            for i, r in enumerate(rows):
-                candles[i, 0] = r["time"].timestamp() * 1000
-                candles[i, 1] = r["open"]
-                candles[i, 2] = r["close"]
-                candles[i, 3] = r["high"]
-                candles[i, 4] = r["low"]
-                candles[i, 5] = r["volume"]
-            return candles
-        except Exception as e:
-            logger.error(f"[AlgoBot] TimescaleDB warmup fetch failed for {symbol}: {e}")
-            return None
-
-    async def _fetch_candles_from_rest(
-        self, symbol: str, timeframe: str, limit: int
-    ) -> np.ndarray:
-        """Fetch recent candles from Binance Futures mainnet REST as warmup fallback."""
-        url = "https://fapi.binance.com/fapi/v1/klines"
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.get(url, params={
-                    "symbol": symbol,
-                    "interval": timeframe,
-                    "limit": limit,
-                })
-                resp.raise_for_status()
-                raw = resp.json()
-            if not raw:
-                return np.empty((0, 6), dtype=np.float64)
-            raw = raw[:-1]  # Exclude the currently open candle
-            # Binance kline: [openTime, open, high, low, close, volume, ...]
-            candles = np.empty((len(raw), 6), dtype=np.float64)
-            for i, c in enumerate(raw):
-                candles[i, 0] = float(c[0])  # timestamp ms
-                candles[i, 1] = float(c[1])  # open
-                candles[i, 2] = float(c[4])  # close
-                candles[i, 3] = float(c[2])  # high
-                candles[i, 4] = float(c[3])  # low
-                candles[i, 5] = float(c[5])  # volume
-            return candles
-        except Exception as e:
-            logger.error(f"[AlgoBot] Binance REST candle fetch failed for {symbol}: {e}")
-            return np.empty((0, 6), dtype=np.float64)
-
-    async def _fetch_htf_candles(
-        self, symbol: str, tf_interval: str, limit: int = 50
-    ) -> np.ndarray:
-        """Fetch HTF candles from Binance Futures REST for live multi-timeframe strategies.
-        Returns the same [timestamp_ms, open, close, high, low, volume] layout as base candles.
-        Excludes the currently open candle (same as _fetch_candles_from_rest)."""
-        url = "https://fapi.binance.com/fapi/v1/klines"
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.get(url, params={
-                    "symbol": symbol,
-                    "interval": tf_interval,
-                    "limit": limit,
-                })
-                resp.raise_for_status()
-                raw = resp.json()
-            if not raw:
-                return np.empty((0, 6), dtype=np.float64)
-            raw = raw[:-1]  # Exclude the currently open candle
-            candles = np.empty((len(raw), 6), dtype=np.float64)
-            for i, c in enumerate(raw):
-                candles[i, 0] = float(c[0])  # timestamp ms
-                candles[i, 1] = float(c[1])  # open
-                candles[i, 2] = float(c[4])  # close
-                candles[i, 3] = float(c[2])  # high
-                candles[i, 4] = float(c[3])  # low
-                candles[i, 5] = float(c[5])  # volume
-            return candles
-        except Exception as e:
-            logger.error(f"[AlgoBot] HTF REST fetch failed for {symbol} {tf_interval}: {e}")
-            return np.empty((0, 6), dtype=np.float64)
-
-    def _append_candle(self, candles: np.ndarray, new_candle: np.ndarray) -> np.ndarray:
-        """Append a new candle to the array if it's not a duplicate. Keep last 500."""
-        if len(candles) > 0:
-            last_ts = candles[-1, 0]
-            if new_candle[0] <= last_ts:
-                # Update the last candle if same timestamp, else ignore older
-                if new_candle[0] == last_ts:
-                    candles[-1] = new_candle
-                return candles
-        candles = np.vstack([candles, new_candle]) if len(candles) > 0 else new_candle.reshape(1, 6)
-        # Keep only last 500 candles
-        if len(candles) > 500:
-            candles = candles[-500:]
-        return candles
-
 
 def _fmt_num(value: float) -> str:
     """Format a numeric value for Binance API (strip trailing zeros/dot)."""

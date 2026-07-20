@@ -138,7 +138,7 @@ def _make_mgr_adapter(monkeypatch, session, notified=None):
     mgr = LiveBotManager()
     sid = "sess_risk_check"
     mgr.sessions[sid] = session
-    monkeypatch.setattr(mgr, "_notify_node", notified or _Notified())
+    monkeypatch.setattr(mgr._notifier, "notify", notified or _Notified())
     return mgr, LiveAdapter(mgr, sid)
 
 
@@ -199,7 +199,7 @@ def test_no_inflation_warning_when_qty_is_not_bumped(monkeypatch):
     session = _make_session()
     mgr, adapter = _make_mgr_adapter(monkeypatch, session)
     notified = _Notified()
-    monkeypatch.setattr(mgr, "_notify_node", notified)
+    monkeypatch.setattr(mgr._notifier, "notify", notified)
     # Large qty, well above any minNotional floor — no bump expected.
     strat = _FakeStrategy(stop_loss=(1.0, 95.0))
 
@@ -222,7 +222,7 @@ def test_inflation_warning_fires_past_1_point_1x(monkeypatch):
     session = _make_session()
     mgr, adapter = _make_mgr_adapter(monkeypatch, session)
     notified = _Notified()
-    monkeypatch.setattr(mgr, "_notify_node", notified)
+    monkeypatch.setattr(mgr._notifier, "notify", notified)
     # entry=100, sl=95 -> stop_loss_pct=0.05 -> reserve_factor~1.105 ->
     # buffered_min_notional ~22.1 -> bumped qty ~0.23. 0.19 -> ratio ~1.21.
     strat = _FakeStrategy(stop_loss=(1.0, 95.0))

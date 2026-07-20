@@ -87,7 +87,7 @@ def test_many_fractional_closes_accumulate_exactly_via_add_money():
 
     async def _notify(session_id, payload):
         monkeypatch_notify_calls.append(payload)
-    mgr._notify_node = _notify
+    mgr._notifier.notify = _notify
 
     strat = _FakeStrategy()
     starting_balance = strat.balance

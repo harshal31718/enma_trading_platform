@@ -158,7 +158,7 @@ def _make_mgr_adapter(monkeypatch, session, notified=None):
     mgr = LiveBotManager()
     sid = "sess_corr_cap"
     mgr.sessions[sid] = session
-    monkeypatch.setattr(mgr, "_notify_node", notified or _Notified())
+    monkeypatch.setattr(mgr._notifier, "notify", notified or _Notified())
     return mgr, LiveAdapter(mgr, sid)
 
 
