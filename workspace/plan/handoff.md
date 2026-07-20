@@ -7,190 +7,247 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
-## 2026-07-20 (later same day, part 5) — Plan 6 Step 6.3 phase (d): d1+d2 AUTHORIZED and SHIPPED
+## 2026-07-20 (later same day, part 16) — Plan 7 Step 7.4 continued: Settings.jsx + Backtest.jsx
 
-**Goal:** user reviewed phase (d)'s scoping (prior entry below) and authorized proceeding, then
-asked to move faster with less back-and-forth. Implemented d1 and d2 of the proposed d1-d5
-sub-phasing this pass.
+**Goal:** user's follow-up after the prior entry's report ("did not attempt
+Backtest/Settings/ChaosWizard decomposition or the hooks factory") was "proceed on them." Did
+Settings.jsx and Backtest.jsx this round; see Open Questions below for what's still outstanding
+and why.
 
-**d1 (done, verified):** `BaseStrategy` (`core/strategy.py`) gained `self.active_bracket = None`.
-`route()` (`core/models/execution.py`) mirrors its returned `OrderPlan` onto it for every path,
-including `None` for the flat→flat no-op — purely additive, no read sites touched yet.
-`kernel.py`'s exec_algo branch mirrors the ACTUAL (possibly-sliced) plan the same way it already
-overwrites `strategy.stop_loss`/`take_profit`. Recorded as a DECISIONS.md #28 second addendum
-(the user's authorization). Verified via real rebuild: pytest 647/647, golden-master
-`MultiDivergence` byte-identical (`trades=55 netProfit=-1784.02 winRate=0.36 cagr=-71.32 sqn=-2.08`).
+**Settings.jsx (928 lines, entirely one function) → 30 lines.** Read the whole file first — 6
+visually-distinct cards (Profile, Algo Access, Environment Config [env toggle + testnet/mainnet
+API keys + bot limits, all one visual card in the original], Chaos Settings, Notifications,
+Exchange Settings), each with its own local form state + effect-synced-from-query + submit
+handler already cleanly commented with `// ── X ──` section markers. Extracted each into
+`client/src/features/settings/`, with each card calling its own `useExchangeSettings()`/
+`useUpdateExchangeSettings()` rather than receiving 20+ props — TanStack Query dedupes identical
+query keys automatically, so 6 independent calls to the same `['settings','exchange']` key is the
+normal usage pattern, not 6x the network traffic. Verified in browser: every card renders with
+real loaded data (fee %, capital, leverage, risk params all correct), and the `space-y-0`
+flush-spacing between Environment/Chaos cards plus `NotificationsCard`'s own explicit `mt-6` was
+preserved exactly (checked this specifically — a naive "wrap the middle card in `<div
+className="mt-6">`" would have added a gap that didn't exist in the original).
 
-**d2 (done, verified) — the highest-risk migration in the set:** migrated cluster #1
-(`check_exits()`'s is_long/is_short SL/TP trigger reads — the actual exit-trigger logic, live +
-backtest both) and cluster #4 (the tail-of-candle rounding block) to read/write
-`strategy.active_bracket` instead of the mutable `stop_loss`/`take_profit` tuples directly. The
-rounding block now also writes rounded values back onto `active_bracket.stop_loss`/`take_profit`
-so it doesn't go stale for the next candle's `check_exits()` call.
+**Backtest.jsx (831 lines, one ~640-line function + 2 small table helpers) → 503 lines.** The
+`PerformanceTable`/`ComparisonTable` helpers were already separate — moved as-is. The 4 result
+tabs (Overview, Performance Summary, List of Trades, Compare) each got their own component under
+`client/src/features/backtest/` (`OverviewTab`/`TradesTab`/`ComparisonTab` — Performance Summary
+just renders `PerformanceTable` inline, didn't need its own wrapper), taking already-fetched data
+as props. **Deliberately did not move the TanStack Query hook calls themselves** — `selectedResultId`/
+`tradePage`/`comparisonIds` are page-level state shared by the history sidebar and all 4 tabs, so
+relocating the hooks into per-tab components would mean threading that state back up anyway with
+no real benefit, just churn. This was a presentational split, not a data-ownership refactor.
 
-**Real gap caught by the first verification run, fixed before re-running:** 4 test files use
-`_FakeStrategy` test doubles that set `stop_loss`/`take_profit` directly as fixtures, bypassing
-`route()` entirely — they never got `active_bracket` populated, so the FIRST rebuild's pytest run
-came back with 19 failures (`AttributeError: '_FakeStrategy' object has no attribute
-'active_bracket'`), all in `test_armed_legs_wick_check_skip.py` (7),
-`test_entry_candle_exits.py` (3), `test_intrabar_detail_resolution.py` (8), and
-`test_multi_symbol_portfolio_exits.py` (1, via a monkeypatched `fake_evaluate` that also bypasses
-`route()`). Fixed by adding `active_bracket` to each fixture (and the monkeypatch), consistent
-with their existing `stop_loss`/`take_profit` values — not a kernel/execution code change.
-`test_exec_algo_slicing.py` got the field added defensively too (was already passing, but same
-gap existed structurally). Re-ran after the fixture fix: pytest 647/647, golden-master
-`MultiDivergence` byte-identical again.
+**Screenshot tooling failed mid-verification** — `Page.captureScreenshot` timed out repeatedly
+after clicking into the Performance Summary tab (unrelated to the code change: console showed no
+errors, and the accessibility tree confirmed the page was fully interactive throughout). Switched
+to `read_page` against the DOM/accessibility tree instead of narrating around the failure —
+confirmed `PerformanceTable` rendered real per-side metrics (Net Profit -$494.74/+$377.24/-$871.98
+for All/Long/Short), `TradesTab` rendered its pagination controls (First/Prev/Page 1/2/11/Next/
+Last), and `ComparisonTab`'s empty state rendered correctly, across the actual DOM tree rather
+than a pixel screenshot.
 
-**Also fixed in passing:** `0_tracker.md`'s Plan 6 table row had been accidentally split across
-multiple physical lines by an earlier edit this session, corrupting the markdown table (a single
-`|`-delimited row must be one physical line) — rejoined into one line while updating it.
+**Found, not caused, not fixed**: a React "duplicate/missing key" console warning on
+`TradesTab`'s `<TableRow key={tr.id}>`. Checked `git show HEAD:client/src/pages/Backtest.jsx`
+before assuming this was a regression — the identical `key={tr.id}` was already in the
+pre-refactor committed code, so this is a pre-existing trade-data quality issue (likely
+duplicate/undefined `id` on some rows from the API), not something the extraction introduced.
+Flagged here rather than silently fixed — fixing it would be scope creep for a decomposition task
+and the actual root cause (why does `tr.id` collide/go missing?) needs its own investigation.
 
-**Files changed:** `engine/core/strategy.py`, `engine/core/models/execution.py`,
-`engine/core/kernel.py`; test fixtures in `engine/tests/test_armed_legs_wick_check_skip.py`,
-`test_entry_candle_exits.py`, `test_intrabar_detail_resolution.py`,
-`test_multi_symbol_portfolio_exits.py`, `test_exec_algo_slicing.py`. Docs:
-`workspace/docs/core/DECISIONS.md` (#28 second addendum),
-`6_engine-decomposition-and-exchange-abstraction.md` (Step 6.3 section),
-`0_tracker.md` (Plan 6 row, also fixed formatting), this file.
+**Verified:** `vite build` succeeds with stable bundle size for both changes, `vitest` 15/15
+throughout. `client/CLAUDE.md` updated — added `features/settings/` and `features/trade/` (from
+the prior entry, which hadn't been documented in CLAUDE.md's folder tree yet) folder entries, and
+expanded the "Backtest page spec" section to describe the new tab components and the
+data-ownership boundary (Backtest.jsx keeps the hooks, cards/tabs are presentational).
 
-**Open questions:** d3 (migrate `reconciler.py`'s exchange-bracket amendment cluster —
-live-only, DIFFERENT call frame than `evaluate_and_route()`, no golden-master coverage, the
-riskiest remaining cluster) and d4 (`execute_exit`/`BacktestAdapter.execute_entry`, lower risk)
-are not started. d5 (retiring `stop_loss`/`take_profit` as strategy-facing API) needs its own
-separate `DECISIONS.md` entry and may never happen. Plan 6 status otherwise unchanged: 6.1/6.2/
-6.4/6.6 shipped, 6.5 needs Node-side consumer code.
+**Files changed:** new `client/src/features/settings/{styles.js, ProfileCard.jsx,
+AlgoAccessCard.jsx, EnvironmentConfigCard.jsx, ChaosSettingsCard.jsx, NotificationsCard.jsx,
+ExchangeSettingsCard.jsx}`, new `client/src/features/backtest/{PerformanceTable.jsx,
+ComparisonTable.jsx, OverviewTab.jsx, TradesTab.jsx, ComparisonTab.jsx}`,
+`client/src/pages/Settings.jsx` (rewritten), `client/src/pages/Backtest.jsx` (rewired),
+`client/CLAUDE.md`. Docs: `0_tracker.md` (Plan 7 row), this file.
 
----
-## 2026-07-20 (later same day, part 4) — Plan 6 Step 6.3 phase (d) SCOPED (docs only, not authorized); phase (b) now fully verified
-
-**Goal:** continue Step 6.3 to phase (c) — per DECISIONS.md #28's original plan, F10's kernel-write
-(the exec_algo branch in `kernel.py` writing `strategy.stop_loss`/`take_profit` directly) should
-become removable once `LiveAdapter.execute_entry` has its own explicit SL/TP channel (phase (b),
-prior entry below).
-
-**Verification status inherited from phase (b), still open**: the user ran the rebuild + pytest
-(647/647 clean) but the conversation moved on before confirming the golden-master
-`run --label after_6.3b` output matched phase (a)'s `MultiDivergence` line
-(`trades=55 netProfit=-1784.02 winRate=0.36 cagr=-71.32 sqn=-2.08`). Not re-verified this pass —
-flag it before treating phase (b) as fully closed.
-
-**Finding — phase (c) as scoped is not safe to implement, and NOT attempted.** Investigated
-removing F10's kernel-write (the natural next step now that phase (b) shipped) and found a bigger
-reason it can't be removed than DECISIONS.md #28 stated: `check_exits()` (`core/kernel.py`
-~lines 343-344, 383-384) ALSO reads `strategy.stop_loss`/`strategy.take_profit` directly — as the
-canonical SL/TP trigger levels checked on **every candle after the entry**, for both backtest and
-live. `OrderPlan` is computed fresh each candle and never persisted, so there's no typed fallback
-`check_exits()` could use if the kernel stopped writing these attributes. Phase (b) only closed the
-gap for `LiveAdapter.execute_entry`'s *same-candle* read — it did nothing for `check_exits()`'s
-cross-candle read, which is a materially different consumer of the same two attributes. Deleting
-the kernel-write now would silently stop SL/TP exits from ever triggering for exec_algo-sliced
-positions after the entry candle — a real regression, not a cleanup, so it was not attempted.
-
-**Asked the user how to proceed (AskUserQuestion: document-and-stop / investigate phase (d) now /
-leave Plan 6 entirely) — they chose document-and-stop.** No code changed this pass. Updated:
-`workspace/docs/core/DECISIONS.md` (#28 addendum), `0_fixes-queue.md` (F10 entry re-scoped),
-`6_engine-decomposition-and-exchange-abstraction.md` (Step 6.3 section), `0_tracker.md`
-(Plan 6 row), this file.
-
-**Then asked the user two things: re-confirm phase (b)'s golden-master, and whether to scope phase
-(d) now. They said re-run the golden-master AND scope phase (d) (docs only) — both done this same
-pass, in parallel.**
-
-**Phase (d) scoping (docs only, per root `CLAUDE.md` Rule D — no code, no stubs):** grepped every
-non-`route()`, non-test read site of `strategy.stop_loss`/`take_profit` rather than trusting the
-original ~48-file estimate at face value. Found 4 distinct consumer clusters, each with a
-different call-frame relationship to `route()`'s per-candle `OrderPlan`: (1) `kernel.py
-check_exits()` — the cross-candle trigger read phase (c) already found, same call frame as
-`OrderPlan`, lowest risk to migrate. (2) `core/reconciler.py`'s `maybe_amend_exchange_sl()` and
-~4 related read sites (M-4/Plan 21.4, live-only) — reads the Path-5-tightened stop to decide
-whether to amend the resting exchange bracket order; called from `_run_symbol_loop`, a DIFFERENT
-call frame than `evaluate_and_route()`, so even though phase (a) already gives Path 5 a typed
-`intent="maintain"` plan, that plan is a local variable that never leaves `evaluate_and_route()`
-— `reconciler.py` has no way to receive it without new plumbing. This is the cluster that makes
-phase (d) NOT a simple find-and-replace. (3) `LiveAdapter.execute_exit` (~line 1256, logs the
-exit's SL/TP to the trade record) and `BacktestAdapter.execute_entry` (mirrors phase (b)'s
-pre-fix pattern on the backtest side, golden-master-covered) — lower risk, logging/sizing only.
-(4) `kernel.py`'s own rounding block (~633-641) — arguably fine to leave, flagged for
-completeness. **Recommended (not authorized) direction**: a new persisted
-`strategy.active_bracket: OrderPlan | None` field, written by `route()` additively (same pattern
-as phase (a)) alongside the existing mutable tuples — turns the migration into a mechanical
-read-site swap once that field exists, since every cluster could then read the SAME persisted
-value regardless of call frame. Proposed sub-phasing d1 (add the field, additive, golden-master
-byte-identical by construction) → d2 (migrate clusters #1/#4, same call frame, lowest risk) →
-d3 (migrate cluster #2, live-only, no golden-master coverage, needs
-`test_maybe_amend_exchange_sl.py` re-verified) → d4 (migrate cluster #3) → d5 (only then does
-removing the original mutable tuples as `BaseStrategy`'s public API become a live question — and
-that still needs its own `DECISIONS.md` entry per the original Step 6.3 investigation, since
-`trail_stop()`/`move_to_breakeven()`-style strategy hooks read them directly today). **Full detail
-in the plan file's Step 6.3 section. Not authorized, not started — this is scope for a future
-decision, not a commitment.**
-
-**Phase (b) golden-master re-check came back clean**: `MultiDivergence: trades=55
-netProfit=-1784.02 winRate=0.36 cagr=-71.32 sqn=-2.08` — byte-identical to phase (a)'s baseline.
-Phase (b) is now fully shipped and verified, no loose ends.
-
-**Open questions:** decide whether phase (d)'s multi-session effort (d1-d5 above) is worth
-pursuing, and if so get a `DECISIONS.md` sign-off on the `active_bracket` design direction before
-d1 starts. Plan 6 status: 6.1/6.2/6.4/6.6 shipped; 6.3 phases (a)/(b) shipped-and-verified, (c)
-blocked/re-scoped into (d), (d) scoped-but-not-authorized; 6.5 needs Node-side consumer code.
+**Open questions:** none design-wise. **Still not attempted, same reasons as before**:
+ChaosWizard.jsx's internal decomposition (677 lines, same monolithic-body shape Settings.jsx/
+Backtest.jsx had before this round — its own pass); the "hooks share a factory" sub-item from 7.5
+(collapsing duplicated `api.get/post`-and-unwrap boilerplate across ~15 per-domain hooks — a real,
+larger mechanical migration); the remaining WS-entangled pieces of Trade.jsx (TickerBar,
+ChartContainer, OrderBook, RecentTrades, OrderForm, LeverageModal, `TradeInner`). Also newly
+surfaced and worth a dedicated look: the `TradesTab` duplicate-key warning (pre-existing trade-
+data quality issue, root cause not investigated).
 
 ---
-## 2026-07-20 (later same day, part 2) — Plan 6 Step 6.3 phase (b): code written, verification pending — run these commands next
+## 2026-07-20 (later same day, part 15) — Plan 7 Steps 7.5 (core) + 7.4 (Trade.jsx) shipped
 
-**Goal:** continue Step 6.3's phased implementation now that phase (a) shipped (prior entry
-below). Phase (b), per DECISIONS.md #28: give `LiveAdapter`/`OrderRouter` explicit SL/TP
-parameters sourced from `OrderPlan`, instead of `LiveAdapter.execute_entry` reading
-`strategy.stop_loss`/`take_profit` directly as its only channel.
+**Goal:** user said "proceed with them" for 7.4 and 7.5 together. 7.5 has a plan-mandated open
+design question (Zustand+TanStack-Query-thin-store vs TanStack-Query-only for the realtime-state
+owner) that explicitly cannot be picked without asking — asked via AskUserQuestion before writing
+any code. **Zustand + TanStack Query (thin store)** was chosen. Did 7.5 before 7.4 despite the
+plan doc's ordering: Trade.jsx (7.4's biggest target) is exactly the page most entangled with the
+realtime state 7.5 redefines, so decomposing it first would have meant redoing that work once the
+state architecture changed underneath it.
 
-**Done:** `LiveAdapter.execute_entry` (`core/live_bot_manager.py`) and the abstract
-`ExecutionAdapter.execute_entry` declaration (`core/kernel.py`) gained optional
-`stop_loss`/`take_profit` params — mirrors `execute_flip`'s existing pattern exactly.
-`kernel.py`'s one live-entry call site (`evaluate_and_route()`, gated by `plan.intent == "enter"`
-from phase (a)) now passes `stop_loss=plan.stop_loss, take_profit=plan.take_profit` explicitly.
-Turned out narrower than DECISIONS.md #28 anticipated: grepped `OrderRouter` first — it never
-reads `strategy.stop_loss`/`take_profit` itself (only `place_market_order`/`place_algo_order`/
-`confirm_fill`, no strategy-attribute reads at all), so it needed no change; the "OrderRouter
-parameterization" concern turned out to be entirely inside `LiveAdapter.execute_entry`.
+**7.5 — surveyed before designing.** Ran an Explore agent over the actual current-state
+architecture rather than assuming the plan's framing was accurate. Findings that shaped the
+design: `client/src/store/` had been fully deleted (greenfield, not a migration target); the
+"3 disagreeing sources" problem was narrower than it sounded — `binanceWS.js` already ref-counts
+connections by stream name, so Trade.jsx's 2 independent `<sym>@ticker` subscriptions (header
+`TickerBar`, order-entry sizing calc) shared one real WebSocket connection but each parsed the
+tick into its own local state/ref, so "this symbol's price" had no single documented value even
+though the underlying data was already identical moment-to-moment.
 
-**Why this is safe despite touching the live path with zero golden-master coverage**: provably a
-no-op by construction, not just by inspection. For `intent="enter"`, `plan.stop_loss`/
-`plan.take_profit` are ALWAYS equal to `strategy.stop_loss[1]`/`strategy.take_profit[1]` at the
-moment `execute_entry` is called — `route()`'s Path 3 writes both the plan and the mutable
-attributes from the same `sl`/`tp` locals (unchanged since before phase (a)), and the exec_algo
-slice path (`kernel.py`) writes `strategy.stop_loss` from `plan.stop_loss` immediately before this
-call. So the change is WHERE the value is read from, never WHAT value is used. Checked every
-`execute_entry(` call site by grep before writing (5 in `kernel.py`, 1 in `live_bot_manager.py`
-itself, ~13 in tests): the DCA "add" call, the flip call, `execute_pending()`'s 2 backtest-only
-calls (different adapter — `BacktestAdapter`, different mechanism, unaffected), and all 19+
-existing `LiveAdapter` tests don't pass the new params — they fall back to reading the strategy
-attributes exactly as before (default `None` → old behavior). Specifically checked
-`test_exec_algo_slicing.py`'s two fake adapters, since that file's tests exercise the exec_algo
-branch most directly — both have `is_live=False`, so the new-kwarg call site (inside kernel.py's
-`if is_live:` block) is never reached by them.
+**Done:** new `client/src/store/marketStore.js`. `useMarketTicker(streamPrefix)` — reactive read,
+for display (`TickerBar`). A non-reactive `useMarketStore.getState().tickers[...]` read — for
+sizing math that shouldn't re-render the order form on every tick, preserving exactly the old
+ref's non-reactive-read intent (a real behavioral requirement I checked for, not an accident to
+paper over — a naive reactive-only design would have made `OrderForm` re-render on every price
+tick, a UX regression the ref was deliberately avoiding). Migrated both Trade.jsx consumers.
+**Deliberately scoped to ticker/price only** — `OrderBook`/`RecentTrades`/the candle chart keep
+their own dedicated `useBinanceWS` subscriptions (depth/aggTrade/kline are structurally different
+data, and client/CLAUDE.md's realtime rules already document per-sub-component isolation for
+those as a deliberate render-perf choice, not something to undo). `client/dist/` requirement
+already satisfied — confirmed gitignored, 0 tracked files.
 
-**NOT done — golden-master/pytest verification.** Same Docker-access limitation as phase (a) (this
-session's sandbox has no `docker` binary). Run, from `C:\Users\harsh\Desktop\enma_trading_platform`:
-```powershell
-docker compose build engine
-docker compose up -d --no-deps engine
-docker exec enma_trading_platform-engine-1 pytest -q
-docker exec enma_trading_platform-engine-1 python scripts/golden_master.py run --label after_6.3b
-```
-Expect pytest 647/647 (no new tests added this phase — the change is provably a no-op for every
-existing call site, so no new regression test was written; consider whether one should exist
-before phase (c)) and the `MultiDivergence` golden-master line matching phase (a)'s
-`trades=55 netProfit=-1784.02 winRate=0.36 cagr=-71.32 sqn=-2.08` exactly, same as last time.
+**Verified in a real browser, not just tests**: navigated to `/trade/BTCUSDT`, confirmed the
+header ticker live-updates, clicked 50% sizing and confirmed the qty field computed correctly
+from the shared store's price (`0.0231` BTC — matches the manual calc), zero console errors.
+`client/src/store/__tests__/marketStore.test.js` (4 cases). `client/CLAUDE.md` updated — the
+"`client/src/store/` no longer exists" note was now stale; added the store's docs and a note in
+the realtime-rules section explaining the ticker exception to per-sub-component isolation.
 
-**Files changed:** `engine/core/kernel.py` (abstract `execute_entry` signature + docstring, the
-one live-entry call site), `engine/core/live_bot_manager.py` (`LiveAdapter.execute_entry`
-signature + the `sl_raw`/`tp_raw` two lines). Docs:
-`6_engine-decomposition-and-exchange-abstraction.md` (Step 6.3 section), `0_tracker.md` (Plan 6
-row), this file.
+**7.5 — deliberately NOT attempted**: the "hooks share a factory" sub-item (collapsing duplicated
+loading/error/toast logic across ~15 per-domain hooks). Checked what's actually duplicated before
+deciding — mostly `const { data } = await api.get(url); return data.data` unwrap boilerplate per
+query, not loading/error/toast (client/CLAUDE.md already documents error handling as page-level,
+via a local `errorMessage` banner, not hook-level — so "collapse hooks" doesn't mean what a
+naive reading suggests). A full mechanical migration across every hook file is real, valuable
+work, but judged too large to append safely to an already-large session without its own dedicated
+regression pass. Flagged as a follow-up, not silently declared done.
 
-**Open questions:** none design-wise. Once verification is green, phase (c) is next: F10's
-kernel-write (the exec_algo branch in `kernel.py` writing `strategy.stop_loss`/`take_profit`
-directly from a sliced plan) becomes removable now that `LiveAdapter` has its own explicit
-channel — but confirm phase (b) is actually green first, do not stack phase (c) on unverified
-phase (b).
+**7.4 — surveyed all four target files' actual shape before touching anything.** Trade.jsx
+(1,760 lines) turned out structurally different from the other three: ~20 already-separate named
+function components crammed into one file — a mechanical file-split, genuinely low risk (cut,
+paste, wire imports, no logic change). Backtest.jsx (831 lines: one ~640-line
+`export default function` + 2 small table helpers), Settings.jsx (928 lines: **entirely** one
+single function, zero pre-existing internal decomposition), and ChaosWizard.jsx (677 lines: one
+~600-line function + one helper) are all single monolithic component bodies — decomposing those
+means real JSX-tree/container-presenter splitting of live, stateful render trees, a slower and
+riskier kind of work than moving already-separate functions.
 
+**Done — Trade.jsx: 1,760 → 892 lines (49% reduction).** Extracted 8 new files under
+`client/src/features/trade/`: `formatters.js` (symbol-precision-aware price/qty formatters — kept
+separate from `@/utils/formatters.js`, genuinely different concern, not a duplicate),
+`TableHelpers.jsx` (SkeletonRow/EmptyRow/SyncWarningBanner), `TpSlModal.jsx`, `PositionsTable.jsx`,
+`OpenOrdersTable.jsx` (+ `extractOcoId`), `AssetsTable.jsx`, `HistoryTables.jsx`
+(Order/Trade/Transaction History — grouped, same shape), `BottomPanel.jsx` (composes all of the
+above). Pure moves — same JSX, same props, same logic, only the import graph changed.
 
+**Verified**: `vite build` succeeds with an **identical output bundle size** to the pre-refactor
+build (confirms nothing got silently duplicated or dropped in the move), `vitest` 15/15
+(including the existing Trade.jsx render smoke test), and a real-browser check — chart, order
+book, recent trades, order form, and every BottomPanel tab (Positions/Open Orders/Order
+History/Trade History/Transaction History/Assets) all render and function after the split, %
+sizing still computes correctly, zero console errors after a hard reload (one stale HMR error
+from mid-edit cleared on a fresh navigation — confirmed not a real issue).
+
+**Not attempted**: Backtest.jsx/Settings.jsx/ChaosWizard.jsx's internal decomposition (their own
+dedicated pass, not a quick follow-on to this one); the remaining WS-entangled Trade.jsx pieces
+(`TickerBar`, `ChartContainer`, `OrderBook`, `RecentTrades`, `OrderForm`, `LeverageModal`,
+`TradeInner`) stay in the page file — already touched for 7.5's price-store work this session,
+and further splitting them trades more regression risk for less file-size benefit than the tables
+did (the tables were pure presentational props-in/JSX-out; these are WS-subscription-owning and
+order-placement-critical).
+
+**Files changed:** new `client/src/store/marketStore.js`,
+`client/src/store/__tests__/marketStore.test.js`, new `client/src/features/trade/{formatters.js,
+TableHelpers.jsx, TpSlModal.jsx, PositionsTable.jsx, OpenOrdersTable.jsx, AssetsTable.jsx,
+HistoryTables.jsx, BottomPanel.jsx}`, `client/src/pages/Trade.jsx` (rewired imports, ~900 lines
+removed), `client/CLAUDE.md`. Docs: `0_tracker.md` (Plan 7 row), this file.
+
+**Open questions:** none design-wise — the one blocking question (7.5's state architecture) was
+resolved via AskUserQuestion before any code. What's left of Plan 7: the hooks factory (7.5) and
+the 3 remaining god-components' internal decomposition (7.4) — both real, both explicitly scoped
+out this session rather than rushed, both good candidates for a dedicated follow-up pass with
+their own browser verification budget.
+
+---
+## 2026-07-20 (later same day, part 14) — Plan 7 Step 7.3 shipped: auth robustness (SRV-4)
+
+**Goal:** user asked for 7.2 then 7.3 "back to back, do not stop till then." 7.2 is the prior
+entry below; this one covers 7.3 (auth robustness).
+
+**Done — 503 vs 401 split:** `verifyJWT` (`middleware/auth.middleware.js`) used to wrap
+`jwt.verify` AND `User.findById` in one try/catch, so a Mongo outage produced the identical 401
+UNAUTHORIZED a bad token would — sending a client into a pointless re-login loop when the actual
+problem is the DB. Split into two try/catches: bad/expired token stays 401; a `User.findById`
+throw now returns `ApiError(503, 'SERVICE_UNAVAILABLE', ...)`. Checked the client before shipping
+this — `client/src/hooks/useAuth.js` only special-cases 401 for its logged-out redirect, so a 503
+surfaces as a plain error instead of silently logging the user out, which is exactly the point.
+
+**Done — short-TTL user cache:** added a 5-second in-memory `Map` cache for the per-request
+`User.findById` lookup (every protected route runs this every request — e.g. Trade's 4s position
+poll), mirroring `symbolService.js`'s existing cache-with-TTL shape. Cache hits return a *shallow
+copy*, never the shared cached object — `verifyJWT` mutates `.id` onto `req.user`, and two
+concurrent requests hitting the same cache entry must never alias the same object underneath.
+
+**The one subtlety that mattered:** server/CLAUDE.md documents "since `verifyJWT` reloads the user
+each request, grants/revokes apply immediately — no JWT re-issue needed" as a designed invariant.
+A naive TTL cache would silently weaken that to "applies within 5 seconds." Fixed by having
+`admin.controller.js`'s `setUserAlgoAccess` call a newly-exported `invalidateUserCache(userId)`
+immediately after its `User.updateOne` — so the immediate-apply guarantee holds exactly, and the
+TTL only smooths over the case where nothing changed between two requests moments apart. Checked
+this is the only User-mutation site that matters: `isActive`/`role` are never toggled outside
+login/creation, no deactivate-user route exists.
+
+**Done — bare `catch {}` removal (explicitly called out in the plan's own Step 7.3 bullet, not
+scope creep):** the `.catch(() => {})` silent-swallow pattern, sitewide — 18 call sites across
+`algo.controller.js` (4), `trade.controller.js` (3), `algoSessionService.js` (7),
+`reconciliation.js` (4). All are fire-and-forget lock-release/DB-write/log-push operations that
+must stay non-blocking on failure (that part is correct, unchanged) but previously had zero
+observability when they failed. Each now logs via `console.error` with enough context (symbol,
+session id, or user id) to actually debug a real failure — pure "replace silence with a log
+line," no control-flow change, nothing that could alter a test's observable outcome besides the
+new log line itself.
+
+**Deliberately left alone, checked each one:** `app.js`'s 2 health-check catches (already write
+`'error'` into the response body — not silent), `config/socket.js`'s auth catch (rejects the
+socket connection with an explicit error — not silent), `constants/top_symbols.js`'s 2 catches
+and `symbolService.js`'s 1 catch (each falls through to a documented static/cached fallback,
+already commented explaining why). None of these are the discard-and-forget anti-pattern the
+plan's own example (`$push` log `.catch(()=>{})`) called out — they're deliberate fallback
+behavior with an observable effect already, just not a console line.
+
+**Tests:** 7 new cases in `auth.middleware.test.js` (503-not-401 on DB failure, bad-token-stays-
+distinct-from-503, cache-hit-skips-a-second-`User.findById`, cache-never-shares-object-references-
+across-requests, `invalidateUserCache`-forces-a-fresh-read) plus a new `admin.controller.test.js`
+(4 cases: invalidates on grant, invalidates on revoke, does NOT invalidate when rejected before
+the update on a bad status or an admin target — the negative cases matter as much as the positive
+ones here, since a false invalidate call would be silently harmless but a missing one would leak
+the bug this whole slice exists to prevent). The `auth.middleware.test.js` suite needed a
+`_clearUserCacheForTests()` export and `afterEach` hook — several existing cases reuse userId
+`'abc123'` with a different `User.findById` mock per case, and the module-scoped cache would
+otherwise leak a stale entry from one test into the next.
+
+**Verified:** full server jest suite 233/233 (224 existing + 9 new) — zero regressions. Docker
+logs confirm nodemon restarted clean, `/health` 200 throughout.
+
+**Files changed:** `server/src/middleware/auth.middleware.js`,
+`server/src/controllers/admin.controller.js`, `server/src/controllers/algo.controller.js`,
+`server/src/controllers/trade.controller.js`, `server/src/services/algoSessionService.js`,
+`server/src/services/reconciliation.js`, `server/src/middleware/__tests__/auth.middleware.test.js`
+(updated), new `server/src/controllers/__tests__/admin.controller.test.js`. Docs: `0_tracker.md`
+(Plan 7 row), this file.
+
+**Open questions:** none design-wise. Both acceptance checks from the plan doc are met: a
+simulated Mongo outage yields 503 not 401 (tested); user lookups are cached (tested, with the
+grant/revoke-immediacy invariant explicitly preserved, not just assumed fine). **Plan 7 Steps
+7.1–7.3 are now all shipped.** What remains is 7.4 (decompose `Trade.jsx`/`Backtest.jsx`/
+`Settings.jsx`/`ChaosWizard.jsx` god-components) and 7.5 (single owner for realtime market state)
+— both client-side, both larger efforts than anything shipped this session (7.4 in particular:
+`Trade.jsx` alone is 1,760 lines / 29 `useState`). 7.5 has a standing open design question
+(Zustand+TanStack-Query-plus-thin-store vs TanStack-Query-only for the realtime-market-state
+owner) that the plan file itself says needs explicit user sign-off before any code — do not just
+pick one without asking. Recommend pausing Plan 7 here for the user to review this session's
+server-side diff before starting the client-side work, which is a different risk profile
+(UI regressions need visual/interaction verification the way server unit tests can't provide).

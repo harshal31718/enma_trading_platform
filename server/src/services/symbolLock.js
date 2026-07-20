@@ -57,4 +57,33 @@ async function getAllLockedSymbols() {
   return result
 }
 
-module.exports = { isSymbolFree, lockSymbol, releaseSymbolLock, getSymbolLock, getAllLockedSymbols }
+// Plan 7 Step 7.1 (SRV-1) third slice: the manual-trading side's "reject if a
+// bot already owns this symbol" guard, duplicated identically across
+// trade.controller.js's placeOrder/placeOCOOrder/placeOrderWithTpSl (and with
+// one word changed in closePosition). Throws, so callers just `await` it
+// inside their existing try/catch — no behavior change from the inline
+// `if (lock && lock.reason === 'bot') return next(new ApiError(...))` it
+// replaces, since every call site's catch already forwards ApiError as-is.
+async function assertSymbolNotBotLocked(symbol, { closing = false } = {}) {
+  const lock = await getSymbolLock(symbol)
+  if (lock && lock.reason === 'bot') {
+    throw new ApiError(409, 'SYMBOL_LOCKED', closing
+      ? `Symbol ${symbol} is locked by an active bot session and cannot be closed manually.`
+      : `Symbol ${symbol} is locked by an active bot session. Close it through the bot page or wait for the bot to close it.`)
+  }
+}
+
+// The engine-callback side's inverse guard — "reject unless THIS bot session
+// owns the lock" — duplicated identically across algo.controller.js's
+// handleAlgoPlaceOrder/ClosePosition/SetLeverage.
+async function assertSymbolLockedByBotSession(symbol, sessionId) {
+  const lock = await getSymbolLock(symbol)
+  if (!lock || lock.reason !== 'bot' || lock.sessionId !== sessionId) {
+    throw new ApiError(409, 'SYMBOL_LOCKED', `Symbol ${symbol} is not locked by this bot session.`)
+  }
+}
+
+module.exports = {
+  isSymbolFree, lockSymbol, releaseSymbolLock, getSymbolLock, getAllLockedSymbols,
+  assertSymbolNotBotLocked, assertSymbolLockedByBotSession,
+}

@@ -22,7 +22,7 @@ const worker = new Worker('optimization', async (job) => {
       userId,
       config,
       configHash,
-    })
+    }, { timeout: engineClient.LONG_JOB_TIMEOUT_MS })
 
     // Engine wrote the full results doc to MongoDB — only update status here
     // (mirrors backtest.worker.js / simulation.worker.js's redundant-but-harmless

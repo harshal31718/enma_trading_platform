@@ -47,7 +47,7 @@ const worker = new Worker('backtest', async (job) => {
       fundingRate,
       riskParams,
       alphaParams,
-    })
+    }, { timeout: engineClient.LONG_JOB_TIMEOUT_MS })
 
     // Engine wrote the full result to MongoDB — only update status here
     await BacktestResult.findOneAndUpdate({ jobId }, { status: 'completed' })

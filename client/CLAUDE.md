@@ -73,17 +73,43 @@ client/
 │   │   │   ├── BacktestHistory.jsx     ← history sidebar list with emerald highlight
 │   │   │   ├── BacktestMetricCard.jsx  ← single reusable KPI stat card (replaces 6 inline copies)
 │   │   │   ├── NewBacktestWizard.jsx   ← multi-step dialog wizard for launching a backtest (strategy → params → market → settings → review); optional `initialConfig` prop (Plan 10 Phase 4b) prefills from a robust-pick "Copy to Backtest" deep link, additive — every other caller passes nothing, unchanged behavior
-│   │   │   └── MCSummaryStrip.jsx      ← compact MC p5/median/p95 + P(ruin) strip on the Backtest report page (Plan 10 Phase 4b, §4.4), deep-links to /lab for the full analysis
+│   │   │   ├── MCSummaryStrip.jsx      ← compact MC p5/median/p95 + P(ruin) strip on the Backtest report page (Plan 10 Phase 4b, §4.4), deep-links to /lab for the full analysis
+│   │   │   ├── PerformanceTable.jsx    ← All/Long/Short metric breakdown table (Performance Summary tab) — Plan 7 Step 7.4
+│   │   │   ├── ComparisonTable.jsx     ← up-to-4-run side-by-side metrics table (Compare tab) — Plan 7 Step 7.4
+│   │   │   ├── OverviewTab.jsx         ← Overview tab: metrics grid + MCSummaryStrip + EquityCurve + BacktestCalendar — Plan 7 Step 7.4
+│   │   │   ├── TradesTab.jsx           ← List of Trades tab: paginated trade table — Plan 7 Step 7.4
+│   │   │   └── ComparisonTab.jsx       ← Compare tab: empty-state / loading / ComparisonTable switch — Plan 7 Step 7.4
 │   │   ├── dashboard/
 │   │   │   ├── StatCard.jsx            ← single numeric metric card (canonical — only this one exists)
 │   │   │   ├── CachedCandlesTable.jsx  ← TimescaleDB candle cache summary table
 │   │   │   ├── RecentActivityTable.jsx ← last 5 backtest runs with View deep-links
 │   │   │   ├── StrategyLeaderboard.jsx ← per-strategy averaged metrics
 │   │   │   └── DashboardCalendar.jsx   ← performance-calendar heatmap, wired into Dashboard.jsx (fixes-queue F5, 2026-07-16) with a 30D/90D/All toggle
-│   │   └── strategies/
-│   │       ├── CodeViewer.jsx          ← read-only pre block rendered in a Dialog
-│   │       ├── StrategyCard.jsx        ← card: name, description, type badge, View button
-│   │       └── StrategyCreateDialog.jsx ← create/clone strategy dialog
+│   │   ├── strategies/
+│   │   │   ├── CodeViewer.jsx          ← read-only pre block rendered in a Dialog
+│   │   │   ├── StrategyCard.jsx        ← card: name, description, type badge, View button
+│   │   │   └── StrategyCreateDialog.jsx ← create/clone strategy dialog
+│   │   ├── trade/          ← Plan 7 Step 7.4 — extracted out of Trade.jsx (1,760 → 892 lines)
+│   │   │   ├── formatters.js       ← symbol-precision-aware price/qty formatters (tickSize/stepSize-driven; distinct from `@/utils/formatters.js`)
+│   │   │   ├── TableHelpers.jsx    ← SkeletonRow, EmptyRow, SyncWarningBanner — shared by every table below
+│   │   │   ├── TpSlModal.jsx       ← take-profit/stop-loss dialog, used only by PositionsTable
+│   │   │   ├── PositionsTable.jsx  ← Positions tab
+│   │   │   ├── OpenOrdersTable.jsx ← Open Orders tab (+ `extractOcoId`)
+│   │   │   ├── AssetsTable.jsx     ← Assets tab
+│   │   │   ├── HistoryTables.jsx   ← Order/Trade/Transaction History tabs (grouped, same shape)
+│   │   │   └── BottomPanel.jsx     ← composes all of the above into the tabbed bottom panel
+│   │   └── settings/       ← Plan 7 Step 7.4 — extracted out of Settings.jsx (928 → 30 lines)
+│   │       ├── styles.js               ← shared `inputCls`/`labelCls`/`skeletonCls` Tailwind strings
+│   │       ├── ProfileCard.jsx         ← read-only profile card
+│   │       ├── AlgoAccessCard.jsx      ← Algo Trading access status + request button
+│   │       ├── EnvironmentConfigCard.jsx ← env toggle + testnet/mainnet API keys + bot session limits (one card, matches the original single visual card boundary)
+│   │       ├── ChaosSettingsCard.jsx   ← Chaos Mode caps + launch defaults
+│   │       ├── NotificationsCard.jsx   ← webhook notification settings + test-send
+│   │       └── ExchangeSettingsCard.jsx ← trading fees, backtest/bot defaults, risk defaults, simulation realism
+│   │       Each Settings card owns its own `useExchangeSettings()`/`useUpdateExchangeSettings()`
+│   │       calls rather than receiving props — TanStack Query dedupes identical `['settings',
+│   │       'exchange']` queries automatically, so this is the standard call-the-hook-where-you-
+│   │       need-it pattern, not N redundant network requests.
 │   ├── hooks/           ← custom hooks
 │   │   ├── useSocket.js           ← subscribe/unsubscribe to Socket.IO events with cleanup
 │   │   ├── useCandles.js          ← TanStack Query hooks: useSymbols() only
@@ -123,8 +149,22 @@ client/
 │   │   ├── AdminPanel.jsx     ← route: /admin (admin-only, user table: grant/revoke algo access + category filter/sort)
 │   │   ├── RiskDashboard.jsx  ← route: /risk-dashboard (Zone 1/2/3 risk intelligence, see CURRENT_STATE.md)
 │   │   └── NotFound.jsx       ← route: * (catch-all 404, "Go to Dashboard" CTA)
-│   │       Note: `client/src/store/` no longer exists — `useUIStore.js` (sidebar state) was its
-│   │       only file and was deleted with the sidebar; no Zustand store directory remains.
+│   ├── store/              ← Zustand stores (Plan 7 Step 7.5, CLI-2/CLI-3 — re-created
+│   │   │                       2026-07-20; the pre-Plan-7 `useUIStore.js` sidebar-state store
+│   │   │                       was deleted with the sidebar, this is a fresh, unrelated store)
+│   │   └── marketStore.js  ← single owner for live ticker price per symbol.
+│   │                           `useMarketTicker(streamPrefix)` subscribes via `useBinanceWS`
+│   │                           and returns the shared `{ price, changePct, high, low, volume,
+│   │                           quoteVolume }` for that symbol — read-only reactive access.
+│   │                           For a non-reactive point-in-time read (e.g. inside a click
+│   │                           handler doing sizing math, where you don't want the component
+│   │                           to re-render on every tick), read `useMarketStore.getState()
+│   │                           .tickers[streamPrefix]` directly instead of the hook. Scoped to
+│   │                           ticker/price only — OrderBook/RecentTrades/the candle chart
+│   │                           keep their own dedicated `useBinanceWS` depth/aggTrade/kline
+│   │                           subscriptions (structurally different data, and client
+│   │                           CLAUDE.md's realtime rules already document per-sub-component
+│   │                           isolation for those as a deliberate render-perf choice).
 │   ├── utils/
 │   │   ├── formatters.js         ← formatQty, formatPrice, formatPct, formatPnl, formatSignedPct
 │   │   ├── backtest-analytics.js ← Performance Calendar bucketing (Day/Week/Month/Quarter) over backtestTrades
@@ -183,7 +223,8 @@ client/
 - **Binance Public WebSocket feed:**
   - Connection manager `src/lib/binanceWS.js` manages `WebSocket` connections to `wss://fstream.binance.com/public/ws` (depth streams) or `wss://fstream.binance.com/market/ws` (everything else) — never the bare `/ws` or `/stream` path. See `workspace/docs/core/binance-api.md` for the authoritative path reference.
   - Custom hook `useBinanceWS(symbol, stream, callback)` registers/unregisters callbacks dynamically to prevent duplicate connections.
-  - Isolate state updates to specific sub-components (e.g. `TickerBar`, `OrderBook`, `RecentTrades`) to avoid parent re-renders of the terminal layout.
+  - Isolate state updates to specific sub-components (e.g. `OrderBook`, `RecentTrades`, the candle chart) to avoid parent re-renders of the terminal layout — each owns its own dedicated `useBinanceWS` subscription (depth/aggTrade/kline are structurally different data).
+  - **Ticker/price is the one exception**: use `useMarketTicker(streamPrefix)` from `src/store/marketStore.js` (Plan 7 Step 7.5) instead of a component-local `useBinanceWS('<sym>@ticker', ...)` subscription. Trade.jsx used to run 2 independent ticker subscriptions (header `TickerBar`, the order-entry sizing calc) that could momentarily disagree on render timing even though they shared one underlying WebSocket connection (`binanceWS.js` ref-counts by stream name) — `useMarketTicker` is the single documented owner of "this symbol's current price" so every consumer reads the same value. For a non-reactive point-in-time read (sizing math inside a click handler, where you don't want a re-render on every tick), read `useMarketStore.getState().tickers[streamPrefix]` directly instead of calling the hook.
   - Update lightweight-charts series imperatively using `seriesRef.current.update` inside the hook's callback to bypass React re-rendering cycles.
   - Always normalize depth payload arrays inside callbacks by fallback-checking `data.asks || data.a` and `data.bids || data.b` to support both partial depth streams and event diffs without unmount crashes.
   - **All-Ticker WebSocket Rule:** The multiplex all-ticker WebSocket stream (`!ticker@arr`) must only be subscribed to when the symbol search dropdown is open. Connect the stream when the dropdown state changes to `open === true` and unsubscribe immediately when it changes to `open === false` or unmounts.
@@ -325,7 +366,7 @@ Both hooks follow the standard TanStack Query pattern used by all other hooks in
 
 ## Backtest page spec
 
-- `Backtest.jsx` is state management + layout wiring only. The launch wizard, history list, and KPI cards are extracted to `features/backtest/`.
+- `Backtest.jsx` is state management + layout wiring only (503 lines as of Plan 7 Step 7.4, down from 831). The launch wizard, history list, KPI cards, and each result tab's content are extracted to `features/backtest/`: `OverviewTab.jsx`/`TradesTab.jsx`/`ComparisonTab.jsx` own their tab's JSX and take the already-fetched data as props (`Backtest.jsx` still owns every TanStack Query hook call and all page-level state — this was a presentational split, not a data-ownership change). `PerformanceTable.jsx`/`ComparisonTable.jsx` are pure tables, no hooks.
 - **Launch flow:** a "New Backtest" button in the `PageHeader` opens `NewBacktestWizard` in a `Dialog` (mirrors the AlgoTrading "New Bot" pipeline). The wizard steps through Strategy → Parameters (skipped when the strategy exposes no PARAMS) → Market → Settings → Review, then calls `onRun(config)` which closes the dialog and triggers `handleRun`. There is no longer an inline config form; the left column is Run History only. While a run is active the "New Backtest" button is disabled and a "Cancel Backtest" button renders inside the running progress card.
 - `NewBacktestWizard.jsx` — owns all config inputs (incl. per-run strategy `alphaParams`) and the multi-step UI; emits the full run config via `onRun`
 - `BacktestHistory.jsx` — owns the history sidebar list with emerald `border-l-2 border-emerald-500` highlight for selected item

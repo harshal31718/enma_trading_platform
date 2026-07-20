@@ -13,7 +13,7 @@ this board no longer duplicates it).
 
 | ID | Title | Remaining scope | Status | Priority | Depends on | Updated |
 |----|-------|-----------------|--------|----------|------------|---------|
-| 21 | Live algo industry-standard audit — **fixes** | 21.5c (batched reconcile) (21.1–21.4 + 21.5a/b + all of 21.7 [A-11/A-12/A-13/A-14] shipped, container-verified 2026-07-17 [301/301 pytest], pending live re-verification only; 21.6 → Merged→22.1) | In progress (21.1–21.4, 21.5a/b, 21.7 all shipped + container-verified 2026-07-17) | P2 (21.5c) | — | 2026-07-17 |
+| 21 | Live algo industry-standard audit — **fixes** | **ALL SHIPPED IN CODE 2026-07-20** — 21.5c (batched reconcile) shipped, container-verified [653/653 pytest, golden-master byte-identical] (21.1–21.4 + 21.5a/b + all of 21.7 [A-11/A-12/A-13/A-14] shipped, container-verified 2026-07-17 [301/301 pytest]; 21.6 → Merged→22.1) — pending live re-verification only, same as every other sub-item | **Done** (pending live re-verification) | — | — | 2026-07-20 |
 | 5  | Live-trading state integrity | ALL SHIPPED (5.1–5.6, container-verified 2026-07-18 [engine 441/441, server 112/112]) — 5.5 scoped to running-total accumulation sites (documented scope decision, not full float→Decimal); 5.6's resume capability shipped but not wired into the default restart path (explicit open decision) | **Done** | — | 21.1–21.2 informed 5.6 | 2026-07-18 |
 | 22 | Industry-standard risk management (Session Risk Governor) | ALL SHIPPED (22.1–22.7, container/Jest-verified 2026-07-17 [330/330 pytest, 88/88 jest], 22.6 golden-master-verified, 22.7 live-verified in-browser) — pending live Testnet re-verification only | **Done** (pending live re-verification) | — | 21 (21.1–21.4, shipped) | 2026-07-17 |
 | 9  | Backtest & optimizer correctness (quant core) | ALL STEPS SHIPPED (9.1–9.11, container-verified 2026-07-18 [427/427 pytest]) — liquidation fee (QNT-4) shipped opt-in 2026-07-18 per user decision; 2 deliberately deferred sub-items remain: warmup fail-loud (needs Plan 8 coordination), `"inf"`-string persistence (dormant, no active consumer) | **Done** | — | — | 2026-07-18 |
@@ -31,8 +31,8 @@ trigger state checked every candle after entry (backtest + live) — `OrderPlan`
 across candles, so deleting the kernel-write (phase (c)'s original goal) would silently break
 exit triggering for exec_algo-sliced positions. Entangled with phase (d)'s wider cleanup instead
 of standalone — see `0_fixes-queue.md` F10 / DECISIONS.md #28 addendum. Stopped here per user
-choice. **Phase (d) scoped 2026-07-20 (docs only), then AUTHORIZED — d1+d2 SHIPPED same day.** Read-site surface breaks into 4 clusters: `kernel.py check_exits()` (cross-candle trigger), `reconciler.py` (exchange-bracket amendment, live-only, different call frame), `execute_exit`/`BacktestAdapter.execute_entry` (logging/sizing), `kernel.py`'s rounding block. d1: new persisted `strategy.active_bracket` field, written additively by `route()`/exec_algo. d2: `check_exits()` + rounding migrated to read/write it instead of the mutable tuples. Both verified via real rebuild (pytest 647/647, golden-master `MultiDivergence` byte-identical each time) — d2 needed 4 test fixtures fixed (`_FakeStrategy` doubles that bypass `route()` and never got `active_bracket`: `test_armed_legs_wick_check_skip.py`/`test_entry_candle_exits.py`/`test_intrabar_detail_resolution.py`/`test_multi_symbol_portfolio_exits.py`). d3 (reconciler.py, live-only, no golden-master coverage) and d4 not started — see plan file's Step 6.3 section. | In progress | P2 | 5 (shipped 2026-07-18), 21.3/21.4 (shipped 2026-07-17) — unblocked | 2026-07-20 |
-| 7  | Server & client structure | All | Ready | P2 | 2 (done), 5 (shipped) — unblocked, should land after 6 per execution-order notes | 2026-07-20 |
+choice. **Phase (d) scoped 2026-07-20 (docs only), then AUTHORIZED — d1+d2+d3+d4 SHIPPED same day, all 4 clusters now migrated.** Read-site surface breaks into 4 clusters: `kernel.py check_exits()` (cross-candle trigger), `reconciler.py` (exchange-bracket amendment, live-only, different call frame), `execute_exit`/`BacktestAdapter.execute_entry` (logging/sizing), `kernel.py`'s rounding block. d1: new persisted `strategy.active_bracket` field, written additively by `route()`/exec_algo. d2: `check_exits()` + rounding migrated to read/write it instead of the mutable tuples. d3: all 5 `reconciler.py` read sites (SL-tighten amend, trade-record booking ×2, naked-position re-arm, `compute_open_risk_breakdown()`) migrated too — live-only, zero golden-master coverage for this cluster. d4: `LiveAdapter.execute_exit` (trade-record logging) and `BacktestAdapter.execute_entry`'s sizing-percent read migrated — the first phase to touch actual backtest code, so golden-master coverage was real (not incidental); safety argument mirrors phase (b)'s (`execute_pending()` runs before `evaluate_and_route()` each candle, so `active_bracket` still holds the prior candle's value at read time). All four verified via real rebuild (pytest 647/647, golden-master `MultiDivergence` byte-identical every time: `trades=55 netProfit=-1784.02 winRate=0.36 cagr=-71.32 sqn=-2.08`) — d2 needed 4 test fixtures fixed, d3 needed 8 more, d4 needed 3 more, same root cause every time (`_FakeStrategy`/manually-constructed doubles that bypass `route()` and never got `active_bracket` populated: `test_armed_legs_wick_check_skip.py`/`test_entry_candle_exits.py`/`test_intrabar_detail_resolution.py`/`test_multi_symbol_portfolio_exits.py` for d2; `test_execute_entry_correlation_cap.py`/`test_execute_entry_portfolio_risk_and_liq_buffer.py`/`test_execute_entry_risk_check_event.py`/`test_execute_entry_var_breach.py`/`test_maybe_amend_exchange_sl.py`/`test_reconcile_fixes.py`/`test_reconcile_naked_position_rearm.py` for d3; `test_execute_flip_idempotency.py`/`test_live_fill_booking.py`/`test_live_money_accumulation.py` for d4). Only d5 (retiring `stop_loss`/`take_profit` as strategy-facing API) remains, needs its own `DECISIONS.md` entry — see plan file's Step 6.3 section. | In progress | P2 | 5 (shipped 2026-07-18), 21.3/21.4 (shipped 2026-07-17) — unblocked | 2026-07-20 |
+| 7  | Server & client structure | 7.1 IN PROGRESS (first slice shipped 2026-07-20 — see below); 7.2–7.5 not started | In progress | P2 | 2 (done), 5 (shipped), 6 (done in every way that mattered — 6.5's Node consumer is unrelated) | 2026-07-20 |
 | 8  | Governance, correctness & cleanup | 8.2–8.5, 8.7 (8.3/8.4 golden-master; SYS-3 doc item carried from F6) — 8.6 verified-already-shipped 2026-07-18, no code needed | In progress | P3 | 3 (done), 5, 6 | 2026-07-18 |
 | 23 | New strategy: high-risk/high-leverage breakout scalper ("MarginSurge") | All — backtest gates can start now; live gated on 21.1–21.4 | Draft | P2 | 21 (live phase), 22.1–22.2 (liq-buffer + governor, soft) | 2026-07-16 |
 | 24 | BestSupertrend fixes (never trades at defaults) | ALL SHIPPED (S-1 through S-5, container-verified 2026-07-17 [353/353 pytest], golden-master re-baselined for S-1 — only BestSupertrend diverges, other 4 strategies byte-identical) — pending live Testnet re-verification only | **Done** (pending live re-verification) | — | — | 2026-07-17 |
@@ -159,10 +159,23 @@ pipeline-touching steps) a golden-master check per Rule C.
   Found and fixed **A-15** while wiring this in: `_reconcile_exchange_state`'s Case 2 was
   fabricating a close on ANY `positionRisk` query failure, not just a confirmed-flat exchange — a
   new `position_query_ok` flag gates Case 2 so an unconfirmed query leaves local state untouched
-  instead. 21.5's part (c), batching `positionRisk`/`openAlgoOrders` into one call per session per
-  candle wave, is deliberately deferred — needs a session-level fan-out/fan-in restructure of
-  `_run_symbol_loop` (today each symbol is an independent `asyncio` task), materially larger than
-  (a)/(b), left as remaining scope. Tests: `engine/tests/test_binance_backpressure.py` (18 cases)
+  instead. **21.5's part (c) shipped 2026-07-20**: batching `positionRisk`/`openOrders`/
+  `openAlgoOrders` into one un-parametered call per session per candle wave. Confirmed against
+  Binance's actual documented weights first — `positionRisk` is flat weight-5 regardless of the
+  symbol param, `openOrders`/`openAlgoOrders` are weight 1 per-symbol but weight 40 when symbol
+  is omitted, so batching only wins above ~13 symbols (exactly the Chaos-run case this item was
+  scoped for). New `Reconciler._get_batched_reconcile_snapshot()` caches one fetch per session
+  per `wave_key` (the closed candle's own open-time ms, shared across every symbol in a session),
+  guarded by a per-session `asyncio.Lock` so concurrent symbol tasks reconciling the same wave
+  share one fetch instead of each triggering their own. `reconcile_exchange_state` gained an
+  optional `wave_key` param — only the routine per-candle-close call site passes it; the
+  event-driven `_on_fill`/`_on_account_update` sites are unchanged (still per-symbol, fresh every
+  time). A-15's `position_query_ok` invariant preserved: a failed batched `positionRisk` call
+  blocks Case 2 for every symbol sharing that wave, not just the one that triggered the fetch.
+  New `engine/tests/test_batched_reconcile_snapshot.py` (6 cases, incl. a real concurrency test —
+  multiple symbols reconciling the same wave concurrently issue exactly one underlying fetch).
+  Verified via real Docker rebuild: pytest 653/653, golden-master `MultiDivergence`
+  byte-identical (live-only change, zero backtest import overlap). Tests: `engine/tests/test_binance_backpressure.py` (18 cases)
   — **actually executed with real pytest in-session** (not just `ast.parse`), since
   `binance_testnet.py` has no TA-Lib/numpy dependency chain, unlike the rest of the suite.
   **21.7's A-11 + A-14 shipped 2026-07-17** (both logging-only, no golden master needed):
@@ -342,9 +355,229 @@ pipeline-touching steps) a golden-master check per Rule C.
   suite 374/374 (new `test_recursive.py`, 10 cases, self-tests the tool via real TA-Lib EMA/SMA
   over synthetic data). No golden master needed (standalone diagnostic, never touches the sim
   pipeline). Recorded in `CURRENT_STATE.md`.
-- **6/7** — Blocked on Plan 5 fully shipping. Plan 6 should treat Plan 22's `governor.py` /
-  `portfolio_risk.py` as already-extracted modules and land after 21.3/21.4 so correctness
-  fixes move with the code.
+- **6/7** — Plan 6 is now done in every way that mattered to Plan 7's dependency (6.5's Node-side
+  Redis-stream consumer is unrelated to server/client structure). **Plan 7 Step 7.1 started
+  2026-07-20**: extracted the ~150-line credential/capital-check/risk-cascade duplication between
+  `startSession` and `startChaos` (`server/src/controllers/algo.controller.js`) into new
+  `server/src/services/algoSessionService.js` — `resolveBinanceCredentials`,
+  `checkCapitalOverCommit`, `checkConcurrentBotCap`, `buildRiskParamsCascade`. Pure extraction,
+  no behavior change (same status codes/error codes; message text only reworded where it
+  referenced a now-shared computed value). Deliberately scoped to just this duplication, not
+  every credential-lookup site — `_getBinanceHeaders` (internal engine-callback routes) and
+  `reconciliation.js`'s `_testnetHeadersFor` resolve by sessionId/cache rather than by
+  `req.user.id`, a different enough shape to leave as a documented follow-up rather than force
+  into this module. New `server/src/services/__tests__/algoSessionService.test.js` (12 cases,
+  100% line coverage on the new module). Verified: full server jest suite 193/193 (181 existing +
+  12 new), server container restarted clean via nodemon on every edit (`/health` 200 throughout).
+  **7.1 second slice, same day**: extracted `handleEngineStats` (algo.controller.js, ~260 lines,
+  the single biggest extraction target) into `algoSessionService.js` as `processEngineStatsUpdate`
+  (+ `computeSymbolStats`, moved alongside it since `processEngineStatsUpdate` is its only
+  internal caller). `io` is passed in by the controller (`getIO()`) rather than required by the
+  service, keeping the service testable without a live Socket.IO server. Pure extraction — same
+  seq-guard/status-code/event-emit/webhook-dispatch/lock-release behavior, just relocated; the
+  controller's `handleEngineStats` is now a 6-line wrapper. New tests: 12 cases for
+  `processEngineStatsUpdate` (stale-seq rejection, session-not-found short-circuit, each event
+  branch — position:open/close, error, log, risk_breach, stopped — plus positionDetails
+  persistence, both symbolStats-aggregation-failure catches, and a thrown-socket-emit-is-caught
+  case) in `algoSessionService.test.js`; `computeSymbolStats.test.js` relocated from
+  `controllers/__tests__` to `services/__tests__` (same 6 cases, import path updated) since the
+  function moved. Full server jest suite 207/207 (193 + 14 new/moved), server container restarted
+  clean via nodemon on every edit (`/health` 200 throughout).
+  **7.1 third slice, same day**: extracted the symbol-lock guard duplicated 3x/4x across both
+  controllers into `symbolLock.js` (the natural home — both controllers already import lock
+  primitives from it directly) rather than `algoSessionService.js`: `assertSymbolNotBotLocked
+  (symbol, { closing })` (manual-trading side — "reject if a bot already owns this symbol",
+  `trade.controller.js`'s `placeOrder`/`placeOCOOrder`/`placeOrderWithTpSl`/`closePosition`, the
+  last with a different message via `{ closing: true }`) and `assertSymbolLockedByBotSession
+  (symbol, sessionId)` (engine-callback side — the inverse "reject unless THIS session owns the
+  lock", `algo.controller.js`'s `handleAlgoPlaceOrder`/`ClosePosition`/`SetLeverage`, identical
+  message across all 3). Both throw an `ApiError`, so call sites just `await` them inside their
+  existing try/catch — the manual side's `return next(new ApiError(...))` became `throw` (behavior
+  identical: every catch already forwards an `ApiError` instance as-is via `handleEngineError`);
+  the engine-callback side's `throw` was already there. **Deliberately did NOT touch** a latent bug
+  found while reading `handleAlgoPlaceOrder`'s catch block: it does
+  `res.status(err.response?.status || 500)`, which for an `ApiError` (no `.response`) always
+  resolves to 500 even though the thrown error is a 409 — pre-existing, out of scope for a
+  behavior-preserving extraction, not silently "fixed" in passing.
+  New tests: 8 cases in `symbolLock.test.js` (unlocked/manually-locked resolve, bot-locked throws
+  with the right message per `closing`, and the 4 ownership branches for
+  `assertSymbolLockedByBotSession`: matching session / no lock / wrong session / manual-not-bot).
+  Full server jest suite 215/215 (207 + 8 new), server container restarted clean via nodemon on
+  every edit (`/health` 200 throughout).
+  **7.1 fourth slice, same day**: extracted the 3x-duplicated engine-sync-then-bulkWrite pattern
+  shared by `trade.controller.js`'s `getTradeOrders`/`getTradeExecutions`/`getTradeTransactions`
+  into new `server/src/services/tradeHistoryService.js`'s `syncAndListTradeHistory({ Model,
+  engineEndpoint, headers, query, idField, transform, syncErrorLabel, readFilter })` — best-effort
+  engine fetch → per-item bulkWrite upsert → degrade to `synced:false` on any failure (fetch or
+  write) rather than throwing → always read back from the local Mongoose collection regardless of
+  sync outcome. Each caller supplies its own `Model` (`TradeOrder`/`TradeExecution`/
+  `TradeTransaction`), dedupe key (`orderId`/`id`/`tranId`), per-item transform (orders also set
+  `updateTime`; executions/transactions don't), and read filter (`getTradeTransactions`'s symbol
+  is optional, the other two require it — validation stays in the controller, not the shared
+  function). Log text preserved exactly via an explicit `syncErrorLabel` param rather than
+  derived from the model name, so `console.error` output is byte-identical to before. Pure
+  extraction — same try/catch boundary, same bulkWrite op shape, same never-throw-on-sync-failure
+  behavior. New `server/src/services/__tests__/tradeHistoryService.test.js` (6 cases: bulkWrite op
+  shape + transform, empty-array skips bulkWrite, malformed non-array response treated as no
+  items, failed engine fetch degrades to `synced:false` without throwing, failed bulkWrite also
+  degrades rather than throwing, local read uses the exact given filter sorted by `time:-1`). Full
+  server jest suite 221/221 (215 + 6 new), server container restarted clean via nodemon on every
+  edit (`/health` 200 throughout).
+  **Not done**: `startSession`/`startChaos` themselves are still 1,000+-line functions (the shared
+  cross-cutting logic moved out, but each function's own remaining body — session
+  create/lock/rollback/engine-call sequencing — has not been moved into the service layer);
+  `trade.controller.js`'s order-placement/cancel bodies (`placeOrder`, `placeOCOOrder`,
+  `placeOrderWithTpSl`, `cancelOrder`, `cancelAllOrders`) still inline their own engine-call +
+  `upsertTradeOrder`/status-update logic — not duplicated 3x the way the sync-then-list functions
+  were, so lower priority for further extraction.
+  **7.2 (SRV-5, jobs not hour-long HTTP) shipped same day**: `services/engineClient.js`'s shared
+  axios instance used to default every call (including request-path calls a browser is waiting
+  on — place order, start session, fetch account) to `timeout: 60*60*1000`, so an engine hang on
+  a *quick* call held the Express connection open for up to an hour. Root cause was never that
+  quick calls needed an hour — only backtest/simulation/optimization/PBO runs did, and those
+  already run through BullMQ workers (`backtest.worker.js` + 3 siblings), not a request/response
+  cycle. Fix: lowered the instance default to `DEFAULT_TIMEOUT_MS = 30_000` (comfortably above the
+  engine's own internal Binance client timeout of 30s in `services/binance_testnet.py`, plus
+  processing headroom) and exposed `engineClient.LONG_JOB_TIMEOUT_MS = 60*60*1000` as a property
+  on the shared instance; each of the 4 worker files now passes `{ timeout:
+  engineClient.LONG_JOB_TIMEOUT_MS }` explicitly on its one long-running engine POST, so their
+  behavior is unchanged while every other call site (controllers, `reconciliation.js`'s startup
+  calls) now fails fast instead of hanging for an hour. Confirmed no other call site needed the
+  long budget: `backtest.controller.js`'s own two `engineClient` calls (`benchmark`, `cancel`) are
+  quick proxies, not the run itself — the run only happens inside the worker. New
+  `server/src/services/__tests__/engineClient.test.js` (3 cases: default timeout is 30s not the
+  old 1-hour value, `LONG_JOB_TIMEOUT_MS` is exposed, default is strictly less than the long-job
+  constant). Full server jest suite 224/224 (221 + 3 new). Verified via `docker logs`: nodemon
+  restarted clean, all 4 workers (required as side-effect modules in `server.js`) loaded without
+  error, `/health` 200 throughout. Acceptance check met: no engine call inherits the 1-hour budget
+  by default; the long-running calls remain jobs with queryable status (unchanged from before —
+  they were already jobs, just previously piggy-backing on a global default instead of an
+  explicit opt-in).
+  **7.3 (SRV-4, auth robustness) shipped same day, per the user's explicit "proceed through 7.3,
+  don't stop" instruction**: `verifyJWT` (`middleware/auth.middleware.js`) used to catch-all
+  everything — a bad/expired JWT and a Mongo outage during `User.findById` both produced the same
+  401 UNAUTHORIZED, which sends a client into a useless re-login loop when the real problem is the
+  DB being unreachable. Split into two try/catches: `jwt.verify` failures stay 401 UNAUTHORIZED
+  (unchanged); a `User.findById` failure now throws `ApiError(503, 'SERVICE_UNAVAILABLE', ...)`
+  instead. Confirmed the client only special-cases 401 for its logged-out redirect
+  (`client/src/hooks/useAuth.js`) — a 503 surfaces as a generic error, not a forced logout, which
+  is exactly the intended distinction. Added a short-TTL (5s) in-memory `Map` cache for the
+  per-request `User.findById` lookup (every protected route runs it on every request — e.g.
+  Trade's 4s position poll), following `symbolService.js`'s existing cache-with-TTL pattern.
+  Cache hits return a shallow copy, never the shared cached object, since `verifyJWT` mutates
+  `.id` onto whatever it assigns `req.user` and two concurrent requests must never alias the same
+  object. **Preserved the documented "grants/revokes apply immediately" invariant exactly, not
+  approximately**: `admin.controller.js`'s `setUserAlgoAccess` now calls the newly-exported
+  `invalidateUserCache(userId)` right after its `User.updateOne`, so an algoAccess change is
+  visible on the very next request regardless of the 5s TTL — checked this was the only User
+  mutation site outside login/creation (`isActive`/`role` are never toggled elsewhere; no
+  deactivate-user route exists).
+  **Also fixed (explicitly called out in the plan's own Step 7.3 bullet, not scope creep)**: the
+  bare `.catch(() => {})` silent-swallow pattern, sitewide — 18 call sites across
+  `algo.controller.js` (4), `trade.controller.js` (3), `algoSessionService.js` (7),
+  `reconciliation.js` (4), all fire-and-forget lock-release/DB-write/log-push operations that
+  previously discarded their failure with zero observability. Each now logs via `console.error`
+  with enough context (symbol/session id/user id) to actually debug a real failure, while staying
+  non-blocking/non-throwing exactly as before — pure "replace silence with a log line," no control-
+  flow change. **Deliberately left alone**: `app.js`'s 2 health-check catches (already surface
+  `'error'` in the response body — not silent), `config/socket.js`'s auth catch (rejects the
+  socket connection with an explicit error, not silent), `constants/top_symbols.js`'s 2 catches
+  and `symbolService.js`'s 1 catch (each falls through to a documented static/cached fallback,
+  already commented) — none of these are the discard-and-forget anti-pattern the plan's example
+  called out; they're deliberate fallback behavior that already has an observable effect.
+  New tests: 7 more cases in `auth.middleware.test.js` (503-not-401 on DB failure, bad-token-stays-
+  401-distinct-from-503, cache-hit-skips-second-`User.findById`, cache-never-shares-object-
+  references-across-requests, `invalidateUserCache`-forces-a-fresh-read) plus a new
+  `admin.controller.test.js` (4 cases: invalidates on grant, invalidates on revoke, does NOT
+  invalidate when rejected before the update on bad status or an admin target). Full server jest
+  suite 233/233 (224 + 9 new). Verified via `docker logs`: nodemon restarted clean, `/health` 200
+  throughout.
+  **Files changed:** `server/src/middleware/auth.middleware.js`,
+  `server/src/controllers/admin.controller.js`, `server/src/controllers/algo.controller.js`,
+  `server/src/controllers/trade.controller.js`, `server/src/services/algoSessionService.js`,
+  `server/src/services/reconciliation.js`, `server/src/middleware/__tests__/auth.middleware.test.js`,
+  new `server/src/controllers/__tests__/admin.controller.test.js`.
+  **7.5 (CLI-2/CLI-3, single realtime-state owner) — design question resolved, core shipped same
+  day**: asked the user the plan's own open question (Zustand+TanStack-Query-thin-store vs
+  TanStack-Query-only) via AskUserQuestion before writing any code, per the plan file's explicit
+  "do not just pick one" instruction — **Zustand + TanStack Query (thin store)** was chosen.
+  Surveyed the actual current-state architecture first (an Explore agent, not assumption):
+  confirmed `client/src/store/` had been fully deleted (no Zustand store existed at all — a
+  greenfield slot, not a migration), and found the concrete "3 disagreeing sources" problem was
+  narrower than the plan's framing suggested — `binanceWS.js` already ref-counts WebSocket
+  connections by stream name, so Trade.jsx's 2 independent `<sym>@ticker` subscriptions (header
+  `TickerBar`, the order-entry sizing calc) shared one real connection but each parsed the tick
+  into its own local state/ref, meaning "this symbol's price" had no single documented value even
+  though the underlying data was already identical. New `client/src/store/marketStore.js` —
+  `useMarketTicker(streamPrefix)` (reactive, for display) and a non-reactive
+  `useMarketStore.getState().tickers[...]` read pattern (for sizing math that shouldn't re-render
+  on every tick, preserving the old ref's non-reactive-read intent exactly). Migrated both
+  Trade.jsx consumers. **Deliberately scoped to ticker/price only** — OrderBook/RecentTrades/the
+  candle chart keep their own dedicated `useBinanceWS` subscriptions (depth/aggTrade/kline are
+  structurally different data, and client/CLAUDE.md's realtime rules already document
+  per-sub-component isolation for those as a deliberate render-perf choice, not an oversight).
+  `client/dist/` requirement already satisfied — confirmed gitignored, 0 tracked files, no action
+  needed. Verified in a real browser (not just the smoke test): header ticker live-updates, the
+  50% sizing button correctly computes qty from the shared store's price, zero console errors.
+  New `client/src/store/__tests__/marketStore.test.js` (4 cases). `client/CLAUDE.md` updated (the
+  store directory's "no longer exists" note was stale; realtime rules section now documents the
+  ticker exception). **Deliberately NOT attempted**: the plan's "hooks share a factory" sub-item
+  (collapsing duplicated loading/error/toast logic across ~15 per-domain hooks) — surveyed the
+  actual duplication (mostly `const { data } = await api.get(url); return data.data` unwrap
+  boilerplate repeated per query, not loading/error/toast which client/CLAUDE.md already
+  documents as page-level, not hook-level) and judged a full mechanical migration across every
+  hook file too large/risky to append to an already-large session without its own dedicated
+  regression pass — flagged as a follow-up, not silently declared done.
+  **7.4 (CLI-1, decompose god components) — Trade.jsx done, 3 files remain**: surveyed all four
+  target files' actual shape before touching anything — Trade.jsx (1,760 lines) was structurally
+  different from the other three: ~20 already-separate named function components crammed into one
+  file (a mechanical file-split, low risk), whereas Backtest.jsx (831 lines, one ~640-line
+  `export default function` plus 2 small table helpers), Settings.jsx (928 lines, **entirely** one
+  single function, zero pre-existing internal decomposition), and ChaosWizard.jsx (677 lines, one
+  ~600-line function plus one helper) are single monolithic component bodies needing real
+  JSX-tree/container-presenter splitting — a different, slower, higher-risk kind of refactor.
+  Prioritized the mechanical, high-value, low-risk win: extracted 8 new files under
+  `client/src/features/trade/` (`formatters.js`, `TableHelpers.jsx`, `TpSlModal.jsx`,
+  `PositionsTable.jsx`, `OpenOrdersTable.jsx`, `AssetsTable.jsx`, `HistoryTables.jsx`,
+  `BottomPanel.jsx`) — pure moves, no logic changes. Trade.jsx: **1,760 → 892 lines (49%
+  reduction)**. Verified: `vite build` succeeds with an identical bundle size (confirms nothing
+  silently duplicated), `vitest` 15/15, and a real-browser check (chart/order book/trades/order
+  form/bottom-panel tabs all render and function, % sizing still computes correctly, zero console
+  errors after a hard reload).
+  **7.4 continued, same day — Settings.jsx and Backtest.jsx also decomposed**, per the user's
+  explicit "proceed on them" follow-up after the Trade.jsx-only report. Settings.jsx (928 lines,
+  entirely one function) split into 7 self-contained cards under `client/src/features/settings/`
+  (`ProfileCard`, `AlgoAccessCard`, `EnvironmentConfigCard`, `ChaosSettingsCard`,
+  `NotificationsCard`, `ExchangeSettingsCard`, `styles.js`) — each card owns its own
+  `useExchangeSettings()`/mutation calls rather than receiving 20+ props from a parent (TanStack
+  Query dedupes the identical `['settings','exchange']` query automatically, so this is the
+  standard usage pattern, not N redundant requests). **Settings.jsx: 928 → 30 lines.**
+  Backtest.jsx (831 lines, one ~640-line function + 2 small table helpers) split into
+  `client/src/features/backtest/{PerformanceTable,ComparisonTable,OverviewTab,TradesTab,
+  ComparisonTab}.jsx` — each tab-content component takes already-fetched data as props;
+  `Backtest.jsx` still owns every TanStack Query hook call and all page-level state (a
+  presentational split, not a data-ownership change, since the hooks are tightly coupled to
+  page-level `selectedResultId`/`tradePage` state that several tabs and the history sidebar all
+  share). **Backtest.jsx: 831 → 503 lines.**
+  Verified both: `vite build` succeeds with stable bundle size, `vitest` 15/15, and a real-browser
+  walkthrough of every affected surface (Settings: all 6 cards render with real loaded data,
+  correct `space-y-0` flush-card spacing preserved exactly, zero console errors; Backtest: all 4
+  result tabs — Overview/Performance Summary/List of Trades/Compare — render correct data via the
+  accessibility tree after a screenshot-tool CDP timeout made pixel screenshots unreliable
+  mid-session, confirmed via DOM inspection instead of narrating around the tooling failure).
+  **Found, not caused, not fixed**: a pre-existing React "duplicate/missing key" console warning
+  on `TradesTab`'s `key={tr.id}` — checked via `git show HEAD:client/src/pages/Backtest.jsx`, the
+  identical `key={tr.id}` was already in the pre-refactor committed code, so this is a pre-existing
+  trade-data quality issue (likely duplicate/undefined `id` on some rows), not a regression from
+  the extraction. Flagged, not silently fixed (would be scope creep for a decomposition task).
+  **Deliberately still not attempted**: ChaosWizard.jsx's internal decomposition (677 lines, one
+  ~600-line function + one helper — same monolithic-body shape as Settings.jsx/Backtest.jsx was,
+  its own dedicated pass); the "hooks share a factory" sub-item from 7.5 (collapsing duplicated
+  `api.get/post`-and-unwrap boilerplate across ~15 per-domain hooks); the remaining WS-entangled
+  Trade.jsx components (TickerBar, ChartContainer, OrderBook, RecentTrades, OrderForm,
+  LeverageModal, `TradeInner`) — already touched for 7.5's price-store work, further splitting
+  trades more regression risk for less file-size benefit than the tables did. See `handoff.md` for
+  the resume point.
 - **8** — 8.1 shipped (F6). Remaining: 8.2–8.6 + the SYS-3 named-volume documentation item
   carried from F6. 8.3/8.4 are golden-master-touching. 8.6 resolved 2026-07-18 — no code
   needed, see Step 8.6 in the plan doc.

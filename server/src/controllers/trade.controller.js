@@ -6,8 +6,9 @@ const TradeTransaction = require('../models/TradeTransaction')
 const engineClient = require('../services/engineClient')
 const ApiResponse = require('../utils/ApiResponse')
 const ApiError = require('../utils/ApiError')
-const { isSymbolFree, getSymbolLock } = require('../services/symbolLock')
+const { isSymbolFree, assertSymbolNotBotLocked } = require('../services/symbolLock')
 const { subscribeToTradeStream, unsubscribeFromTradeStream } = require('../services/socketEmitter')
+const { syncAndListTradeHistory } = require('../services/tradeHistoryService')
 
 function handleEngineError(err, defaultMessage) {
   if (err instanceof ApiError) return err
@@ -254,7 +255,9 @@ async function getPositionRisk(req, res, next) {
     // Fire-and-forget: keep manual Redis locks in sync with live positions.
     // Only run on full (no symbol filter) polls — the client does this every 4000ms.
     if (!symbol) {
-      _reconcileManualLocks(allPositions).catch(() => {})
+      _reconcileManualLocks(allPositions).catch((err) => {
+        console.error('[Trade] Manual lock reconciliation failed:', err.message)
+      })
     }
   } catch (err) {
     next(handleEngineError(err, 'Failed to fetch positions'))
@@ -271,7 +274,9 @@ async function _reconcileManualLocks(allPositions) {
       openSymbols.add(sym)
       const existing = await getSymbolLock(sym)
       if (!existing) {
-        await lockSymbol(sym, 'manual').catch(() => {})
+        await lockSymbol(sym, 'manual').catch((lockErr) => {
+          console.error(`[Trade] Manual lock acquire failed for ${sym}:`, lockErr.message)
+        })
       }
     }
   }
@@ -280,7 +285,9 @@ async function _reconcileManualLocks(allPositions) {
   const allLocked = await getAllLockedSymbols()
   for (const [sym, lock] of Object.entries(allLocked)) {
     if (lock.reason === 'manual' && !openSymbols.has(sym)) {
-      await releaseSymbolLock(sym).catch(() => {})
+      await releaseSymbolLock(sym).catch((releaseErr) => {
+        console.error(`[Trade] Manual lock release failed for ${sym}:`, releaseErr.message)
+      })
     }
   }
 }
@@ -333,10 +340,7 @@ async function placeOrder(req, res, next) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'quantity must be a positive number')
     }
     // Symbol lock check
-    const lock = await getSymbolLock(symbol)
-    if (lock && lock.reason === 'bot') {
-      return next(new ApiError(409, 'SYMBOL_LOCKED', `Symbol ${symbol} is locked by an active bot session. Close it through the bot page or wait for the bot to close it.`))
-    }
+    await assertSymbolNotBotLocked(symbol)
     const { data } = await engineClient.post(
       '/trade/order',
       { symbol, side, type, quantity, price },
@@ -361,10 +365,7 @@ async function closePosition(req, res, next) {
     if (!symbol) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'symbol is required')
     }
-    const lock = await getSymbolLock(symbol)
-    if (lock && lock.reason === 'bot') {
-      return next(new ApiError(409, 'SYMBOL_LOCKED', `Symbol ${symbol} is locked by an active bot session and cannot be closed manually.`))
-    }
+    await assertSymbolNotBotLocked(symbol, { closing: true })
     const { data } = await engineClient.post('/trade/close-position', { symbol }, { headers: req.binanceHeaders })
     res.json(ApiResponse.success(data.data))
   } catch (err) {
@@ -432,10 +433,7 @@ async function placeOCOOrder(req, res, next) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'quantity must be a positive number')
     }
     // Symbol lock check
-    const lock = await getSymbolLock(symbol)
-    if (lock && lock.reason === 'bot') {
-      return next(new ApiError(409, 'SYMBOL_LOCKED', `Symbol ${symbol} is locked by an active bot session. Close it through the bot page or wait for the bot to close it.`))
-    }
+    await assertSymbolNotBotLocked(symbol)
     const { data } = await engineClient.post(
       '/trade/order/oco_futures',
       { symbol, side: side.toUpperCase(), quantity, stopPrice, takeProfitPrice },
@@ -479,10 +477,7 @@ async function placeOrderWithTpSl(req, res, next) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'quantity must be a positive number')
     }
     // Symbol lock check
-    const lock = await getSymbolLock(symbol)
-    if (lock && lock.reason === 'bot') {
-      return next(new ApiError(409, 'SYMBOL_LOCKED', `Symbol ${symbol} is locked by an active bot session. Close it through the bot page or wait for the bot to close it.`))
-    }
+    await assertSymbolNotBotLocked(symbol)
     const { data } = await engineClient.post(
       '/trade/order/with_tp_sl',
       { symbol, side: side.toUpperCase(), type: type.toUpperCase(), quantity, price, stopLoss, takeProfit },
@@ -581,37 +576,20 @@ async function getTradeOrders(req, res, next) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'symbol query parameter is required')
     }
 
-    let synced = true
-    try {
-      const { data } = await engineClient.get('/trade/history-orders', {
-        headers: req.binanceHeaders,
-        params: { symbol, limit: 100 },
-      })
-
-      if (data?.data && Array.isArray(data.data)) {
-        const ops = data.data.map(order => ({
-          updateOne: {
-            filter: { orderId: order.orderId },
-            update: {
-              $set: {
-                ...order,
-                time: new Date(order.time),
-                updateTime: order.updateTime ? new Date(order.updateTime) : null,
-              }
-            },
-            upsert: true,
-          }
-        }))
-        if (ops.length > 0) {
-          await TradeOrder.bulkWrite(ops)
-        }
-      }
-    } catch (engineErr) {
-      console.error('Failed to sync trade orders from engine:', engineErr.message)
-      synced = false
-    }
-
-    const orders = await TradeOrder.find({ userId: req.user.id, symbol }).sort({ time: -1 }).lean()
+    const { items: orders, synced } = await syncAndListTradeHistory({
+      Model: TradeOrder,
+      engineEndpoint: '/trade/history-orders',
+      headers: req.binanceHeaders,
+      query: { symbol },
+      idField: 'orderId',
+      transform: (order) => ({
+        ...order,
+        time: new Date(order.time),
+        updateTime: order.updateTime ? new Date(order.updateTime) : null,
+      }),
+      syncErrorLabel: 'trade orders',
+      readFilter: { userId: req.user.id, symbol },
+    })
     res.json(ApiResponse.success({ orders, synced }))
   } catch (err) {
     next(err)
@@ -625,36 +603,16 @@ async function getTradeExecutions(req, res, next) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'symbol query parameter is required')
     }
 
-    let synced = true
-    try {
-      const { data } = await engineClient.get('/trade/history-executions', {
-        headers: req.binanceHeaders,
-        params: { symbol, limit: 100 },
-      })
-
-      if (data?.data && Array.isArray(data.data)) {
-        const ops = data.data.map(exec => ({
-          updateOne: {
-            filter: { id: exec.id },
-            update: {
-              $set: {
-                ...exec,
-                time: new Date(exec.time),
-              }
-            },
-            upsert: true,
-          }
-        }))
-        if (ops.length > 0) {
-          await TradeExecution.bulkWrite(ops)
-        }
-      }
-    } catch (engineErr) {
-      console.error('Failed to sync executions from engine:', engineErr.message)
-      synced = false
-    }
-
-    const executions = await TradeExecution.find({ userId: req.user.id, symbol }).sort({ time: -1 }).lean()
+    const { items: executions, synced } = await syncAndListTradeHistory({
+      Model: TradeExecution,
+      engineEndpoint: '/trade/history-executions',
+      headers: req.binanceHeaders,
+      query: { symbol },
+      idField: 'id',
+      transform: (exec) => ({ ...exec, time: new Date(exec.time) }),
+      syncErrorLabel: 'executions',
+      readFilter: { userId: req.user.id, symbol },
+    })
     res.json(ApiResponse.success({ executions, synced }))
   } catch (err) {
     next(err)
@@ -665,39 +623,16 @@ async function getTradeTransactions(req, res, next) {
   try {
     const { symbol } = req.query
 
-    let synced = true
-    try {
-      const params = { limit: 100 }
-      if (symbol) params.symbol = symbol
-      const { data } = await engineClient.get('/trade/history-transactions', {
-        headers: req.binanceHeaders,
-        params,
-      })
-
-      if (data?.data && Array.isArray(data.data)) {
-        const ops = data.data.map(tx => ({
-          updateOne: {
-            filter: { tranId: tx.tranId },
-            update: {
-              $set: {
-                ...tx,
-                time: new Date(tx.time),
-              }
-            },
-            upsert: true,
-          }
-        }))
-        if (ops.length > 0) {
-          await TradeTransaction.bulkWrite(ops)
-        }
-      }
-    } catch (engineErr) {
-      console.error('Failed to sync transactions from engine:', engineErr.message)
-      synced = false
-    }
-
-    const filter = symbol ? { userId: req.user.id, symbol } : { userId: req.user.id }
-    const transactions = await TradeTransaction.find(filter).sort({ time: -1 }).lean()
+    const { items: transactions, synced } = await syncAndListTradeHistory({
+      Model: TradeTransaction,
+      engineEndpoint: '/trade/history-transactions',
+      headers: req.binanceHeaders,
+      query: symbol ? { symbol } : {},
+      idField: 'tranId',
+      transform: (tx) => ({ ...tx, time: new Date(tx.time) }),
+      syncErrorLabel: 'transactions',
+      readFilter: symbol ? { userId: req.user.id, symbol } : { userId: req.user.id },
+    })
     res.json(ApiResponse.success({ transactions, synced }))
   } catch (err) {
     next(err)

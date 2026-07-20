@@ -2,10 +2,7 @@ import { useState, useEffect, useMemo, useRef, lazy, Suspense } from 'react'
 import { useSearchParams, Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import {
-  TrendingUp,
-  Percent,
   AlertTriangle,
-  DollarSign,
   Activity,
   Loader2,
   Download,
@@ -16,20 +13,16 @@ import {
 
 import PageWrapper from '../components/layout/PageWrapper'
 import PageHeader from '../components/ui/PageHeader'
-import ErrorBoundary from '../components/ErrorBoundary'
-import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card'
-import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../components/ui/table'
-import { Badge } from '../components/ui/badge'
+import { Card } from '../components/ui/card'
 import { Button } from '../components/ui/button'
 import { Dialog, DialogContent } from '../components/ui/dialog'
-import { Pagination } from '../components/ui/pagination'
-const EquityCurve = lazy(() => import('../components/charts/EquityCurve'))
 import BacktestHistory from '../features/backtest/BacktestHistory'
-import BacktestMetricCard from '../features/backtest/BacktestMetricCard'
-import MCSummaryStrip from '../features/backtest/MCSummaryStrip'
+import PerformanceTable from '../features/backtest/PerformanceTable'
+import OverviewTab from '../features/backtest/OverviewTab'
+import TradesTab from '../features/backtest/TradesTab'
+import ComparisonTab from '../features/backtest/ComparisonTab'
 
 const NewBacktestWizard = lazy(() => import('../features/backtest/NewBacktestWizard'))
-const BacktestCalendar = lazy(() => import('../features/backtest/BacktestCalendar'))
 
 import {
   useRunBacktest,
@@ -41,152 +34,10 @@ import {
   useBacktestBenchmark,
 } from '../hooks/useBacktest'
 import api from '../lib/axios'
-import { formatQty, formatPrice, formatPct, formatSignedPct, formatPnl, formatIsoDate } from '../utils/formatters'
 import { exportResultAsJSON } from '../utils/exporters'
 import socket from '../lib/socket'
 import { useQueryClient, useQueries } from '@tanstack/react-query'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs'
-
-function PerformanceTable({ bySide }) {
-  if (!bySide) return null;
-
-  const rows = [
-    { label: 'Net Profit', key: 'netProfit', format: (val, r) => `${formatPnl(val).value} (${formatSignedPct(r.netProfitPct)})`, isPnl: true },
-    { label: 'Gross Profit', key: 'grossProfit', format: (val) => formatPnl(val).value, isPnl: true },
-    { label: 'Gross Loss', key: 'grossLoss', format: (val) => formatPnl(val).value, isPnl: true },
-    { label: 'Profit Factor', key: 'profitFactor', format: (val) => parseFloat(val).toFixed(2), highlightPF: true },
-    { label: 'Total Trades', key: 'totalTrades', format: (val) => val },
-    { label: 'Winning Trades', key: 'winningTrades', format: (val) => val },
-    { label: 'Losing Trades', key: 'losingTrades', format: (val) => val },
-    { label: 'Win Rate (% Profitable)', key: 'winRate', format: (val) => formatPct(parseFloat(val) * 100) },
-    { label: 'Expectancy (Avg P&L)', key: 'expectancy', format: (val) => formatPnl(val).value, isPnl: true },
-    { label: 'Avg Win', key: 'averageWin', format: (val) => formatPnl(val).value, isPnl: true },
-    { label: 'Avg Loss', key: 'averageLoss', format: (val) => formatPnl(val).value, isPnl: true },
-    { label: 'Payoff Ratio (Win/Loss)', key: 'payoffRatio', format: (val) => parseFloat(val).toFixed(2) },
-    {
-      label: 'Avg Holding Period', key: 'averageHoldingPeriod', format: (val) => {
-        const secs = parseInt(val)
-        if (secs >= 3600) return `${(secs / 3600).toFixed(1)}h`
-        if (secs >= 60) return `${(secs / 60).toFixed(1)}m`
-        return `${secs}s`
-      }
-    },
-    { label: 'Max Consecutive Wins', key: 'maxConsecutiveWins', format: (val) => val },
-    { label: 'Max Consecutive Losses', key: 'maxConsecutiveLosses', format: (val) => val },
-  ]
-
-  const getPnlClass = (val) => {
-    const n = parseFloat(val)
-    if (n > 0) return 'text-emerald-400 font-semibold'
-    if (n < 0) return 'text-red-400 font-semibold'
-    return 'text-gray-300'
-  }
-
-  const getPFClass = (val) => {
-    const n = parseFloat(val)
-    if (n >= 1) return 'text-emerald-400 font-semibold'
-    if (n > 0) return 'text-red-400 font-semibold'
-    return 'text-gray-300'
-  }
-
-  return (
-    <div className="h-full flex flex-col bg-title-bg border border-slate-700/50 overflow-hidden">
-      <Table wrapperClassName="flex-1 overflow-y-auto">
-        <TableHeader className="sticky top-0 z-10">
-          <TableRow className="h-11 shrink-0 bg-title-bg title-fade border-b border-slate-700/50">
-            <TableHead className="w-[250px]">Metric</TableHead>
-            <TableHead>All Trades</TableHead>
-            <TableHead>Long Trades</TableHead>
-            <TableHead>Short Trades</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map((row) => {
-            const allVal = bySide.all?.[row.key] ?? '-'
-            const longVal = bySide.long?.[row.key] ?? '-'
-            const shortVal = bySide.short?.[row.key] ?? '-'
-
-            return (
-              <TableRow key={row.key}>
-                <TableCell className="font-medium text-gray-300">{row.label}</TableCell>
-                <TableCell className={row.isPnl ? getPnlClass(allVal) : row.highlightPF ? getPFClass(allVal) : 'text-gray-400 font-mono text-sm'}>
-                  {allVal !== '-' ? row.format(allVal, bySide.all) : '-'}
-                </TableCell>
-                <TableCell className={row.isPnl ? getPnlClass(longVal) : row.highlightPF ? getPFClass(longVal) : 'text-gray-400 font-mono text-sm'}>
-                  {longVal !== '-' ? row.format(longVal, bySide.long) : '-'}
-                </TableCell>
-                <TableCell className={row.isPnl ? getPnlClass(shortVal) : row.highlightPF ? getPFClass(shortVal) : 'text-gray-400 font-mono text-sm'}>
-                  {shortVal !== '-' ? row.format(shortVal, bySide.short) : '-'}
-                </TableCell>
-              </TableRow>
-            )
-          })}
-        </TableBody>
-      </Table>
-    </div>
-  )
-}
-
-
-
-function ComparisonTable({ results }) {
-  const metricRows = [
-    { label: 'Net Profit', getValue: (r) => formatPrice(r.metrics?.netProfit ?? 0), isPnl: true },
-    { label: 'Net Profit %', getValue: (r) => formatSignedPct(r.metrics?.netProfitPct ?? 0), isPnl: true },
-    { label: 'Win Rate', getValue: (r) => formatPct((parseFloat(r.metrics?.winRate || 0) || 0) * 100) },
-    { label: 'Profit Factor', getValue: (r) => (r.metrics?.profitFactor ? parseFloat(r.metrics.profitFactor).toFixed(2) : '-'), isPF: true },
-    { label: 'Max Drawdown', getValue: (r) => formatPct(parseFloat(r.metrics?.maxDrawdown || 0)), isLoss: true },
-    { label: 'Sharpe', getValue: (r) => parseFloat(r.metrics?.sharpeRatio || 0).toFixed(2) },
-    { label: 'Sortino', getValue: (r) => parseFloat(r.metrics?.sortinoRatio || 0).toFixed(2) },
-    { label: 'Calmar', getValue: (r) => parseFloat(r.metrics?.calmarRatio || 0).toFixed(2) },
-    { label: 'Total Trades', getValue: (r) => r.metrics?.totalTrades ?? '-' },
-    { label: 'Win / Loss', getValue: (r) => `${r.metrics?.winningTrades ?? '-'} / ${r.metrics?.losingTrades ?? '-'}` },
-    { label: 'Expectancy', getValue: (r) => (r.metrics?.expectancy != null ? formatPnl(r.metrics.expectancy).value : '-'), isPnl: true },
-    { label: 'Capital', getValue: (r) => formatPrice(r.capital) },
-    { label: 'Leverage', getValue: (r) => `${r.leverage}x` },
-    { label: 'Fee Rate', getValue: (r) => `${((r.feeRate || 0) * 100).toFixed(2)}%` },
-    { label: 'Date Range', getValue: (r) => `${formatIsoDate(r.startDate)} → ${formatIsoDate(r.endDate)}` },
-  ]
-
-  const getValClass = (row, r) => {
-    const raw = row.getValue(r)
-    const n = parseFloat(raw)
-    if (row.isPnl) return n > 0 ? 'text-emerald-400' : n < 0 ? 'text-red-400' : 'text-gray-300'
-    if (row.isLoss) return 'text-red-400'
-    if (row.isPF) return n >= 1 ? 'text-emerald-400' : 'text-red-400'
-    return 'text-gray-300'
-  }
-
-  return (
-    <div className="flex-1 flex flex-col rounded-lg border-x-0 border-t-0 border-b border-gray-800 overflow-hidden bg-title-bg">
-        <Table wrapperClassName="flex-1 overflow-y-auto">
-          <TableHeader className="sticky top-0 z-10">
-            <TableRow className="h-11 shrink-0 bg-title-bg title-fade border-b border-slate-700/50">
-              <TableHead className="w-[180px] text-gray-400 font-medium text-xs">Metric</TableHead>
-              {results.map((r) => (
-                <TableHead key={r.jobId} className="text-gray-200 font-semibold text-xs">
-                  <div className="truncate max-w-[140px]">{r.strategyName}</div>
-                  <div className="text-[10px] text-gray-500 font-normal">{r.symbol} · {r.timeframe}</div>
-                </TableHead>
-              ))}
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {metricRows.map((row, idx) => (
-              <TableRow key={row.label}>
-                <TableCell className="text-gray-400 text-xs font-medium">{row.label}</TableCell>
-                {results.map((r) => (
-                  <TableCell key={`${r.jobId}-${row.label}`} className={`font-mono text-xs font-semibold ${getValClass(row, r)}`}>
-                    {row.getValue(r)}
-                  </TableCell>
-                ))}
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-    </div>
-  )
-}
 
 const HISTORY_FILTER_KEYS = ['strategyName', 'symbol', 'timeframe', 'status', 'createdAfter', 'createdBefore']
 
@@ -417,13 +268,6 @@ export default function Backtest() {
     }
   }
 
-  const getPnlClass = (val) => {
-    const n = parseFloat(val)
-    if (n > 0) return 'text-emerald-400'
-    if (n < 0) return 'text-red-400'
-    return 'text-gray-300'
-  }
-
   const toggleComparison = (jobId) => {
     setComparisonIds((current) => {
       if (current.includes(jobId)) {
@@ -604,68 +448,7 @@ export default function Backtest() {
                 ) : null}
 
                 <TabsContent value="overview" className={`h-full w-full m-0 outline-none overflow-y-auto ${activeResult.status === 'failed' ? 'hidden' : 'data-[state=active]:block'}`}>
-                  {activeResult.metrics && (() => {
-                    const m = activeResult.metrics
-                    const metrics = [
-                      { label: 'Net Profit', value: formatPrice(m.netProfit), cls: getPnlClass(m.netProfit) },
-                      { label: 'Net P&L %', value: formatSignedPct(m.netProfitPct), cls: getPnlClass(m.netProfit) },
-                      { label: 'Max Drawdown', value: `${formatPct(m.maxDrawdown)} / ${formatPct((activeResult.riskParams?.max_session_dd ?? 0.20) * 100)}`, cls: 'text-red-400' },
-                      { label: 'Win Rate', value: formatPct(parseFloat(m.winRate) * 100), cls: 'text-gray-100' },
-                      { label: 'Total Trades', value: m.totalTrades ?? '-', cls: 'text-gray-100' },
-                      { label: 'Profit Factor', value: m.profitFactor ? parseFloat(m.profitFactor).toFixed(2) : '-', cls: m.profitFactor && parseFloat(m.profitFactor) >= 1 ? 'text-emerald-400' : 'text-red-400' },
-                      { label: 'Sharpe', value: parseFloat(m.sharpeRatio || 0).toFixed(2), cls: 'text-gray-100' },
-                      { label: 'Sortino', value: parseFloat(m.sortinoRatio || 0).toFixed(2), cls: 'text-gray-100' },
-                      { label: 'Calmar', value: parseFloat(m.calmarRatio || 0).toFixed(2), cls: 'text-gray-100' },
-                      { label: 'Expectancy', value: m.expectancy ? formatPnl(m.expectancy).value : '-', cls: m.expectancy ? getPnlClass(m.expectancy) : 'text-gray-300' },
-                      { label: 'Leverage', value: `${activeResult.leverage}x`, cls: 'text-gray-100' },
-                      { label: 'Fee Rate', value: `${((activeResult.feeRate || 0) * 100).toFixed(2)}%`, cls: 'text-gray-100' },
-                      { label: 'Total Fees', value: m.totalFees ? formatPrice(m.totalFees) : '-', cls: 'text-red-400' },
-                      { label: 'Liquidations', value: m.liquidations ?? 0, cls: (m.liquidations ?? 0) > 0 ? 'text-red-400' : 'text-gray-100' },
-                    ]
-                    return (
-                      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 border-b border-slate-700/50 divide-x divide-y divide-slate-700/50">
-                        {metrics.map(({ label, value, cls }) => (
-                          <div key={label} className="flex flex-col justify-center px-3 h-11 bg-title-bg">
-                            <span className="text-[9px] uppercase tracking-wider text-gray-500 leading-none mb-1">{label}</span>
-                            <span className={`text-sm font-bold leading-none ${cls}`}>{value}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )
-                  })()}
-
-                  <MCSummaryStrip sourceJobId={activeResult.jobId} enabled={activeResult.status === 'completed'} />
-
-                  {/* Performance Charts */}
-                  <div className="border-b border-slate-700/50">
-                    <div className="h-11 bg-title-bg title-fade flex items-center px-4 border-b border-slate-700/30">
-                      <span className="text-sm font-semibold text-gray-100">Performance Charts</span>
-                    </div>
-                    <div className="p-4">
-                      <ErrorBoundary label="Equity chart">
-                        <Suspense fallback={<div className="h-48 flex items-center justify-center"><Loader2 className="size-6 animate-spin text-emerald-400" /></div>}>
-                          <EquityCurve
-                            data={activeResult.equityCurve}
-                            startingCapital={activeResult.capital}
-                            buyHoldReturnPct={activeResult.metrics?.buyHoldReturnPct || 0}
-                            benchmark={benchmarkData ?? null}
-                          />
-                        </Suspense>
-                      </ErrorBoundary>
-                    </div>
-                  </div>
-
-                  {allTradesData && allTradesData.length > 0 && (
-                    <div className="border-b border-slate-700/50">
-                      <Suspense fallback={<div className="h-48 flex items-center justify-center"><Loader2 className="size-6 animate-spin text-emerald-400" /></div>}>
-                        <BacktestCalendar
-                          trades={allTradesData}
-                          onSelectPeriod={(trades) => { }}
-                        />
-                      </Suspense>
-                    </div>
-                  )}
-
+                  <OverviewTab activeResult={activeResult} benchmarkData={benchmarkData} allTradesData={allTradesData} />
                 </TabsContent>
 
                 <TabsContent value="performance" className={`h-full w-full m-0 outline-none flex-col overflow-hidden ${activeResult.status === 'failed' ? 'hidden' : 'data-[state=active]:flex'}`}>
@@ -680,127 +463,16 @@ export default function Backtest() {
                   )}
                 </TabsContent>
                 <TabsContent value="trades" className={`h-full w-full m-0 outline-none flex-col overflow-hidden ${activeResult.status === 'failed' ? 'hidden' : 'data-[state=active]:flex'}`}>
-                  <div className="bg-title-bg border border-slate-700/50 overflow-hidden flex-1 flex flex-col">
-                    {tradesData?.trades && tradesData.trades.length > 0 ? (() => {
-                      const totalTrades = tradesData.pagination.total
-                      const totalPages = tradesData.pagination.totalPages
-                      const startIdx = (tradePage - 1) * TRADES_PER_PAGE
-                      const pageTrades = tradesData.trades
-
-                      return (
-                        <>
-                          <Table wrapperClassName="flex-1 overflow-y-auto">
-                            <TableHeader className="sticky top-0 z-10">
-                              <TableRow className="h-11 shrink-0 bg-title-bg title-fade border-b border-slate-700/50">
-                                <TableHead>Symbol</TableHead>
-                                <TableHead>Type</TableHead>
-                                <TableHead>Qty</TableHead>
-                                <TableHead>Entry Price</TableHead>
-                                <TableHead>Exit Price</TableHead>
-                                <TableHead>Entry Time</TableHead>
-                                <TableHead>Run-up (MFE)</TableHead>
-                                <TableHead>Drawdown (MAE)</TableHead>
-                                <TableHead>Bars</TableHead>
-                                <TableHead>Reason</TableHead>
-                                <TableHead className="text-right">Net P&L</TableHead>
-                              </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                              {pageTrades.map((tr) => {
-                                const pnl = formatPnl(tr.pnl)
-                                const runUp = tr.runUpPct ? `${tr.runUpPct}%` : '-'
-                                const drawdown = tr.drawdownPct ? `${tr.drawdownPct}%` : '-'
-                                const bars = tr.barsHeld ?? '-'
-
-                                return (
-                                  <TableRow key={tr.id}>
-                                    <TableCell className="font-mono text-xs text-gray-300">
-                                      {tr.symbol || '-'}
-                                    </TableCell>
-                                    <TableCell>
-                                      <Badge variant={tr.type === 'long' ? 'profit' : 'destructive'}>
-                                        {tr.type.toUpperCase()}
-                                      </Badge>
-                                    </TableCell>
-                                    <TableCell className="font-mono text-xs">{formatQty(tr.qty)}</TableCell>
-                                    <TableCell className="font-mono text-xs">{formatPrice(tr.entryPrice)}</TableCell>
-                                    <TableCell className="font-mono text-xs">{formatPrice(tr.exitPrice)}</TableCell>
-                                    <TableCell className="text-slate-400 text-xs font-mono tabular-nums">
-                                      {new Date(tr.entryAt).toLocaleDateString('en-US', {
-                                        month: 'short', day: 'numeric',
-                                        hour: '2-digit', minute: '2-digit',
-                                        timeZone: 'UTC',
-                                      })}
-                                    </TableCell>
-                                    <TableCell className="font-mono text-xs text-emerald-400">
-                                      {runUp}
-                                    </TableCell>
-                                    <TableCell className="font-mono text-xs text-red-400">
-                                      {drawdown}
-                                    </TableCell>
-                                    <TableCell className="font-mono text-xs text-gray-400">
-                                      {bars}
-                                    </TableCell>
-                                    <TableCell>
-                                      <span className="text-xs capitalize text-gray-300">
-                                        {tr.exitReason ? tr.exitReason.replace('_', ' ') : '-'}
-                                      </span>
-                                    </TableCell>
-                                    <TableCell className={`text-right font-mono text-xs font-semibold ${pnl.isPositive ? 'text-emerald-400' : 'text-red-400'}`}>
-                                      {pnl.value} ({formatSignedPct(tr.pnlPct)})
-                                    </TableCell>
-                                  </TableRow>
-                                )
-                              })}
-                            </TableBody>
-                          </Table>
-
-                          {totalPages > 1 && (
-                            <div className="shrink-0 border-t border-slate-700/50 px-3 py-2 flex items-center justify-between">
-                              <span className="text-[10px] text-gray-500 font-mono">
-                                {(tradePage - 1) * TRADES_PER_PAGE + 1}–{Math.min(tradePage * TRADES_PER_PAGE, totalTrades)} of {totalTrades}
-                              </span>
-                              <Pagination page={tradePage} totalPages={totalPages} onPageChange={setTradePage} />
-                            </div>
-                          )}
-                        </>
-                      )
-                    })() : (
-                      <p className="text-center text-gray-500 py-6 text-sm">
-                        No trades were executed during this backtest. Try relaxing strategy rules or expanding dates.
-                      </p>
-                    )}
-                  </div>
+                  <TradesTab tradesData={tradesData} tradePage={tradePage} setTradePage={setTradePage} tradesPerPage={TRADES_PER_PAGE} />
                 </TabsContent>
 
                 <TabsContent value="comparison" className={`h-full w-full m-0 outline-none flex-col overflow-hidden ${activeResult.status === 'failed' ? 'hidden' : 'data-[state=active]:flex'}`}>
-                  {compareError && (
-                    <div className="shrink-0 mb-3 flex items-center gap-2 px-3 py-2 rounded-md bg-amber-500/10 border border-amber-500/25 text-amber-400 text-xs">
-                      <AlertTriangle className="size-3.5 shrink-0" />
-                      {compareError}
-                    </div>
-                  )}
-                  {comparisonIds.length < 2 ? (
-                    <Card>
-                      <CardContent className="py-16 text-center">
-                        <div className="flex flex-col items-center gap-3">
-                          <div className="size-12 rounded-full bg-gray-800 flex items-center justify-center">
-                            <Activity className="size-5 text-gray-600" />
-                          </div>
-                          <p className="text-gray-400 font-medium text-sm">Select runs to compare</p>
-                          <p className="text-gray-600 text-xs max-w-xs">
-                            Tick the checkbox on at least 2 completed runs in History to see a side-by-side breakdown here.
-                          </p>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ) : comparisonLoading ? (
-                    <Card className="h-full flex justify-center items-center py-32">
-                      <Loader2 className="size-8 animate-spin text-emerald-400" />
-                    </Card>
-                  ) : (
-                    <ComparisonTable results={comparisonResults} />
-                  )}
+                  <ComparisonTab
+                    compareError={compareError}
+                    comparisonIds={comparisonIds}
+                    comparisonLoading={comparisonLoading}
+                    comparisonResults={comparisonResults}
+                  />
                 </TabsContent>
               </div>
             </Tabs>

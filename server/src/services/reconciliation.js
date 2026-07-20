@@ -147,7 +147,9 @@ async function reconcileSymbolLocks() {
         const resumed = await _tryResumeSession(session, credsCache)
         if (resumed) {
           resumedIds.add(String(session._id))
-          await LiveSession.findByIdAndUpdate(session._id, { status: 'running' }).catch(() => {})
+          await LiveSession.findByIdAndUpdate(session._id, { status: 'running' }).catch((dbErr) => {
+            console.error(`[Startup] Failed to persist resumed status for session ${session._id}:`, dbErr.message)
+          })
           console.log(`[Startup] Resumed session ${session._id} from event log + exchange state (RESUME_SESSIONS_ON_RESTART)`)
         }
       }
@@ -226,7 +228,9 @@ async function reconcileSymbolLocks() {
         stoppedAt: new Date(),
         openPositions: [...stillOpen],
         positionDetails: {},
-      }).catch(() => {})
+      }).catch((dbErr) => {
+        console.error(`[Startup] Failed to persist final stopped state for session ${session._id}:`, dbErr.message)
+      })
 
       if (stillOpen.size > 0) {
         console.error(`[Startup] Session ${session._id}: ${stillOpen.size} symbol(s) failed to confirm-close, may still be open on Binance: ${[...stillOpen].join(', ')}`)
@@ -261,7 +265,9 @@ async function reconcileSymbolLocks() {
       const existingIds = new Set(existingSessions.map(s => String(s._id)))
       for (const [symbol, lock] of Object.entries(allLocks)) {
         if (lock.reason === 'bot' && lock.sessionId && !existingIds.has(lock.sessionId)) {
-          await releaseSymbolLock(symbol).catch(() => {})
+          await releaseSymbolLock(symbol).catch((lockErr) => {
+            console.error(`[Startup] Stale bot lock release failed for ${symbol} (session ${lock.sessionId}):`, lockErr.message)
+          })
           console.log(`[Startup] Released stale bot lock for ${symbol} (session ${lock.sessionId} deleted)`)
         }
       }
@@ -283,7 +289,9 @@ async function reconcileSymbolLocks() {
           if (parseFloat(pos.positionAmt) !== 0) {
             const existing = await getSymbolLock(pos.symbol)
             if (!existing) {
-              await lockSymbol(pos.symbol, 'manual').catch(() => {})
+              await lockSymbol(pos.symbol, 'manual').catch((lockErr) => {
+                console.error(`[Startup] Manual re-lock failed for ${pos.symbol} (user ${userId}):`, lockErr.message)
+              })
             }
           }
         }

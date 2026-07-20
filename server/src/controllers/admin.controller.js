@@ -1,6 +1,7 @@
 const User = require('../models/User')
 const ApiResponse = require('../utils/ApiResponse')
 const ApiError = require('../utils/ApiError')
+const { invalidateUserCache } = require('../middleware/auth.middleware')
 
 // GET /api/v1/admin/users — all users with their Algo Trading access status.
 // Global read (no userId scope): admin sees everyone. Normalises algoAccess to a
@@ -44,6 +45,10 @@ async function setUserAlgoAccess(req, res) {
     { _id: target._id },
     { $set: { 'algoAccess.status': status, 'algoAccess.decidedAt': new Date(), 'algoAccess.decidedBy': req.user.id } }
   )
+  // verifyJWT's short-TTL user cache (Plan 7 Step 7.3) must not delay this
+  // grant/revoke — invalidate immediately so the very next request re-reads
+  // from Mongo, preserving the existing "applies immediately" guarantee.
+  invalidateUserCache(String(target._id))
 
   res.json(ApiResponse.success({ id: target._id, algoAccess: status }))
 }

@@ -1,5 +1,6 @@
 /**
- * Plan 5 Step 5.5 (ENG-11): `computeSymbolStats` (`algo.controller.js`)
+ * Plan 5 Step 5.5 (ENG-11): `computeSymbolStats` (`algoSessionService.js`,
+ * moved here from `algo.controller.js` in Plan 7 Step 7.1's next slice)
  * aggregates via real MongoDB $sum/$toDecimal — Decimal128 exact-decimal
  * summation itself is a documented MongoDB server feature, not something
  * this test re-proves. What this test guards is the code around it: the
@@ -17,16 +18,19 @@
  * object exposing `.toString()`, exactly Mongoose's own return shape) is
  * the next-best hermetic check available in this environment.
  */
-// algo.controller.js transitively requires ../services/symbolLock ->
-// ../config/redis, which opens a real ioredis connection at module-load
-// time unless mocked (same open-handle-hangs-Jest fix as
-// symbolLock.test.js / reconciliation.test.js earlier this session).
+// algoSessionService.js requires ../services/symbolLock -> ../config/redis,
+// which opens a real ioredis connection at module-load time unless mocked
+// (same open-handle-hangs-Jest fix as symbolLock.test.js / reconciliation.test.js).
 jest.mock('../../config/redis', () => new (require('ioredis-mock'))())
-jest.mock('../../services/engineClient', () => ({ post: jest.fn(), get: jest.fn() }))
+jest.mock('../engineClient', () => ({ post: jest.fn(), get: jest.fn() }))
 jest.mock('../../models/TradeRecord', () => ({ aggregate: jest.fn() }))
+jest.mock('../../models/Settings', () => ({ findOne: jest.fn() }))
+jest.mock('../../models/LiveSession', () => ({
+  find: jest.fn(), countDocuments: jest.fn(), findById: jest.fn(), findByIdAndUpdate: jest.fn(),
+}))
 
 const TradeRecord = require('../../models/TradeRecord')
-const { computeSymbolStats } = require('../algo.controller')
+const { computeSymbolStats } = require('../algoSessionService')
 
 // Stand-in for a BSON Decimal128 as returned by mongoose's aggregate() —
 // the real object's only contract computeSymbolStats relies on is toString().

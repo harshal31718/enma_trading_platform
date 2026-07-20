@@ -21,7 +21,7 @@ const worker = new Worker('pbo', async (job) => {
       userId,
       config,
       configHash,
-    })
+    }, { timeout: engineClient.LONG_JOB_TIMEOUT_MS })
 
     await LabResult.findOneAndUpdate({ labId }, { status: 'completed' })
 

@@ -1,5 +1,4 @@
 const LiveSession = require('../models/LiveSession')
-const TradeRecord = require('../models/TradeRecord')
 const Strategy = require('../models/Strategy')
 const Settings = require('../models/Settings')
 const User = require('../models/User')
@@ -8,12 +7,16 @@ const engineClient = require('../services/engineClient')
 const { getTOP_SYMBOLS, getTIERED_SYMBOLS } = require('../constants/top_symbols')
 const ApiError = require('../utils/ApiError')
 const ApiResponse = require('../utils/ApiResponse')
-const { lockSymbol, releaseSymbolLock, getAllLockedSymbols, isSymbolFree, getSymbolLock } = require('../services/symbolLock')
+const { lockSymbol, releaseSymbolLock, getAllLockedSymbols, isSymbolFree, assertSymbolLockedByBotSession } = require('../services/symbolLock')
 const { getIO } = require('../config/socket')
-const { resolveModelParams, resolveStrategyRiskParams } = require('../utils/risk')
+const { resolveModelParams } = require('../utils/risk')
 const { allocateChaosSymbols } = require('../utils/chaosAllocator')
 const { dispatchWebhook } = require('../utils/webhook')
-const { validateCapitalValue, sumReservedCapital, checkCapitalAgainstBalance } = require('../utils/capitalGate')
+const { validateCapitalValue } = require('../utils/capitalGate')
+const {
+  resolveBinanceCredentials, checkCapitalOverCommit, checkConcurrentBotCap, buildRiskParamsCascade,
+  computeSymbolStats, processEngineStatsUpdate,
+} = require('../services/algoSessionService')
 
 // POST /api/v1/algo/sessions
 async function startSession(req, res, next) {
@@ -36,10 +39,7 @@ async function startSession(req, res, next) {
     if (!strategy) throw new ApiError(404, 'NOT_FOUND', 'Strategy not found')
 
     // Risk model: resolve per-symbol overrides over strategy overrides, symbol overrides, and saved global defaults.
-    const savedSettings = await Settings.findOne({ userId: req.user.id }).lean() || {}
-    const apiKey = savedSettings.encryptedApiKey ? decrypt(savedSettings.encryptedApiKey) : ''
-    const apiSecret = savedSettings.encryptedApiSecret ? decrypt(savedSettings.encryptedApiSecret) : ''
-    if (!apiKey || !apiSecret) throw new ApiError(400, 'NO_CREDENTIALS', 'Binance API keys not configured. Add them in Settings.')
+    const { savedSettings, apiKey, apiSecret } = await resolveBinanceCredentials(req.user.id)
 
     // Plan 22 Step 22.1 (B-11/B-12): over-commit vs the real wallet is
     // warn-and-confirm on testnet (DECISIONS.md #23) — reject once unless the
@@ -47,32 +47,14 @@ async function startSession(req, res, next) {
     // numbers. A failed/unknown balance fetch never blocks session start (the
     // engine-side `_fetch_available_balance` clamp is the backstop for that).
     if (!confirmOverCommit) {
-      const reservedCapital = sumReservedCapital(
-        await LiveSession.find(
-          { userId: req.user.id, status: { $in: ['starting', 'running', 'stopping'] } },
-          'capital'
-        ).lean()
-      )
-      let availableBalance = null
-      try {
-        const { data } = await engineClient.get('/trade/account', {
-          headers: { 'X-Binance-API-Key': apiKey, 'X-Binance-API-Secret': apiSecret, 'X-Binance-Mode': 'testnet' },
-        })
-        const parsed = Number(data?.data?.availableBalance)
-        if (Number.isFinite(parsed)) availableBalance = parsed
-      } catch (balanceErr) {
-        // Balance fetch failed — cannot make the over-commit call, don't guess.
-      }
-      const commitCheck = checkCapitalAgainstBalance({
-        requestedCapital: capitalCheck.value,
-        reservedCapital,
-        availableBalance,
+      const commitCheck = await checkCapitalOverCommit({
+        userId: req.user.id, requestedCapital: capitalCheck.value, apiKey, apiSecret,
       })
       if (commitCheck.checked && commitCheck.overCommit) {
         throw new ApiError(409, 'CAPITAL_OVER_COMMIT',
-          `Requested capital $${capitalCheck.value.toFixed(2)} plus $${reservedCapital.toFixed(2)} already ` +
+          `Requested capital $${capitalCheck.value.toFixed(2)} plus $${commitCheck.reservedCapital.toFixed(2)} already ` +
           `reserved by your other running sessions ($${commitCheck.totalCommitted.toFixed(2)} total) exceeds ` +
-          `your available testnet balance ($${availableBalance.toFixed(2)}). Resubmit with confirmOverCommit: true ` +
+          `your available testnet balance ($${commitCheck.availableBalance.toFixed(2)}). Resubmit with confirmOverCommit: true ` +
           `to proceed anyway.`)
       }
     }
@@ -84,25 +66,14 @@ async function startSession(req, res, next) {
     }
 
     const maxConcurrentBots = savedSettings.limits?.testnet?.maxConcurrentBots ?? 10
-    const runningCount = await LiveSession.countDocuments({
-      userId: req.user.id,
-      status: { $in: ['starting', 'running', 'stopping'] },
-    })
-    if (runningCount >= maxConcurrentBots) {
+    const { runningCount, atCap } = await checkConcurrentBotCap({ userId: req.user.id, maxConcurrentBots })
+    if (atCap) {
       throw new ApiError(409, 'BOT_LIMIT_REACHED',
         `Concurrent bot limit reached (${runningCount}/${maxConcurrentBots} running). Stop a bot before starting a new one.`)
     }
 
-    const riskParams = {}
-    for (const symbol of symbols) {
-      riskParams[symbol] = resolveStrategyRiskParams(strategy.name, symbol, savedSettings, {
-        ...riskOverride,
-        leverage: Number(leverage) || 1
-      })
-    }
-    riskParams.default = resolveStrategyRiskParams(strategy.name, null, savedSettings, {
-      ...riskOverride,
-      leverage: Number(leverage) || 1
+    const riskParams = buildRiskParamsCascade({
+      strategyName: strategy.name, symbols, savedSettings, riskOverride, leverage,
     })
 
     // 2. All symbols free
@@ -172,7 +143,11 @@ async function startSession(req, res, next) {
       })
     } catch (engineErr) {
       // Rollback on engine failure
-      for (const symbol of symbols) await releaseSymbolLock(symbol, String(session._id)).catch(() => { })
+      for (const symbol of symbols) {
+        await releaseSymbolLock(symbol, String(session._id)).catch((lockErr) => {
+          console.error(`[AlgoBot] Rollback lock release failed for ${symbol} (session ${session._id}):`, lockErr.message)
+        })
+      }
       await LiveSession.findByIdAndUpdate(session._id, {
         status: 'error',
         errorMessage: engineErr.message,
@@ -234,7 +209,9 @@ async function stopSession(req, res, next) {
           await engineClient.post('/trade/close-position', { symbol }, { headers }).catch((closeErr) => {
             console.log(`[AlgoBot] Note: No position closed or error for ${symbol}: ${closeErr.message}`)
           })
-          await releaseSymbolLock(symbol, String(session._id)).catch(() => { })
+          await releaseSymbolLock(symbol, String(session._id)).catch((lockErr) => {
+            console.error(`[AlgoBot] Fallback lock release failed for ${symbol} (session ${session._id}):`, lockErr.message)
+          })
         }
       } catch (fallbackErr) {
         console.error(`[AlgoBot] Fallback position closing/lock release failed:`, fallbackErr.message)
@@ -337,308 +314,11 @@ async function getSessionEquity(req, res, next) {
   }
 }
 
-// Re-derive per-symbol aggregates for a session from the tradeRecords
-// collection (the engine is the sole writer). Returns a { symbol: {...} } map.
-// Plan 5 Step 5.5 (ENG-11): sums via $toDecimal/Decimal128, not $toDouble —
-// a session can accumulate many trade records, and summing that many IEEE-754
-// doubles in one aggregation pass is the exact same compounding-float-error
-// shape the engine-side `add_money()` fix addresses, just executed by Mongo
-// instead of Python. Decimal128 sums exactly, with no term-count-dependent
-// drift. Converted back to plain JS numbers before returning/storing —
-// deliberately NOT stringified — every existing consumer (SessionCard.jsx's
-// `a + s.realisedPnl` reduce, `notional / leverage` margin calc) does real
-// numeric arithmetic on these fields and would silently break on a string
-// (JS `0 + "12.34"` concatenates instead of adding). This is a precision fix
-// at the aggregation boundary, not a type/contract change.
-async function computeSymbolStats(sessionId) {
-  const rows = await TradeRecord.aggregate([
-    { $match: { sessionId: String(sessionId) } },
-    { $sort: { exitTime: 1 } },
-    {
-      $group: {
-        _id: '$symbol',
-        trades: { $sum: 1 },
-        qty: { $sum: { $toDecimal: '$qty' } },
-        notional: { $sum: { $multiply: [{ $toDecimal: '$qty' }, { $toDecimal: '$entryPrice' }] } },
-        realisedPnl: { $sum: { $toDecimal: '$netPnl' } },
-        leverage: { $last: '$leverage' },
-      },
-    },
-  ])
-  const stats = {}
-  for (const r of rows) {
-    stats[r._id] = {
-      trades: r.trades,
-      qty: Number(r.qty.toString()),
-      notional: Number(r.notional.toString()),
-      realisedPnl: Number(r.realisedPnl.toString()),
-      leverage: r.leverage || null,
-    }
-  }
-  return stats
-}
-
 // PATCH /internal/algo/sessions/:id/stats (called by Engine)
 async function handleEngineStats(req, res, next) {
   try {
-    const { id } = req.params
-    const { pnl, openPositions, status, event, eventData, positionDetails, seq } = req.body
-
-    // Plan 5 Step 5.1 (SYS-2): reject a stale position mutation racing a
-    // newer one for the same symbol (e.g. a delayed/retried engine PATCH
-    // arriving after a later one already landed). Scoped narrowly to the
-    // symbol-mutating position events that carry a `seq` — other fields
-    // (status, generic pnl/log updates) are never guarded by this check.
-    const seqSymbol = eventData && eventData.symbol
-    if (typeof seq === 'number' && seqSymbol && ['position:open', 'position:close', 'position:adjust'].includes(event)) {
-      const existing = await LiveSession.findById(id).select('lastSeqBySymbol').lean()
-      const lastSeq = existing && existing.lastSeqBySymbol ? existing.lastSeqBySymbol[seqSymbol] : undefined
-      if (typeof lastSeq === 'number' && seq <= lastSeq) {
-        console.warn(`[AlgoBot] Rejected stale stats update for session ${id} symbol ${seqSymbol}: seq=${seq} <= lastSeq=${lastSeq}`)
-        return res.json({ success: true, rejected: 'stale_seq' })
-      }
-    }
-
-    const updateData = {}
-    if (typeof seq === 'number' && seqSymbol) updateData[`lastSeqBySymbol.${seqSymbol}`] = seq
-    if (pnl !== undefined) updateData.pnl = String(pnl)
-    if (openPositions !== undefined) updateData.openPositions = openPositions
-    if (status && ['running', 'stopping', 'stopped', 'error'].includes(status)) {
-      updateData.status = status
-      if (status === 'stopped') updateData.stoppedAt = new Date()
-      if (status === 'error' && req.body.errorMessage) updateData.errorMessage = req.body.errorMessage
-    }
-    // Store exchange-truth position details from engine reconciliation
-    // (F-001/F-023) — each symbol's side, qty, price, mark_price,
-    // unrealized_pnl. Used by the UI as single source of truth.
-    if (positionDetails && typeof positionDetails === 'object') {
-      const pd = {}
-      for (const [sym, info] of Object.entries(positionDetails)) {
-        pd[sym] = info
-      }
-      updateData.positionDetails = pd
-    }
-
-    const session = await LiveSession.findByIdAndUpdate(id, updateData, { new: true }).lean()
-
-    if (!session) {
-      return res.json({ success: true })
-    }
-
-    // Emit Socket.IO events
-    try {
-      const io = getIO()
-      const userRoom = `user:${String(session.userId)}`
-
-      // Always emit session update
-      io.to(userRoom).emit('algo:session:update', {
-        sessionId: id,
-        status: session.status,
-        pnl: session.pnl,
-        openPositions: session.openPositions,
-      })
-
-      if (event === 'position:open' && eventData) {
-        io.to(userRoom).emit('algo:position:open', { sessionId: id, ...eventData })
-        const openLog = {
-          sessionId: id,
-          timestamp: new Date().toISOString(),
-          type: eventData.side === 'long' ? 'long' : 'short',
-          message: `${eventData.side.toUpperCase()} ${eventData.symbol} · qty ${eventData.qty} · entry $${eventData.price}`
-        }
-        io.to(userRoom).emit('algo:session:log', openLog)
-        await LiveSession.findByIdAndUpdate(id, {
-          $push: { logs: { $each: [{ type: openLog.type, message: openLog.message }], $slice: -100 } },
-          // Persist the open-position snapshot with exchange-truth PnL data
-          // (F-023/A-013): mark_price and unrealized_pnl come from Binance.
-          $set: {
-            [`positionDetails.${eventData.symbol}`]: {
-              side: eventData.side,
-              qty: eventData.qty,
-              price: eventData.price,
-              leverage: eventData.leverage,
-              mark_price: eventData.mark_price || null,
-              unrealized_pnl: eventData.unrealized_pnl || null,
-              price_missing: eventData.price_missing || false,
-            },
-          },
-        }).catch(() => { })
-
-        // Plan 14 / F3: fire-and-forget, never awaited/blocking.
-        dispatchWebhook(String(session.userId), 'entry_fill', {
-          sessionId: id,
-          strategy: session.strategyName,
-          symbol: eventData.symbol,
-          side: eventData.side,
-          qty: eventData.qty,
-          entryPrice: eventData.price,
-          leverage: eventData.leverage,
-        })
-      }
-
-      if (event === 'position:close' && eventData) {
-        io.to(userRoom).emit('algo:position:close', { sessionId: id, ...eventData })
-
-        const isPositive = parseFloat(eventData.pnl) >= 0
-        const closeLog = {
-          sessionId: id,
-          timestamp: new Date().toISOString(),
-          type: 'closed',
-          message: `Closed ${eventData.symbol} · PnL ${isPositive ? '+' : ''}$${eventData.pnl}`
-        }
-        io.to(userRoom).emit('algo:session:log', closeLog)
-        await LiveSession.findByIdAndUpdate(id, {
-          $push: { logs: { $each: [{ type: closeLog.type, message: closeLog.message }], $slice: -100 } },
-          // Clear the persisted snapshot — the position is no longer open.
-          $unset: { [`positionDetails.${eventData.symbol}`]: '' },
-        }).catch(() => { })
-
-        // Plan 14 / F3: fire-and-forget, never awaited/blocking. `session`
-        // here is the pre-`$unset` snapshot fetched above (a plain JS object,
-        // unaffected by the DB write that just ran), so positionDetails for
-        // this symbol is still the entry-side data we need for the payload.
-        const closedPos = session.positionDetails && session.positionDetails[eventData.symbol]
-        const exitWebhookPayload = {
-          sessionId: id,
-          strategy: session.strategyName,
-          symbol: eventData.symbol,
-          side: closedPos ? closedPos.side : undefined,
-          qty: closedPos ? closedPos.qty : undefined,
-          entryPrice: closedPos ? closedPos.price : undefined,
-          exitPrice: eventData.exitPrice,
-          pnl: eventData.pnl,
-          exitReason: eventData.exitReason,
-        }
-        dispatchWebhook(String(session.userId), 'exit_fill', exitWebhookPayload)
-        if (eventData.exitReason === 'liquidation') {
-          dispatchWebhook(String(session.userId), 'liquidation', exitWebhookPayload)
-        }
-
-        // Push to trade history
-        const currentBalance = parseFloat(session.capital) + parseFloat(session.pnl || '0')
-        await LiveSession.findByIdAndUpdate(id, {
-          $inc: { totalTrades: 1 },
-          $push: {
-            tradeHistory: {
-              timestamp: new Date(),
-              balance: currentBalance.toString()
-            }
-          }
-        })
-
-        // Re-derive per-symbol aggregates from the now-recorded trade and push
-        // them to clients so the Open Positions panel updates live.
-        try {
-          const symbolStats = await computeSymbolStats(id)
-          await LiveSession.findByIdAndUpdate(id, { symbolStats })
-          io.to(userRoom).emit('algo:session:update', { sessionId: id, symbolStats })
-        } catch (statsErr) {
-          console.error('[AlgoBot] symbolStats aggregation failed:', statsErr.message)
-        }
-
-        // NOTE: Symbol lock is intentionally NOT released here.
-        // The lock persists for the entire bot session to allow multiple trades on the same symbol.
-        // Lock is released only when the session stops or encounters an error.
-      }
-
-      if (status === 'error') {
-        const errMsg = req.body.errorMessage || session?.errorMessage || 'Unknown strategy error'
-        io.to(userRoom).emit('algo:session:log', {
-          sessionId: id,
-          timestamp: new Date().toISOString(),
-          type: 'error',
-          message: errMsg
-        })
-        // Plan 14 / F3: fire-and-forget, never awaited/blocking.
-        dispatchWebhook(String(session.userId), 'session_error', {
-          sessionId: id,
-          strategy: session.strategyName,
-          error: errMsg,
-        })
-        // Release all symbol locks for errored sessions
-        if (session?.symbols) {
-          for (const sym of session.symbols) {
-            await releaseSymbolLock(sym, id).catch(() => { })
-          }
-        }
-      }
-
-      if (event === 'log' && eventData) {
-        const logEntry = {
-          sessionId: id,
-          timestamp: new Date().toISOString(),
-          type: eventData.type || 'info',
-          message: eventData.message,
-        }
-        io.to(userRoom).emit('algo:session:log', logEntry)
-        await LiveSession.findByIdAndUpdate(id, {
-          $push: { logs: { $each: [{ type: logEntry.type, message: logEntry.message }], $slice: -100 } }
-        }).catch(() => { })
-      }
-
-      if (event === 'risk_breach' && eventData) {
-        // Plan 22 Step 22.1: Session Risk Governor breach — engine already
-        // decided the new trading_state (per DECISIONS.md #23's
-        // breach_action config) and, if applicable, auto-flattened. This
-        // block just persists/broadcasts it, mirroring setTradingState's
-        // shape so the UI's existing tradingState handling picks it up
-        // without any new client-side code.
-        const newState = ['active', 'reducing', 'halted'].includes(eventData.newState)
-          ? eventData.newState
-          : 'reducing'
-        await LiveSession.findByIdAndUpdate(id, { tradingState: newState }).catch(() => { })
-        io.to(userRoom).emit('algo:session:update', { sessionId: id, tradingState: newState })
-        const breachLog = {
-          sessionId: id,
-          timestamp: new Date().toISOString(),
-          type: 'error',
-          message: `Risk governor breach (${eventData.checkName}): ${eventData.reason} — trading state -> ${newState}`,
-        }
-        io.to(userRoom).emit('algo:session:log', breachLog)
-        await LiveSession.findByIdAndUpdate(id, {
-          $push: { logs: { $each: [{ type: breachLog.type, message: breachLog.message }], $slice: -100 } }
-        }).catch(() => { })
-
-        // Plan 14 / F3: fire-and-forget, never awaited/blocking.
-        dispatchWebhook(String(session.userId), 'risk_breach', {
-          sessionId: id,
-          strategy: session.strategyName,
-          checkName: eventData.checkName,
-          reason: eventData.reason,
-          newState,
-        })
-      }
-
-      if (event === 'stopped') {
-        // Plan 14 / F3: fire-and-forget, never awaited/blocking.
-        dispatchWebhook(String(session.userId), 'session_stop', {
-          sessionId: id,
-          strategy: session.strategyName,
-        })
-
-        // Final per-symbol aggregation — captures positions force-closed during
-        // the stop sequence (which emit no position:close event).
-        try {
-          const symbolStats = await computeSymbolStats(id)
-          await LiveSession.findByIdAndUpdate(id, { symbolStats })
-          io.to(userRoom).emit('algo:session:update', { sessionId: id, symbolStats })
-        } catch (statsErr) {
-          console.error('[AlgoBot] symbolStats aggregation (stop) failed:', statsErr.message)
-        }
-
-        // Release all remaining locks for this session
-        const session2 = await LiveSession.findById(id).lean()
-        if (session2?.symbols) {
-          for (const sym of session2.symbols) {
-            await releaseSymbolLock(sym, id).catch(() => { })
-          }
-        }
-      }
-    } catch (socketErr) {
-      console.error('[AlgoBot] Socket.IO emit error:', socketErr.message)
-    }
-
-    res.json({ success: true })
+    const result = await processEngineStatsUpdate({ id: req.params.id, body: req.body, io: getIO() })
+    res.json(result)
   } catch (err) {
     next(err)
   }
@@ -814,10 +494,7 @@ const CHAOS_SUPPORTED_TIMEFRAMES = ['1m','3m','5m','15m','30m','1h','2h','4h','6
 async function startChaos(req, res, next) {
   try {
     // ── 1. Load settings & known strategies ─────────────────────────────────
-    const savedSettings = await Settings.findOne({ userId: req.user.id }).lean() || {}
-    const chaosApiKey = savedSettings.encryptedApiKey ? decrypt(savedSettings.encryptedApiKey) : ''
-    const chaosApiSecret = savedSettings.encryptedApiSecret ? decrypt(savedSettings.encryptedApiSecret) : ''
-    if (!chaosApiKey || !chaosApiSecret) throw new ApiError(400, 'NO_CREDENTIALS', 'Binance API keys not configured. Add them in Settings.')
+    const { savedSettings, apiKey: chaosApiKey, apiSecret: chaosApiSecret } = await resolveBinanceCredentials(req.user.id)
     const feeRate = savedSettings.takerFee ?? 0.0005
     const riskParams = resolveModelParams(savedSettings, null)
 
@@ -884,12 +561,10 @@ async function startChaos(req, res, next) {
     // BEFORE manualPicks is built and allocateChaosSymbols() is called, so symbols reserved
     // for a to-be-skipped strategy are never removed from the pool the surviving strategies
     // round-robin over.
-    const runningCount = await LiveSession.countDocuments({
-      userId: req.user.id,
-      status: { $in: ['starting', 'running', 'stopping'] },
+    const { runningCount, availableSlots, atCap } = await checkConcurrentBotCap({
+      userId: req.user.id, maxConcurrentBots,
     })
-    const availableSlots = maxConcurrentBots - runningCount
-    if (availableSlots <= 0) {
+    if (atCap) {
       throw new ApiError(409, 'BOT_LIMIT_REACHED',
         `Concurrent bot limit reached (${runningCount}/${maxConcurrentBots} running). Stop a bot before starting Chaos Mode.`)
     }
@@ -908,27 +583,13 @@ async function startChaos(req, res, next) {
     }
     if (!body.confirmOverCommit) {
       const requestedCapital = chaosCapitalCheck.value * activeNames.length
-      const reservedCapital = sumReservedCapital(
-        await LiveSession.find(
-          { userId: req.user.id, status: { $in: ['starting', 'running', 'stopping'] } },
-          'capital'
-        ).lean()
-      )
-      let availableBalance = null
-      try {
-        const { data } = await engineClient.get('/trade/account', {
-          headers: { 'X-Binance-API-Key': chaosApiKey, 'X-Binance-API-Secret': chaosApiSecret, 'X-Binance-Mode': 'testnet' },
-        })
-        const parsed = Number(data?.data?.availableBalance)
-        if (Number.isFinite(parsed)) availableBalance = parsed
-      } catch (balanceErr) {
-        // Balance fetch failed — cannot make the over-commit call, don't guess.
-      }
-      const commitCheck = checkCapitalAgainstBalance({ requestedCapital, reservedCapital, availableBalance })
+      const commitCheck = await checkCapitalOverCommit({
+        userId: req.user.id, requestedCapital, apiKey: chaosApiKey, apiSecret: chaosApiSecret,
+      })
       if (commitCheck.checked && commitCheck.overCommit) {
         throw new ApiError(409, 'CAPITAL_OVER_COMMIT',
           `Chaos would commit $${chaosCapitalCheck.value.toFixed(2)} x ${activeNames.length} strategies = ` +
-          `$${requestedCapital.toFixed(2)}, plus $${reservedCapital.toFixed(2)} already reserved by your other ` +
+          `$${requestedCapital.toFixed(2)}, plus $${commitCheck.reservedCapital.toFixed(2)} already reserved by your other ` +
           `running sessions ($${commitCheck.totalCommitted.toFixed(2)} total) — exceeds your available testnet ` +
           `balance ($${availableBalance.toFixed(2)}). Resubmit with confirmOverCommit: true to proceed anyway.`)
       }
@@ -1005,16 +666,8 @@ async function startChaos(req, res, next) {
       }
 
       // Resolve risk parameters for this specific chaos strategy and symbols
-      const resolvedRisk = {}
-      for (const sym of symbols) {
-        resolvedRisk[sym] = resolveStrategyRiskParams(stratName, sym, savedSettings, {
-          ...riskOverride,
-          leverage: Number(leverage) || 1
-        })
-      }
-      resolvedRisk.default = resolveStrategyRiskParams(stratName, null, savedSettings, {
-        ...riskOverride,
-        leverage: Number(leverage) || 1
+      const resolvedRisk = buildRiskParamsCascade({
+        strategyName: stratName, symbols, savedSettings, riskOverride, leverage,
       })
 
       // b. Create session in MongoDB
@@ -1047,7 +700,11 @@ async function startChaos(req, res, next) {
           lockedSoFar.push(sym)
         }
       } catch (lockErr) {
-        for (const s of lockedSoFar) await releaseSymbolLock(s, String(session._id)).catch(() => {})
+        for (const s of lockedSoFar) {
+          await releaseSymbolLock(s, String(session._id)).catch((rollbackErr) => {
+            console.error(`[AlgoBot] Chaos rollback lock release failed for ${s} (session ${session._id}):`, rollbackErr.message)
+          })
+        }
         await LiveSession.findByIdAndDelete(session._id)
         errors.push({ strategy: stratName, error: `Symbol lock failed: ${lockErr.message}` })
         lockFailed = true
@@ -1073,7 +730,11 @@ async function startChaos(req, res, next) {
         await LiveSession.findByIdAndUpdate(session._id, { status: 'running' })
         created.push({ strategy: stratName, sessionId: String(session._id), symbols, status: 'running' })
       } catch (engineErr) {
-        for (const sym of symbols) await releaseSymbolLock(sym, String(session._id)).catch(() => {})
+        for (const sym of symbols) {
+          await releaseSymbolLock(sym, String(session._id)).catch((rollbackErr) => {
+            console.error(`[AlgoBot] Chaos engine-failure lock release failed for ${sym} (session ${session._id}):`, rollbackErr.message)
+          })
+        }
         await LiveSession.findByIdAndUpdate(session._id, { status: 'error', errorMessage: engineErr.message })
         errors.push({ strategy: stratName, error: `Engine start failed: ${engineErr.message}` })
       }
@@ -1192,10 +853,7 @@ async function handleAlgoPlaceOrder(req, res, next) {
   try {
     const { symbol, side, type, quantity, price, stopLoss, takeProfit } = req.body
 
-    const lock = await getSymbolLock(symbol)
-    if (!lock || lock.reason !== 'bot' || lock.sessionId !== req.params.id) {
-      throw new ApiError(409, 'SYMBOL_LOCKED', `Symbol ${symbol} is not locked by this bot session.`)
-    }
+    await assertSymbolLockedByBotSession(symbol, req.params.id)
 
     const headers = await _getBinanceHeaders(req.params.id)
 
@@ -1220,10 +878,7 @@ async function handleAlgoClosePosition(req, res, next) {
   try {
     const { symbol } = req.body
 
-    const lock = await getSymbolLock(symbol)
-    if (!lock || lock.reason !== 'bot' || lock.sessionId !== req.params.id) {
-      throw new ApiError(409, 'SYMBOL_LOCKED', `Symbol ${symbol} is not locked by this bot session.`)
-    }
+    await assertSymbolLockedByBotSession(symbol, req.params.id)
 
     const headers = await _getBinanceHeaders(req.params.id)
 
@@ -1243,10 +898,7 @@ async function handleAlgoSetLeverage(req, res, next) {
   try {
     const { symbol, leverage } = req.body
 
-    const lock = await getSymbolLock(symbol)
-    if (!lock || lock.reason !== 'bot' || lock.sessionId !== req.params.id) {
-      throw new ApiError(409, 'SYMBOL_LOCKED', `Symbol ${symbol} is not locked by this bot session.`)
-    }
+    await assertSymbolLockedByBotSession(symbol, req.params.id)
 
     const headers = await _getBinanceHeaders(req.params.id)
 
