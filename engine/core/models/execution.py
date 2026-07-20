@@ -4,11 +4,19 @@ route() is the primary contract (Narang strict boundary: strategies never write
 buy/sell/stop_loss/take_profit/_pending_flip/_close_at_open directly).
 
 Paths in route():
-  1. flat  → flat:          no-op
-  2. hold  → flat (close):  _close_at_open = True
-  3. flat  → enter:         write buy/sell + bracket
-  4. hold  → flip:          flip_position()
-  5. hold  → maintain:      refresh bracket from constraints (handles trailing)
+  1. flat  → flat:          no-op                         (returns None)
+  2. hold  → flat (close):  _close_at_open = True          (returns OrderPlan, intent="exit")
+  3. flat  → enter:         write buy/sell + bracket        (returns OrderPlan, intent="enter")
+  4. hold  → flip:          flip_position()                 (returns OrderPlan, intent="flip")
+  5. hold  → maintain:      refresh bracket from constraints (returns OrderPlan, intent="maintain")
+
+As of Plan 6 Step 6.3 phase (a), every path except the true no-op (Path 1)
+returns a typed OrderPlan describing the event, in addition to the mutable
+attribute writes below — the returned plan is documentation/typed-contract
+completeness for now, not (yet) the execution machinery's sole input.
+Callers that only care about entries (e.g. exec_algo slicing) must check
+`plan.intent == "enter"` rather than `plan is not None` — see kernel.py's
+evaluate_and_route().
 
 DCA scale-in/out (A-014) is handled externally by evaluate_and_route():
 the strategy's adjust_trade_position() hook sets qty_to_adjust on the
@@ -61,6 +69,10 @@ class DefaultExecution(ExecutionModel):
         This is the sole place that assigns s.buy, s.sell, s.stop_loss,
         s.take_profit, s._pending_flip, or s._close_at_open. Strategies and
         models must NOT write these fields.
+
+        Returns a typed OrderPlan for every path except the true flat->flat
+        no-op (Path 1) — see the module docstring's path table for each
+        path's `intent` value.
         """
         desired    = target.qty
         is_holding = current_holding != 0.0
@@ -73,7 +85,16 @@ class DefaultExecution(ExecutionModel):
         # Path 2: holding → flat (guaranteed next-open close; see BUG-03)
         if desired == 0.0 and is_holding:
             s._close_at_open = True
-            return None
+            close_direction = 1 if current_holding > 0 else -1
+            return OrderPlan(
+                direction=close_direction,
+                qty=abs(current_holding),
+                entry_price=s.price,
+                stop_loss=s.stop_loss[1]   if s.stop_loss   else None,
+                take_profit=s.take_profit[1] if s.take_profit else None,
+                order_type=getattr(s, "order_type", "market"),
+                intent="exit",
+            )
 
         # Path 5: maintain bracket (same direction, holding)
         if is_holding and same_sign:
@@ -82,7 +103,15 @@ class DefaultExecution(ExecutionModel):
                     s.stop_loss = s.stop_loss[0], constraints.stop_price
                 if constraints.take_profit_price is not None and s.take_profit is not None:
                     s.take_profit = s.take_profit[0], constraints.take_profit_price
-            return None
+            return OrderPlan(
+                direction=1 if current_holding > 0 else -1,
+                qty=abs(current_holding),
+                entry_price=s.price,
+                stop_loss=s.stop_loss[1]   if s.stop_loss   else None,
+                take_profit=s.take_profit[1] if s.take_profit else None,
+                order_type=getattr(s, "order_type", "market"),
+                intent="maintain",
+            )
 
         sl  = constraints.stop_price        if constraints else None
         tp  = constraints.take_profit_price if constraints else None
@@ -92,7 +121,15 @@ class DefaultExecution(ExecutionModel):
         # Path 4: flip (holding, opposite direction)
         if is_holding and not same_sign:
             s.flip_position(qty, stop_loss=sl, take_profit=tp)
-            return None
+            return OrderPlan(
+                direction=direction,
+                qty=qty,
+                entry_price=s.price,
+                stop_loss=sl,
+                take_profit=tp,
+                order_type=getattr(s, "order_type", "market"),
+                intent="flip",
+            )
 
         # Path 3: flat → enter
         if desired > 0:

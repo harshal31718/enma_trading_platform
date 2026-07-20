@@ -464,7 +464,7 @@ class ExecutionKernel:
             # QNT-2: closes and flips are never sliced (the algos' own contract) —
             # snapshot them before the clear below and restore afterward, otherwise
             # DefaultExecution.route()'s close/flip intent (encoded on these two
-            # attributes, plan == None) is erased and never re-created.
+            # attributes) is erased and never re-created.
             _snapshot_close_at_open = strategy._close_at_open
             _snapshot_pending_flip = strategy._pending_flip
 
@@ -474,7 +474,13 @@ class ExecutionKernel:
             strategy._pending_flip = None
             strategy._close_at_open = False
 
-            if plan is not None:
+            # Plan 6 Step 6.3 phase (a): route() now returns a typed OrderPlan for
+            # every path (exit/flip/maintain, not just enter), so "plan is not
+            # None" alone no longer means "this is an entry to slice" — exec_algo
+            # was only ever built/tested for slicing entries (QNT-2's contract
+            # above). Non-entry plans fall through to the same elif/else branch
+            # they used to hit when route() returned None for them.
+            if plan is not None and plan.intent == "enter":
                 plan = self.exec_algo.process_order_plan(plan)
             elif self.exec_algo.is_active:
                 plan = self.exec_algo.step(strategy.price, candle[5])
@@ -545,7 +551,12 @@ class ExecutionKernel:
                             high_t=candle[3], low_t=candle[4],
                         )
 
-            if strategy.position is None and plan is not None:
+            # plan.intent == "enter" is structurally implied by
+            # `strategy.position is None` already (route()'s exit/flip/maintain
+            # paths all require is_holding=True), but checked explicitly here too
+            # (Plan 6 Step 6.3 phase (a)) since route() now returns a non-None
+            # OrderPlan for those paths as well.
+            if strategy.position is None and plan is not None and plan.intent == "enter":
                 await self.adapter.execute_entry(
                     strategy=strategy,
                     symbol=symbol,

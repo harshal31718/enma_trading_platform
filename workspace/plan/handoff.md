@@ -7,6 +7,66 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
+## 2026-07-20 (later same day) — Plan 6 Step 6.3 phase (a): code written, verification BLOCKED — needs Docker, run these commands next
+
+**Goal:** the user picked up this session after hitting CLI session limits and asked to continue
+from where the prior session left off. Prior session's last state (see the two entries below):
+6.1/6.2/6.4/6.6 shipped; 6.3's target design authorized (DECISIONS.md #28) but implementation
+deliberately phased into 4 sub-steps, none started. First action this session: committed ~40 files
+of prior-session work that had been sitting uncommitted since `6245b1c` (now `3bdd077` on `dev`) —
+the mounted repo's `.git` directory has a recurring FUSE quirk where git can't unlink lock files it
+creates (`index.lock`/`HEAD.lock`); worked around it the same way `.git/`'s existing pile of
+`.stale`/`.dead` files shows prior sessions did — `mv` the lock aside with a timestamp suffix
+instead of `rm`, then retry the git command. Expect to hit this again next session; same fix works.
+
+**Done — Step 6.3 phase (a) only (of the 4-phase plan in DECISIONS.md #28 / the prior 6.3 entries
+below): `route()` returns a complete OrderPlan for all 5 paths + kernel.py's 2 gate sites updated +
+exec_algo audit.** `DefaultExecution.route()` (`core/models/execution.py`) now returns a typed
+`OrderPlan` for Paths 2/4/5 (close/flip/maintain) in addition to Path 3 (enter) — purely additive,
+every existing mutable-attribute write (`s._close_at_open = True`, `s.flip_position()`, the Path 5
+stop/take-profit tightening) is untouched. New `intent` values `"exit"`/`"flip"`/`"maintain"` added
+to `OrderPlan`'s documented enum (`core/models/base.py`) alongside `"enter"`/`"add"`/`"reduce"`.
+`kernel.py`'s two `if plan is not None:` gates — the exec_algo re-routing gate and the live-entry
+gate in `evaluate_and_route()` — now explicitly check `plan.intent == "enter"`, because before this
+phase `plan is not None` WAS the entry signal (route() only returned non-`None` for Path 3); left
+unguarded, an exec_algo would now try to slice exits/flips, which it was never built or tested for.
+Audited `exec_algo.py`'s `TWAPAlgorithm.process_order_plan()` — its own internal close/flip guard
+is now provably unreachable (kernel clears those attributes before calling in, and the new intent
+gate stops non-entry plans from reaching the call at all); left in place, documented as defensive.
+Checked before writing: grepped all test files calling `.route(` directly — none assert `route()`
+returns `None` for Paths 2/4/5, so this shouldn't be a test-breaking change, but that's inference,
+not verification.
+
+**NOT done — golden-master/pytest verification (Rule C, mandatory for this class of change).** This
+session has no Docker access (the shell tool's sandbox has no `docker` binary, no TA-Lib — checked
+before concluding this, not assumed). **Next thing to do, before anything else touches Plan 6**: run
+in a real terminal with Docker access —
+```
+docker exec enma_trading_platform-engine-1 python engine/scripts/golden_master.py --out /tmp/before_6.3a.json
+# (if a `before` baseline from this exact working tree doesn't already exist — check first)
+docker exec enma_trading_platform-engine-1 pytest -q
+docker exec enma_trading_platform-engine-1 python engine/scripts/golden_master.py --out /tmp/after_6.3a.json
+diff <(python -m json.tool /tmp/before_6.3a.json) <(python -m json.tool /tmp/after_6.3a.json)
+```
+Expect pytest 647/647 unchanged and the golden-master diff empty (byte-identical) — this phase
+changes what `route()` **returns**, never what the mutable attributes end up holding, so backtest
+output should be untouched. If either check fails, do NOT proceed to phase (b) — the phase (a)
+design itself needs re-examination.
+
+**Files changed:** `engine/core/models/execution.py` (route(), all 3 non-enter paths + docstrings),
+`engine/core/models/base.py` (`OrderPlan.intent` docstring), `engine/core/kernel.py` (2 gate sites
++ comments), `engine/core/models/exec_algo.py` (comment only, no logic change). Docs:
+`6_engine-decomposition-and-exchange-abstraction.md` (Step 6.3 section), `0_tracker.md` (Plan 6
+row), this file.
+
+**Open questions:** none design-wise — phase (a)'s design is settled per DECISIONS.md #28. The only
+open item is the verification run above. Once that's green, phase (b) is next: `LiveAdapter`/
+`OrderRouter` (`core/live_bot_manager.py`, Step 6.1's `order_router.py`) gain explicit SL/TP
+parameters sourced from `OrderPlan` instead of reading `strategy.stop_loss`/`take_profit` directly —
+verify against all 19+ existing `LiveAdapter` tests. Do not attempt (b) in the same pass as
+re-verifying (a) — each phase gets its own golden-master/pytest confirmation per DECISIONS.md #28.
+
+---
 ## 2026-07-20 — Plan 6 Step 6.6 SHIPPED FOR REAL — engine_alias import hook replaces the symlink hack, verified via a real image rebuild + container restart
 
 **Goal:** user authorized (via AskUserQuestion) a real container rebuild to close out Step 6.6,
@@ -107,50 +167,4 @@ yes, this needs a `DECISIONS.md` entry and is likely its own multi-session effor
 pass. **Plan 6 overall status**: 6.1/6.2/6.4 shipped; 6.3 scoped-but-gated on a user decision; 6.5
 needs Node-side consumer code; 6.6 scoped-but-gated on a container-rebuild sign-off. Nothing left
 in Plan 6 is actionable without either the user's input or cross-service work.
-
----
-## 2026-07-20 — Plan 6 Step 6.4: kernel `is_live` parameter-threading killed (deliberately narrower than full timing unification)
-
-**Goal:** user picked kernel `is_live` removal (over 6.3's typed contract) as the next Plan 6 item.
-This is the ONE piece of Plan 6 touching code shared by both the golden-master-protected backtest
-path and the live path — treated with more caution than every other change this session.
-
-**Design:** `ExecutionAdapter` (`core/kernel.py`) gained an abstract `is_live: bool` property.
-`check_exits()`/`evaluate_and_route()` no longer take `is_live` as a parameter — each method reads
-`self.adapter.is_live` once into a local var instead, and every existing internal `if is_live:`
-check downstream is unchanged. `LiveAdapter.is_live` → `True`, `BacktestAdapter.is_live` → `False`.
-This kills the real risk (a caller passing the WRONG `is_live` for the adapter it's driving —
-structurally impossible now) without touching WHAT each branch does or WHEN it runs.
-
-**Deliberately NOT attempted**: a full redesign where the kernel calls one polymorphic method and
-each adapter owns its own execution-timing model (backtest defers to `execute_pending()` on the
-next candle via strategy attributes; live executes inline). Investigated first: confirmed via
-`backtest_runner.py`'s runner loop that `execute_pending → check_exits → evaluate_and_route` runs
-in that exact order every candle, and live never calls `execute_pending` at all. Backtest's
-deferral isn't adapter machinery today — it's `strategy.buy`/`sell`/`_pending_flip`/
-`_close_at_open`/`qty_to_adjust` attributes the runner loop's NEXT iteration reads. Moving that
-into the adapters means giving `BacktestAdapter` authority over candle-loop advancement it doesn't
-have — a materially bigger structural change needing its own dedicated design pass, not something
-to gamble on the no-lookahead invariant for in one session. This is a legitimate, deliberately
-scoped partial result, not an incomplete one — see the plan file's Step 6.4 section for the full
-reasoning.
-
-**Verified:** engine pytest 647/647 unchanged (pure refactor — 4 test files' `ExecutionAdapter`
-subclasses gained the `is_live` property, call sites stopped passing `is_live=`, zero new tests
-needed since no behavior changed). Golden-master byte-identical (`before_kernel_is_live.json` vs
-`after_kernel_is_live.json`, 5/5 strategies) — the one change this session that actually touches
-the golden-master-protected path. Container `/health` 200; `core.kernel`/`core.live_bot_manager`/
-`services.backtest_runner` import cleanly.
-
-**Files changed:** `engine/core/kernel.py`, `engine/core/live_bot_manager.py`,
-`engine/services/backtest_runner.py`; `engine/tests/test_entry_candle_exits.py`,
-`test_armed_legs_wick_check_skip.py`, `test_intrabar_detail_resolution.py`,
-`test_exec_algo_slicing.py`. Docs: `6_engine-decomposition-and-exchange-abstraction.md` (Step 6.4
-section), `engine/CLAUDE.md` (`kernel.py` folder-structure entry), `0_tracker.md` (Plan 6 row),
-this file.
-
-**Open questions:** none blocking. The full timing-model unification described above remains
-scoped-but-not-started if ever pursued — needs its own dedicated design pass. Remaining Plan 6
-scope unchanged otherwise: Step 6.5's Redis-stream channel (cross-service, needs Node work), Steps
-6.3/6.6 not started.
 

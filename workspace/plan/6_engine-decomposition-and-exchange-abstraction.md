@@ -330,6 +330,30 @@ not the risk/decision logic living alongside it in the same methods, actually mo
     `LiveAdapter` tests; (c) only then does F10's kernel-write become removable; (d) the wider
     mutable-attribute-read cleanup across the ~48-file surface the first pass sized. Each phase
     independently golden-master-verified — do not attempt (a)+(b)+(c) as one change.
+  - **Phase (a) implemented 2026-07-20 — code written, golden-master/pytest verification NOT YET
+    RUN (this session had no Docker access; needs the user to run it — see handoff.md).**
+    `DefaultExecution.route()` (`core/models/execution.py`) now returns a typed `OrderPlan` for
+    Paths 2/4/5 (close/flip/maintain), not just Path 3 (enter) — additive only, every existing
+    mutable-attribute write (`s._close_at_open`, `s.flip_position()`, `s.stop_loss`/`take_profit`
+    tightening) is unchanged. New `intent` values `"exit"`/`"flip"`/`"maintain"` added to
+    `OrderPlan`'s documented enum (`core/models/base.py`) alongside the existing `"enter"`/`"add"`/
+    `"reduce"`. `kernel.py`'s two `if plan is not None:` gates (the exec_algo re-routing gate at
+    `evaluate_and_route()` line ~477, and the live-entry gate at line ~548) now explicitly check
+    `plan.intent == "enter"` — necessary because before this phase, `plan is not None` WAS the
+    entry signal (route() only ever returned non-`None` for Path 3); now that every non-no-op path
+    returns a plan, an unguarded `process_order_plan()` call would have started slicing exits/flips,
+    which `exec_algo` was never built or tested for. Audited `exec_algo.py`'s
+    `TWAPAlgorithm.process_order_plan()` — its own internal close/flip guard (checking
+    `strategy._close_at_open`/`_pending_flip`) is now provably unreachable in practice (kernel
+    clears those two attributes before calling in, and the new `intent` gate stops non-entry plans
+    from reaching the call at all) — left in place as a documented defensive check rather than
+    removed, since removing it isn't this phase's job. **Verification still needed before this can
+    be called shipped**: `docker exec` into the engine container, run
+    `python engine/scripts/golden_master.py` before/after comparison (should be byte-identical —
+    this phase changes what `route()` returns, never what the mutable attributes end up holding)
+    and the full pytest suite (expect 647/647 unchanged, since no test directly asserts `route()`
+    returns `None` for Paths 2/4/5 — confirmed by grep before writing this). See `handoff.md` for
+    the exact commands.
 
 ### Step 6.4 — Fix the adapter leak (issue ENG-5)
 - `LiveAdapter` no longer reaches into `manager.sessions` / `_order_semaphores` / `_notify_node`

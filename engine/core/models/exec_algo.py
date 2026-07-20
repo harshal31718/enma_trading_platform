@@ -53,7 +53,11 @@ class TWAPAlgorithm(ExecAlgorithm):
             self.remaining_qty = 0.0
             return plan
 
-        # If we have an active flip or exit, do not slice
+        # Belt-and-suspenders: kernel.py's evaluate_and_route() only ever calls
+        # process_order_plan() when plan.intent == "enter" (Plan 6 Step 6.3 phase
+        # (a)), and additionally clears these two attributes before calling in,
+        # so this branch should be unreachable in practice. Left in place as a
+        # defensive check in case a future caller invokes this method directly.
         if getattr(self.strategy, "_close_at_open", False) or getattr(self.strategy, "_pending_flip", None) is not None:
             self.active_plan = None
             self.remaining_qty = 0.0

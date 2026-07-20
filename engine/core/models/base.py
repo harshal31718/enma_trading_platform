@@ -106,7 +106,11 @@ class OrderPlan:
     """Execution Model output: the concrete order to send.
 
     direction: +1 long, -1 short (derived from target sign in route()).
-    intent: "enter" | "add" | "reduce" | "exit" — describes the order's purpose.
+    intent: "enter" | "add" | "reduce" | "exit" | "flip" | "maintain" — describes
+        the order's purpose. "exit"/"flip"/"maintain" are produced by
+        DefaultExecution.route()'s Paths 2/4/5 (Plan 6 Step 6.3 phase (a)) —
+        consumers that only care about entries must check
+        `plan.intent == "enter"` explicitly rather than `plan is not None`.
     entry_tag: label from the strategy signal for per-tag analytics (A-015).
     """
     direction: int
