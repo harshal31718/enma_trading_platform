@@ -7,7 +7,7 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
-## 2026-07-20 (later same day, part 3) — Plan 6 Step 6.3 phase (c) NOT implemented — F10 needs re-scoping; phase (b)'s golden-master still unconfirmed
+## 2026-07-20 (later same day, part 4) — Plan 6 Step 6.3 phase (d) SCOPED (docs only, not authorized) — phase (b)'s golden-master still unconfirmed mid-re-check
 
 **Goal:** continue Step 6.3 to phase (c) — per DECISIONS.md #28's original plan, F10's kernel-write
 (the exec_algo branch in `kernel.py` writing `strategy.stop_loss`/`take_profit` directly) should
@@ -38,14 +38,46 @@ leave Plan 6 entirely) — they chose document-and-stop.** No code changed this 
 `6_engine-decomposition-and-exchange-abstraction.md` (Step 6.3 section), `0_tracker.md`
 (Plan 6 row), this file.
 
-**Open questions:** (1) confirm phase (b)'s golden-master line before calling it fully verified —
-see above. (2) F10/phase (c) is now understood to be entangled with phase (d) (the wider
-mutable-attribute-read cleanup across the ~48-file surface the original Step 6.3 investigation
-sized) rather than a standalone step — a real fix means giving `check_exits()` its own persisted,
-typed source of truth, not just `LiveAdapter`. That's a materially bigger, dedicated effort, not
-something to squeeze into a "phase (c)" slot. Plan 6 status: 6.1/6.2/6.4/6.6 shipped; 6.3 phases
-(a) shipped-and-verified, (b) code-written-verification-incomplete, (c) blocked/re-scoped into
-(d), (d) not started; 6.5 needs Node-side consumer code.
+**Then asked the user two things: re-confirm phase (b)'s golden-master, and whether to scope phase
+(d) now. They said re-run the golden-master AND scope phase (d) (docs only) — both done this same
+pass, in parallel.**
+
+**Phase (d) scoping (docs only, per root `CLAUDE.md` Rule D — no code, no stubs):** grepped every
+non-`route()`, non-test read site of `strategy.stop_loss`/`take_profit` rather than trusting the
+original ~48-file estimate at face value. Found 4 distinct consumer clusters, each with a
+different call-frame relationship to `route()`'s per-candle `OrderPlan`: (1) `kernel.py
+check_exits()` — the cross-candle trigger read phase (c) already found, same call frame as
+`OrderPlan`, lowest risk to migrate. (2) `core/reconciler.py`'s `maybe_amend_exchange_sl()` and
+~4 related read sites (M-4/Plan 21.4, live-only) — reads the Path-5-tightened stop to decide
+whether to amend the resting exchange bracket order; called from `_run_symbol_loop`, a DIFFERENT
+call frame than `evaluate_and_route()`, so even though phase (a) already gives Path 5 a typed
+`intent="maintain"` plan, that plan is a local variable that never leaves `evaluate_and_route()`
+— `reconciler.py` has no way to receive it without new plumbing. This is the cluster that makes
+phase (d) NOT a simple find-and-replace. (3) `LiveAdapter.execute_exit` (~line 1256, logs the
+exit's SL/TP to the trade record) and `BacktestAdapter.execute_entry` (mirrors phase (b)'s
+pre-fix pattern on the backtest side, golden-master-covered) — lower risk, logging/sizing only.
+(4) `kernel.py`'s own rounding block (~633-641) — arguably fine to leave, flagged for
+completeness. **Recommended (not authorized) direction**: a new persisted
+`strategy.active_bracket: OrderPlan | None` field, written by `route()` additively (same pattern
+as phase (a)) alongside the existing mutable tuples — turns the migration into a mechanical
+read-site swap once that field exists, since every cluster could then read the SAME persisted
+value regardless of call frame. Proposed sub-phasing d1 (add the field, additive, golden-master
+byte-identical by construction) → d2 (migrate clusters #1/#4, same call frame, lowest risk) →
+d3 (migrate cluster #2, live-only, no golden-master coverage, needs
+`test_maybe_amend_exchange_sl.py` re-verified) → d4 (migrate cluster #3) → d5 (only then does
+removing the original mutable tuples as `BaseStrategy`'s public API become a live question — and
+that still needs its own `DECISIONS.md` entry per the original Step 6.3 investigation, since
+`trail_stop()`/`move_to_breakeven()`-style strategy hooks read them directly today). **Full detail
+in the plan file's Step 6.3 section. Not authorized, not started — this is scope for a future
+decision, not a commitment.**
+
+**Open questions:** (1) confirm phase (b)'s golden-master line — re-check was in progress when
+this entry was written; get the actual result before calling phase (b) fully verified. (2) decide
+whether phase (d)'s multi-session effort (d1-d5 above) is worth pursuing, and if so get a
+`DECISIONS.md` sign-off on the `active_bracket` design direction before d1 starts. Plan 6 status:
+6.1/6.2/6.4/6.6 shipped; 6.3 phases (a) shipped-and-verified, (b) code-written/verification
+re-checking, (c) blocked/re-scoped into (d), (d) scoped-but-not-authorized; 6.5 needs Node-side
+consumer code.
 
 ---
 ## 2026-07-20 (later same day, part 2) — Plan 6 Step 6.3 phase (b): code written, verification pending — run these commands next

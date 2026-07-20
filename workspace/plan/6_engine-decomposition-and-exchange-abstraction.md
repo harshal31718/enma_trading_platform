@@ -373,6 +373,73 @@ not the risk/decision logic living alongside it in the same methods, actually mo
     step.** See `0_fixes-queue.md`'s F10 entry (updated same pass) for the full writeup. No code
     changed this pass — surfaced to the user, who chose to stop and document rather than push
     into phase (d)'s larger scope in this session.
+  - **Phase (d) scoped 2026-07-20 (docs only, per root `CLAUDE.md` Rule D — no code written).**
+    User asked for the scope, not the implementation. Grepped every read site of
+    `strategy.stop_loss`/`take_profit` (excluding `route()`'s own writes and test files) to map
+    the real surface, rather than trusting the ~48-file/31+30-occurrence estimate from the
+    original Step 6.3 investigation at face value. The read sites cluster into four groups, each
+    a different consumer with a different call-frame relationship to `route()`'s per-candle
+    `OrderPlan`:
+    1. **Cross-candle exit-trigger detection** — `kernel.py`'s `check_exits()` (~lines 343-344,
+       383-384). Reads on EVERY candle after entry, both backtest and live. This is the one
+       phase (c) investigation already found (see above) — no persisted typed state exists for
+       it to read instead.
+    2. **Exchange-bracket amendment (live-only, biggest cluster)** — `core/reconciler.py`'s
+       `maybe_amend_exchange_sl()` (M-4/Plan 21.4) and related methods (~lines 130-190, 320, 592,
+       746-770, ~938). Reads `strategy.stop_loss` AFTER `route()`'s Path 5 (maintain) tightens it,
+       to decide whether to cancel+replace the resting exchange stop order (trailing
+       stops/breakeven/Chandelier exits). Called from `_run_symbol_loop`
+       (`live_bot_manager.py`) — a DIFFERENT call frame than `kernel.evaluate_and_route()`, so
+       even though phase (a) already gives Path 5 a typed `OrderPlan` (`intent="maintain"`), that
+       plan is a local variable inside `evaluate_and_route()` and never leaves it — `reconciler.py`
+       has no way to receive it without new plumbing threading it out of the kernel call and into
+       the symbol loop.
+    3. **Entry-time sizing/logging** — `LiveAdapter.execute_entry` (already phase-(b)-migrated),
+       `LiveAdapter.execute_exit` (~line 1256, reads `strategy.stop_loss`/`take_profit` purely to
+       attach the exit's SL/TP to the trade record — a different, lower-risk read than #1/#2 since
+       it's post-hoc logging, not a live decision), and `BacktestAdapter.execute_entry`
+       (`services/backtest_runner.py` ~lines 359-360, same sizing-percent read phase (b) already
+       solved for the live side, not yet mirrored on the backtest side — lower risk, covered by
+       golden-master).
+    4. **Rounding** — `kernel.py`'s own tail-of-candle rounding block (~lines 633-641), which reads
+       AND rewrites `strategy.stop_loss`/`take_profit` to round them direction-awarely (F-006/
+       F-007) — this one is arguably fine to leave alone since it's `route()`-adjacent state
+       massaging, not a separate "consumer," but flagged for completeness.
+    - **Why this is NOT one mechanical find-and-replace**: `OrderPlan` today is a per-call
+      transient return value, computed fresh inside `evaluate_and_route()` and discarded when
+      that call returns. Clusters #1 and #4 live inside the same call frame `OrderPlan` is already
+      available in — genuinely low-risk to migrate. Cluster #2 lives in a DIFFERENT call frame
+      entirely (`_run_symbol_loop`, called after `evaluate_and_route()` returns) — closing that
+      gap needs `OrderPlan` (or the tightened SL/TP it carries) to be PERSISTED somewhere
+      `reconciler.py` can read it from, not just returned. Cluster #3's `execute_exit` read
+      happens even later (whenever the position actually closes, possibly many candles after the
+      SL/TP was last set) — also needs persisted state, not a transient plan.
+    - **Recommended design direction (not authorized, not implemented — a future DECISIONS.md
+      entry would need to bless this before code)**: give `BaseStrategy` (or `Position`) a single
+      persisted typed field — e.g. `strategy.active_bracket: OrderPlan | None` — that `route()`
+      writes on every path alongside (not instead of) the existing mutable tuples, updated every
+      candle. Every read site above would then read `strategy.active_bracket.stop_loss` instead
+      of `strategy.stop_loss[1]`, regardless of which call frame it's in, since it's now
+      session/strategy-scoped persisted state rather than a per-call return value. This makes the
+      migration mechanical (a read-site swap) ONCE the persisted field exists — the field itself
+      is the actual design work, not each read site.
+    - **Proposed phasing if this direction is authorized**: (d1) add `active_bracket` as a new
+      persisted field, written everywhere `route()`/kernel's exec_algo branch already write
+      `stop_loss`/`take_profit` — purely additive, zero read-site changes, golden-master
+      byte-identical by construction (same pattern as phase (a)). (d2) migrate cluster #1
+      (`check_exits()`) and #4 (rounding) — same call frame, lowest risk, golden-master-verified.
+      (d3) migrate cluster #2 (`reconciler.py`) — live-only, needs the M-4 trailing-stop tests
+      (`test_maybe_amend_exchange_sl.py`) re-verified, no golden-master coverage (same caution
+      class as phases (b)/(c)). (d4) migrate cluster #3 (`execute_exit`, `BacktestAdapter.
+      execute_entry`) — lowest urgency, logging/sizing only. (d5) only after ALL clusters read
+      from `active_bracket` exclusively does removing the original mutable tuples (`s.stop_loss`/
+      `s.take_profit` as strategy-facing API) become a live question — and per the original Step
+      6.3 investigation, THAT still needs its own `DECISIONS.md` entry since those attributes are
+      documented in `engine/CLAUDE.md`'s "Available properties" as strategy-facing, used by
+      `trail_stop()`/`move_to_breakeven()`-style strategy hooks directly. Each of d1-d5 is its own
+      session, independently golden-master/test-verified — not a single pass.
+    - **Not authorized, not started.** This is scope, not a commitment — the user should decide
+      whether this multi-session effort is worth pursuing before any of d1-d5 begins.
     `DefaultExecution.route()` (`core/models/execution.py`) now returns a typed `OrderPlan` for
     Paths 2/4/5 (close/flip/maintain), not just Path 3 (enter) — additive only, every existing
     mutable-attribute write (`s._close_at_open`, `s.flip_position()`, `s.stop_loss`/`take_profit`
