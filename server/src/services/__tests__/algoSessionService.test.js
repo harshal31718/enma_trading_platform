@@ -321,4 +321,44 @@ describe('processEngineStatsUpdate', () => {
     const result = await processEngineStatsUpdate({ id: 's1', io, body: { event: 'stopped' } })
     expect(result).toEqual({ success: true })
   })
+
+  // Plan 8 Step 8.2 (SEC-10): eventData.symbol and positionDetails keys become
+  // Mongo dot-path segments (`positionDetails.${symbol}`/`lastSeqBySymbol.${symbol}`)
+  // via $set/$unset below — a malformed key must be rejected before any write.
+  describe('symbol-key whitelisting (SEC-10)', () => {
+    test('rejects an eventData.symbol containing a Mongo path separator', async () => {
+      const io = makeIo()
+      await expect(processEngineStatsUpdate({
+        id: 's1', io,
+        body: { event: 'position:open', eventData: { symbol: 'foo.bar', side: 'long', qty: 1, price: 100 } },
+      })).rejects.toMatchObject({ statusCode: 400, code: 'VALIDATION_ERROR' })
+      expect(LiveSession.findByIdAndUpdate).not.toHaveBeenCalled()
+    })
+
+    test('rejects an eventData.symbol containing a Mongo operator prefix', async () => {
+      const io = makeIo()
+      await expect(processEngineStatsUpdate({
+        id: 's1', io,
+        body: { event: 'position:open', eventData: { symbol: '$where', side: 'long', qty: 1, price: 100 } },
+      })).rejects.toMatchObject({ statusCode: 400, code: 'VALIDATION_ERROR' })
+    })
+
+    test('rejects a positionDetails key with an invalid symbol format', async () => {
+      const io = makeIo()
+      await expect(processEngineStatsUpdate({
+        id: 's1', io,
+        body: { positionDetails: { '__proto__.polluted': { side: 'long', qty: 1 } } },
+      })).rejects.toMatchObject({ statusCode: 400, code: 'VALIDATION_ERROR' })
+      expect(LiveSession.findByIdAndUpdate).not.toHaveBeenCalled()
+    })
+
+    test('accepts a well-formed symbol unchanged', async () => {
+      const io = makeIo()
+      const result = await processEngineStatsUpdate({
+        id: 's1', io,
+        body: { positionDetails: { BTCUSDT: { side: 'long', qty: 1 } } },
+      })
+      expect(result).toEqual({ success: true })
+    })
+  })
 })

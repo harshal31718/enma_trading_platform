@@ -9,6 +9,13 @@ const ApiError = require('../utils/ApiError')
 const { isSymbolFree, assertSymbolNotBotLocked } = require('../services/symbolLock')
 const { subscribeToTradeStream, unsubscribeFromTradeStream } = require('../services/socketEmitter')
 const { syncAndListTradeHistory } = require('../services/tradeHistoryService')
+const { isValidSymbolFormat } = require('../utils/symbolFormat')
+
+function _assertValidSymbol(symbol) {
+  if (!isValidSymbolFormat(symbol)) {
+    throw new ApiError(400, 'VALIDATION_ERROR', `Invalid symbol format: ${JSON.stringify(symbol)}`)
+  }
+}
 
 function handleEngineError(err, defaultMessage) {
   if (err instanceof ApiError) return err
@@ -307,6 +314,7 @@ async function changeLeverage(req, res, next) {
     if (!symbol || leverage == null) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'symbol and leverage are required')
     }
+    _assertValidSymbol(symbol)
     const { data } = await engineClient.post('/trade/leverage', { symbol, leverage }, { headers: req.binanceHeaders })
     res.json(ApiResponse.success(data.data))
   } catch (err) {
@@ -323,6 +331,7 @@ async function changeMarginType(req, res, next) {
     if (!['ISOLATED', 'CROSSED'].includes(marginType)) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'marginType must be ISOLATED or CROSSED')
     }
+    _assertValidSymbol(symbol)
     const { data } = await engineClient.post('/trade/margin-type', { symbol, marginType }, { headers: req.binanceHeaders })
     res.json(ApiResponse.success(data.data))
   } catch (err) {
@@ -339,6 +348,7 @@ async function placeOrder(req, res, next) {
     if (typeof quantity !== 'number' || quantity <= 0) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'quantity must be a positive number')
     }
+    _assertValidSymbol(symbol)
     // Symbol lock check
     await assertSymbolNotBotLocked(symbol)
     const { data } = await engineClient.post(
@@ -365,6 +375,7 @@ async function closePosition(req, res, next) {
     if (!symbol) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'symbol is required')
     }
+    _assertValidSymbol(symbol)
     await assertSymbolNotBotLocked(symbol, { closing: true })
     const { data } = await engineClient.post('/trade/close-position', { symbol }, { headers: req.binanceHeaders })
     res.json(ApiResponse.success(data.data))
@@ -432,6 +443,7 @@ async function placeOCOOrder(req, res, next) {
     if (typeof quantity !== 'number' || quantity <= 0) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'quantity must be a positive number')
     }
+    _assertValidSymbol(symbol)
     // Symbol lock check
     await assertSymbolNotBotLocked(symbol)
     const { data } = await engineClient.post(
@@ -476,6 +488,7 @@ async function placeOrderWithTpSl(req, res, next) {
     if (typeof quantity !== 'number' || quantity <= 0) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'quantity must be a positive number')
     }
+    _assertValidSymbol(symbol)
     // Symbol lock check
     await assertSymbolNotBotLocked(symbol)
     const { data } = await engineClient.post(

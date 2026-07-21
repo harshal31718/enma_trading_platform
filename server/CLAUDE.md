@@ -15,7 +15,8 @@
 - passport + passport-google-oauth20 (Google OAuth 2.0, sessionless)
 - jsonwebtoken (JWT signing/verification)
 - cookie-parser (reads the `enma_jwt` httpOnly cookie)
-- express-validator (installed but not used as standalone middleware — validation inline in controllers)
+- express-validator (installed but not used as standalone middleware — dead dependency, superseded by zod, see below)
+- zod (Plan 8 Step 8.2, SEC-10) — schema-validation layer via `middleware/validate.js`'s `validate(schema, source='body')`, applied per-route on the previously-zero-validation routes (`POST /strategies`). Most controllers already had adequate hand-rolled inline validation (`settings.controller.js`, `risk.controller.js`, `admin.controller.js`, `lab.controller.js` via `utils/labConfig.js`) — those were deliberately left as-is rather than force-migrated to zod for stylistic consistency; see `0_tracker.md`'s Plan 8 notes for the full per-controller scoping.
 - express-rate-limit (inline in `app.js`)
 - Helmet.js
 - pino + pino-http for structured logging (replaces `morgan('dev')`, Plan 2 Step 2.4 — DECISIONS
@@ -50,7 +51,10 @@ server/
     │   ├── errorHandler.js          ← global error handler, logs via config/logger.js with req.id
     │   ├── auth.middleware.js       ← verifyJWT / requireAdmin / requireAlgoAccess (gates all /api/v1/* routes)
     │   ├── requestId.js             ← reads/generates X-Request-Id, echoes on response, seeds requestContext
-    │   └── requireBinanceCredentials.js ← validates X-Binance headers on trade routes
+    │   ├── requireBinanceCredentials.js ← validates X-Binance headers on trade routes
+    │   └── validate.js              ← Plan 8 Step 8.2 (SEC-10): generic zod schema-validation middleware, `validate(schema, source='body')` — throws ApiError(400, 'VALIDATION_ERROR', …) on failure, replaces req[source] with the parsed data on success
+    ├── validators/          ← Plan 8 Step 8.2 — per-route zod schemas, one file per controller domain that needed one (only routes with zero prior inline validation got a schema here — see server/CLAUDE.md's Stack section)
+    │   └── strategy.validators.js ← createStrategySchema (POST /strategies)
     ├── models/             ← Mongoose models
     │   ├── Strategy.js        ← metadata: name, description, filePath (global, no userId)
     │   ├── User.js             ← googleId, email, name, avatar, role, isActive, algoAccess {status,requestedAt,decidedAt,decidedBy}
@@ -113,7 +117,8 @@ server/
     │   ├── chaosAllocator.js  ← Chaos Mode symbol allocation (manual pick guarantee + round-robin tier partition)
     │   ├── encryption.js      ← AES-256 for API key storage
     │   ├── risk.js            ← resolveRiskParams() — per-run risk override merge
-    │   └── labConfig.js       ← buildMonteCarloConfig() (Phase 1) / buildWalkForwardConfig() (Phase 3a) / computeConfigHash(), pure + unit-tested
+    │   ├── labConfig.js       ← buildMonteCarloConfig() (Phase 1) / buildWalkForwardConfig() (Phase 3a) / computeConfigHash(), pure + unit-tested
+    │   └── symbolFormat.js    ← Plan 8 Step 8.2 (SEC-10): SYMBOL_REGEX / isValidSymbolFormat() — whitelists the real Binance symbol shape before a user/engine-callback-supplied symbol is used as a Mongo dot-path segment (`positionDetails.${symbol}`) or Redis lock key
     ├── app.js               ← Express app setup (no server.listen here)
     └── server.js            ← Entry point (server.listen + startup reconciliation)
 ```

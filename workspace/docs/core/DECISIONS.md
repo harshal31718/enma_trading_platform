@@ -625,7 +625,21 @@ not just empirically. 3 more `_FakeStrategy` test doubles needed `active_bracket
 (`test_execute_flip_idempotency.py`, `test_live_fill_booking.py`, `test_live_money_accumulation.py`
 — 7 failing tests total, same root cause as d2/d3's fixture gap). Verified: pytest 647/647, golden-master `MultiDivergence`
 byte-identical to every prior checkpoint (`trades=55 netProfit=-1784.02 winRate=0.36 cagr=-71.32
-sqn=-2.08`). **Remaining: d5 (retiring `stop_loss`/`take_profit` as strategy-facing API — still
-needs its own separate `DECISIONS.md` entry, may never happen). d1-d4 of the proposed sub-phasing
-are now all shipped — every read site the phase (d) scoping addendum identified reads from
-`active_bracket`.**
+sqn=-2.08`). d1-d4 of the proposed sub-phasing are now all shipped — every read site the phase (d)
+scoping addendum identified reads from `active_bracket`.
+
+**Fourth addendum (2026-07-21) — d5 DROPPED, Plan 6 fully closed.** Asked the user whether to
+proceed with d5 (retiring `self.stop_loss`/`self.take_profit` as strategy-facing *writable* API,
+per the second addendum's own note that this "needs its own separate DECISIONS.md entry"). Argued
+against it: d1-d4 already achieve the actual technical goal (every internal consumer reads the
+typed `active_bracket` field instead of the raw mutable tuple) — retiring the write-side API on top
+of that adds no correctness or type-safety benefit, since `route()` already mirrors whatever the
+strategy writes onto `active_bracket` regardless of whether the raw attribute continues to exist.
+The cost, by contrast, is real: every seeded strategy writes `self.stop_loss = qty, price` directly,
+`trail_stop()`/`move_to_breakeven()` (`core/strategy.py`) both read and write it directly, and
+`engine/CLAUDE.md`'s "Available properties" section documents it as public API — retiring it means
+designing a replacement setter, migrating every strategy and both trail/breakeven hooks, rewriting
+the docs, and re-running golden-master across every strategy, not just the touched ones. User
+agreed: **d5 dropped.** `self.stop_loss`/`self.take_profit` remain strategy-facing exactly as
+documented in `engine/CLAUDE.md`; `active_bracket` stays a read-side mirror only, not a replacement
+API. **Plan 6 (engine decomposition & exchange abstraction) has no remaining scope.**

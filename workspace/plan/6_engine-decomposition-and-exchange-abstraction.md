@@ -491,9 +491,14 @@ not the risk/decision logic living alongside it in the same methods, actually mo
       `test_live_money_accumulation.py` — 7 failing tests, same fixture-gap root cause as d2/d3).
       Verified: pytest 647/647, golden-master `MultiDivergence` byte-identical to every prior
       checkpoint. **d1-d4 of the proposed sub-phasing are all now shipped — every read site the
-      phase (d) scoping addendum identified reads from `active_bracket`. Only d5 (retiring
-      `stop_loss`/`take_profit` as strategy-facing API) remains, and it needs its own separate
-      `DECISIONS.md` entry.**
+      phase (d) scoping addendum identified reads from `active_bracket`.**
+    - **d5 — DROPPED 2026-07-21 (DECISIONS.md).** Retiring `self.stop_loss`/`self.take_profit` as
+      strategy-facing *writable* API buys nothing d1-d4 didn't already deliver — every internal
+      consumer already reads the typed `active_bracket` field; the raw tuple stays strategy-facing
+      purely as the write side, mirrored into `active_bracket` by `route()`. Retiring it would touch
+      every seeded strategy, `trail_stop()`/`move_to_breakeven()`, and `engine/CLAUDE.md`'s
+      documented public contract for zero functional benefit. **Plan 6 is now fully closed — no
+      remaining scope.**
     `DefaultExecution.route()` (`core/models/execution.py`) now returns a typed `OrderPlan` for
     Paths 2/4/5 (close/flip/maintain), not just Path 3 (enter) — additive only, every existing
     mutable-attribute write (`s._close_at_open`, `s.flip_position()`, `s.stop_loss`/`take_profit`

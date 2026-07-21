@@ -41,12 +41,51 @@ and the smaller hardening items are done.
 - Acceptance check: no invariant in the governance docs is contradicted by the code — confirmed
   via a dedicated audit subagent pass, findings applied same session.
 
-### Step 8.2 — Application-layer request validation (issue SEC-10)
+### Step 8.2 — Application-layer request validation (issue SEC-10) · **✅ shipped 2026-07-21**
 - Add a schema-validation layer (zod/joi/celebrate) to the Node API. Controllers stop
   destructuring raw `req.body`. Special attention to any handler writing user-influenced field
   paths into Mongo `$set` (the `positionDetails.${symbol}` pattern) — validate/whitelist keys.
 - Acceptance check: malformed bodies are rejected at the edge with 400; injection-shaped keys
   are refused.
+- **Surveyed before implementing** (Explore agent over every controller's actual validation
+  state) rather than assuming every controller needed a rewrite: `settings.controller.js`,
+  `risk.controller.js` (both large dynamic FIELD_RULES-driven validators), `admin.controller.js`,
+  and `lab.controller.js` (via `utils/labConfig.js`'s `buildMonteCarloConfig`/etc.) already had
+  adequate hand-rolled inline validation — throwing `ApiError(400, 'VALIDATION_ERROR', ...)` on
+  every malformed field, same as a schema library would. Force-migrating those to zod would have
+  been stylistic churn with real regression risk (some of that logic carries forward previous
+  saved-settings values on a partial update — not a pure stateless schema shape), not a genuine
+  gap closure — left as-is, documented rather than silently incomplete.
+- **The actual load-bearing gap, found by the survey**: `server/src/services/algoSessionService.js`'s
+  `processEngineStatsUpdate` (called from the *unauthenticated* internal engine-callback route
+  `PATCH /internal/algo/sessions/:id/stats`, gated only by a shared `X-Internal-Key`, not per-user
+  JWT) builds `positionDetails.${eventData.symbol}` / `lastSeqBySymbol.${seqSymbol}` Mongo
+  `$set`/`$unset` path segments straight from the request body, with zero format check — exactly
+  the pattern this step's own text calls out. Fixed with a new shared
+  `server/src/utils/symbolFormat.js` (`SYMBOL_REGEX = /^[A-Z0-9]{5,20}$/`, matching real Binance
+  USDT-M futures symbols, rejecting `.`/`$`/`__proto__`-shaped keys) and a whitelist guard at the
+  top of `processEngineStatsUpdate` that throws `ApiError(400, 'VALIDATION_ERROR', ...)` on any
+  invalid `eventData.symbol` or `positionDetails` key before either reaches a template-literal
+  path. Same util applied to every other internal engine-callback handler in
+  `algo.controller.js` (`handleAlgoPlaceOrder`/`ClosePosition`/`SetLeverage`/`GetPosition`/
+  `GetOpenOrders`, via a new shared `_rejectIfInvalidSymbol` helper) and to the user-facing
+  `startSession`/`startChaos` symbol arrays (same symbols later flow through the engine callback
+  into the same `positionDetails` path) and `trade.controller.js`'s 6 order-placement/leverage/
+  margin-type routes, closing the pattern uniformly rather than just at the one call site the
+  survey happened to name.
+- **New schema-validation layer**: `zod` added as a dependency (`express-validator` stays a listed
+  but genuinely dead dependency — already true before this step, not newly introduced), new
+  generic `server/src/middleware/validate.js` (`validate(schema, source='body')` — parses,
+  replaces `req[source]` with the typed result on success, throws the same
+  `ApiError(400,'VALIDATION_ERROR',...)` shape as every other validation failure in this codebase
+  on failure) and `server/src/validators/strategy.validators.js`. Applied to `POST /strategies`
+  (`createStrategy`) — the one route with genuinely **zero** prior validation (raw destructure,
+  forwarded straight to the engine).
+- **Verified**: real `docker compose build server` + container restart (zod installed into the
+  named `enma_server_node_modules` volume, host `node_modules` never touched), full jest suite
+  252/252 (233 existing + 19 new: `symbolFormat.test.js`, `validate.test.js`,
+  `strategy.validators.test.js`, 4 new `algoSessionService.test.js` cases for the symbol-key
+  whitelist), `/health` 200 throughout, no regressions.
 
 ### Step 8.3 — Warmup/readiness math (issue ENG-8)
 - Fix `_get_min_candles_required` vs `WARMUP_CANDLES` vs the 500-candle `_append_candle` cap so

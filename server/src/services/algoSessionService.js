@@ -24,6 +24,7 @@ const { sumReservedCapital, checkCapitalAgainstBalance } = require('../utils/cap
 const { releaseSymbolLock } = require('./symbolLock')
 const { dispatchWebhook } = require('../utils/webhook')
 const ApiError = require('../utils/ApiError')
+const { isValidSymbolFormat } = require('../utils/symbolFormat')
 
 /**
  * Load this user's saved Settings and decrypt their Binance API credentials.
@@ -188,6 +189,23 @@ async function computeSymbolStats(sessionId) {
  */
 async function processEngineStatsUpdate({ id, body, io }) {
   const { pnl, openPositions, status, event, eventData, positionDetails, seq } = body
+
+  // Plan 8 Step 8.2 (SEC-10): `eventData.symbol` and every `positionDetails`
+  // key end up as a Mongo dot-path segment below (`positionDetails.${symbol}`,
+  // `lastSeqBySymbol.${symbol}` via $set/$unset) — whitelist them against the
+  // real Binance symbol shape before they ever reach a path-building template
+  // literal, so a malformed/adversarial symbol (containing '.', '$', or an
+  // operator-shaped key) can't be written into an arbitrary document field.
+  if (eventData && eventData.symbol !== undefined && !isValidSymbolFormat(eventData.symbol)) {
+    throw new ApiError(400, 'VALIDATION_ERROR', `Invalid symbol format: ${JSON.stringify(eventData.symbol)}`)
+  }
+  if (positionDetails && typeof positionDetails === 'object') {
+    for (const sym of Object.keys(positionDetails)) {
+      if (!isValidSymbolFormat(sym)) {
+        throw new ApiError(400, 'VALIDATION_ERROR', `Invalid symbol format in positionDetails: ${JSON.stringify(sym)}`)
+      }
+    }
+  }
 
   // Plan 5 Step 5.1 (SYS-2): reject a stale position mutation racing a
   // newer one for the same symbol (e.g. a delayed/retried engine PATCH

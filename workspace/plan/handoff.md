@@ -7,6 +7,62 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
+## 2026-07-21 — Plan 6 closed (d5 dropped) + Plan 8 Step 8.2 shipped (SEC-10) — In progress
+
+**Goal:** user asked to continue with `workspace/`. Surveyed the tracker, found three
+not-`Done` items (Plan 6's d5, Plan 8's 8.2–8.5/8.7, Plan 23 draft), asked which to continue —
+user picked Plan 6 d5. Per its own scoping note (`d5 ... needs its own separate DECISIONS.md
+entry`), argued against doing it before writing any code (d1-d4 already deliver the actual
+technical goal — every internal consumer reads `active_bracket`; retiring
+`self.stop_loss`/`self.take_profit` as the strategy-facing *write* API on top of that adds zero
+functional benefit for real cost: every seeded strategy + `trail_stop()`/`move_to_breakeven()` +
+`engine/CLAUDE.md`'s public contract would need touching). User agreed — **d5 dropped, Plan 6 has
+no remaining scope.** Then proceeded to Plan 8 per the user's explicit "proceed with plan 8."
+
+**Plan 6 d5 close-out**: updated `6_engine-decomposition-and-exchange-abstraction.md` (d5 marked
+dropped with rationale), `0_tracker.md` (Plan 6 row → **Done**), `DECISIONS.md` (fourth addendum
+to the #28 chain recording the drop + rationale).
+
+**Plan 8 Step 8.2 (SEC-10, schema-validation layer) shipped.** Surveyed every controller's actual
+validation state via an Explore agent before writing anything (not assumed) — found most
+controllers (`settings.controller.js`, `risk.controller.js`, `admin.controller.js`,
+`lab.controller.js` via `utils/labConfig.js`) already had adequate hand-rolled inline validation;
+force-migrating those to zod would have been stylistic churn with real regression risk, not a
+genuine gap closure, so left as-is (documented, not silently incomplete). **The actual load-bearing
+gap**: `algoSessionService.js`'s `processEngineStatsUpdate` (reached via the *unauthenticated*
+internal engine-callback route `PATCH /internal/algo/sessions/:id/stats`, gated only by a shared
+key, not per-user JWT) builds `positionDetails.${eventData.symbol}` / `lastSeqBySymbol.${symbol}`
+Mongo `$set`/`$unset` paths straight from the request body with zero format check — exactly SEC-10's
+own named pattern. Fixed with new `server/src/utils/symbolFormat.js`
+(`SYMBOL_REGEX = /^[A-Z0-9]{5,20}$/`) + a whitelist guard at the top of `processEngineStatsUpdate`
+that throws `ApiError(400,'VALIDATION_ERROR',...)` before any invalid symbol reaches a
+template-literal path. Same util applied uniformly to every other internal engine-callback
+handler in `algo.controller.js`, `startSession`/`startChaos`'s symbol arrays, and
+`trade.controller.js`'s 6 order/leverage/margin routes — not just the one site the survey named.
+Also added the actual "schema-validation layer" the step calls for: `zod` dependency, generic
+`server/src/middleware/validate.js`, and `server/src/validators/strategy.validators.js` wired onto
+`POST /strategies` (the one route with genuinely zero prior validation).
+
+**Verified**: real `docker compose build server` (zod installed into the named
+`enma_server_node_modules` volume, host `node_modules` untouched) + container restart, full jest
+suite 252/252 (233 existing + 19 new), `/health` 200 throughout.
+
+**Files changed:** new `server/src/utils/symbolFormat.js` (+ test), new
+`server/src/middleware/validate.js` (+ test), new `server/src/validators/strategy.validators.js`
+(+ test), `server/src/services/algoSessionService.js` (+ 4 new tests),
+`server/src/controllers/algo.controller.js`, `server/src/controllers/trade.controller.js`,
+`server/src/routes/strategy.routes.js`, `server/package.json` (added `zod`), `server/CLAUDE.md`.
+Docs: `6_engine-decomposition-and-exchange-abstraction.md`, `8_governance-correctness-and-cleanup.md`,
+`0_tracker.md`, `DECISIONS.md`, this file.
+
+**Open questions:** none for 8.2. **Next in Plan 8**: 8.3 (warmup/readiness math, engine,
+golden-master before/after), 8.4 (candle column-order safety, engine, golden-master before/after),
+8.5 (embedded policy choices explicit — SL-before-TP ordering doc + live strategy-load-failure
+visibility), 8.7 (remaining hardening — health-endpoint Redis connection reuse, timing-safe secret
+compares). Suggested order per the plan file: 8.3/8.4 first (both need their own golden-master
+baseline, don't bundle same-day), then 8.5/8.7 (no golden-master needed, lower risk).
+
+---
 ## 2026-07-20 (later same day, part 17) — Plan 7 COMPLETE: ChaosWizard.jsx + hooks factory
 
 **Goal:** user said "proceed with completion of 7," then mid-task "do not stop without completing
@@ -152,96 +208,3 @@ ChartContainer, OrderBook, RecentTrades, OrderForm, LeverageModal, `TradeInner`)
 surfaced and worth a dedicated look: the `TradesTab` duplicate-key warning (pre-existing trade-
 data quality issue, root cause not investigated).
 
----
-## 2026-07-20 (later same day, part 15) — Plan 7 Steps 7.5 (core) + 7.4 (Trade.jsx) shipped
-
-**Goal:** user said "proceed with them" for 7.4 and 7.5 together. 7.5 has a plan-mandated open
-design question (Zustand+TanStack-Query-thin-store vs TanStack-Query-only for the realtime-state
-owner) that explicitly cannot be picked without asking — asked via AskUserQuestion before writing
-any code. **Zustand + TanStack Query (thin store)** was chosen. Did 7.5 before 7.4 despite the
-plan doc's ordering: Trade.jsx (7.4's biggest target) is exactly the page most entangled with the
-realtime state 7.5 redefines, so decomposing it first would have meant redoing that work once the
-state architecture changed underneath it.
-
-**7.5 — surveyed before designing.** Ran an Explore agent over the actual current-state
-architecture rather than assuming the plan's framing was accurate. Findings that shaped the
-design: `client/src/store/` had been fully deleted (greenfield, not a migration target); the
-"3 disagreeing sources" problem was narrower than it sounded — `binanceWS.js` already ref-counts
-connections by stream name, so Trade.jsx's 2 independent `<sym>@ticker` subscriptions (header
-`TickerBar`, order-entry sizing calc) shared one real WebSocket connection but each parsed the
-tick into its own local state/ref, so "this symbol's price" had no single documented value even
-though the underlying data was already identical moment-to-moment.
-
-**Done:** new `client/src/store/marketStore.js`. `useMarketTicker(streamPrefix)` — reactive read,
-for display (`TickerBar`). A non-reactive `useMarketStore.getState().tickers[...]` read — for
-sizing math that shouldn't re-render the order form on every tick, preserving exactly the old
-ref's non-reactive-read intent (a real behavioral requirement I checked for, not an accident to
-paper over — a naive reactive-only design would have made `OrderForm` re-render on every price
-tick, a UX regression the ref was deliberately avoiding). Migrated both Trade.jsx consumers.
-**Deliberately scoped to ticker/price only** — `OrderBook`/`RecentTrades`/the candle chart keep
-their own dedicated `useBinanceWS` subscriptions (depth/aggTrade/kline are structurally different
-data, and client/CLAUDE.md's realtime rules already document per-sub-component isolation for
-those as a deliberate render-perf choice, not something to undo). `client/dist/` requirement
-already satisfied — confirmed gitignored, 0 tracked files.
-
-**Verified in a real browser, not just tests**: navigated to `/trade/BTCUSDT`, confirmed the
-header ticker live-updates, clicked 50% sizing and confirmed the qty field computed correctly
-from the shared store's price (`0.0231` BTC — matches the manual calc), zero console errors.
-`client/src/store/__tests__/marketStore.test.js` (4 cases). `client/CLAUDE.md` updated — the
-"`client/src/store/` no longer exists" note was now stale; added the store's docs and a note in
-the realtime-rules section explaining the ticker exception to per-sub-component isolation.
-
-**7.5 — deliberately NOT attempted**: the "hooks share a factory" sub-item (collapsing duplicated
-loading/error/toast logic across ~15 per-domain hooks). Checked what's actually duplicated before
-deciding — mostly `const { data } = await api.get(url); return data.data` unwrap boilerplate per
-query, not loading/error/toast (client/CLAUDE.md already documents error handling as page-level,
-via a local `errorMessage` banner, not hook-level — so "collapse hooks" doesn't mean what a
-naive reading suggests). A full mechanical migration across every hook file is real, valuable
-work, but judged too large to append safely to an already-large session without its own dedicated
-regression pass. Flagged as a follow-up, not silently declared done.
-
-**7.4 — surveyed all four target files' actual shape before touching anything.** Trade.jsx
-(1,760 lines) turned out structurally different from the other three: ~20 already-separate named
-function components crammed into one file — a mechanical file-split, genuinely low risk (cut,
-paste, wire imports, no logic change). Backtest.jsx (831 lines: one ~640-line
-`export default function` + 2 small table helpers), Settings.jsx (928 lines: **entirely** one
-single function, zero pre-existing internal decomposition), and ChaosWizard.jsx (677 lines: one
-~600-line function + one helper) are all single monolithic component bodies — decomposing those
-means real JSX-tree/container-presenter splitting of live, stateful render trees, a slower and
-riskier kind of work than moving already-separate functions.
-
-**Done — Trade.jsx: 1,760 → 892 lines (49% reduction).** Extracted 8 new files under
-`client/src/features/trade/`: `formatters.js` (symbol-precision-aware price/qty formatters — kept
-separate from `@/utils/formatters.js`, genuinely different concern, not a duplicate),
-`TableHelpers.jsx` (SkeletonRow/EmptyRow/SyncWarningBanner), `TpSlModal.jsx`, `PositionsTable.jsx`,
-`OpenOrdersTable.jsx` (+ `extractOcoId`), `AssetsTable.jsx`, `HistoryTables.jsx`
-(Order/Trade/Transaction History — grouped, same shape), `BottomPanel.jsx` (composes all of the
-above). Pure moves — same JSX, same props, same logic, only the import graph changed.
-
-**Verified**: `vite build` succeeds with an **identical output bundle size** to the pre-refactor
-build (confirms nothing got silently duplicated or dropped in the move), `vitest` 15/15
-(including the existing Trade.jsx render smoke test), and a real-browser check — chart, order
-book, recent trades, order form, and every BottomPanel tab (Positions/Open Orders/Order
-History/Trade History/Transaction History/Assets) all render and function after the split, %
-sizing still computes correctly, zero console errors after a hard reload (one stale HMR error
-from mid-edit cleared on a fresh navigation — confirmed not a real issue).
-
-**Not attempted**: Backtest.jsx/Settings.jsx/ChaosWizard.jsx's internal decomposition (their own
-dedicated pass, not a quick follow-on to this one); the remaining WS-entangled Trade.jsx pieces
-(`TickerBar`, `ChartContainer`, `OrderBook`, `RecentTrades`, `OrderForm`, `LeverageModal`,
-`TradeInner`) stay in the page file — already touched for 7.5's price-store work this session,
-and further splitting them trades more regression risk for less file-size benefit than the tables
-did (the tables were pure presentational props-in/JSX-out; these are WS-subscription-owning and
-order-placement-critical).
-
-**Files changed:** new `client/src/store/marketStore.js`,
-`client/src/store/__tests__/marketStore.test.js`, new `client/src/features/trade/{formatters.js,
-TableHelpers.jsx, TpSlModal.jsx, PositionsTable.jsx, OpenOrdersTable.jsx, AssetsTable.jsx,
-HistoryTables.jsx, BottomPanel.jsx}`, `client/src/pages/Trade.jsx` (rewired imports, ~900 lines
-removed), `client/CLAUDE.md`. Docs: `0_tracker.md` (Plan 7 row), this file.
-
-**Open questions:** none design-wise — the one blocking question (7.5's state architecture) was
-resolved via AskUserQuestion before any code. What's left of Plan 7: the hooks factory (7.5) and
-the 3 remaining god-components' internal decomposition (7.4) — both real, both explicitly scoped
-out this session rather than rushed, both good candidates for a dedicated follow-up pass with
-their own browser verification budget.

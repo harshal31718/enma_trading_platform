@@ -13,6 +13,7 @@ const { resolveModelParams } = require('../utils/risk')
 const { allocateChaosSymbols } = require('../utils/chaosAllocator')
 const { dispatchWebhook } = require('../utils/webhook')
 const { validateCapitalValue } = require('../utils/capitalGate')
+const { isValidSymbolFormat } = require('../utils/symbolFormat')
 const {
   resolveBinanceCredentials, checkCapitalOverCommit, checkConcurrentBotCap, buildRiskParamsCascade,
   computeSymbolStats, processEngineStatsUpdate,
@@ -25,6 +26,13 @@ async function startSession(req, res, next) {
 
     if (!strategyId || !symbols || !symbols.length || !timeframe || !capital) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'strategyId, symbols, timeframe, and capital are required')
+    }
+    // Plan 8 Step 8.2 (SEC-10): symbols end up as Redis lock keys and, via the
+    // engine's stats callback, Mongo `positionDetails.${symbol}` path segments
+    // — reject an invalid shape here rather than downstream.
+    const invalidSymbol = symbols.find((s) => !isValidSymbolFormat(s))
+    if (invalidSymbol !== undefined) {
+      throw new ApiError(400, 'VALIDATION_ERROR', `Invalid symbol format: ${JSON.stringify(invalidSymbol)}`)
     }
 
     // Plan 22 Step 22.1 (B-11): hard-reject non-numeric/negative/zero capital
@@ -355,6 +363,7 @@ async function deleteAllStopped(req, res, next) {
 async function handleAlgoGetPosition(req, res) {
   try {
     const { symbol } = req.body
+    if (_rejectIfInvalidSymbol(symbol, res)) return
     const headers = await _getBinanceHeaders(req.params.id)
     const { data } = await engineClient.get('/trade/positions', { headers, params: { symbol } })
     const positions = data?.data || []
@@ -375,6 +384,7 @@ async function handleAlgoGetPosition(req, res) {
 async function handleAlgoGetOpenOrders(req, res) {
   try {
     const { symbol } = req.body
+    if (_rejectIfInvalidSymbol(symbol, res)) return
     const headers = await _getBinanceHeaders(req.params.id)
     const { data } = await engineClient.get('/trade/open-orders', { headers, params: { symbol } })
     res.json({ success: true, data: data?.data || [] })
@@ -535,6 +545,17 @@ async function startChaos(req, res, next) {
     const strategiesBody = body.strategies || []
     if (!Array.isArray(strategiesBody)) {
       throw new ApiError(400, 'VALIDATION_ERROR', '"strategies" must be an array')
+    }
+    // Plan 8 Step 8.2 (SEC-10): manual symbol picks flow into Redis lock keys
+    // and, via the engine's stats callback, Mongo `positionDetails.${symbol}`
+    // path segments — same whitelist as startSession's `symbols` array.
+    for (const entry of strategiesBody) {
+      if (Array.isArray(entry.symbols)) {
+        const invalidSymbol = entry.symbols.find((s) => !isValidSymbolFormat(s))
+        if (invalidSymbol !== undefined) {
+          throw new ApiError(400, 'VALIDATION_ERROR', `Invalid symbol format: ${JSON.stringify(invalidSymbol)}`)
+        }
+      }
     }
 
     // ── 3. Resolve active strategies (D2) ───────────────────────────────────
@@ -847,11 +868,23 @@ async function _getBinanceHeaders(sessionId) {
   }
 }
 
+// Plan 8 Step 8.2 (SEC-10): every internal engine-callback handler below reads
+// `symbol` from the request body before using it — whitelist the shape here
+// rather than trusting the engine's callback payload verbatim.
+function _rejectIfInvalidSymbol(symbol, res) {
+  if (!isValidSymbolFormat(symbol)) {
+    res.status(400).json({ success: false, error: `Invalid symbol format: ${JSON.stringify(symbol)}` })
+    return true
+  }
+  return false
+}
+
 // POST /internal/algo/sessions/:id/place-order
 // Body: { symbol, side, type, quantity, price?, stopLoss?, takeProfit? }
 async function handleAlgoPlaceOrder(req, res, next) {
   try {
     const { symbol, side, type, quantity, price, stopLoss, takeProfit } = req.body
+    if (_rejectIfInvalidSymbol(symbol, res)) return
 
     await assertSymbolLockedByBotSession(symbol, req.params.id)
 
@@ -877,6 +910,7 @@ async function handleAlgoPlaceOrder(req, res, next) {
 async function handleAlgoClosePosition(req, res, next) {
   try {
     const { symbol } = req.body
+    if (_rejectIfInvalidSymbol(symbol, res)) return
 
     await assertSymbolLockedByBotSession(symbol, req.params.id)
 
@@ -897,6 +931,7 @@ async function handleAlgoClosePosition(req, res, next) {
 async function handleAlgoSetLeverage(req, res, next) {
   try {
     const { symbol, leverage } = req.body
+    if (_rejectIfInvalidSymbol(symbol, res)) return
 
     await assertSymbolLockedByBotSession(symbol, req.params.id)
 
