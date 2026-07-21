@@ -438,7 +438,7 @@ TA-Lib is built from source inside the engine Docker container. It is **not** in
 
 - `BaseStrategy` is the contract — never change its interface without a DECISIONS.md entry.
 - Strategy files are the source of truth — MongoDB is a metadata cache only.
-- Seeder (`services/strategy_seeder.py`) runs on every engine startup but only creates missing strategies (idempotent — 5 seeded strategies: MicroScalper, AdaptiveTrend, BestSupertrend, MicroMacroRSIDivergence, MultiDivergence).
+- Seeder (`services/strategy_seeder.py`) runs on every engine startup but only creates missing strategies (idempotent — 6 seeded strategies: MicroScalper, AdaptiveTrend, BestSupertrend, MicroMacroRSIDivergence, MultiDivergence, MarginSurge — the last of which failed its own validation gates, Plan 23/DECISIONS.md #29, and is kept only as a boundary-clean reference, not recommended for use).
 - Never import strategy files at module level — always use dynamic import at runtime.
 - Strategies directory: `engine/strategies/` (inside Docker container, mounted as a named volume).
 - Server never reads strategy files directly — always via `GET engine:8000/strategies/:name/code`.
@@ -447,7 +447,7 @@ TA-Lib is built from source inside the engine Docker container. It is **not** in
 - **Custom Models**: Subclass from base models in `engine/core/models/base.py` and assign custom instances in the strategy's `__init__` constructor.
 - **Alpha contract**: Override `forecast() -> Signal` to return a `Signal(direction: int, conviction: float, ref_price: float)`. Alpha must not read account state or write orders — those are Risk/PCM/Execution responsibilities.
 - **Model variants available** (`engine/core/models/`): `AtrBracketRiskModel`, `ChandelierRiskModel`, `SignalExitRiskModel`; `RiskBudgetPortfolio`, `NotionalPortfolio`; `DefaultTransactionCostModel`, `LadderedTransactionCostModel` (opt-in fill-model ladder — volatility-scaled slippage + √-impact, Plan 9 Step 9.10); `DefaultExecution`.
-- **Boundary enforcement**: `engine/tests/test_boundaries.py` checks all 5 seeded strategies at test time.
+- **Boundary enforcement**: `engine/tests/test_boundaries.py` checks all 6 seeded strategies at test time.
 
 ---
 

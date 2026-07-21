@@ -17,7 +17,8 @@ table; version before that dated 2026-06-05.
 Manages Python trading strategy files. Users can list all available strategies, **view** their
 source code (read-only — in-app editing was removed 2026-07-15, see above), and extract their
 configurable parameters. Users can also create new strategies from a blank template or clone an
-existing strategy. Five built-in strategies are seeded on engine startup.
+existing strategy. Six built-in strategies are seeded on engine startup (one, `MarginSurge`,
+failed its own validation — see the Built-in Strategies table below).
 
 ---
 
@@ -84,7 +85,7 @@ Returns: { strategy: Strategy }
 
 ## Key Invariants
 
-- **Seeding is idempotent.** All 5 current strategies are seeded on engine startup; re-seeding skips existing names. (Three earlier strategies — SimpleEMACross, RSIReversion, DonchianBreakout — were removed 2026-06-14; see `workspace/docs/state/DEPRECATED.md`.)
+- **Seeding is idempotent.** All 6 current strategies are seeded on engine startup; re-seeding skips existing names. (Three earlier strategies — SimpleEMACross, RSIReversion, DonchianBreakout — were removed 2026-06-14; see `workspace/docs/state/DEPRECATED.md`.)
 - **Strategy files live on disk.** MongoDB only stores metadata (name, description, filePath). Source code is read from `strategies/{name}/__init__.py` at request time.
 - **PARAMS schema is dynamic.** Each strategy class exposes a `PARAMS` class attribute. The engine reflects this at runtime — no schema is stored in the database.
 - **Server never imports strategy code.** All Python reflection happens inside the engine only.
@@ -102,7 +103,7 @@ Returns: { strategy: Strategy }
   (redeploying a new image does NOT reset it), but was never committed to `engine/strategies/` in
   git — so the deployed code and the repo's source of truth are not guaranteed to match. There is
   no reconciliation/sync step today; a strategy created this way must be manually copied back into
-  the repo if it's meant to be permanent (and the 5 seeded strategies are always safe regardless,
+  the repo if it's meant to be permanent (and the 6 seeded strategies are always safe regardless,
   since `services/strategy_seeder.py` re-creates any missing one idempotently on every startup).
 
 ---
