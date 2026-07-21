@@ -211,10 +211,32 @@ and the smaller hardening items are done.
 - Acceptance check: starting two sessions that would trade the same symbol on one account is
   prevented or explicitly warned. **Already true — no code change needed.**
 
-### Step 8.7 — Remaining small hardening (issue SEC-8)
+### Step 8.7 — Remaining small hardening (issue SEC-8) · **✅ shipped 2026-07-21**
 - Finish any constant-time-compare / health-endpoint items not already covered by Plans 2/3
   (e.g. the `/health` Redis new-connection-per-request churn).
 - Acceptance check: health check reuses a connection; no timing-unsafe secret compares remain.
+- **Surveyed before implementing**: constant-time compares were already fully closed by Plan 3
+  Step 3.5 — `requireInternalKey.js` (Node) uses `crypto.timingSafeEqual`, engine's `X-API-Key`
+  check uses `hmac.compare_digest`, no manual JWT/raw-token string comparison exists anywhere.
+  Engine's own `/health` already reuses its pooled Mongo/TimescaleDB clients (motor singleton,
+  asyncpg pool) — no fix needed there. **The only real gap**: `server/src/app.js`'s `/health`
+  opened (and tore down) a brand-new `ioredis` connection on every single request instead of
+  reusing the shared `config/redis.js` singleton.
+- Fixed by reusing the shared singleton, wrapped in a 2s timeout — the singleton is created with
+  `maxRetriesPerRequest: null` (BullMQ's own requirement), so a queued command on an unreachable
+  Redis would otherwise wait indefinitely instead of rejecting, turning a health check into a
+  hang. Extracted the check logic into new `server/src/utils/healthCheck.js`
+  (`checkMongoHealth`/`checkRedisHealth`) specifically so it's unit-testable without requiring
+  the whole `app.js` — found while writing the test that `app.js` transitively opens its own
+  real Redis connections via `socketEmitter.js`'s pub/sub subscriber and the 4 BullMQ queue
+  definitions, and that `ioredis-mock` doesn't implement the `.call()` method `rate-limit-redis`'s
+  `RedisStore` needs — both made a full-`app.js`-via-supertest test hang/fail for reasons
+  unrelated to the actual fix. The extracted-module approach sidesteps both.
+- **Verified**: new `server/src/utils/__tests__/healthCheck.test.js` (6 cases: reuses the given
+  client, `.ping()` failure returns `'error'`, a never-resolving `.ping()` still returns `'error'`
+  within the timeout rather than hanging, Mongo disconnected/connected/erroring). Full server jest
+  suite 258/258 (252 + 6 new), 100% coverage on the new file. Real `docker restart` on the server
+  container, `curl /api/v1/health` → `{"status":"ok","mongo":"connected","redis":"connected"}`.
 
 ## Out of scope
 - New features. This plan closes gaps and truth-tells the docs.

@@ -118,7 +118,8 @@ server/
     │   ├── encryption.js      ← AES-256 for API key storage
     │   ├── risk.js            ← resolveRiskParams() — per-run risk override merge
     │   ├── labConfig.js       ← buildMonteCarloConfig() (Phase 1) / buildWalkForwardConfig() (Phase 3a) / computeConfigHash(), pure + unit-tested
-    │   └── symbolFormat.js    ← Plan 8 Step 8.2 (SEC-10): SYMBOL_REGEX / isValidSymbolFormat() — whitelists the real Binance symbol shape before a user/engine-callback-supplied symbol is used as a Mongo dot-path segment (`positionDetails.${symbol}`) or Redis lock key
+    │   ├── symbolFormat.js    ← Plan 8 Step 8.2 (SEC-10): SYMBOL_REGEX / isValidSymbolFormat() — whitelists the real Binance symbol shape before a user/engine-callback-supplied symbol is used as a Mongo dot-path segment (`positionDetails.${symbol}`) or Redis lock key
+    │   └── healthCheck.js     ← Plan 8 Step 8.7 (SEC-8): checkMongoHealth()/checkRedisHealth() — extracted from `app.js`'s `/api/v1/health` handler so its connection-reuse behavior is unit-testable without requiring the whole app (which transitively opens its own real Redis connections via `socketEmitter.js`/BullMQ queue definitions)
     ├── app.js               ← Express app setup (no server.listen here)
     └── server.js            ← Entry point (server.listen + startup reconciliation)
 ```

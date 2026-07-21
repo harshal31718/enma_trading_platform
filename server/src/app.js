@@ -3,7 +3,7 @@ const helmet = require('helmet')
 const cors = require('cors')
 const pinoHttp = require('pino-http')
 const mongoose = require('mongoose')
-const Redis = require('ioredis')
+const redis = require('./config/redis')
 const cookieParser = require('cookie-parser')
 
 require('./config/passport')
@@ -28,6 +28,7 @@ const errorHandler = require('./middleware/errorHandler')
 const { verifyJWT } = require('./middleware/auth.middleware')
 const requireInternalKey = require('./middleware/requireInternalKey')
 const { authLimiter, mutatingLimiter, readLimiter } = require('./middleware/rateLimiters')
+const { checkMongoHealth, checkRedisHealth } = require('./utils/healthCheck')
 
 const passport = require('passport')
 
@@ -53,30 +54,16 @@ app.use(pinoHttp({
 app.use(express.json())
 app.use(passport.initialize())
 
-// Unprotected
+// Unprotected. Plan 8 Step 8.7 (SEC-8): both checks reuse the app's existing
+// shared connections (mongoose.connection, config/redis.js's singleton)
+// instead of opening — and tearing down — a brand-new connection per request.
 app.get('/api/v1/health', async (req, res) => {
-  const health = { status: 'ok', mongo: 'disconnected', redis: 'disconnected' }
-
-  try {
-    if (mongoose.connection.readyState === 1) {
-      await mongoose.connection.db.admin().command({ ping: 1 })
-      health.mongo = 'connected'
-    }
-  } catch {
-    health.mongo = 'error'
-  }
-
-  try {
-    const redis = new Redis(process.env.REDIS_URL, { lazyConnect: true })
-    await redis.connect()
-    await redis.ping()
-    redis.disconnect()
-    health.redis = 'connected'
-  } catch {
-    health.redis = 'error'
-  }
-
-  const statusCode = health.mongo === 'connected' && health.redis === 'connected' ? 200 : 503
+  const [mongo, redisStatus] = await Promise.all([
+    checkMongoHealth(mongoose.connection),
+    checkRedisHealth(redis),
+  ])
+  const health = { status: 'ok', mongo, redis: redisStatus }
+  const statusCode = mongo === 'connected' && redisStatus === 'connected' ? 200 : 503
   res.status(statusCode).json(health)
 })
 
