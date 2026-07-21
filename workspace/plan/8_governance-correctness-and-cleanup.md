@@ -1,6 +1,6 @@
 # Plan 8 — Governance, correctness & cleanup
 
-**Status:** Ready · **Priority:** P3 (last) · **Depends on:** 3, 5, 6 · **Related:** all
+**Status:** ✅ Done (2026-07-21) · **Priority:** P3 (last) · **Depends on:** 3, 5, 6 · **Related:** all
 
 > Source issues: SYS-3, SYS-4, SYS-7, ENG-8, ENG-14, ENG-15, ENG-18, SEC-8 (remainder),
 > SEC-10. The trailing correctness fixes and the reconciliation of docs to the new reality.
@@ -35,9 +35,12 @@ and the smaller hardening items are done.
   All fixed same session — see `handoff.md`'s 2026-07-16 entry for the full file list.
 - Document the strategy-asset model decided in Plan 3.2 (retired UI editing / sandboxed worker)
   including versioning and the prod named-volume divergence (`engine/strategies` volume makes
-  deployed code differ from the image — SYS-3). **Not done this pass** — the SYS-3 named-volume
-  divergence item is a distinct, still-open doc gap; carried forward, not part of F6's scope
-  (which was strictly the truth-telling audit, not new documentation of undocumented behavior).
+  deployed code differ from the image — SYS-3). **Done 2026-07-21 (Plan 8 close-out)** — added
+  as a new Key Invariant in `workspace/docs/features/strategy-management/SPEC.md`, documenting
+  that `docker-compose.prod.yml`'s `enma_engine_strategies` named volume overlays the image's
+  baked-in strategy files, so a strategy created/cloned via `POST /strategies` persists in the
+  volume across restarts/redeploys without ever being committed to the repo — no automatic
+  reconciliation exists. This was the one item Plan 8.1's original pass explicitly deferred.
 - Acceptance check: no invariant in the governance docs is contradicted by the code — confirmed
   via a dedicated audit subagent pass, findings applied same session.
 
@@ -174,7 +177,7 @@ and the smaller hardening items are done.
   winRate=0.36 cagr=-71.32 sqn=-2.08`), real `docker restart` on the engine container — clean
   boot, all 5 strategies seeded without error across 4 consecutive restarts, `/health` 200.
 
-### Step 8.5 — Make embedded policy choices explicit (issue ENG-18, ENG-14)
+### Step 8.5 — Make embedded policy choices explicit (issue ENG-18, ENG-14) · **✅ shipped 2026-07-21**
 - Document (and make configurable where reasonable) the SL-before-TP same-candle exit ordering
   in `check_exits` — currently a silent pessimism bias in branch order.
 - Validate `strategy_name` in the live path (`start_session`) the same way the strategies
@@ -182,6 +185,44 @@ and the smaller hardening items are done.
   failed instead of silently killing the task.
 - Acceptance check: invalid strategy/params surface as a visible session error; the exit-order
   policy is documented at the decision point.
+- **ENG-18 (exit-order policy) — already fully satisfied, verified rather than assumed.**
+  Surveyed `check_exits()` (`core/kernel.py`) before writing anything: the SL-before-TP tie-break
+  is already documented in three places — `ExecutionKernel.__init__`'s own docstring, the exact
+  decision-point comment (`# QNT-3 residual (Plan 9 Step 9.8): both wicks hit this candle —
+  ambiguous ordering. Default: SL first (conservative, unchanged). Opt-in: resolve via 1m
+  detail.`), and `engine/CLAUDE.md`'s Backtest engine rules section. It is also already
+  *configurable* — Plan 9 Step 9.8's opt-in `intrabar_detail` resolves the real tie via 1m
+  sub-candle data when enabled, falling back to the SL-first default only when detail data is
+  unavailable. `engine/tests/test_intrabar_detail_resolution.py` already covers both the default
+  and opt-in paths. No code change needed for this half — it was done by a prior session, this
+  step's job was to confirm it, not silently claim credit for new work.
+- **ENG-14 (strategy_name validation + load/param failure visibility) — the real gap, fixed.**
+  New `engine/utils/strategy_names.py` (`is_valid_strategy_name`) — extracted the regex
+  `routers/strategies.py`'s `_validate_strategy_name` already used, so both the strategy-creation
+  API and the live-session-start path check the same shape (the router keeps its own
+  `HTTPException` wrapper; the live path needed a different failure mode entirely). `start_session`
+  now validates `strategy_name` before the dynamic import, and wraps the import itself in
+  try/except — either failure calls `self._notifier.notify(session_id, {"status": "error",
+  "errorMessage": ...})`, reusing infrastructure Node's `processEngineStatsUpdate` already
+  supports (confirmed: it already accepts an engine-pushed `status: 'error'` +
+  `errorMessage` and writes both to the `LiveSession` Mongo doc — this was previously only used
+  by Node's own rollback path, never by the engine). Since `start_session` runs as a fire-and-
+  forget FastAPI background task (the `POST /algo/sessions` response has already returned 200
+  "starting" before this code runs), this is the ONLY way a load failure ever reaches the user —
+  before this fix it silently never did, and the session stayed "starting" forever. Also wrapped
+  `_run_symbol_loop`'s per-symbol param-validation block (`ValueError`/`TypeError` from an
+  unknown or out-of-range param) in the same log+notify pattern already used a few lines below
+  it for the informative-timeframe/HTF-insufficient-candles cases — session-visible, but scoped
+  to a `{"event": "log", ...}` (not a session-level status flip) since this is a per-symbol
+  failure in a possibly multi-symbol session, not a whole-session one.
+- **Verified**: new `engine/tests/test_strategy_load_failure.py` (6 cases: `is_valid_strategy_name`
+  accepts every seeded strategy name / rejects path-traversal-shaped and malformed input, an
+  invalid `strategy_name` notifies `status:error` and never registers the session, a
+  valid-shaped-but-nonexistent strategy notifies the same way, a valid strategy still starts
+  normally with no spurious error notify, an unknown param notifies `event:log/type:error` and
+  returns cleanly instead of raising). Full container pytest 666/666 (660 + 6 new), golden-master
+  byte-identical (live-only change, zero backtest overlap), real `docker restart` on the engine
+  container — clean boot, all 5 strategies seeded.
 
 ### Step 8.6 — Multi-session same-account modelling (issue SYS-7) · **✅ verified-already-shipped 2026-07-18**
 - **Correction to this step's own premise:** checked the actual code before deciding anything
@@ -241,18 +282,20 @@ and the smaller hardening items are done.
 ## Out of scope
 - New features. This plan closes gaps and truth-tells the docs.
 
-## Acceptance criteria (phase)
-- Governance docs contain no invariant the code contradicts.
-- API validates request bodies; injection-shaped keys refused.
-- Warmup readiness is always reachable; candle access is by name.
-- Embedded policy choices are documented/configurable; live strategy failures are visible.
-- Multi-session account conflict is prevented or warned.
-- Golden-master identical or explained; CI green.
+## Acceptance criteria (phase) — **ALL MET, Plan 8 fully shipped 2026-07-21**
+- Governance docs contain no invariant the code contradicts. ✅ (8.1, + SYS-3 close-out above)
+- API validates request bodies; injection-shaped keys refused. ✅ (8.2)
+- Warmup readiness is always reachable; candle access is by name. ✅ (8.3, 8.4)
+- Embedded policy choices are documented/configurable; live strategy failures are visible. ✅ (8.5)
+- Multi-session account conflict is prevented or warned. ✅ (8.6, verified-already-shipped)
+- Golden-master identical or explained; CI green. ✅ (8.3/8.4 byte-identical; 8.2/8.5/8.7 live/
+  server-only, no backtest overlap; full pytest 666/666, full server jest 258/258)
 
 ## Open questions
 - ~~8.6 is partly a product decision (allow overlapping-symbol sessions at all?)~~ — resolved
   2026-07-18: the existing atomic symbol lock already forbids it; no code change needed
   (see Step 8.6 above).
+- None remaining — Plan 8 has no open scope. All of 8.1–8.7 are shipped/verified-already-shipped.
 
 ## Handoff note template
 `Next session: [steps done 8.x], [next step], [golden-master result], [files changed]`

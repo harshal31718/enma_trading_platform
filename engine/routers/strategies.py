@@ -8,17 +8,16 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, validator
 
 from config.mongo import get_database
+from utils.strategy_names import is_valid_strategy_name
 
 router = APIRouter()
 
 STRATEGIES_DIR = Path(__file__).parent.parent / "strategies"
 
-VALID_STRATEGY_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]+$")
-
 
 def _validate_strategy_name(name: str) -> str:
     name = name.strip()
-    if not VALID_STRATEGY_NAME.match(name):
+    if not is_valid_strategy_name(name):
         raise HTTPException(
             status_code=400,
             detail="Strategy name must start with a letter and contain only letters, numbers, and underscores.",

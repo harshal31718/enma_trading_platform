@@ -44,6 +44,7 @@ from services.event_log import append_event, reset_session_seq, fetch_events, fo
 from services.user_data_stream import UserDataStreamManager
 from services.pairlist import pairlist_from_config
 from utils.symbols import round_price, clamp_and_round_qty, clamp_leverage, is_symbol_invalid
+from utils.strategy_names import is_valid_strategy_name
 from core.kernel import ExecutionAdapter, ExecutionKernel
 
 logger = logging.getLogger(__name__)
@@ -1631,10 +1632,34 @@ class LiveBotManager:
         # separate, deliberate product gate, not this step's call).
         session_exchange = BinanceFuturesTestnet()
 
+        # Plan 8 Step 8.5 (ENG-14): validate strategy_name the same way the
+        # strategies router does, and surface a load failure as a visible
+        # session error instead of letting the exception kill this
+        # background task silently — before this fix, an invalid
+        # strategy_name (or a strategy module that fails to import) never
+        # reached Node at all; the session stayed "starting" forever with no
+        # diagnosable cause, since start_session runs as a fire-and-forget
+        # FastAPI background task the original POST /algo/sessions request
+        # has already returned 200 for.
+        if not is_valid_strategy_name(strategy_name):
+            msg = (
+                f"Invalid strategy_name {strategy_name!r} — must start with a letter "
+                f"and contain only letters, numbers, and underscores."
+            )
+            logger.error(f"[AlgoBot] Session {session_id}: {msg}")
+            await self._notifier.notify(session_id, {"status": "error", "errorMessage": msg})
+            return
+
         # Dynamic import of strategy class
         import importlib
-        module = importlib.import_module(f"strategies.{strategy_name}")
-        strategy_class = getattr(module, strategy_name)
+        try:
+            module = importlib.import_module(f"strategies.{strategy_name}")
+            strategy_class = getattr(module, strategy_name)
+        except Exception as e:
+            msg = f"Failed to load strategy {strategy_name!r}: {e}"
+            logger.error(f"[AlgoBot] Session {session_id}: {msg}")
+            await self._notifier.notify(session_id, {"status": "error", "errorMessage": msg})
+            return
 
         stop_event = asyncio.Event()
         self._stop_signals[session_id] = stop_event
@@ -1939,21 +1964,39 @@ class LiveBotManager:
         strategy.fee_rate = fee_rate
 
         # Set user params on instance (F-015/F-016: reject out-of-range and unknown params)
-        _strategy_params = getattr(strategy_class, "PARAMS", {})
-        for key in params:
-            if key not in _strategy_params:
-                raise ValueError(
-                    f"Unknown parameter '{key}'. "
-                    f"Valid parameters for {strategy_class.__name__}: {list(_strategy_params.keys())}"
-                )
-        for key, meta in _strategy_params.items():
-            raw_val = params.get(key, param_default(meta))
-            try:
-                typed_val = param_coerce(meta, raw_val)
-            except (TypeError, ValueError):
-                typed_val = raw_val
-            param_validate(meta, typed_val)
-            setattr(strategy, key, typed_val)
+        # Plan 8 Step 8.5 (ENG-14): this used to raise straight out of
+        # `_run_symbol_loop`, a bare `asyncio.create_task()` with no
+        # `add_done_callback` (line ~1790) — an unknown/out-of-range param
+        # silently killed just this symbol's task with zero visibility
+        # anywhere but asyncio's own "Task exception was never retrieved"
+        # logger. Session-visible (log+notify), same pattern as the
+        # informative-timeframe/HTF-insufficient-candles cases below — this
+        # is a per-symbol failure, not a whole-session one, so only this
+        # symbol's task ends; other symbols in the same session are unaffected.
+        try:
+            _strategy_params = getattr(strategy_class, "PARAMS", {})
+            for key in params:
+                if key not in _strategy_params:
+                    raise ValueError(
+                        f"Unknown parameter '{key}'. "
+                        f"Valid parameters for {strategy_class.__name__}: {list(_strategy_params.keys())}"
+                    )
+            for key, meta in _strategy_params.items():
+                raw_val = params.get(key, param_default(meta))
+                try:
+                    typed_val = param_coerce(meta, raw_val)
+                except (TypeError, ValueError):
+                    typed_val = raw_val
+                param_validate(meta, typed_val)
+                setattr(strategy, key, typed_val)
+        except (ValueError, TypeError) as e:
+            _msg = f"{symbol}: invalid strategy params — {e}"
+            logger.error(f"[AlgoBot] {_msg}")
+            await self._notifier.notify(session_id, {
+                "event": "log",
+                "eventData": {"type": "error", "message": _msg},
+            })
+            return
 
         # Inject risk model params (mirrors backtest_runner step 6b). Live
         # trading executes against real fills, so slippage_pct is left at the

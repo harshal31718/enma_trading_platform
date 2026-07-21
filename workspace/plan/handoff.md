@@ -7,7 +7,7 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
-## 2026-07-21 — Plan 6 closed (d5) + Plan 8 Steps 8.2 (SEC-10) + 8.3 (ENG-8) + 8.4 (ENG-15) shipped — In progress
+## 2026-07-21 — Plan 6 closed (d5) + Plan 8 FULLY SHIPPED (8.2–8.5, 8.7 + SYS-3 doc close-out) — Done
 
 **Goal:** user asked to continue with `workspace/`. Surveyed the tracker, found three
 not-`Done` items (Plan 6's d5, Plan 8's 8.2–8.5/8.7, Plan 23 draft), asked which to continue —
@@ -110,11 +110,55 @@ restarts — clean boot, all 5 strategies seeded every time, `/health` 200.
 `engine/indicators/base.py`, `engine/tests/test_market_data_feed.py`, `engine/CLAUDE.md`. Docs:
 `8_governance-correctness-and-cleanup.md`, `0_tracker.md`, this file.
 
-**Open questions:** none for 8.2/8.3/8.4. **Next in Plan 8**: 8.5 (embedded policy choices
-explicit — SL-before-TP ordering doc + live strategy-load-failure visibility, no golden-master
-needed) and 8.7 (remaining hardening — health-endpoint Redis connection reuse, timing-safe secret
-compares, no golden-master needed) are the only steps left; both lower-risk than 8.2-8.4, can be
-done together in one pass if desired.
+**Plan 8 Step 8.7 (SEC-8, health/timing hardening) shipped.** Surveyed first — constant-time
+compares were already fully closed by Plan 3 Step 3.5 (Node `requireInternalKey.js` uses
+`crypto.timingSafeEqual`, engine's `X-API-Key` check uses `hmac.compare_digest`), and engine's own
+`/health` already reuses pooled Mongo/TimescaleDB clients. The only real gap: `server/src/app.js`'s
+`/health` opened (and tore down) a brand-new `ioredis` connection every request instead of reusing
+the shared `config/redis.js` singleton. Fixed, bounded by a 2s timeout (the singleton's
+`maxRetriesPerRequest: null` would otherwise let an unreachable Redis hang the check indefinitely).
+Extracted the check logic into new `server/src/utils/healthCheck.js` specifically so it's testable
+without requiring the whole `app.js` — found while writing the test that `app.js` transitively
+opens its own real Redis connections via `socketEmitter.js`/BullMQ queues, and `ioredis-mock`
+doesn't implement the `.call()` method `rate-limit-redis` needs; both made a full-app supertest
+hang/fail for reasons unrelated to the fix. Verified: new `healthCheck.test.js` (6 cases), full
+server jest 258/258, real `docker restart`, `curl /api/v1/health` correct.
+
+**Plan 8 Step 8.5 (ENG-18/ENG-14) shipped, closing out Plan 8 entirely.** ENG-18 (SL-before-TP
+same-candle exit ordering) turned out **already fully satisfied** by a prior session's Plan 9 Step
+9.8 work — verified via survey rather than assumed: already documented in 3 places (kernel.py
+docstring, the exact decision-point comment, `engine/CLAUDE.md`) and already configurable via the
+opt-in `intrabar_detail` resolution, with existing test coverage. No code change needed — reported
+the finding rather than silently claiming new work. ENG-14 was the real gap: `start_session` never
+validated `strategy_name` (unlike the strategies router) and its dynamic strategy import/param
+validation had zero failure visibility — since `start_session` runs as a fire-and-forget FastAPI
+background task, the only way a load failure could ever reach the user is an engine→Node
+notification, and none existed; the session just stayed "starting" forever. New
+`engine/utils/strategy_names.py` shares the same regex the router already used; `start_session` now
+validates upfront and wraps the dynamic import, notifying Node with `status:'error'` +
+`errorMessage` on failure (reusing infrastructure `processEngineStatsUpdate` already supported but
+the engine never called). `_run_symbol_loop`'s per-symbol param-validation failure gets the same
+treatment via the existing per-symbol log+notify pattern. Verified: new
+`test_strategy_load_failure.py` (6 cases), full container pytest 666/666, golden-master
+byte-identical, engine restarted clean.
+
+**Also closed while wrapping up Plan 8**: Step 8.1's own explicitly-deferred SYS-3 doc item (the
+prod `enma_engine_strategies` named-volume divergence — a strategy created via `POST /strategies`
+persists in the volume across redeploys without ever being committed to the repo) — added as a new
+Key Invariant in `workspace/docs/features/strategy-management/SPEC.md`. **Plan 8 is now fully
+shipped — all of 8.1–8.7 done, no remaining scope.**
+
+**Files changed (8.7):** `server/src/app.js`, new `server/src/utils/healthCheck.js` (+ test),
+`server/CLAUDE.md`. **Files changed (8.5):** new `engine/utils/strategy_names.py`,
+`engine/routers/strategies.py`, `engine/core/live_bot_manager.py`, new
+`engine/tests/test_strategy_load_failure.py`. **Files changed (SYS-3 close-out):**
+`workspace/docs/features/strategy-management/SPEC.md`. Docs:
+`8_governance-correctness-and-cleanup.md` (Status → Done), `0_tracker.md` (Plan 8 row → Done),
+this file.
+
+**Open questions:** none. Plan 8 has no remaining scope. Per the tracker's Execution order
+section, next unblocked work would be Plan 23 (MarginSurge strategy, Draft, backtest-gated work
+can start now) or the Quant track's remaining items (9.7-9.10-adjacent follow-ups, if any resurface).
 
 ---
 ## 2026-07-20 (later same day, part 17) — Plan 7 COMPLETE: ChaosWizard.jsx + hooks factory

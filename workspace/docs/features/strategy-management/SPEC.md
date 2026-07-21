@@ -93,6 +93,17 @@ Returns: { strategy: Strategy }
 - ~~Code edits are validated before write~~ — **removed 2026-07-15 (Plan 3 Step 3.2).** In-app strategy
   code editing (and the `PUT /code` endpoint) no longer exists; code is read-only. See "Data Flow"
   above and `workspace/plan/3_service-to-service-trust.md`'s Shipped summary.
+- **Prod's `enma_engine_strategies` named volume can diverge from the image (SYS-3, Plan 8 Step 8.1).**
+  `docker-compose.prod.yml` mounts a named volume at `/app/strategies`, overlaying whatever
+  strategy files are baked into the engine image at build time. Since `POST /strategies` (create/
+  clone, "What It Does" above) writes new files straight into this running directory, the
+  volume's actual contents can drift from what's checked into the repo/image: a strategy created
+  or cloned via the app persists in the volume across container restarts and image rebuilds
+  (redeploying a new image does NOT reset it), but was never committed to `engine/strategies/` in
+  git — so the deployed code and the repo's source of truth are not guaranteed to match. There is
+  no reconciliation/sync step today; a strategy created this way must be manually copied back into
+  the repo if it's meant to be permanent (and the 5 seeded strategies are always safe regardless,
+  since `services/strategy_seeder.py` re-creates any missing one idempotently on every startup).
 
 ---
 
