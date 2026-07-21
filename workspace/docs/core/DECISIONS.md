@@ -643,3 +643,55 @@ the docs, and re-running golden-master across every strategy, not just the touch
 agreed: **d5 dropped.** `self.stop_loss`/`self.take_profit` remain strategy-facing exactly as
 documented in `engine/CLAUDE.md`; `active_bracket` stays a read-side mirror only, not a replacement
 API. **Plan 6 (engine decomposition & exchange abstraction) has no remaining scope.**
+
+## 29. MarginSurge (Plan 23) — implemented, validation FAILED, kept as reference not shipped (2026-07-21)
+
+Plan 23 was explicit up front that a negative-expectancy edge should be killed by its own
+validation gates rather than shipped regardless — "the correct outcome of this plan is 'don't ship
+it' — that is a success of the process, not a failure." Ran the strategy through the plan's own
+gate sequence (§6) autonomously (user pre-resolved the open questions: validate both 5m/15m, fixed
+majors BTC/ETH/SOL/BNB, respect a losing verdict):
+
+- **Cost-realism (gate 1)**, default params, leverage=20/risk_pct=3%, full year 2024: every one of
+  8 symbol/timeframe combos showed heavy net losses (-46% to -51% of capital).
+- **Diagnostic re-run** at leverage=50/risk_pct=1% (isolates alpha quality from margin-rejection
+  noise — many gate-1 entries were rejected outright for exceeding available capital): **every one
+  of 6 combos still showed negative expectancy** (-18 to -114 $/trade) over the full year. Rules
+  out "just a sizing artifact."
+- **Lookahead sentinel (9.5)** — PASS, no divergence between full-array and expanding-window
+  `prepare()`.
+- **Grid optimize (gate 4)** on the least-bad combo (SOLUSDT/15m), 64 combos over
+  `dc_period`/`sl_atr_mult`/`rrr`, manual OOS split (train H1 2024, validate H2 2024): best
+  in-sample combo looked strong (Sharpe 1.76, +7.3%, expectancy +$33/trade) but **completely
+  inverted out-of-sample** (22% win rate, -17.8%, expectancy -$44.56/trade) — the plan's own "OOS
+  expectancy ≥ 50% of in-sample" acceptance bar isn't just missed, the sign flips. Textbook
+  in-sample-only overfitting (QNT-6).
+- **Monte Carlo/leverage selection (gate 5) and chaos stress (gate 6) were not run** — gate 4's OOS
+  failure is itself a kill per the plan's own gate ordering; running further compute on an
+  already-failed parameter set would only manufacture false confidence from a resampled version of
+  the same disproven trade sample.
+
+**Decision: implemented and kept in the codebase, but explicitly NOT shipped as a usable
+strategy.** The code itself is a legitimate reference implementation (passes
+`test_boundaries.py`'s Alpha-boundary checks, passes the lookahead sentinel, `MIN_WARMUP_CANDLES`
+correctly sized against the live retention cap) — the failure is in the specified alpha's edge, not
+in the engineering. Seeded into MongoDB (visible/backtestable in the UI, same as any strategy) with
+its description explicitly stating the validation outcome, rather than either hiding a
+demonstrated-negative-edge strategy or silently pretending it passed. `workspace/docs/strategies/
+MarginSurge.md` carries the full validation report. This is the first strategy this codebase has
+run through a full formal gate sequence and rejected — sets the precedent that "don't ship" is a
+valid, fully-documented terminal state for a strategy implementation session, not a fallback for
+only mid-implementation blockers.
+
+**Also found while implementing (engineering, not validation, findings):**
+- `AtrBracketRiskModel`'s TP is a static price target, but with `breakeven_r`/`trail_atr_mult` both
+  active (as this design requires), exits are dominated by the breakeven/trail/time-stop mechanics
+  before the static TP is ever reached — the grid search's `rrr` dimension produced identical
+  metrics across all 4 tested values for this reason. Not a bug (both mechanisms are working as
+  designed), but a real interaction worth knowing before assuming a 3-parameter grid is exploring
+  3 independent dimensions.
+- The `max_hold_candles` time-stop deliberately avoids `on_open_position()`/`on_close_position()`
+  — confirmed `LiveAdapter` never calls these hooks (only `BacktestAdapter` does), so any strategy
+  relying on them for entry-index tracking would have a live/backtest parity gap. Tracked instead
+  via `self.is_open`/`self.index`/`self.vars` only, which both adapters keep consistent — a pattern
+  worth reusing for any future strategy that needs "how long have I held this position" state.

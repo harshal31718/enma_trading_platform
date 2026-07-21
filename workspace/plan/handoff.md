@@ -7,6 +7,68 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
+## 2026-07-21 (later same day) — Plan 23 (MarginSurge strategy) — VALIDATION FAILED, not shipped — Done
+
+**Goal:** user said "proceed and start working on plan23 and work non-stop... use recommended
+paths, do not stop" — full autonomy, no mid-session questions, respecting the plan's own
+pre-resolved open questions (validate both 5m/15m, fixed majors BTC/ETH/SOL/BNB, respect a losing
+verdict).
+
+**Implemented** `engine/strategies/MarginSurge/__init__.py` per the plan's §2/§3/§5 spec: Donchian
+breakout from a BB(20) squeeze (bottom `squeeze_pct` of a rolling-200 bandwidth-percentile
+history — vectorized via `sliding_window_view`, verified bit-identical to a naive loop before use),
+ADX(14) rising + MFI(14) flow + EMA(200) trend confirmation; `AtrBracketRiskModel` +
+`RiskBudgetPortfolio` for the SL/breakeven/trail/ATR-percentile-veto and sizing (no new model
+classes, as the plan specified). One real engineering finding along the way: the time-stop
+(`max_hold_candles`) can't use `on_open_position()` for entry-index tracking because `LiveAdapter`
+never calls that hook (only `BacktestAdapter` does) — used `self.is_open`/`self.index`/`self.vars`
+instead, which both adapters keep consistent. Registered in `strategy_seeder.py`, added to
+`test_boundaries.py` (24/24 boundary cases now, 6 strategies) and `lookahead_sentinel.py` (PASS —
+no divergence between full-array and expanding-window `prepare()`).
+
+**Ran the plan's own validation gates 1-4, then stopped per the plan's own explicit framing.**
+Gate 1 (cost-realism, default params) and a diagnostic re-run (isolating alpha quality from
+margin-rejection noise) both showed **negative expectancy on every tested symbol/timeframe combo**
+— not a marginal miss, -18 to -114 $/trade across the board. Gate 4 (grid-optimize 64 combos +
+manual OOS split) made this unambiguous: the best in-sample combo (Sharpe 1.76, +7.3%) **inverted
+sign out-of-sample** (-17.8%, win rate 22%) — textbook overfitting, exactly what the plan's QNT-6
+warning anticipated. Gates 5-6 (Monte Carlo/leverage selection, chaos stress) were deliberately
+**not run** — gate 4's OOS failure is itself a kill per the plan's own gate ordering; spending more
+compute there would manufacture false confidence from an already-disproven trade sample, not
+produce real signal.
+
+**Verdict: DO NOT SHIP — a valid, fully-documented terminal outcome per the plan's own explicit
+framing** ("the correct outcome of this plan is 'don't ship it' — that is a success of the process,
+not a failure"). The code stays in the codebase as a boundary-clean, lookahead-clean reference
+implementation (the engineering is correct; the specified alpha has no edge) — seeded with its
+validation outcome stated explicitly in the description so it's never mistaken for a
+ready-to-trade strategy. This is the first strategy this codebase has run through a full formal
+gate sequence and rejected; recorded as `DECISIONS.md` #29 to set the precedent that this is a
+legitimate outcome, not an abandoned task.
+
+**Verified:** engine pytest 670/670, golden-master byte-identical (additive-only, zero impact on
+the 5 existing strategies), engine container restarted clean with all 6 strategies seeded across
+multiple restarts. No browser/UI verification was performed — no browser-automation tool was
+available in this session; verified instead via direct MongoDB reads and the engine's own health
+endpoint, which the user should be aware of if they specifically wanted a visual Strategies-page
+check.
+
+**Files changed:** new `engine/strategies/MarginSurge/__init__.py`, new
+`workspace/docs/strategies/MarginSurge.md`, `engine/services/strategy_seeder.py`,
+`engine/tests/test_boundaries.py`, `engine/scripts/lookahead_sentinel.py`,
+`workspace/docs/strategies/INDEX.md`, `workspace/docs/features/strategy-management/SPEC.md`,
+`workspace/docs/state/CURRENT_STATE.md`, `workspace/docs/core/DECISIONS.md` (#29),
+`workspace/plan/23_high-risk-leverage-strategy.md`, `workspace/plan/0_tracker.md`, this file.
+Several throwaway validation scripts (`engine/scripts/_plan23_*.py`, `_smoke_marginsurge.py`) were
+written, run, and deleted — not part of the permanent codebase.
+
+**Open questions:** none — the plan's own §8 open questions were all pre-resolved by the user's
+"do not stop" instruction and are now moot given the don't-ship verdict. If a future session wants
+to revisit MarginSurge's alpha (different entry logic, different symbols/timeframes), start from
+this file's implementation and re-run the full gate sequence — do not assume the current entry
+conditions have any edge just because the code passes boundary/lookahead checks.
+
+---
 ## 2026-07-21 — Plan 6 closed (d5) + Plan 8 FULLY SHIPPED (8.2–8.5, 8.7 + SYS-3 doc close-out) — Done
 
 **Goal:** user asked to continue with `workspace/`. Surveyed the tracker, found three
@@ -234,75 +296,4 @@ all 4 named god-components decomposed (7.4), one documented realtime-price sourc
 concentrated hooks-toast duplication collapsed + `dist/` already untracked (7.5). Plan 7 was the
 last item astride the "Server & client structure" track in `0_roadmap.md`; check that file plus
 `0_tracker.md`'s Execution order section for what's next in priority order.
-
----
-## 2026-07-20 (later same day, part 16) — Plan 7 Step 7.4 continued: Settings.jsx + Backtest.jsx
-
-**Goal:** user's follow-up after the prior entry's report ("did not attempt
-Backtest/Settings/ChaosWizard decomposition or the hooks factory") was "proceed on them." Did
-Settings.jsx and Backtest.jsx this round; see Open Questions below for what's still outstanding
-and why.
-
-**Settings.jsx (928 lines, entirely one function) → 30 lines.** Read the whole file first — 6
-visually-distinct cards (Profile, Algo Access, Environment Config [env toggle + testnet/mainnet
-API keys + bot limits, all one visual card in the original], Chaos Settings, Notifications,
-Exchange Settings), each with its own local form state + effect-synced-from-query + submit
-handler already cleanly commented with `// ── X ──` section markers. Extracted each into
-`client/src/features/settings/`, with each card calling its own `useExchangeSettings()`/
-`useUpdateExchangeSettings()` rather than receiving 20+ props — TanStack Query dedupes identical
-query keys automatically, so 6 independent calls to the same `['settings','exchange']` key is the
-normal usage pattern, not 6x the network traffic. Verified in browser: every card renders with
-real loaded data (fee %, capital, leverage, risk params all correct), and the `space-y-0`
-flush-spacing between Environment/Chaos cards plus `NotificationsCard`'s own explicit `mt-6` was
-preserved exactly (checked this specifically — a naive "wrap the middle card in `<div
-className="mt-6">`" would have added a gap that didn't exist in the original).
-
-**Backtest.jsx (831 lines, one ~640-line function + 2 small table helpers) → 503 lines.** The
-`PerformanceTable`/`ComparisonTable` helpers were already separate — moved as-is. The 4 result
-tabs (Overview, Performance Summary, List of Trades, Compare) each got their own component under
-`client/src/features/backtest/` (`OverviewTab`/`TradesTab`/`ComparisonTab` — Performance Summary
-just renders `PerformanceTable` inline, didn't need its own wrapper), taking already-fetched data
-as props. **Deliberately did not move the TanStack Query hook calls themselves** — `selectedResultId`/
-`tradePage`/`comparisonIds` are page-level state shared by the history sidebar and all 4 tabs, so
-relocating the hooks into per-tab components would mean threading that state back up anyway with
-no real benefit, just churn. This was a presentational split, not a data-ownership refactor.
-
-**Screenshot tooling failed mid-verification** — `Page.captureScreenshot` timed out repeatedly
-after clicking into the Performance Summary tab (unrelated to the code change: console showed no
-errors, and the accessibility tree confirmed the page was fully interactive throughout). Switched
-to `read_page` against the DOM/accessibility tree instead of narrating around the failure —
-confirmed `PerformanceTable` rendered real per-side metrics (Net Profit -$494.74/+$377.24/-$871.98
-for All/Long/Short), `TradesTab` rendered its pagination controls (First/Prev/Page 1/2/11/Next/
-Last), and `ComparisonTab`'s empty state rendered correctly, across the actual DOM tree rather
-than a pixel screenshot.
-
-**Found, not caused, not fixed**: a React "duplicate/missing key" console warning on
-`TradesTab`'s `<TableRow key={tr.id}>`. Checked `git show HEAD:client/src/pages/Backtest.jsx`
-before assuming this was a regression — the identical `key={tr.id}` was already in the
-pre-refactor committed code, so this is a pre-existing trade-data quality issue (likely
-duplicate/undefined `id` on some rows from the API), not something the extraction introduced.
-Flagged here rather than silently fixed — fixing it would be scope creep for a decomposition task
-and the actual root cause (why does `tr.id` collide/go missing?) needs its own investigation.
-
-**Verified:** `vite build` succeeds with stable bundle size for both changes, `vitest` 15/15
-throughout. `client/CLAUDE.md` updated — added `features/settings/` and `features/trade/` (from
-the prior entry, which hadn't been documented in CLAUDE.md's folder tree yet) folder entries, and
-expanded the "Backtest page spec" section to describe the new tab components and the
-data-ownership boundary (Backtest.jsx keeps the hooks, cards/tabs are presentational).
-
-**Files changed:** new `client/src/features/settings/{styles.js, ProfileCard.jsx,
-AlgoAccessCard.jsx, EnvironmentConfigCard.jsx, ChaosSettingsCard.jsx, NotificationsCard.jsx,
-ExchangeSettingsCard.jsx}`, new `client/src/features/backtest/{PerformanceTable.jsx,
-ComparisonTable.jsx, OverviewTab.jsx, TradesTab.jsx, ComparisonTab.jsx}`,
-`client/src/pages/Settings.jsx` (rewritten), `client/src/pages/Backtest.jsx` (rewired),
-`client/CLAUDE.md`. Docs: `0_tracker.md` (Plan 7 row), this file.
-
-**Open questions:** none design-wise. **Still not attempted, same reasons as before**:
-ChaosWizard.jsx's internal decomposition (677 lines, same monolithic-body shape Settings.jsx/
-Backtest.jsx had before this round — its own pass); the "hooks share a factory" sub-item from 7.5
-(collapsing duplicated `api.get/post`-and-unwrap boilerplate across ~15 per-domain hooks — a real,
-larger mechanical migration); the remaining WS-entangled pieces of Trade.jsx (TickerBar,
-ChartContainer, OrderBook, RecentTrades, OrderForm, LeverageModal, `TradeInner`). Also newly
-surfaced and worth a dedicated look: the `TradesTab` duplicate-key warning (pre-existing trade-
-data quality issue, root cause not investigated).
 

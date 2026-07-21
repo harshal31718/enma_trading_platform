@@ -26,6 +26,7 @@ SEEDED_STRATEGIES = [
     "BestSupertrend",
     "MicroMacroRSIDivergence",
     "MultiDivergence",
+    "MarginSurge",
 ]
 
 # ── Forbidden Alpha-side references (account/position state + order writes) ──

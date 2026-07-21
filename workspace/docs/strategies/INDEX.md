@@ -11,7 +11,7 @@ for the full indicator catalog before choosing what to use.
 
 ---
 
-## Implemented Strategies (5)
+## Implemented Strategies (6)
 
 | Name | Category | Signal Logic | Key Indicators | Best Timeframe |
 |------|----------|-------------|----------------|----------------|
@@ -20,6 +20,7 @@ for the full indicator catalog before choosing what to use.
 | [BestSupertrend](BestSupertrend.md) | Trend + MTF | HTF Supertrend (inline) + SMA(7/20) crossover | sma, atr (inline Supertrend) | 1h–4h |
 | [MicroMacroRSIDivergence](MicroMacroRSIDivergence.md) | Divergence | RSI regular divergence on micro+macro pivot confluence; ported from Pine | rsi, atr, pivot_high, pivot_low, ema/sma | 1h–4h |
 | [MultiDivergence](MultiDivergence.md) | Divergence Confluence | 9-oscillator vote; entry when ≥N agree on direction; ported from Pine | rsi, mfi, stochastic, adx, macd, obv, pivot_high, pivot_low, atr + inline Z-Score | 15m–4h |
+| [MarginSurge](MarginSurge.md) | Breakout Scalper (Plan 23) | Donchian breakout from a BB squeeze + rising ADX + MFI flow + EMA(200) trend | donchian, bollinger_bands, adx, mfi, ema, atr | 5m/15m — **⚠️ validation FAILED, see doc: negative expectancy on every tested symbol/timeframe, OOS grid-search sign-flip. Not recommended for live or further deployment as specified.** |
 
 ---
 

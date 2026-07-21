@@ -45,6 +45,7 @@ STRATEGIES = [
     "BestSupertrend",
     "MicroMacroRSIDivergence",
     "MultiDivergence",
+    "MarginSurge",
 ]
 
 CONFIG = {

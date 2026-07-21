@@ -1,6 +1,7 @@
 # 23 — New Strategy: High-Risk / High-Leverage Breakout Scalper ("MarginSurge")
 
-**Status:** Draft (design plan — Rule D: docs only, no code scaffolded)
+**Status:** ✅ Done — **VALIDATION FAILED, NOT SHIPPED** (verdict reached 2026-07-21; see
+"Validation outcome" section at the end of this file)
 **Created:** 2026-07-16 · **Priority:** P2 (feature work; gated on live-correctness fixes below)
 **Requested as:** "a new strategy, fixed to give high returns, high risk, entry conditions +
 SL/TP levels, optimised for heavy margin use."
@@ -154,3 +155,54 @@ on Plan 21.
    recommendation is to not ship — confirm that's acceptable up front, because "high returns"
    cannot be rescued by raising leverage on a negative-expectancy edge (it only accelerates
    the loss).
+
+**Resolved 2026-07-21** — user authorized proceeding autonomously ("use recommended paths, do not
+stop") on the implementation/validation session, which is exactly a pre-authorization of this
+section's own proposals: validate both 5m/15m and ship whichever passes (§8.1), fixed majors for
+validation (§8.2), and respect a losing verdict (§8.3). See below.
+
+---
+
+## Validation outcome (2026-07-21) — DO NOT SHIP
+
+Implemented `engine/strategies/MarginSurge/__init__.py` exactly per §2/§3/§5 above (Donchian
+breakout from a BB squeeze, ADX/MFI/EMA(200) confirmation, ATR bracket via `AtrBracketRiskModel`,
+`RiskBudgetPortfolio` sizing), registered in the seeder, added to `test_boundaries.py` and the
+lookahead sentinel. Ran gates 1–4 of §6 autonomously (open questions above pre-resolved, so no
+mid-session questions were needed):
+
+- **Gate 1 (cost-realism)** — default params, leverage=20/risk_pct=3%, full year 2024, all 4 fixed
+  majors × 5m/15m: every combo showed heavy net losses (-46% to -51% of capital). Only
+  `SOLUSDT/15m` technically passed the breakeven-WR≤45% filter (payoff 1.42 → BE-WR 41%), but its
+  *actual* win rate (29%) sat below that bar — an alpha problem, not (only) a cost problem.
+- **Diagnostic re-run** at leverage=50/risk_pct=1% (isolates alpha quality from the margin-
+  rejection noise gate 1's many `[Entry rejected]` lines showed): **negative expectancy on all 6
+  combos re-tested** (-$18 to -$114/trade). Confirms the negative edge isn't a sizing artifact of
+  gate 1's specific leverage/risk_pct choice.
+- **Gate 3 (lookahead sentinel, 9.5)** — PASS. `scripts/lookahead_sentinel.py` shows zero
+  divergence between full-array and expanding-window `prepare()` for MarginSurge.
+- **Gate 4 (grid optimize + manual OOS split)** — 64 combos over `dc_period`/`sl_atr_mult`/`rrr`
+  on the least-bad combo (SOLUSDT/15m), train H1 2024 / validate H2 2024: best in-sample result
+  looked strong (Sharpe 1.76, +7.3%, expectancy +$33/trade) but **inverted sign out-of-sample**
+  (22% win rate, -17.8%, expectancy -$44.56/trade) — this plan's own §6.4 acceptance rule ("B's
+  expectancy ≥ 50% of A's") isn't marginally missed, it fails on a sign flip. Textbook in-sample
+  overfitting (QNT-6's own warning, borne out exactly).
+- **Gates 5–6 (Monte Carlo/leverage selection, chaos stress) — deliberately not run.** Gate 4's
+  OOS failure is itself a kill per this plan's own §6 framing ("each can kill the strategy — that's
+  the point"); spending further compute on Monte Carlo ruin-probability curves for an already-
+  disproven parameter set would manufacture false confidence, not real signal.
+
+**Verdict, per this plan's own pre-committed framing: don't ship.** The strategy is implemented
+correctly (passes `test_boundaries.py`, passes the lookahead sentinel) and stays in the codebase as
+a working, boundary-clean reference — but its specified alpha has no demonstrated edge on any
+tested symbol/timeframe, and the one combo that looked good in-sample was a textbook overfit that
+failed OOS by a wide margin, not a marginal miss. Seeded with its validation outcome stated
+explicitly in the description (`services/strategy_seeder.py`) so it isn't mistaken for a normal,
+ready-to-trade strategy. Full report: `workspace/docs/strategies/MarginSurge.md`. Decision recorded
+in `DECISIONS.md` #29.
+
+**Verified:** engine pytest 670/670 (24 boundary cases across 6 strategies, +6 new
+`test_strategy_load_failure.py`-adjacent counts unaffected), golden-master byte-identical
+(`MultiDivergence trades=55 netProfit=-1784.02 winRate=0.36 cagr=-71.32 sqn=-2.08` — additive-only
+change, zero impact on the 5 existing seeded strategies), engine container restarted clean with all
+6 strategies seeded.

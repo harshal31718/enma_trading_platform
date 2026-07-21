@@ -243,11 +243,16 @@ Earlier relocation: content moved into feature SPEC docs and DECISIONS.md; see
 - **Exchange Settings**: Centralized configuration for trading fees, backtest defaults, bot defaults, simulation parameters (slippage, funding), and **risk-model defaults** (risk % per trade, reward:risk ratio, max session drawdown, liquidation buffer). All values stored as variables — no hardcoded numbers. Accessible via GET/PUT `/api/v1/settings/exchange`. Forms pre-fill from saved defaults.
 
 ### Strategy Management
-List, create, clone, and view (read-only) strategies; 5 strategies seeded on startup, each bound
+List, create, clone, and view (read-only) strategies; 6 strategies seeded on startup, each bound
 to a specific Risk/Portfolio model pair. **In-app code editing was removed 2026-07-15** (Plan 3
 Step 3.2, SEC-2 — closed the any-user strategy-code RCE path outright). **Detail moved 2026-07-02
 to** `workspace/docs/features/strategy-management/SPEC.md` (Built-in Strategies table, updated
 2026-07-15 for the edit-path removal) — this bullet is a pointer, not a description.
+**MarginSurge (Plan 23, added 2026-07-21)** is the 6th seeded strategy — architecturally correct
+(boundary-clean, lookahead-clean) but its **validation FAILED**: negative expectancy on every
+tested symbol/timeframe, grid-search parameters catastrophically overfit out-of-sample. Seeded
+for backtest/reference use only; not recommended for live sessions regardless of Plan 21's own
+gating. See `workspace/docs/strategies/MarginSurge.md` for the full report.
 
 ### Backtesting
 Full strategy simulation against historical OHLCV, unified five-model pipeline (shared with live

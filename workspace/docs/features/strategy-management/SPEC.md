@@ -109,7 +109,7 @@ Returns: { strategy: Strategy }
 
 ## Built-in Strategies
 
-All 5 are ported to the Narang Black-Box architecture: each defines `forecast()` and binds a
+All 6 are ported to the Narang Black-Box architecture: each defines `forecast()` and binds a
 specific `RiskModel` + `PortfolioModel` pair (see `workspace/docs/core/MODELS.md`); none own
 `go_long`/`go_short`/`update_position` directly. The seeder also prunes any MongoDB strategy document
 whose name isn't in `DEFAULT_STRATEGIES` (e.g. a stale removed-strategy remnant).
@@ -121,6 +121,7 @@ whose name isn't in `DEFAULT_STRATEGIES` (e.g. a stale removed-strategy remnant)
 | `BestSupertrend` | Trend + MTF | `AtrBracketRiskModel` + `NotionalPortfolio` | HTF Supertrend + SMA(7/20) crossover with a hard ATR stop (replaced the earlier `SignalExitRiskModel`); closes via `_close_at_open` (intentional behavioral change from the prior `liquidate()`); `_safe_sma()` guards against `period > data_length` TA errors |
 | `MicroMacroRSIDivergence` | Divergence | `AtrBracketRiskModel` + `RiskBudgetPortfolio` | RSI regular divergence on micro+macro pivot confluence; optional opposite-divergence exit |
 | `MultiDivergence` | Divergence Confluence | `AtrBracketRiskModel` + `RiskBudgetPortfolio` | 9-oscillator vote (RSI, MFI, Stochastic, Z-Score, ADX, MACD, OBV, price-action, swing-volume); entry when ≥N sources agree on direction |
+| `MarginSurge` | Breakout Scalper (Plan 23) | `AtrBracketRiskModel` + `RiskBudgetPortfolio` | Donchian breakout from a BB squeeze + rising ADX + MFI flow + EMA(200) trend — **⚠️ validation FAILED 2026-07-21, not recommended for live/further deployment; see `workspace/docs/strategies/MarginSurge.md`** |
 
 ---
 

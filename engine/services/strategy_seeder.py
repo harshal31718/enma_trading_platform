@@ -32,6 +32,10 @@ DEFAULT_STRATEGIES = [
         "name": "MultiDivergence",
         "description": "Multi-oscillator divergence confluence (ported from the GainzAlgo Multi-Divergence Pine screener). Detects regular divergence between price swing pivots and nine sources (RSI, MFI, Stochastic, Z-Score, ADX, MACD, OBV, price-action, swing-volume); enters when at least N sources agree on a new pivot. ATR-based SL/TP with risk-per-trade sizing. Long & short.",
     },
+    {
+        "name": "MarginSurge",
+        "description": "⚠️ VALIDATION FAILED (Plan 23, 2026-07-21) — not recommended for live or further deployment. Volatility-compression breakout scalper (Donchian breakout from a BB squeeze + rising ADX + MFI flow + EMA(200) trend). Negative expectancy on every tested symbol/timeframe (BTC/ETH/SOL/BNB, 5m & 15m, full year 2024); grid-optimized parameters catastrophically overfit (in-sample Sharpe 1.76 flipped to -22% win rate out-of-sample). Architecturally correct (boundary-clean, lookahead-clean) and kept as a reference implementation — see workspace/docs/strategies/MarginSurge.md for the full validation report before using it for anything beyond backtesting.",
+    },
 ]
 
 
