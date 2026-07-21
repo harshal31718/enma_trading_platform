@@ -7,7 +7,7 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
-## 2026-07-21 — Plan 6 closed (d5 dropped) + Plan 8 Step 8.2 shipped (SEC-10) — In progress
+## 2026-07-21 — Plan 6 closed (d5 dropped) + Plan 8 Steps 8.2 (SEC-10) + 8.3 (ENG-8) shipped — In progress
 
 **Goal:** user asked to continue with `workspace/`. Surveyed the tracker, found three
 not-`Done` items (Plan 6's d5, Plan 8's 8.2–8.5/8.7, Plan 23 draft), asked which to continue —
@@ -55,12 +55,38 @@ suite 252/252 (233 existing + 19 new), `/health` 200 throughout.
 Docs: `6_engine-decomposition-and-exchange-abstraction.md`, `8_governance-correctness-and-cleanup.md`,
 `0_tracker.md`, `DECISIONS.md`, this file.
 
-**Open questions:** none for 8.2. **Next in Plan 8**: 8.3 (warmup/readiness math, engine,
-golden-master before/after), 8.4 (candle column-order safety, engine, golden-master before/after),
-8.5 (embedded policy choices explicit — SL-before-TP ordering doc + live strategy-load-failure
-visibility), 8.7 (remaining hardening — health-endpoint Redis connection reuse, timing-safe secret
-compares). Suggested order per the plan file: 8.3/8.4 first (both need their own golden-master
-baseline, don't bundle same-day), then 8.5/8.7 (no golden-master needed, lower risk).
+**Plan 8 Step 8.3 (ENG-8, warmup/readiness math) shipped, user said "proceed."** Surveyed the
+actual code (Explore agent) before designing — found the bug was already live, not hypothetical:
+`_get_min_candles_required` (`core/live_bot_manager.py`) scanned every strategy `PARAMS` entry for
+the largest numeric value regardless of meaning, then applied a hardcoded ×3 buffer contradicting
+its own "2x" docstring. With default config this left **2 of the 5 seeded strategies permanently
+stuck in "warming up," never trading**: `MicroMacroRSIDivergence`'s `max_pivot_bars=500` (a
+bar-distance cap, not a lookback) dominated the scan → 1500 required; `AdaptiveTrend`'s genuine
+`trend_period=200` → 600 required — both past the hardcoded 500-candle `append_candle` retention
+cap. **Found the real fix while investigating, not invented**: every strategy already declares its
+own correct warmup requirement via `BaseStrategy.MIN_WARMUP_CANDLES` — already the exact value
+`services/backtest_runner.py` uses for the backtest's own warmup period. Rewrote
+`_get_min_candles_required` to `max(50, strategy.MIN_WARMUP_CANDLES)`, giving live/backtest parity
+instead of a second, independently-wrong computation — no new params.py metadata flag needed.
+Extracted the 500 cap into a named `MAX_CANDLES_RETAINED` (`core/market_data_feed.py`) and added a
+session-start visibility check (mirrors the existing HTF-insufficient-candles pattern) that logs +
+notifies the session if a strategy's declared requirement ever exceeds the cap, rather than a
+silent unreachable state.
+
+**Verified**: new `engine/tests/test_min_candles_required.py` (6 cases), full container pytest
+659/659 (653 + 6 new), golden-master byte-identical (live-only change, zero backtest overlap —
+confirmed via before/after `golden_master.py run` + `compare`), real `docker restart` on the
+engine container (clean boot, all 5 strategies seeded, `/health` 200).
+
+**Files changed:** `engine/core/live_bot_manager.py`, `engine/core/market_data_feed.py`, new
+`engine/tests/test_min_candles_required.py`. Docs: `8_governance-correctness-and-cleanup.md`,
+`0_tracker.md`, this file.
+
+**Open questions:** none for 8.2/8.3. **Next in Plan 8**: 8.4 (candle column-order safety, engine,
+needs its own golden-master before/after — don't bundle with another engine change same-day), 8.5
+(embedded policy choices explicit — SL-before-TP ordering doc + live strategy-load-failure
+visibility, no golden-master needed), 8.7 (remaining hardening — health-endpoint Redis connection
+reuse, timing-safe secret compares, no golden-master needed).
 
 ---
 ## 2026-07-20 (later same day, part 17) — Plan 7 COMPLETE: ChaosWizard.jsx + hooks factory

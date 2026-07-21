@@ -87,7 +87,7 @@ and the smaller hardening items are done.
   `strategy.validators.test.js`, 4 new `algoSessionService.test.js` cases for the symbol-key
   whitelist), `/health` 200 throughout, no regressions.
 
-### Step 8.3 — Warmup/readiness math (issue ENG-8)
+### Step 8.3 — Warmup/readiness math (issue ENG-8) · **✅ shipped 2026-07-21**
 - Fix `_get_min_candles_required` vs `WARMUP_CANDLES` vs the 500-candle `_append_candle` cap so
   readiness is always reachable: reconcile the "×3" code with the "2x" docstring, stop
   conflating unrelated numeric params (an RSI threshold of 70 shouldn't demand 210 candles —
@@ -95,6 +95,39 @@ and the smaller hardening items are done.
   ≥ the requirement.
 - Golden-master before/after (touches indicator warmup). Acceptance check: a strategy with a
   large lookback becomes ready deterministically; no permanent-warmup state.
+- **Surveyed before designing**: the old `_get_min_candles_required` (`core/live_bot_manager.py`)
+  scanned every `PARAMS` entry for the largest numeric value regardless of meaning, then applied
+  a hardcoded ×3 buffer contradicting its own "2x" docstring. **Confirmed as a live, not
+  hypothetical, bug**: with default config, `MicroMacroRSIDivergence`'s `max_pivot_bars=500` (a
+  bar-distance sanity cap, not a lookback) dominates the scan → 500×3=1500 required; separately,
+  `AdaptiveTrend`'s genuine `trend_period=200` lookback → 200×3=600 required. Both exceed the
+  hardcoded 500-candle `append_candle` retention cap — **2 of the 5 seeded strategies were
+  already permanently stuck in "warming up" with stock defaults**, never trading, before this fix.
+- **Found the real fix while investigating, not invented**: every strategy already declares its
+  own correct warmup requirement via `BaseStrategy.MIN_WARMUP_CANDLES` (`core/strategy.py`,
+  default 50) — hand-tuned per strategy (MicroScalper 25, MicroMacroRSIDivergence 30,
+  MultiDivergence 60, BestSupertrend defaults to 50, AdaptiveTrend 210) and **already the exact
+  value `services/backtest_runner.py:1213` uses** (`max(strategy.MIN_WARMUP_CANDLES, min(50,
+  len(rows)-2))`) to size the backtest's own warmup period. The live path's PARAMS-scanning
+  function was a second, independently-wrong computation of a concept the strategy already
+  declares correctly — not a case needing a new metadata flag (no `lookback=True` param
+  attribute needed). Rewrote `_get_min_candles_required` to `max(50, strategy.MIN_WARMUP_CANDLES)`
+  — same floor backtest_runner applies, now genuinely at parity with backtest's warmup semantics.
+- **Cap ≥ requirement, made checkable rather than assumed**: extracted the `append_candle` magic
+  number into a named `MAX_CANDLES_RETAINED = 500` (`core/market_data_feed.py`). All 5 seeded
+  strategies' declared values now sit safely under it (max is AdaptiveTrend's 210). For any
+  future strategy that declares more, added a session-start check (mirrors the existing
+  HTF-insufficient-candles session-visible-error pattern a few lines below it in
+  `live_bot_manager.py`) that logs + notifies the session with a clear message rather than
+  silently sitting in unreachable "warming up" forever — the failure stays possible for a
+  misconfigured future strategy, but is now diagnosable instead of a silent black box.
+- **Verified**: new `engine/tests/test_min_candles_required.py` (6 cases — declared-value read,
+  the 50-floor, the missing-attribute fallback, the unrelated-large-param-ignored regression
+  case, all 5 seeded strategies' values staying under the cap, and the over-cap case still
+  computing correctly for the visibility check to catch). Full container pytest 659/659 (653 + 6
+  new), golden-master byte-identical (`MultiDivergence trades=55 netProfit=-1784.02 winRate=0.36
+  cagr=-71.32 sqn=-2.08` — expected, this is a live-only code path, zero backtest overlap). Real
+  `docker restart` on the engine container: clean boot, all 5 strategies seeded, `/health` 200.
 
 ### Step 8.4 — Candle column-order safety (issue ENG-15)
 - Replace positional `candle[1..5]` indexing and the per-fetcher OHLC remap with named

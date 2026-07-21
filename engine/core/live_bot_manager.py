@@ -14,7 +14,7 @@ import websockets
 
 from core.position import Position
 from core.money import add_money
-from core.market_data_feed import MarketDataFeed
+from core.market_data_feed import MarketDataFeed, MAX_CANDLES_RETAINED
 from core.node_notifier import NodeNotifier
 from core.session_registry import SessionRegistry
 from core.reconciler import Reconciler
@@ -131,19 +131,23 @@ def _classify_exchange_sync_exit_reason(
 
 def _get_min_candles_required(strategy) -> int:
     """
-    Finds the largest numeric param on the strategy and applies a 2x buffer
-    to ensure all indicator lookback windows (including derived ones like
-    atr_sma = atr_period * 2) have enough candles.
-    Falls back to 100 if no params exist.
+    Plan 8 Step 8.3 (ENG-8). Previously scanned every PARAMS entry for the
+    largest numeric value regardless of what it represented — an unrelated
+    threshold/multiplier (e.g. MicroMacroRSIDivergence's max_pivot_bars=500,
+    a bar-distance sanity cap, not a candle-lookback window) could dominate
+    the computation and, combined with the ×3 buffer this function used to
+    apply, demand more candles than `MarketDataFeed.append_candle` even
+    retains (`MAX_CANDLES_RETAINED`) — a permanent, silent "warming up"
+    state the strategy could never leave.
+
+    Every strategy already declares its own correct warmup requirement via
+    `BaseStrategy.MIN_WARMUP_CANDLES` (`core/strategy.py`) — hand-tuned per
+    strategy and already the value `services/backtest_runner.py` uses to
+    size the backtest's own warmup period. Reading it here instead gives the
+    live path exact parity with backtest's warmup semantics, rather than a
+    second, independently-wrong computation of the same concept.
     """
-    params_schema = getattr(strategy.__class__, "PARAMS", {})
-    numeric_values = [
-        getattr(strategy, key, meta.get("default", 0))
-        for key, meta in params_schema.items()
-        if meta.get("type") in ("int", "float")
-    ]
-    largest = max((v for v in numeric_values if isinstance(v, (int, float)) and v > 0), default=50)
-    return int(largest) * 3  # 3x buffer: covers derived indicators (e.g. atr_sma = atr_period * 2)
+    return max(50, int(getattr(strategy, "MIN_WARMUP_CANDLES", 50)))
 
 def _safe_float(val, default):
     if val is None:
@@ -2087,6 +2091,25 @@ class LiveBotManager:
         except Exception as e:
             logger.error(f"[AlgoBot] Failed to load warmup candles for {symbol}: {e}")
             strategy.candles = np.empty((0, 6), dtype=np.float64)
+
+        # Plan 8 Step 8.3 (ENG-8): ensure the retained-candle cap can actually
+        # reach this strategy's declared warmup requirement — a strategy whose
+        # MIN_WARMUP_CANDLES exceeds MAX_CANDLES_RETAINED would sit in
+        # "warming up" forever, since append_candle() never lets the array
+        # grow past the cap. Session-visible, not just a log line, since
+        # nothing else about this failure mode is otherwise diagnosable.
+        _min_required = _get_min_candles_required(strategy)
+        if _min_required > MAX_CANDLES_RETAINED:
+            _msg = (
+                f"{symbol}: strategy requires {_min_required} warmup candles "
+                f"(MIN_WARMUP_CANDLES) but only the last {MAX_CANDLES_RETAINED} are "
+                f"ever retained — this strategy will never leave 'warming up'"
+            )
+            logger.error(f"[AlgoBot] {_msg}")
+            await self._notifier.notify(session_id, {
+                "event": "log",
+                "eventData": {"type": "error", "message": _msg},
+            })
 
         # Fetch HTF candles if strategy uses a higher timeframe (e.g. BestSupertrend tf param)
         # Plan 24 finding S-3: a failed fetch previously only logged a debug-level

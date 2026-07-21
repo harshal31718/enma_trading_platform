@@ -17,6 +17,11 @@ logger = logging.getLogger(__name__)
 
 _HTF_REST_URL = "https://fapi.binance.com/fapi/v1/klines"
 
+# Plan 8 Step 8.3 (ENG-8): named so live_bot_manager.py's readiness gate can
+# assert a strategy's declared MIN_WARMUP_CANDLES never exceeds what the
+# in-memory candle array actually retains.
+MAX_CANDLES_RETAINED = 500
+
 
 class MarketDataFeed:
     """Sources candles for live bot sessions from TimescaleDB and Binance REST."""
@@ -120,7 +125,7 @@ class MarketDataFeed:
             return np.empty((0, 6), dtype=np.float64)
 
     def append_candle(self, candles: np.ndarray, new_candle: np.ndarray) -> np.ndarray:
-        """Append a new candle to the array if it's not a duplicate. Keep last 500."""
+        """Append a new candle to the array if it's not a duplicate. Keep last MAX_CANDLES_RETAINED."""
         if len(candles) > 0:
             last_ts = candles[-1, 0]
             if new_candle[0] <= last_ts:
@@ -129,7 +134,7 @@ class MarketDataFeed:
                     candles[-1] = new_candle
                 return candles
         candles = np.vstack([candles, new_candle]) if len(candles) > 0 else new_candle.reshape(1, 6)
-        # Keep only last 500 candles
-        if len(candles) > 500:
-            candles = candles[-500:]
+        # Keep only the last MAX_CANDLES_RETAINED candles
+        if len(candles) > MAX_CANDLES_RETAINED:
+            candles = candles[-MAX_CANDLES_RETAINED:]
         return candles
