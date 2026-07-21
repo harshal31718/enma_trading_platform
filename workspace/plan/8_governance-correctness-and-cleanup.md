@@ -129,12 +129,50 @@ and the smaller hardening items are done.
   cagr=-71.32 sqn=-2.08` — expected, this is a live-only code path, zero backtest overlap). Real
   `docker restart` on the engine container: clean boot, all 5 strategies seeded, `/health` 200.
 
-### Step 8.4 — Candle column-order safety (issue ENG-15)
+### Step 8.4 — Candle column-order safety (issue ENG-15) · **✅ shipped 2026-07-21**
 - Replace positional `candle[1..5]` indexing and the per-fetcher OHLC remap with named
   constants/accessors (or a typed candle struct) so the nonstandard
   `[ts, open, close, high, low, volume]` layout can't be silently mis-mapped.
 - Golden-master before/after. Acceptance check: column access is by name; a remap mistake is a
   test failure.
+- **Surveyed before designing**: found a working precedent already existed — `engine/indicators/base.py`
+  had its own `OPEN, CLOSE, HIGH, LOW, VOLUME = 1, 2, 3, 4, 5` and every indicator adapter already
+  used it correctly. The bug wasn't absence of named constants; it was that **every other
+  consumer re-derived the same mapping independently with bare literals** — surveyed blast
+  radius: ~50-55 production call sites across `core/kernel.py` (~14), `core/market_data_feed.py`
+  (~19), `core/strategy.py` (the `self.open/high/low/close/volume` properties every strategy
+  author relies on), `core/live_bot_manager.py` (live-WS kline handling), `services/backtest_runner.py`
+  (3 near-identical `column_stack` remap blocks), `core/models/cost.py`, and 2 seeded strategy files
+  reading columns directly. **Confirmed as a real (if latent) risk, not hypothetical**: the
+  duplication is exactly how a copy-paste remap mistake stays silent — one wrong literal in any
+  one of ~50 sites has zero cross-check against any other.
+- **New `core/candle_columns.py`** — canonical `TIMESTAMP, OPEN, CLOSE, HIGH, LOW, VOLUME = 0..5` +
+  `NUM_COLUMNS = 6` + a shared `build_candle_array(timestamps, opens, highs, lows, closes,
+  volumes)` builder (named args state the *source* order explicitly, not just the *target*
+  order). `engine/indicators/base.py` now imports the constants from here instead of
+  re-declaring them — one definition, not two. Every production call site above migrated to
+  import and use these constants (`market_data_feed.py`'s 3 fetchers + `append_candle`,
+  `kernel.py`'s ~14 sites, `strategy.py`'s 5 properties + `htf()`'s timestamp alignment,
+  `live_bot_manager.py`'s reconcile/time_t/HTF-append read sites, `models/cost.py`'s 2 sites,
+  `MultiDivergence`/`MicroMacroRSIDivergence`'s direct column reads). `backtest_runner.py`'s 3
+  `column_stack` blocks now call the shared `build_candle_array` instead of each hand-rolling its
+  own column order — a wrong order there now breaks identically for all 3 callers instead of
+  silently diverging between them. Strategy files import via `engine.core.candle_columns` (the
+  documented alias path every strategy author already uses for `engine.core.strategy`/
+  `engine.core.models`), not `core.candle_columns` directly.
+- **Found and closed a real test gap while surveying, not just adding new tests**:
+  `test_fetch_candles_from_rest_excludes_open_candle` was the ONLY existing test that actually
+  verified the Binance-kline-to-engine-layout swap (close=kline idx4, high=kline idx2, low=kline
+  idx3) — the structurally-identical `fetch_htf_candles` had zero swap coverage, and
+  `fetch_warmup_candles`'s existing test reused `open=high=low=close` in its fixture, which can't
+  distinguish column positions at all. Added `test_fetch_warmup_candles_column_order` (distinct
+  O/H/L/C values) and strengthened `test_fetch_htf_candles_same_shape_as_base` with the same
+  swap assertions the REST test already had.
+- **Verified**: full container pytest 660/660 (659 + 1 new — `test_min_candles_required.py`'s 6
+  cases from 8.3 already counted; this step adds 1 net new test plus 2 strengthened existing
+  ones), golden-master byte-identical before/after (`MultiDivergence trades=55 netProfit=-1784.02
+  winRate=0.36 cagr=-71.32 sqn=-2.08`), real `docker restart` on the engine container — clean
+  boot, all 5 strategies seeded without error across 4 consecutive restarts, `/health` 200.
 
 ### Step 8.5 — Make embedded policy choices explicit (issue ENG-18, ENG-14)
 - Document (and make configurable where reasonable) the SL-before-TP same-candle exit ordering

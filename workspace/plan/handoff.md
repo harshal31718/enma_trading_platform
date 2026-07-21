@@ -7,7 +7,7 @@ Resume prompts for cross-session continuity (root `CLAUDE.md` Rule G / `AGENTS.m
 - Keep at most the **3 most recent entries**. When adding a new one, delete the oldest — git history is the archive. This file must stay a short resume prompt, not a project log.
 
 ---
-## 2026-07-21 — Plan 6 closed (d5 dropped) + Plan 8 Steps 8.2 (SEC-10) + 8.3 (ENG-8) shipped — In progress
+## 2026-07-21 — Plan 6 closed (d5) + Plan 8 Steps 8.2 (SEC-10) + 8.3 (ENG-8) + 8.4 (ENG-15) shipped — In progress
 
 **Goal:** user asked to continue with `workspace/`. Surveyed the tracker, found three
 not-`Done` items (Plan 6's d5, Plan 8's 8.2–8.5/8.7, Plan 23 draft), asked which to continue —
@@ -82,11 +82,39 @@ engine container (clean boot, all 5 strategies seeded, `/health` 200).
 `engine/tests/test_min_candles_required.py`. Docs: `8_governance-correctness-and-cleanup.md`,
 `0_tracker.md`, this file.
 
-**Open questions:** none for 8.2/8.3. **Next in Plan 8**: 8.4 (candle column-order safety, engine,
-needs its own golden-master before/after — don't bundle with another engine change same-day), 8.5
-(embedded policy choices explicit — SL-before-TP ordering doc + live strategy-load-failure
-visibility, no golden-master needed), 8.7 (remaining hardening — health-endpoint Redis connection
-reuse, timing-safe secret compares, no golden-master needed).
+**Plan 8 Step 8.4 (ENG-15, candle column-order safety) shipped, user said "proceed."** Surveyed
+first (Explore agent) — found `engine/indicators/base.py` already had working named constants
+(`OPEN, CLOSE, HIGH, LOW, VOLUME`) used correctly by both indicator adapters, but every OTHER
+consumer independently re-derived the same `[ts, open, close, high, low, vol]` mapping with bare
+integer literals — ~50-55 production call sites across `core/kernel.py` (~14),
+`core/market_data_feed.py` (~19), `core/strategy.py` (the `self.open/high/low/close/volume`
+properties every strategy relies on), `core/live_bot_manager.py`, `services/backtest_runner.py`
+(3 near-identical `column_stack` blocks), `core/models/cost.py`, and 2 seeded strategy files. New
+`core/candle_columns.py` — canonical constants + a shared `build_candle_array()` builder —
+migrated every one of those sites onto it; `indicators/base.py` now imports from it instead of
+re-declaring. **Found and closed a real test gap while surveying**: `fetch_htf_candles` (a
+structural duplicate of the one fetcher that WAS tested for the OHLC swap) had zero swap
+coverage, and `fetch_warmup_candles`'s existing test used `open=high=low=close` in its fixture,
+which can't distinguish column positions at all — added/strengthened both.
+
+**Verified**: full container pytest 660/660 (1 net new test — `test_fetch_warmup_candles_column_order`
+— plus 2 existing tests strengthened with real O≠H≠L≠C fixture values), golden-master
+byte-identical before/after, real `docker restart` on the engine container across 4 consecutive
+restarts — clean boot, all 5 strategies seeded every time, `/health` 200.
+
+**Files changed:** new `engine/core/candle_columns.py`, `engine/core/kernel.py`,
+`engine/core/strategy.py`, `engine/core/market_data_feed.py`, `engine/core/live_bot_manager.py`,
+`engine/services/backtest_runner.py`, `engine/core/models/cost.py`,
+`engine/strategies/MultiDivergence/__init__.py`,
+`engine/strategies/MicroMacroRSIDivergence/__init__.py`,
+`engine/indicators/base.py`, `engine/tests/test_market_data_feed.py`, `engine/CLAUDE.md`. Docs:
+`8_governance-correctness-and-cleanup.md`, `0_tracker.md`, this file.
+
+**Open questions:** none for 8.2/8.3/8.4. **Next in Plan 8**: 8.5 (embedded policy choices
+explicit — SL-before-TP ordering doc + live strategy-load-failure visibility, no golden-master
+needed) and 8.7 (remaining hardening — health-endpoint Redis connection reuse, timing-safe secret
+compares, no golden-master needed) are the only steps left; both lower-risk than 8.2-8.4, can be
+done together in one pass if desired.
 
 ---
 ## 2026-07-20 (later same day, part 17) — Plan 7 COMPLETE: ChaosWizard.jsx + hooks factory

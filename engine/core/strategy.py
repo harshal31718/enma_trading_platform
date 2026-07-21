@@ -10,6 +10,7 @@ from core.models import (
     DefaultPortfolioModel,
     DefaultExecution,
 )
+from core.candle_columns import TIMESTAMP, OPEN, CLOSE, HIGH, LOW, VOLUME
 
 
 class BaseStrategy(ABC):
@@ -143,7 +144,7 @@ class BaseStrategy(ABC):
 
     @property
     def close(self) -> float:
-        return float(self.current_candle[2]) if len(self.current_candle) > 0 else 0.0
+        return float(self.current_candle[CLOSE]) if len(self.current_candle) > 0 else 0.0
 
     @property
     def price(self) -> float:
@@ -151,19 +152,19 @@ class BaseStrategy(ABC):
 
     @property
     def open(self) -> float:
-        return float(self.current_candle[1]) if len(self.current_candle) > 0 else 0.0
+        return float(self.current_candle[OPEN]) if len(self.current_candle) > 0 else 0.0
 
     @property
     def high(self) -> float:
-        return float(self.current_candle[3]) if len(self.current_candle) > 0 else 0.0
+        return float(self.current_candle[HIGH]) if len(self.current_candle) > 0 else 0.0
 
     @property
     def low(self) -> float:
-        return float(self.current_candle[4]) if len(self.current_candle) > 0 else 0.0
+        return float(self.current_candle[LOW]) if len(self.current_candle) > 0 else 0.0
 
     @property
     def volume(self) -> float:
-        return float(self.current_candle[5]) if len(self.current_candle) > 0 else 0.0
+        return float(self.current_candle[VOLUME]) if len(self.current_candle) > 0 else 0.0
 
     # ─────────────────────────────────────────
     # Position property accessors
@@ -370,8 +371,8 @@ class BaseStrategy(ABC):
         aligned = np.full((len(base), 6), np.nan, dtype=np.float64)
         raw = self._htf_raw.get(timeframe)
         if raw is not None and len(raw) > 0 and len(base) > 0:
-            htf_close_times = raw[:, 0] + to_ms(timeframe)
-            base_times = base[:, 0]
+            htf_close_times = raw[:, TIMESTAMP] + to_ms(timeframe)
+            base_times = base[:, TIMESTAMP]
             idx = np.searchsorted(htf_close_times, base_times, side="right") - 1
             valid = idx >= 0
             aligned[valid] = raw[idx[valid]]

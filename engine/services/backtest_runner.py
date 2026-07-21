@@ -14,6 +14,7 @@ from core.money import add_money
 from core.models import BacktestExecution
 from core.pipeline import evaluate
 from core.params import param_coerce, param_validate
+from core.candle_columns import build_candle_array
 from services.candle_manager import ensure_candles_available
 from services.funding_manager import ensure_funding_available
 from utils.timeframes import annual_factor, required_base_candles_for_htf, to_ms
@@ -919,14 +920,14 @@ async def run_backtest_simulation(
 
         rows_by_sym[sym] = rows
 
-        candles_np = np.column_stack([
-            [r["time"].timestamp() * 1000 for r in rows],
-            [r["open"]   for r in rows],
-            [r["close"]  for r in rows],
-            [r["high"]   for r in rows],
-            [r["low"]    for r in rows],
-            [r["volume"] for r in rows],
-        ]).astype(np.float64)
+        candles_np = build_candle_array(
+            timestamps=[r["time"].timestamp() * 1000 for r in rows],
+            opens=[r["open"] for r in rows],
+            highs=[r["high"] for r in rows],
+            lows=[r["low"] for r in rows],
+            closes=[r["close"] for r in rows],
+            volumes=[r["volume"] for r in rows],
+        )
         candles_np_by_sym[sym] = candles_np
 
         # Plan 13: fetch each declared informative timeframe over the same
@@ -955,14 +956,14 @@ async def run_backtest_simulation(
                     """,
                     exchange, sym, tf, start_dt, end_dt,
                 )
-            htf_raw_by_sym[sym][tf] = np.column_stack([
-                [r["time"].timestamp() * 1000 for r in htf_rows],
-                [r["open"]   for r in htf_rows],
-                [r["close"]  for r in htf_rows],
-                [r["high"]   for r in htf_rows],
-                [r["low"]    for r in htf_rows],
-                [r["volume"] for r in htf_rows],
-            ]).astype(np.float64) if htf_rows else np.empty((0, 6), dtype=np.float64)
+            htf_raw_by_sym[sym][tf] = build_candle_array(
+                timestamps=[r["time"].timestamp() * 1000 for r in htf_rows],
+                opens=[r["open"] for r in htf_rows],
+                highs=[r["high"] for r in htf_rows],
+                lows=[r["low"] for r in htf_rows],
+                closes=[r["close"] for r in htf_rows],
+                volumes=[r["volume"] for r in htf_rows],
+            ) if htf_rows else np.empty((0, 6), dtype=np.float64)
 
         if intrabar_detail and timeframe != "1m":
             _detail_ok = await ensure_candles_available(
@@ -986,14 +987,14 @@ async def run_backtest_simulation(
                         """,
                         exchange, sym, start_dt, end_dt,
                     )
-                detail_candles_by_sym[sym] = np.column_stack([
-                    [r["time"].timestamp() * 1000 for r in detail_rows],
-                    [r["open"]   for r in detail_rows],
-                    [r["close"]  for r in detail_rows],
-                    [r["high"]   for r in detail_rows],
-                    [r["low"]    for r in detail_rows],
-                    [r["volume"] for r in detail_rows],
-                ]).astype(np.float64) if detail_rows else np.empty((0, 6), dtype=np.float64)
+                detail_candles_by_sym[sym] = build_candle_array(
+                    timestamps=[r["time"].timestamp() * 1000 for r in detail_rows],
+                    opens=[r["open"] for r in detail_rows],
+                    highs=[r["high"] for r in detail_rows],
+                    lows=[r["low"] for r in detail_rows],
+                    closes=[r["close"] for r in detail_rows],
+                    volumes=[r["volume"] for r in detail_rows],
+                ) if detail_rows else np.empty((0, 6), dtype=np.float64)
 
         if historical_funding and exchange == "Binance Futures":
             _funding_ok = await ensure_funding_available(

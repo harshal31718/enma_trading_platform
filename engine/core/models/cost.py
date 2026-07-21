@@ -12,6 +12,7 @@ import math
 import numpy as np
 
 from .base import TransactionCostModel, CostEstimate, Cost, Signal, RiskConstraints
+from core.candle_columns import CLOSE, VOLUME
 
 
 class DefaultTransactionCostModel(TransactionCostModel):
@@ -157,8 +158,8 @@ class LadderedTransactionCostModel(DefaultTransactionCostModel):
         window = candles[-n:]
         if len(window) == 0:
             return 0.0
-        volumes = window[:, 5]
-        closes = window[:, 2]
+        volumes = window[:, VOLUME]
+        closes = window[:, CLOSE]
         return float(np.sum(volumes * closes))
 
     def adverse_fill(self, s, ref_price: float, side: str, qty: float | None = None) -> float:

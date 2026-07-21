@@ -9,6 +9,7 @@ import engine.indicators as ta
 # pivot geometry is identical everywhere.
 from engine.indicators.base import _compute_pivots
 from engine.core.models import AtrBracketRiskModel, RiskBudgetPortfolio, Signal
+from engine.core.candle_columns import CLOSE, VOLUME
 
 
 def _last2(series) -> tuple | None:
@@ -285,7 +286,7 @@ class MultiDivergence(BaseStrategy):
             k, _ = ta.stochastic(candles, period=self.stoch_period, sequential=True)
             pairs.append(_osc_piv(k))
         if self.use_zscore:
-            pairs.append(_osc_piv(self._zscore_series(candles[:, 2].astype(float))))
+            pairs.append(_osc_piv(self._zscore_series(candles[:, CLOSE].astype(float))))
         if self.use_adx:
             pairs.append(_osc_piv(ta.adx(candles, period=self.adx_period, sequential=True)))
         if self.use_macd:
@@ -297,7 +298,7 @@ class MultiDivergence(BaseStrategy):
         if self.use_obv:
             pairs.append(_osc_piv(ta.obv(candles, sequential=True)))
         if self.use_swing:
-            pairs.append(_osc_piv(candles[:, 5].astype(float)))
+            pairs.append(_osc_piv(candles[:, VOLUME].astype(float)))
         self._osc_pivot_pairs = pairs
 
     @staticmethod

@@ -89,6 +89,26 @@ def test_fetch_warmup_candles_db_error_returns_none(monkeypatch):
     assert _run(feed.fetch_warmup_candles("BTCUSDT", "1h", 3)) is None
 
 
+def test_fetch_warmup_candles_column_order(monkeypatch):
+    # Plan 8 Step 8.4 (ENG-15) regression: distinct o/h/l/c values so a
+    # remap mistake (e.g. writing DB "high" into the engine's HIGH slot
+    # inconsistently with CLOSE) would actually fail this test — the
+    # pre-existing test above reused o=h=l=c=3 for every row, which can't
+    # distinguish column positions at all.
+    rows = [_row(1000, 10, 40, 20, 30, 99)]  # open=10 high=40 low=20 close=30
+    monkeypatch.setattr(mdf_mod, "get_pool", lambda: _FakePool(rows))
+
+    feed = MarketDataFeed()
+    candles = _run(feed.fetch_warmup_candles("BTCUSDT", "1h", 1))
+
+    assert candles[0, mdf_mod.TIMESTAMP] == 1000.0
+    assert candles[0, mdf_mod.OPEN] == 10
+    assert candles[0, mdf_mod.CLOSE] == 30
+    assert candles[0, mdf_mod.HIGH] == 40
+    assert candles[0, mdf_mod.LOW] == 20
+    assert candles[0, mdf_mod.VOLUME] == 99
+
+
 class _FakeResp:
     def __init__(self, payload):
         self._payload = payload
@@ -131,8 +151,12 @@ def test_fetch_candles_from_rest_excludes_open_candle(monkeypatch):
     candles = _run(feed.fetch_candles_from_rest("BTCUSDT", "1h", 2))
 
     assert candles.shape == (1, 6)
-    assert candles[0, 0] == 1000.0
-    assert candles[0, 2] == 1.2  # close = kline index 4
+    assert candles[0, mdf_mod.TIMESTAMP] == 1000.0
+    assert candles[0, mdf_mod.OPEN] == 1.0
+    assert candles[0, mdf_mod.CLOSE] == 1.2  # close = kline index 4
+    assert candles[0, mdf_mod.HIGH] == 1.5   # high = kline index 2
+    assert candles[0, mdf_mod.LOW] == 0.5    # low = kline index 3
+    assert candles[0, mdf_mod.VOLUME] == 10.0
     assert capture["params"]["symbol"] == "BTCUSDT"
 
 
@@ -159,7 +183,15 @@ def test_fetch_htf_candles_same_shape_as_base(monkeypatch):
     feed = MarketDataFeed()
     candles = _run(feed.fetch_htf_candles("BTCUSDT", "4h", limit=50))
     assert candles.shape == (1, 6)
-    assert candles[0, 0] == 1000.0
+    assert candles[0, mdf_mod.TIMESTAMP] == 1000.0
+    # Plan 8 Step 8.4 (ENG-15): same OHLC-swap check as
+    # test_fetch_candles_from_rest_excludes_open_candle — this fetcher is a
+    # near-duplicate of that one and was previously untested for the swap.
+    assert candles[0, mdf_mod.OPEN] == 10.0
+    assert candles[0, mdf_mod.CLOSE] == 10.5  # close = kline index 4
+    assert candles[0, mdf_mod.HIGH] == 11.0   # high = kline index 2
+    assert candles[0, mdf_mod.LOW] == 9.0     # low = kline index 3
+    assert candles[0, mdf_mod.VOLUME] == 5.0
 
 
 def test_append_candle_new_timestamp_appends():

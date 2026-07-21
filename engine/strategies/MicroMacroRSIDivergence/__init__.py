@@ -4,6 +4,7 @@ from engine.core.strategy import BaseStrategy
 import engine.indicators as ta
 
 from engine.core.models import AtrBracketRiskModel, RiskBudgetPortfolio, Signal
+from engine.core.candle_columns import CLOSE, NUM_COLUMNS
 
 
 class MicroMacroRSIDivergence(BaseStrategy):
@@ -220,8 +221,8 @@ class MicroMacroRSIDivergence(BaseStrategy):
         if int(valid.sum()) <= self.smooth_length:
             return out
         vals = rsi_seq[valid]
-        synth = np.zeros((vals.size, 6), dtype=float)
-        synth[:, 2] = vals
+        synth = np.zeros((vals.size, NUM_COLUMNS), dtype=float)
+        synth[:, CLOSE] = vals
         if self.smooth_type == self.SMOOTH_SMA:
             sm = ta.sma(synth, period=self.smooth_length, sequential=True)
         else:

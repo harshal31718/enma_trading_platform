@@ -32,10 +32,9 @@ from typing import Optional, Tuple, Union
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 
-logger = logging.getLogger(__name__)
+from core.candle_columns import OPEN, CLOSE, HIGH, LOW, VOLUME
 
-# Column layout of the engine's candle array: [ts, open, close, high, low, vol].
-OPEN, CLOSE, HIGH, LOW, VOLUME = 1, 2, 3, 4, 5
+logger = logging.getLogger(__name__)
 
 # Source-name → candle column, for pivot detection on price.
 _SOURCE_COL = {"open": OPEN, "close": CLOSE, "high": HIGH, "low": LOW}

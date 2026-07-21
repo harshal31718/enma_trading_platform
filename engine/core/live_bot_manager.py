@@ -15,6 +15,7 @@ import websockets
 from core.position import Position
 from core.money import add_money
 from core.market_data_feed import MarketDataFeed, MAX_CANDLES_RETAINED
+from core.candle_columns import TIMESTAMP, HIGH, LOW
 from core.node_notifier import NodeNotifier
 from core.session_registry import SessionRegistry
 from core.reconciler import Reconciler
@@ -2353,8 +2354,8 @@ class LiveBotManager:
                                     try:
                                         _new_htf = await self._market_data.fetch_htf_candles(symbol, _htf_interval, 2)
                                         if len(_new_htf) > 0:
-                                            _last_ts = strategy._htf_candles[-1, 0] if len(strategy._htf_candles) > 0 else 0
-                                            if _new_htf[-1, 0] > _last_ts:
+                                            _last_ts = strategy._htf_candles[-1, TIMESTAMP] if len(strategy._htf_candles) > 0 else 0
+                                            if _new_htf[-1, TIMESTAMP] > _last_ts:
                                                 strategy._htf_candles = self._market_data.append_candle(strategy._htf_candles, _new_htf[-1])
                                                 if len(strategy._htf_candles) > 100:
                                                     strategy._htf_candles = strategy._htf_candles[-100:]
@@ -2440,8 +2441,8 @@ class LiveBotManager:
                                     # its own 3 signed calls every candle.
                                     await self._reconcile_exchange_state(
                                         session_id, strategy, symbol,
-                                        candle_high=candle[3], candle_low=candle[4],
-                                        wave_key=int(candle[0]),
+                                        candle_high=candle[HIGH], candle_low=candle[LOW],
+                                        wave_key=int(candle[TIMESTAMP]),
                                     )
 
                                     # Setup execution algorithm if configured (A-016 parity with backtest path)
@@ -2461,7 +2462,7 @@ class LiveBotManager:
 
                                     adapter = LiveAdapter(self, session_id)
                                     kernel = ExecutionKernel(adapter, exec_algo)
-                                    time_t = datetime.fromtimestamp(candle[0] / 1000, tz=timezone.utc)
+                                    time_t = datetime.fromtimestamp(candle[TIMESTAMP] / 1000, tz=timezone.utc)
 
                                     # Plan 21 A-13: tell check_exits which legs
                                     # already have a confirmed-resting exchange

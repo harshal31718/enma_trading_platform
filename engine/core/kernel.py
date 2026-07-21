@@ -12,6 +12,7 @@ import numpy as np
 from core.models import OrderPlan
 from core.position import Position
 from core.pipeline import evaluate
+from core.candle_columns import TIMESTAMP, OPEN, CLOSE, HIGH, LOW, VOLUME
 from services.fill_model import gap_through_stop_price, bounded_exit_price
 
 
@@ -130,12 +131,12 @@ class ExecutionKernel:
         if detail is None or len(detail) == 0:
             return None
         bucket_end_ms = bucket_start_ms + self.base_timeframe_ms
-        ts = detail[:, 0]
+        ts = detail[:, TIMESTAMP]
         lo = np.searchsorted(ts, bucket_start_ms, side="left")
         hi = np.searchsorted(ts, bucket_end_ms, side="left")
         window = detail[lo:hi]
         for row in window:
-            d_high, d_low = row[3], row[4]
+            d_high, d_low = row[HIGH], row[LOW]
             if is_long:
                 if d_low <= sl_price:
                     return "stop_loss"
@@ -150,9 +151,9 @@ class ExecutionKernel:
 
     async def execute_pending(self, strategy, symbol: str, candle: np.ndarray, index_t: int, time_t: datetime) -> None:
         """Simulates next-open fills for orders placed on the previous candle (backtest only)."""
-        open_t = candle[1]
-        high_t = candle[3]
-        low_t = candle[4]
+        open_t = candle[OPEN]
+        high_t = candle[HIGH]
+        low_t = candle[LOW]
 
         # 1. Atomic Flip
         if strategy.position is not None and strategy._pending_flip is not None:
@@ -303,10 +304,10 @@ class ExecutionKernel:
         if strategy.position is None:
             return
 
-        open_t = candle[1]
-        close_t = candle[2]
-        high_t = candle[3]
-        low_t = candle[4]
+        open_t = candle[OPEN]
+        close_t = candle[CLOSE]
+        high_t = candle[HIGH]
+        low_t = candle[LOW]
 
         # 1. Update position unrealized P&L
         strategy.position.update_pnl(close_t)
@@ -360,7 +361,7 @@ class ExecutionKernel:
                     # (conservative, unchanged). Opt-in: resolve via 1m detail.
                     winner = self._resolve_intrabar_winner(
                         symbol, is_long=True, sl_price=sl_price, tp_price=tp_price,
-                        bucket_start_ms=candle[0],
+                        bucket_start_ms=candle[TIMESTAMP],
                     ) or "stop_loss"
                 elif sl_hit:
                     winner = "stop_loss"
@@ -397,7 +398,7 @@ class ExecutionKernel:
                 if sl_hit and tp_hit:
                     winner = self._resolve_intrabar_winner(
                         symbol, is_long=False, sl_price=sl_price, tp_price=tp_price,
-                        bucket_start_ms=candle[0],
+                        bucket_start_ms=candle[TIMESTAMP],
                     ) or "stop_loss"
                 elif sl_hit:
                     winner = "stop_loss"
@@ -494,7 +495,7 @@ class ExecutionKernel:
             if plan is not None and plan.intent == "enter":
                 plan = self.exec_algo.process_order_plan(plan)
             elif self.exec_algo.is_active:
-                plan = self.exec_algo.step(strategy.price, candle[5])
+                plan = self.exec_algo.step(strategy.price, candle[VOLUME])
             else:
                 plan = None
 
@@ -566,7 +567,7 @@ class ExecutionKernel:
                             exit_price=strategy.price,
                             reason="scale_out",
                             time_t=time_t, index_t=index_t,
-                            high_t=candle[3], low_t=candle[4],
+                            high_t=candle[HIGH], low_t=candle[LOW],
                         )
 
             # plan.intent == "enter" is structurally implied by
@@ -603,8 +604,8 @@ class ExecutionKernel:
                     ref_price=strategy.price,
                     time_t=time_t,
                     index_t=index_t,
-                    high_t=candle[3],
-                    low_t=candle[4],
+                    high_t=candle[HIGH],
+                    low_t=candle[LOW],
                     stop_loss=flip.get("stop_loss"),
                     take_profit=flip.get("take_profit"),
                 )
@@ -618,8 +619,8 @@ class ExecutionKernel:
                     reason="strategy_exit",
                     time_t=time_t,
                     index_t=index_t,
-                    high_t=candle[3],
-                    low_t=candle[4],
+                    high_t=candle[HIGH],
+                    low_t=candle[LOW],
                 )
 
         strategy.after()

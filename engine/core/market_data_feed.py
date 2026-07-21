@@ -12,6 +12,7 @@ import httpx
 import numpy as np
 
 from config.timescale import get_pool
+from core.candle_columns import TIMESTAMP, OPEN, CLOSE, HIGH, LOW, VOLUME, NUM_COLUMNS
 
 logger = logging.getLogger(__name__)
 
@@ -50,14 +51,14 @@ class MarketDataFeed:
                 return None
             # Reverse so oldest first, build numpy array
             rows = list(reversed(rows))
-            candles = np.empty((len(rows), 6), dtype=np.float64)
+            candles = np.empty((len(rows), NUM_COLUMNS), dtype=np.float64)
             for i, r in enumerate(rows):
-                candles[i, 0] = r["time"].timestamp() * 1000
-                candles[i, 1] = r["open"]
-                candles[i, 2] = r["close"]
-                candles[i, 3] = r["high"]
-                candles[i, 4] = r["low"]
-                candles[i, 5] = r["volume"]
+                candles[i, TIMESTAMP] = r["time"].timestamp() * 1000
+                candles[i, OPEN] = r["open"]
+                candles[i, CLOSE] = r["close"]
+                candles[i, HIGH] = r["high"]
+                candles[i, LOW] = r["low"]
+                candles[i, VOLUME] = r["volume"]
             return candles
         except Exception as e:
             logger.error(f"[AlgoBot] TimescaleDB warmup fetch failed for {symbol}: {e}")
@@ -77,21 +78,22 @@ class MarketDataFeed:
                 resp.raise_for_status()
                 raw = resp.json()
             if not raw:
-                return np.empty((0, 6), dtype=np.float64)
+                return np.empty((0, NUM_COLUMNS), dtype=np.float64)
             raw = raw[:-1]  # Exclude the currently open candle
-            # Binance kline: [openTime, open, high, low, close, volume, ...]
-            candles = np.empty((len(raw), 6), dtype=np.float64)
+            # Binance kline: [openTime, open, high, low, close, volume, ...] —
+            # standard order, NOT the engine's own [ts, open, close, high, low, vol].
+            candles = np.empty((len(raw), NUM_COLUMNS), dtype=np.float64)
             for i, c in enumerate(raw):
-                candles[i, 0] = float(c[0])  # timestamp ms
-                candles[i, 1] = float(c[1])  # open
-                candles[i, 2] = float(c[4])  # close
-                candles[i, 3] = float(c[2])  # high
-                candles[i, 4] = float(c[3])  # low
-                candles[i, 5] = float(c[5])  # volume
+                candles[i, TIMESTAMP] = float(c[0])
+                candles[i, OPEN] = float(c[1])
+                candles[i, CLOSE] = float(c[4])
+                candles[i, HIGH] = float(c[2])
+                candles[i, LOW] = float(c[3])
+                candles[i, VOLUME] = float(c[5])
             return candles
         except Exception as e:
             logger.error(f"[AlgoBot] Binance REST candle fetch failed for {symbol}: {e}")
-            return np.empty((0, 6), dtype=np.float64)
+            return np.empty((0, NUM_COLUMNS), dtype=np.float64)
 
     async def fetch_htf_candles(
         self, symbol: str, tf_interval: str, limit: int = 50
@@ -109,31 +111,33 @@ class MarketDataFeed:
                 resp.raise_for_status()
                 raw = resp.json()
             if not raw:
-                return np.empty((0, 6), dtype=np.float64)
+                return np.empty((0, NUM_COLUMNS), dtype=np.float64)
             raw = raw[:-1]  # Exclude the currently open candle
-            candles = np.empty((len(raw), 6), dtype=np.float64)
+            # Binance kline: [openTime, open, high, low, close, volume, ...] —
+            # standard order, NOT the engine's own [ts, open, close, high, low, vol].
+            candles = np.empty((len(raw), NUM_COLUMNS), dtype=np.float64)
             for i, c in enumerate(raw):
-                candles[i, 0] = float(c[0])  # timestamp ms
-                candles[i, 1] = float(c[1])  # open
-                candles[i, 2] = float(c[4])  # close
-                candles[i, 3] = float(c[2])  # high
-                candles[i, 4] = float(c[3])  # low
-                candles[i, 5] = float(c[5])  # volume
+                candles[i, TIMESTAMP] = float(c[0])
+                candles[i, OPEN] = float(c[1])
+                candles[i, CLOSE] = float(c[4])
+                candles[i, HIGH] = float(c[2])
+                candles[i, LOW] = float(c[3])
+                candles[i, VOLUME] = float(c[5])
             return candles
         except Exception as e:
             logger.error(f"[AlgoBot] HTF REST fetch failed for {symbol} {tf_interval}: {e}")
-            return np.empty((0, 6), dtype=np.float64)
+            return np.empty((0, NUM_COLUMNS), dtype=np.float64)
 
     def append_candle(self, candles: np.ndarray, new_candle: np.ndarray) -> np.ndarray:
         """Append a new candle to the array if it's not a duplicate. Keep last MAX_CANDLES_RETAINED."""
         if len(candles) > 0:
-            last_ts = candles[-1, 0]
-            if new_candle[0] <= last_ts:
+            last_ts = candles[-1, TIMESTAMP]
+            if new_candle[TIMESTAMP] <= last_ts:
                 # Update the last candle if same timestamp, else ignore older
-                if new_candle[0] == last_ts:
+                if new_candle[TIMESTAMP] == last_ts:
                     candles[-1] = new_candle
                 return candles
-        candles = np.vstack([candles, new_candle]) if len(candles) > 0 else new_candle.reshape(1, 6)
+        candles = np.vstack([candles, new_candle]) if len(candles) > 0 else new_candle.reshape(1, NUM_COLUMNS)
         # Keep only the last MAX_CANDLES_RETAINED candles
         if len(candles) > MAX_CANDLES_RETAINED:
             candles = candles[-MAX_CANDLES_RETAINED:]
