@@ -783,3 +783,51 @@ pytest 675 → 679/679, golden-master `MultiDivergence` byte-identical
 (`trades=55 netProfit=-1784.02 winRate=0.36 cagr=-71.32 sqn=-2.08`).
 
 **F10 is now fully closed** — no remaining scope in `0_fixes-queue.md` or Plan 6.
+
+## 32. Live Testnet re-verification (Plan 21) found and fixed two real regressions (2026-07-24)
+
+Started a real Binance Testnet algo session to close out the "pending live re-verification" status
+on Plans 21/22/24. Found two genuine, previously-undetected bugs — not confirmation that everything
+already shipped was fine.
+
+**Bug 1 — BestSupertrend never traded via Chaos Mode.** `server/src/controllers/algo.controller.js`'s
+`CHAOS_LAUNCH_LIST` still used the pre-Plan-24 param name `order_type` for BestSupertrend; Plan 24's
+own S-4 fix (2026-07-17) had renamed it to `direction_filter` specifically because `order_type`
+collided with `OrderPlan.order_type`, and wired F-016's unknown-param rejection to loudly reject the
+old name rather than silently ignore it. The Chaos config was simply never updated to match — every
+Chaos-launched BestSupertrend symbol had been hitting that rejection and sitting in `WATCHING`
+forever since S-4 shipped. Fixed: `order_type` → `direction_filter` in the Chaos launch config. The
+other 4 Chaos-launch strategies were cross-checked against their live `PARAMS` schemas — no other
+stale keys found. Server jest 269/269.
+
+**Bug 2 — repeated entry → SL-rejected → emergency-close → re-entry loop, real money lost.** A
+Chaos-style session running `sl_atr_mult=0.1` at 25–50x leverage hit Binance's `-2021 Order would
+immediately trigger` on nearly every SL placement (the ATR-derived stop distance was smaller than
+Binance's live rejection margin). The engine's own M-5 safety net (Plan 21.4) correctly refused to
+leave the position naked and emergency-closed it — but the entry logic then re-fired next candle
+with the same too-tight config, repeating the cycle. 4 orphaned sessions (found bypassing Node
+entirely via a direct engine API call, no `LiveSession` Mongo doc) lost **-$54.96** combined
+(testnet) before being stopped. This corrects the 2026-07-19 F7 note that called `-2021` "expected
+& self-healed by the A-7 re-arm" — what actually happened was M-5's emergency-close repeating, not
+A-7's re-arm succeeding.
+
+**Real fix, not a config tweak** (explicit user decision — the alternative, just detuning the Chaos
+launch config's `sl_atr_mult`, was considered and rejected): new `enforce_min_trigger_distance()`
+(`utils/symbols.py`) widens a computed SL/TP trigger price away from the live reference price when
+it's within `MIN_TRIGGER_DISTANCE_PCT` (0.15%, empirically chosen — Binance doesn't publish a fixed
+tolerance for `-2021`, so this may need tuning from further live observation). Wired into
+`execute_entry`'s SL/TP finalization (`live_bot_manager.py`) and `maybe_amend_exchange_sl`'s
+tighten-and-amend path (`reconciler.py`) — both are live-only order-submission call sites, so this
+carries **zero golden-master risk by construction** (backtest never submits a real conditional order
+to be rejected). Deliberately scoped to only ever WIDEN a price already on its correct side — a
+first draft inferred side from `price < ref_price` and would have silently corrected a genuinely
+wrong-side SL (M-5's exact rejection scenario) onto a valid-looking price, masking the bug it exists
+to catch; caught by `test_execute_entry_bracket_safety.py`'s existing wrong-side tests before
+shipping. New `engine/tests/test_enforce_min_trigger_distance.py` (9 cases). Verified: engine pytest
+682 → 691/691, golden-master `MultiDivergence` byte-identical.
+
+**Also stopped**: 4 orphaned engine-only sessions found via the `algo:events` Redis Stream (Plan
+6.5) carrying their full session IDs — MongoDB had no record of them at all, confirming they were
+started by something calling the engine's `POST /algo/sessions` directly, bypassing Node/Mongo
+entirely. Worth a closer look separately (not investigated further this pass — out of scope for the
+live-verification task at hand).

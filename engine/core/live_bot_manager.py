@@ -43,7 +43,7 @@ from services.trade_recorder import record_trade, build_trade_record
 from services.event_log import append_event, reset_session_seq, fetch_events, fold_events
 from services.user_data_stream import UserDataStreamManager
 from services.pairlist import pairlist_from_config
-from utils.symbols import round_price, clamp_and_round_qty, clamp_leverage, is_symbol_invalid
+from utils.symbols import round_price, clamp_and_round_qty, clamp_leverage, is_symbol_invalid, enforce_min_trigger_distance
 from utils.strategy_names import is_valid_strategy_name
 from core.kernel import ExecutionAdapter, ExecutionKernel
 
@@ -411,6 +411,16 @@ class LiveAdapter(ExecutionAdapter):
         # (using the stop's mode for TP biased it toward entry — easier to hit).
         sl_rounding = ROUND_DOWN if direction == "long" else ROUND_UP
         tp_rounding = ROUND_UP if direction == "long" else ROUND_DOWN
+        # Live Testnet re-verification 2026-07-24: widen sl_raw/tp_raw away
+        # from fill_price BEFORE rounding if a tight ATR stop (e.g.
+        # sl_atr_mult=0.1 at high leverage) landed within Binance's
+        # `-2021 Order would immediately trigger` rejection margin — see
+        # enforce_min_trigger_distance's docstring. No-op for any stop
+        # already comfortably clear of fill_price.
+        if sl_raw:
+            sl_raw = enforce_min_trigger_distance(sl_raw, fill_price, is_below=(direction == "long"))
+        if tp_raw:
+            tp_raw = enforce_min_trigger_distance(tp_raw, fill_price, is_below=(direction == "short"))
         sl_price = round_price(symbol, exchange_name, sl_raw, rounding=sl_rounding) if sl_raw else None
         tp_price = round_price(symbol, exchange_name, tp_raw, rounding=tp_rounding) if tp_raw else None
 

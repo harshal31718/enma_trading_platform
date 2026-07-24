@@ -28,9 +28,14 @@ Anything failing one of these lives in **§ Not in this queue** below with the r
 - **2026-07-19 closure (container 444/444 + live testnet chaos):** the fill-staleness symptom is
   FIXED — a conditional SL fill reflected in local state in **~0.5s** via the A-8 `ACCOUNT_UPDATE`
   reconcile (fill 08:11:02.177 → closed 08:11:02.677), vs the original ~60s. The TP/SL-placement
-  400 root cause is **`-2021 Order would immediately trigger`** (tight stops at extreme leverage —
-  expected & self-healed by the A-7 re-arm; the `PERCENT_PRICE` hypothesis noted below is
-  DISPROVEN — drop it). FXSUSDT-class stuck-open is covered by the entry-fill-confirmation guard
+  400 root cause is **`-2021 Order would immediately trigger`** (tight stops at extreme leverage;
+  the `PERCENT_PRICE` hypothesis noted below is DISPROVEN — drop it). **Correction, 2026-07-24**:
+  this entry's "expected & self-healed by the A-7 re-arm" framing was wrong — a real live session
+  showed `-2021` firing on nearly every entry (not a rare tight-stop edge case) and triggering M-5's
+  emergency-close repeatedly instead of A-7's re-arm, in a real money-losing entry→reject→close→
+  re-entry loop (-$54.96 testnet across 4 sessions before being stopped). Fixed with a proactive
+  minimum-trigger-distance floor, not left as "expected" — see DECISIONS.md #32. FXSUSDT-class
+  stuck-open is covered by the entry-fill-confirmation guard
   (`test_entry_unconfirmed_fill.py`, 3/3). **Two new bugs surfaced by the live run:** (a) FIXED —
   server governor-config coercion in `risk.js` (`Number(null)===0` armed correlation/VaR/CVaR/margin
   caps at 0 on blank fields, blocking ALL live entries; +5 jest tests → 116/116, live-confirmed

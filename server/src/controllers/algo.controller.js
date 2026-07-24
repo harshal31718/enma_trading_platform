@@ -443,7 +443,12 @@ const CHAOS_LAUNCH_LIST = [
   {
     name: 'BestSupertrend',
     params: {
-      order_type:        'Longs+Shorts',
+      // Plan 24 S-4 renamed this param order_type -> direction_filter (it
+      // collided with OrderPlan.order_type); this Chaos launch config was
+      // never updated to match, so every Chaos-launched BestSupertrend
+      // symbol was hitting the fix's own "reject unknown params" guard and
+      // never trading — found via live Testnet re-verification 2026-07-24.
+      direction_filter:  'Longs+Shorts',
       fast_length:       1,
       slow_length:       2,
       factor:            1.0,

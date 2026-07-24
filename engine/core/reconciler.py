@@ -23,7 +23,7 @@ from core.money import add_money
 from core.exchange import Exchange, BinanceFuturesTestnet
 from services.trade_recorder import record_trade, build_trade_record
 from services.event_log import append_event
-from utils.symbols import round_price, get_ticker_data
+from utils.symbols import round_price, get_ticker_data, enforce_min_trigger_distance
 
 logger = logging.getLogger(__name__)
 
@@ -208,6 +208,12 @@ class Reconciler:
         exchange = _resolve_exchange(session)
 
         sl_rounding = ROUND_DOWN if is_long else ROUND_UP
+        # Same -2021 "would immediately trigger" guard execute_entry applies
+        # at entry time — a trail/breakeven tighten can land the new stop
+        # too close to the current price too, and this is the amend path's
+        # own live-only order submission, see enforce_min_trigger_distance.
+        if strategy.price and strategy.price > 0:
+            new_sl_price = enforce_min_trigger_distance(new_sl_price, strategy.price, is_below=is_long)
         rounded_sl = round_price(symbol, "Binance Futures", new_sl_price, rounding=sl_rounding)
         if rounded_sl is None:
             return

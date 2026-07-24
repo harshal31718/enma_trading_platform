@@ -94,7 +94,7 @@ engine/
 │   └── user_data_stream.py ← Binance User Data Stream (listenKey create/keepalive/close, WS connection). `UserDataStreamManager` takes an `exchange: Exchange | None = None` (default `BinanceFuturesTestnet()`, Plan 6 Step 6.2, migrated 2026-07-20) — listen-key lifecycle routes through `exchange.create_listen_key`/`keepalive_listen_key`/`close_listen_key`, and the WS URL is built via `exchange.user_data_ws_url()` instead of the old hardcoded module-level `_BINANCE_FUTURES_WS` constant (now removed)
 ├── utils/
 │   ├── timeframes.py      ← timeframe string conversions
-│   ├── symbols.py         ← identity converters (to_ccxt_symbol etc.), load_exchange_rules(), round_price(), clamp_and_round_qty(), leverage-bracket lookup, is_symbol_invalid() (testnet-invalid symbol blacklist, 2026-07-03 — DECISIONS.md #22)
+│   ├── symbols.py         ← identity converters (to_ccxt_symbol etc.), load_exchange_rules(), round_price(), clamp_and_round_qty(), leverage-bracket lookup, is_symbol_invalid() (testnet-invalid symbol blacklist, 2026-07-03 — DECISIONS.md #22), enforce_min_trigger_distance() (live-only `-2021 Order would immediately trigger` guard, 2026-07-24 — DECISIONS.md #32; widens an SL/TP trigger price away from the live reference price if too close, never corrects a genuinely wrong-side price)
 │   ├── rate_limiter.py    ← Binance per-IP rate-limit guard
 │   └── risk_math.py       ← shared risk/notional/liquidation-buffer math helpers
 ├── scripts/

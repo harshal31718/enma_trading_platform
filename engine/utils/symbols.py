@@ -360,6 +360,60 @@ def _get_precision(value: Decimal) -> Decimal:
     return Decimal("0." + "0" * (-exp - 1) + "1")
 
 
+# Live-only exchange-compliance concern (see enforce_min_trigger_distance's
+# docstring) — no backtest analog, so this constant carries zero golden-master
+# risk. 0.15% is an empirically-informed default, not a documented Binance
+# constant: Binance doesn't publish a fixed tolerance for its -2021 "Order
+# would immediately trigger" rejection on CONDITIONAL (STOP_MARKET/
+# TAKE_PROFIT_MARKET) orders — found via live Testnet re-verification
+# 2026-07-24 (session repeatedly hit -2021 on ATR stops as tight as
+# sl_atr_mult=0.1 at 25-50x leverage, entering an entry -> reject -> M-5
+# emergency-close -> re-entry loop). May need empirical tuning from further
+# live observation if -2021 still recurs at this margin.
+MIN_TRIGGER_DISTANCE_PCT = 0.0015
+
+
+def enforce_min_trigger_distance(
+    price: float, ref_price: float, is_below: bool, min_distance_pct: float = MIN_TRIGGER_DISTANCE_PCT
+) -> float:
+    """Push a computed SL/TP trigger price further from `ref_price` if it's
+    within `min_distance_pct` of it.
+
+    Binance rejects a CONDITIONAL (STOP_MARKET/TAKE_PROFIT_MARKET) order with
+    `-2021 Order would immediately trigger` when the trigger price is too
+    close to (or on the wrong side of) the current mark price at submission
+    time — a purely live-exchange concern with no backtest equivalent
+    (backtest never submits a real conditional order to be rejected). Applying
+    this BEFORE `round_price()` at the live placement call site keeps this
+    change scoped entirely to `live_bot_manager.py`/`reconciler.py`, with zero
+    reach into any golden-master-covered code path.
+
+    `is_below` is explicit (a long's SL / a short's TP → True; a long's TP /
+    a short's SL → False) rather than inferred from `price < ref_price` —
+    a degenerate `price == ref_price` input would be genuinely ambiguous
+    under inference.
+
+    Only ever WIDENS a price already on its correct side — never corrects a
+    price on the WRONG side (or exactly at `ref_price`) onto the correct one.
+    A wrong-side price is an M-5-class invalid bracket (a genuine strategy/
+    risk-model bug), and this function silently "fixing" it into a
+    valid-looking value would mask the very rejection M-5 exists to raise
+    loud instead of enter naked. Caught by `test_execute_entry_bracket_
+    safety.py`'s existing wrong-side-SL cases when this function's first
+    draft got that wrong.
+    """
+    if ref_price <= 0 or price <= 0:
+        return price
+    min_gap = ref_price * min_distance_pct
+    if is_below:
+        if price >= ref_price:
+            return price
+        return min(price, ref_price - min_gap)
+    if price <= ref_price:
+        return price
+    return max(price, ref_price + min_gap)
+
+
 def round_price(symbol: str, exchange: str, price: float, rounding: str = ROUND_DOWN) -> float:
     """Round price to the exchange tick size for (exchange, symbol)."""
     rules = _rules_cache.get((exchange, symbol))

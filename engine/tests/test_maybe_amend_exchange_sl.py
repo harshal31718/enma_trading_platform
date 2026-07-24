@@ -45,6 +45,11 @@ class _FakeStrategy:
             OrderPlan(direction=1, qty=stop_loss[0], entry_price=100.0, stop_loss=stop_loss[1])
             if stop_loss is not None else None
         )
+        # 2026-07-24: maybe_amend_exchange_sl() now reads strategy.price to
+        # apply enforce_min_trigger_distance — every existing test here uses
+        # a stop comfortably outside the 0.15% floor (>=2% from entry), so
+        # this default is a no-op for all of them.
+        self.price = position.entry_price if position is not None else 100.0
 
 
 def _session(pos_info):
