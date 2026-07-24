@@ -644,19 +644,26 @@ class ExecutionKernel:
             sl_rounding = ROUND_DOWN if direction_name == "long" else ROUND_UP
             tp_rounding = ROUND_UP if direction_name == "long" else ROUND_DOWN
             exchange_name = strategy.exchange or "Binance Futures"
-            if strategy.stop_loss is not None:
-                sl_qty, sl_price = strategy.stop_loss
-                rounded_sl = round_price(symbol, exchange_name, sl_price, rounding=sl_rounding)
-                strategy.stop_loss = (sl_qty, rounded_sl)
-                # Plan 6 Step 6.3 phase (d2): keep active_bracket in sync with
-                # the rounded value too, since check_exits() now reads from it
-                # (see above) — otherwise active_bracket would go stale
-                # (holding the pre-rounding price) as soon as this block runs.
-                if strategy.active_bracket is not None:
-                    strategy.active_bracket.stop_loss = rounded_sl
-            if strategy.take_profit is not None:
-                tp_qty, tp_price = strategy.take_profit
-                rounded_tp = round_price(symbol, exchange_name, tp_price, rounding=tp_rounding)
-                strategy.take_profit = (tp_qty, rounded_tp)
-                if strategy.active_bracket is not None:
-                    strategy.active_bracket.take_profit = rounded_tp
+            # Plan 6 Step 6.3 phase (d, F10 residual re-key, 2026-07-24):
+            # active_bracket is now the DRIVING source for the rounding
+            # decision (condition + value), not strategy.stop_loss/
+            # take_profit — every route()/exec_algo write path sets both
+            # together from the same source value, so active_bracket is
+            # never None here while strategy.stop_loss/take_profit hold a
+            # real (non-stale) value, and vice versa (see F10's investigation
+            # notes in 0_fixes-queue.md for the full argument). The mutable
+            # tuple is still kept in sync afterward — it remains a live read
+            # surface for LiveAdapter.execute_entry's fallback and other
+            # call sites not yet migrated; retiring it is a separate,
+            # still-open piece of work, not attempted here.
+            _ab = strategy.active_bracket
+            if _ab is not None and _ab.stop_loss is not None:
+                rounded_sl = round_price(symbol, exchange_name, _ab.stop_loss, rounding=sl_rounding)
+                _ab.stop_loss = rounded_sl
+                if strategy.stop_loss is not None:
+                    strategy.stop_loss = (strategy.stop_loss[0], rounded_sl)
+            if _ab is not None and _ab.take_profit is not None:
+                rounded_tp = round_price(symbol, exchange_name, _ab.take_profit, rounding=tp_rounding)
+                _ab.take_profit = rounded_tp
+                if strategy.take_profit is not None:
+                    strategy.take_profit = (strategy.take_profit[0], rounded_tp)

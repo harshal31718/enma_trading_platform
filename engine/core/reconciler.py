@@ -156,9 +156,10 @@ class Reconciler:
         hasn't tightened since the last amend (tracked via
         `open_positions[symbol]["armed_sl_price"]` — direction-aware: a
         higher SL is a tighten for longs, a lower SL is a tighten for
-        shorts; anything else, including a widening, is left alone since
-        `move_to_breakeven`/`trail_stop` are themselves documented to only
-        ever tighten, never loosen).
+        shorts; anything else, including a widening, is left alone since the
+        risk model's own stop-tightening logic (e.g. AtrBracketRiskModel's
+        RiskConstraints, consumed by route()) is documented to only ever
+        tighten, never loosen).
         """
         from core.live_bot_manager import (
             _binance_error_detail, _classify_exchange_sync_exit_reason, _extract_fill_price,

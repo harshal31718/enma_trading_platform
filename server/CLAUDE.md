@@ -105,6 +105,7 @@ server/
     │   ├── socketEmitter.js ← Redis pub/sub → Socket.IO relay
     │   ├── symbolService.js ← fetches tiered symbol list from engine (5-min TTL cache)
     │   ├── symbolLock.js    ← Redis-backed symbol lock (bot vs manual)
+    │   ├── eventStreamConsumer.js ← Plan 6 Step 6.5 (ENG-16): consumer-group reader for the engine's `algo:events` Redis Stream (`core/node_notifier.py`'s `NodeNotifier.notify()`) — ordered, at-least-once, replaces the old fire-and-forget HTTP PATCH. Applies each entry via `algoSessionService.processEngineStatsUpdate()` (same function the old `PATCH /internal/algo/sessions/:id/stats` route used) then XACKs; consumer name is `os.hostname()`-keyed (stable across this dev environment's frequent nodemon restarts) and `claimStalePending()` uses `XAUTOCLAIM` on startup to reclaim any dead consumer's unacked backlog, not just its own
     │   └── reconciliation.js ← startup reconciliation (server.js), aligns local state with exchange/engine truth
     ├── workers/
     │   ├── backtest.worker.js
@@ -236,6 +237,7 @@ The server owns the routing, auth, and job queue layers. Database ownership is s
 | Redis — cancel flags | server writes, engine reads | Write only (`backtest:cancel:{jobId}`) |
 | Redis — symbol locks | server writes/reads | Via `symbolLock.js` (bot vs manual lock) |
 | Redis — live bot cache | engine writes, server reads | Read-only |
+| Redis — `algo:events` stream | engine writes (`XADD`), server reads (consumer group) | Plan 6 Step 6.5 — ordered/at-least-once session stats/event delivery, see `eventStreamConsumer.js` |
 
 **Policies:**
 - server/ never connects to TimescaleDB — all candle data comes through engine HTTP endpoints

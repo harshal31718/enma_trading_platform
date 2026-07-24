@@ -15,6 +15,7 @@ const MONGO_URI = process.env.MONGO_URI || 'mongodb://mongodb:27017/enma_trading
 const MONGO_DB = process.env.MONGO_DB || 'enma_trading'
 
 const { reconcileSymbolLocks, reconcileFullAccountPositions } = require('./services/reconciliation')
+const eventStreamConsumer = require('./services/eventStreamConsumer')
 
 const FULL_RECONCILE_INTERVAL_MS = 10 * 60 * 1000 // 10 min — safety-net sweep, see reconciliation.js
 
@@ -26,6 +27,10 @@ async function startServer() {
 
   const httpServer = http.createServer(app)
   initSocket(httpServer)
+
+  // Plan 6 Step 6.5 (ENG-16): consumes the engine's algo:events Redis
+  // Stream — started after initSocket() so getIO() resolves inside it.
+  await eventStreamConsumer.start()
 
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`)
@@ -40,6 +45,7 @@ async function startServer() {
   async function shutdown(signal) {
     console.log(`${signal} received — shutting down gracefully`)
     clearInterval(reconcileTimer)
+    await eventStreamConsumer.stop()
     httpServer.close(async () => {
       await mongoose.connection.close()
       console.log('MongoDB connection closed')

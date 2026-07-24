@@ -156,7 +156,7 @@ Anything failing one of these lives in **§ Not in this queue** below with the r
   chaos session should confirm keepalive success in the logs (`"Listen key keep-alive OK"` instead
   of `"Keep-alive failed"`) and the absence of routine hourly `LISTEN_KEY_EXPIRED` reconnects.
 
-### F10 — `kernel.py`'s exec_algo branch bypasses `route()`'s "sole writer" contract · Plan 6 Step 6.3 (ENG-6) · **filed, NOT a quick fix**
+### F10 — `kernel.py`'s exec_algo branch bypasses `route()`'s "sole writer" contract · Plan 6 Step 6.3 (ENG-6) · **FULLY SHIPPED 2026-07-24**
 - **What:** found while investigating Plan 6 Step 6.3 (typed strategy↔engine contract, see
   DECISIONS.md #28). `core/models/execution.py`'s `route()` docstring claims it is "the sole place
   that assigns `s.buy`, `s.sell`, `s.stop_loss`, `s.take_profit`, `s._pending_flip`, or
@@ -195,15 +195,91 @@ Anything failing one of these lives in **§ Not in this queue** below with the r
   attributes AND the only code path anything else ever reads them from (i.e. `check_exits()` also
   needs its own typed/persisted source, not just `LiveAdapter`); `test_boundaries.py` or a new
   equivalent test enforces it structurally, not just by docstring claim.
+- **RE-SCOPED AGAIN 2026-07-23 — this entry (and the fourth `DECISIONS.md` #28 addendum it fed)
+  was stale about check_exits() and about the actual size of the problem.** Two things had already
+  changed by the time this was revisited: (1) Plan 6 phase (d2), shipped 2026-07-20, migrated
+  `check_exits()` to read `strategy.active_bracket` instead of `strategy.stop_loss`/`take_profit` —
+  the acceptance criterion's "check_exits() also needs its own typed/persisted source" is done. (2)
+  A repo-wide grep found the feared "~48-file surface" was never real: `trail_stop()`,
+  `move_to_breakeven()`, `liquidate()`, `go_long()`, `go_short()`, and `DefaultExecution.plan()`
+  (the shim that called `go_long`/`go_short`) had **zero reachable callers** — `test_boundaries.py`
+  already forbade every seeded strategy from touching them, and no framework code called them
+  either (`pipeline.py`'s `evaluate()` calls `route()` unconditionally, not `plan()`). All six were
+  deleted (DECISIONS.md #28, fifth addendum) — dead code, not a migration. **What's now true:**
+  `route()` is the sole reachable writer of `s.buy`/`s.sell`/`s.stop_loss`/`s.take_profit` from the
+  model/strategy layer. **What's still open, and genuinely not a quick fix:** `kernel.py`'s
+  exec_algo branch (~line 526-529) and its post-route rounding block (~line 647-662) still write
+  these fields directly as the engine's own bookkeeping on an already-routed plan. The rounding
+  block is keyed off `if strategy.stop_loss is not None`, so removing the exec_algo branch's write
+  without re-keying the rounding block onto `active_bracket` would silently stop rounding from
+  applying to exec_algo-sliced brackets — a real regression. That re-keying is the one remaining
+  piece, touches every candle of every live/backtest run with an open position, and needs its own
+  golden-master-verified pass — not attempted in this round. **Verified in-container 2026-07-24**:
+  pytest 670/670, golden-master `MultiDivergence` byte-identical (`trades=55 netProfit=-1784.02
+  winRate=0.36 cagr=-71.32 sqn=-2.08`) to the established baseline — the dead-code deletion itself
+  is now fully confirmed safe.
 
-### F8 — Redis `requirepass` · Plan 4.5 · **needs an infra window**
+- **Rounding-block re-key SHIPPED 2026-07-24, closing F10 completely.** Investigated the actual
+  invariant before touching anything: `route()` (every one of Paths 2/3/4/5) and `kernel.py`'s
+  exec_algo branch both write `strategy.active_bracket` and the mutable
+  `strategy.stop_loss`/`strategy.take_profit` tuple TOGETHER, from the same source value, on every
+  call — so `active_bracket` is never `None` while the tuple holds a fresh (non-stale) value, and
+  never holds a different price than the tuple when both are non-`None`. The one real asymmetry
+  (an exec_algo slice that carries no SL/TP leaves `active_bracket.stop_loss` `None` while the
+  tuple can still hold an already-rounded value from an earlier slice) is safe to skip, not round
+  again — re-rounding an already-tick-aligned price is a no-op anyway.
+  `kernel.py`'s rounding block (~line 647-666) now branches on `strategy.active_bracket` — reads
+  `_ab.stop_loss`/`.take_profit` as the source and condition, rounds, writes the result back onto
+  `_ab` first, then mirrors it onto the mutable tuple (still needed — `LiveAdapter.execute_entry`'s
+  fallback read and other un-migrated call sites still consume the tuple directly; retiring it
+  entirely is separate, still-open work, not this item's job). New
+  `engine/tests/test_kernel_rounding_active_bracket.py` (4 cases, using the same
+  fake-`kernel_mod.evaluate` harness `test_exec_algo_slicing.py` established): long entry rounds
+  both fields correctly (SL down/TP up), short entry rounds the opposite direction, the
+  active_bracket-None-but-stale-tuple case is skipped without touching the stale value or
+  crashing, and the fully-flat case touches neither field. **Verified**: engine pytest 675 → **679/679
+  passed**, golden-master `MultiDivergence` byte-identical (`trades=55 netProfit=-1784.02
+  winRate=0.36 cagr=-71.32 sqn=-2.08`) — expected, since `round_price` with no cached exchange
+  rules is a passthrough for this fixture symbol regardless of which field drives it; the new unit
+  tests (with rules seeded) are the real coverage for the rounding mechanics themselves.
+  `core/models/execution.py`'s module docstring updated to record the closure.
+
+### F8 — Redis `requirepass` · Plan 4.5 · **CODE/CONFIG PREPARED 2026-07-24 — needs your `.env` edit + a restart to actually cut over**
 - **What:** The one real infra item deferred from Plan 4 — authenticate Redis (`requirepass` + update
   every client connection string: server BullMQ/ioredis, engine, health check). Wide-ish blast radius
   (touches every service's Redis config) so it wants a deliberate window, not a squeeze-in.
+- **Shipped (config/docs, not yet live):** audited every Redis connection site in the codebase —
+  exactly 7 (`server/src/config/redis.js`, `services/eventStreamConsumer.js`, `services/socketEmitter.js`;
+  `engine/core/node_notifier.py`, `engine/routers/backtest.py`, `engine/services/manual_trade_stream.py`,
+  `engine/services/progress.py`) construct their own client, and every one of them reads `REDIS_URL`
+  first with an unauthenticated fallback default — no bypasses found. Every other Redis consumer
+  (BullMQ queues, `symbolLock.js`, `rateLimiters.js`) already goes through the shared
+  `config/redis.js` singleton. This means the ENTIRE fix is: make Redis itself require a password,
+  and make `REDIS_URL` embed it — zero application code changes needed anywhere.
+  `docker-compose.yml` (dev): `redis` service now runs `redis-server --requirepass
+  enma_dev_redis_password` (hardcoded dev-only value, same convention as timescaledb's own
+  `POSTGRES_PASSWORD: enma_dev_password`), healthcheck updated to `redis-cli -a
+  enma_dev_redis_password --no-auth-warning ping`. `docker-compose.prod.yml`: `--requirepass
+  ${REDIS_PASSWORD}` (compose-level interpolation from the deploy host's own `.env`, same pattern as
+  `${TIMESCALE_PASSWORD}`), healthcheck likewise. `.env.example` and `.env.ci` (both git-tracked,
+  not secrets) updated: both `REDIS_URL` lines now read
+  `redis://:enma_dev_redis_password@redis:6379`, matching the dev compose hardcode exactly; new
+  `REDIS_PASSWORD=` var added (consumed only by prod's compose interpolation — dev ignores it since
+  dev's password is hardcoded directly in the compose file). Both `docker compose config --quiet`
+  (dev) and `docker compose -f docker-compose.prod.yml config --quiet` parse clean.
+- **NOT yet applied to the running dev stack, deliberately** — the real (git-ignored) local `.env`
+  still has the old unauthenticated `REDIS_URL`, which Claude Code cannot edit (root `CLAUDE.md`:
+  never modify `.env` files). Applying `docker compose up -d redis` now, before `.env` is updated to
+  match, would immediately break every service's Redis connectivity (BullMQ queues, symbol locks,
+  progress pub/sub, the new `algo:events` stream from Plan 6.5) — a real outage, not a safe
+  verification. **To finish this yourself:** update your local `.env`'s `REDIS_URL` line to
+  `redis://:enma_dev_redis_password@redis:6379` (matches `.env.example` exactly), then run
+  `docker compose up -d redis` followed by `docker compose restart server engine` (or a full
+  `docker compose watch` restart) — the healthcheck will confirm Redis accepted the new password
+  before dependents come back up.
 - **Acceptance:** Redis rejects unauthenticated connections; all services reconnect; queues + pub/sub
-  + cache all functional; `/health` still honest.
-- **Effort:** small–medium but **touches every service's config** — do it when you can restart the
-  full stack and watch it, not at the tail of another task. Last in the queue for that reason.
+  + cache all functional; `/health` still honest. **Config/audit done; live cutover + acceptance
+  verification blocked on your `.env` edit.**
 
 ---
 

@@ -93,8 +93,10 @@ Client receives backtest:complete → fetches result + trades
   optional funding at 8h boundaries (off by default; longs pay / shorts receive on a positive rate)
   — see `DECISIONS.md` #10.
 - **Risk-based position sizing**: centralized in `BaseStrategy` (`size_by_risk`, `atr_stop`,
-  `rr_target`, `trail_stop`, `move_to_breakeven`); all 5 seeded strategies size via pluggable
-  `PortfolioModel` subclasses. Per-run risk overrides (`risk_pct`, `rrr`, `max_session_dd`,
+  `rr_target`); all seeded strategies size via pluggable `PortfolioModel`/`RiskModel` subclasses —
+  stop tightening is the risk model's job (`RiskConstraints` into `route()`), not a strategy call;
+  `trail_stop`/`move_to_breakeven` were removed as dead legacy API (F10 follow-up, DECISIONS.md
+  #28 addendum). Per-run risk overrides (`risk_pct`, `rrr`, `max_session_dd`,
   `liq_buffer_pct`) come from the wizard's Settings step, pre-filled from Exchange Settings
   defaults, merged server-side (`utils/risk.js → resolveRiskParams`) over saved defaults, mapped to
   the engine's snake_case `riskParams`, persisted on `backtestResults`.

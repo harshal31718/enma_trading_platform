@@ -626,12 +626,45 @@ not the risk/decision logic living alongside it in the same methods, actually mo
   598/598, golden-master byte-identical (`before_plan6.json` vs `after_plan6_5a.json`), and the
   running dev container's `/health` endpoint + an active live session's real position-check traffic
   both confirmed healthy after the change (checked container logs directly, not just pytest — this
-  touches `main.py`'s startup/shutdown path, which no test suite exercises end-to-end). **Still
-  NOT done, and a materially different, larger piece of work**: the durable, ORDERED, at-least-once
-  Redis-stream delivery channel replacing Node's last-write-wins `findByIdAndUpdate` projection.
-  That needs new consumer code on the Node/server side too (not just this engine-side change) —
-  left for its own dedicated session per this plan's own Rule D (planning tasks produce docs, not
-  half-built cross-service features).
+  touches `main.py`'s startup/shutdown path, which no test suite exercises end-to-end).
+
+- **Redis-stream half SHIPPED 2026-07-24, closing Step 6.5 in full.** `NodeNotifier.notify()`
+  (`engine/core/node_notifier.py`) now publishes to a durable Redis Stream (`algo:events`,
+  `XADD ... MAXLEN ~ 10000`) instead of the fire-and-forget HTTP PATCH — `call_internal()` is
+  unchanged (still HTTP, synchronous request/response, not a fit for a stream). New
+  `server/src/services/eventStreamConsumer.js` reads it via a consumer group (`node-consumers`,
+  `XREADGROUP ... '>'` for new entries), applies each entry through the exact same
+  `processEngineStatsUpdate()` the old PATCH route used (so Node-side apply behavior is
+  byte-identical — only the transport changed), then `XACK`s. Correctness against duplicate/
+  out-of-order delivery relies entirely on `processEngineStatsUpdate`'s pre-existing
+  `lastSeqBySymbol` staleness guard — this change makes the transport reliable enough for that
+  guard to matter, it doesn't add new dedup logic.
+  **Real bug found and fixed during live smoke-testing, not just unit tests**: the consumer's name
+  was initially `consumer-${process.pid}` — this dev environment's nodemon restarts the Node
+  process (not the container) on every file-watch event, so every restart abandoned the prior
+  process's unacked entries under a name no future process would ever read again. Confirmed live
+  via `XPENDING` showing 14 entries stuck under a dead `consumer-<old-pid>` name. Fixed by keying
+  the consumer name on `os.hostname()` (stable across in-container process restarts, == container
+  ID under Docker) and replacing the startup drain with `XAUTOCLAIM` (`claimStalePending()`,
+  `CLAIM_MIN_IDLE_MS=30s`), which reassigns stale-pending entries regardless of which consumer name
+  — dead or alive — currently holds them; a `XREADGROUP '0'` self-drain (the original design) can
+  only ever see a process's own prior pending list, not a genuinely different dead consumer's.
+  Verified live end-to-end against the running dev stack (not just mocked tests): `redis-cli XADD`
+  a real event, confirmed `XACK`ed within the loop's `BLOCK_MS` window and `processEngineStatsUpdate`
+  invoked with the right `{id, body, io}` shape; confirmed the 14 stuck entries were claimed,
+  reprocessed, and (for the ones with fake test-fixture session ids, permanently unresolvable)
+  correctly left un-acked rather than silently dropped.
+  New `server/src/services/__tests__/eventStreamConsumer.test.js` (11 cases) — `applyEntry`'s
+  field-parsing/malformed-input/JSON-parse-failure/error-propagation paths, `processBatch`'s
+  ack-on-success/no-ack-on-failure/ack-malformed-to-skip behavior, and `claimStalePending`'s
+  single-page/multi-page-cursor/empty-backlog cases — all against injected fake clients rather than
+  ioredis-mock, which doesn't implement `XGROUP`/`XREADGROUP`/`XACK`/`XAUTOCLAIM` (confirmed by hand
+  against the running container before choosing this test strategy). `engine/tests/test_node_notifier.py`
+  updated: `notify()`'s tests now assert an `XADD` call shape instead of an HTTP PATCH; `call_internal()`'s
+  tests unchanged.
+  **Verified**: engine pytest 679 → 682/682, golden-master byte-identical (live-only change, zero
+  backtest import overlap); server jest 266 → 269/269. **Plan 6 Step 6.5 and Plan 6 as a whole are
+  now fully shipped, no remaining scope.**
 
 ### Step 6.6 — Proper packaging (issue ENG-12)
 - Remove the `/engine→/app` symlink and `sys.path.insert(0,'/')` from `main.py`. Establish one

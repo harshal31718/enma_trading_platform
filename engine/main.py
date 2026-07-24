@@ -29,6 +29,7 @@ from routers.simulate import router as simulate_router
 from services.strategy_seeder import seed_strategies
 from services.binance_testnet import close_client
 from core.node_notifier import close_client as close_node_notifier_client
+from core.node_notifier import close_redis_client as close_node_notifier_redis_client
 from utils.symbols import load_exchange_rules, load_symbol_volume_tiers, load_book_tickers
 
 load_dotenv()
@@ -152,6 +153,7 @@ async def lifespan(app: FastAPI):
     await close_pool()
     await close_client()
     await close_node_notifier_client()
+    await close_node_notifier_redis_client()
     logger.info("Engine shutdown complete")
 
 

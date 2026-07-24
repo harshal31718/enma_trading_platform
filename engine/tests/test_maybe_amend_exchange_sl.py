@@ -137,8 +137,8 @@ def test_short_tighten_direction_is_downward(monkeypatch):
 
 def test_widening_is_never_amended(monkeypatch):
     """A stop that moved AWAY from price (looser, not tighter) must never
-    be amended — trail_stop/move_to_breakeven are documented to only ever
-    tighten; if something upstream violates that, this method still must
+    be amended — the risk model's own tightening logic is documented to only
+    ever tighten; if something upstream violates that, this method still must
     not push a wider stop to the exchange."""
     async def fake_signed(*args, **kwargs):
         raise AssertionError("should not call Binance for a widening stop")

@@ -5,16 +5,22 @@
 #   - server binds 127.0.0.1 only; engine/redis/timescaledb publish no host
 #     ports (Docker-published ports bypass host firewall INPUT rules)
 #   - named volume persists engine/strategies across image rebuilds
-# Compose interpolates ${TIMESCALE_PASSWORD} from the git-ignored root .env.
+# Compose interpolates ${TIMESCALE_PASSWORD}/${REDIS_PASSWORD} from the
+# git-ignored root .env.
 
 services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    # F8 (0_fixes-queue.md): REDIS_PASSWORD must be set in the deploy host's
+    # .env, and REDIS_URL (read by engine/server via env_file passthrough
+    # below, not compose interpolation) must independently embed the same
+    # value: redis://:<REDIS_PASSWORD>@redis:6379. See .env.example.
+    command: redis-server --requirepass ${REDIS_PASSWORD}
     volumes:
       - enma_redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "--no-auth-warning", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5

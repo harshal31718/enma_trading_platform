@@ -63,10 +63,12 @@ class BaseStrategy(ABC):
         # OrderPlan route() built (or the exec_algo-sliced replacement, when
         # configured), for EVERY path including exit/flip/maintain, not just
         # enter. Written by DefaultExecution.route() (core/models/execution.py)
-        # additively, alongside (not instead of) the mutable tuples above —
-        # this field has NO readers yet (d2+ migrates read sites one cluster
-        # at a time per the phase (d) scoping doc; see DECISIONS.md). Engine-
-        # internal; not documented as a strategy-facing property.
+        # and kernel.py's exec_algo/rounding bookkeeping, alongside (not
+        # instead of) the mutable tuples above. As of phases (d2)-(d4), this
+        # is the field every cross-candle/live reader actually reads
+        # (kernel.check_exits(), reconciler.py, LiveAdapter/BacktestAdapter)
+        # — see DECISIONS.md #28. Engine-internal; not documented as a
+        # strategy-facing property.
         self.active_bracket = None  # OrderPlan | None
 
         # Candle index counter — incremented by engine on each candle
@@ -228,19 +230,12 @@ class BaseStrategy(ABC):
         """Return True to cancel a pending entry order before it fills."""
         return False
 
-    def go_long(self) -> None:
-        """Define entry, stop-loss, and take-profit for a long trade.
-
-        Default: no-op (pass). Legacy strategies override this; ported strategies
-        implement forecast() and let route() write the order state.
-        """
-
-    def go_short(self) -> None:
-        """Define entry, stop-loss, and take-profit for a short trade.
-
-        Default: no-op (pass). Legacy strategies override this; ported strategies
-        implement forecast() and let route() write the order state.
-        """
+    # go_long()/go_short() (pre-Narang legacy entry hooks) removed — F10
+    # follow-up (DECISIONS.md #28 addendum). They were only ever invoked by
+    # DefaultExecution.plan(), which had zero call sites (pipeline.py's
+    # evaluate() calls route() unconditionally, never plan()) and has been
+    # removed alongside them. route() is now the sole reachable writer of
+    # s.buy/s.sell/s.stop_loss/s.take_profit for every strategy in this repo.
 
     # ─────────────────────────────────────────
     # Optional lifecycle methods — override as needed
@@ -463,42 +458,13 @@ class BaseStrategy(ABC):
             return entry + rr * risk
         return entry - rr * risk
 
-    def trail_stop(self, atr_mult: float = 2.0, period: int = 14) -> None:
-        """Ratchet the stop-loss toward price by ``atr_mult`` ATR. Only ever
-        tightens (moves up for longs, down for shorts) — never loosens.
-        Call from ``update_position()`` while a position is open."""
-        if not self.is_open:
-            return
-        qty = self.position.qty
-        atr = self._atr(period)
-        if self.is_long:
-            new_sl = self.price - atr_mult * atr
-            cur = self.stop_loss[1] if self.stop_loss else None
-            if cur is None or new_sl > cur:
-                self.stop_loss = qty, new_sl
-        elif self.is_short:
-            new_sl = self.price + atr_mult * atr
-            cur = self.stop_loss[1] if self.stop_loss else None
-            if cur is None or new_sl < cur:
-                self.stop_loss = qty, new_sl
-
-    def move_to_breakeven(self, buffer_pct: float = 0.0) -> None:
-        """Move the stop to the entry price (plus a small buffer in the profit
-        direction). No-op if it would loosen the existing stop."""
-        if not self.is_open:
-            return
-        qty = self.position.qty
-        entry = self.position.entry_price
-        if self.is_long:
-            be = entry * (1.0 + buffer_pct)
-            cur = self.stop_loss[1] if self.stop_loss else None
-            if cur is None or be > cur:
-                self.stop_loss = qty, be
-        elif self.is_short:
-            be = entry * (1.0 - buffer_pct)
-            cur = self.stop_loss[1] if self.stop_loss else None
-            if cur is None or be < cur:
-                self.stop_loss = qty, be
+    # trail_stop()/move_to_breakeven() (pre-Narang legacy strategy-facing SL
+    # mutators) removed — F10 follow-up (DECISIONS.md #28 addendum). Zero
+    # call sites in this repo: FORBIDDEN_PATTERNS in test_boundaries.py
+    # already barred every seeded (ported) strategy from calling them, and no
+    # framework code called them either. Tightening the stop as price moves
+    # is the risk model's job via RiskConstraints passed into route() (see
+    # e.g. AtrBracketRiskModel), not a strategy-owned mutation.
 
     # ─────────────────────────────────────────
     # Atomic flip (close-and-reverse)
@@ -556,18 +522,10 @@ class BaseStrategy(ABC):
         """
         return None
 
-    def liquidate(self) -> None:
-        """[DEPRECATED] Close the open position at market price.
-
-        Prefer ``close_position()`` — it guarantees a next-open market exit
-        that cannot be pre-empted by SL/TP checks (BUG-03 fix). This method
-        is kept for backward compatibility only.
-        """
-        if self.is_open:
-            if self.is_long:
-                self.take_profit = self.position.qty, self.price
-            else:
-                self.stop_loss = self.position.qty, self.price
+    # liquidate() ([DEPRECATED] market-close-via-fake-SL/TP shim) removed —
+    # F10 follow-up (DECISIONS.md #28 addendum). Zero call sites; its own
+    # docstring already named close_position() (below) as the preferred
+    # replacement, which every strategy has available directly.
 
     def log(self, msg: str) -> None:
         """Log a message during strategy execution."""

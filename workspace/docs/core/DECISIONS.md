@@ -644,6 +644,52 @@ agreed: **d5 dropped.** `self.stop_loss`/`self.take_profit` remain strategy-faci
 documented in `engine/CLAUDE.md`; `active_bracket` stays a read-side mirror only, not a replacement
 API. **Plan 6 (engine decomposition & exchange abstraction) has no remaining scope.**
 
+**Fifth addendum (2026-07-23) — the fourth addendum's cost argument for dropping d5 rested on a
+factual error; corrected, and the real (much smaller) dead-code piece of d5 shipped.** Revisited
+F10 (`0_fixes-queue.md`) at the user's request. The fourth addendum's stated cost — "every seeded
+strategy writes `self.stop_loss = qty, price` directly" — is false and was never true after the
+Narang Black-Box migration: `test_boundaries.py`'s `FORBIDDEN_PATTERNS` (`self\.stop_loss\s*=`,
+`self\.trail_stop\(`, `self\.move_to_breakeven\(`, etc.) already bars every seeded strategy from
+writing these fields or calling these hooks, checked by `test_no_forbidden_references` on all 6
+strategies. A repo-wide grep confirmed zero reachable callers of `trail_stop()`, `move_to_breakeven()`,
+`liquidate()`, `go_long()`, `go_short()`, or `DefaultExecution.plan()` (the legacy shim that would
+have called `go_long`/`go_short`) — `pipeline.py`'s `evaluate()` calls `route()` unconditionally and
+always has; nothing in the live or backtest path invokes the pre-Narang API at all. So the "48-file
+migration" the fourth addendum feared was never real: there was no live strategy-facing write path
+to migrate, only dead code left over from before the Narang porting completed.
+
+**What actually shipped:** deleted `go_long()`, `go_short()`, `trail_stop()`, `move_to_breakeven()`,
+`liquidate()` from `core/strategy.py` and the dead `plan()` shim from `core/models/execution.py`
+(`Signal`/`Target` imports there dropped as now-unused too). `route()` is now, provably, the sole
+reachable writer of `s.buy`/`s.sell`/`s.stop_loss`/`s.take_profit` from the model/strategy layer —
+matching its own docstring's claim for the first time. `should_long()`/`should_short()`/
+`update_position()` were left alone: `should_long`/`should_short` feed `forecast()`'s own default
+implementation (`core/strategy.py` line ~588) and are genuinely reachable; `update_position()` is a
+harmless no-op lifecycle hook (like `before()`/`after()`) that never wrote the forbidden fields
+itself, so it isn't part of F10's concern. Updated comments/docstrings that referenced the deleted
+methods: `execution.py`'s module docstring, `strategy.py`'s `active_bracket` comment, `reconciler.py`'s
+stop-tighten-invariant comment, `test_maybe_amend_exchange_sl.py`, `engine/CLAUDE.md`'s BaseStrategy
+interface section, and the backtest-pipeline `SPEC.md`.
+
+**What deliberately did NOT ship:** `kernel.py`'s exec_algo-branch write (`core/kernel.py` ~line
+526-529) and its post-route rounding block (~line 647-662) still write `strategy.stop_loss`/
+`strategy.take_profit`/`strategy.active_bracket` directly, outside `route()`. This is not a
+strategy bypassing `route()` — it's the engine's own bookkeeping on an already-routed plan (slicing
+an entry via exec_algo; rounding a price to the exchange's tick size) — and it's load-bearing: the
+rounding block is triggered by `if strategy.stop_loss is not None`, so deleting the exec_algo
+branch's write without also re-keying the rounding block off `active_bracket` would silently stop
+rounding from ever applying to exec_algo-sliced brackets, a real regression. Re-keying the rounding
+block itself was judged out of scope for this pass (higher-risk, touches every candle of every
+live/backtest run with an open position) — left as `F10`'s documented remaining state, not reopened
+as new work here.
+
+**Verification note, updated 2026-07-24:** verified in-container with `docker compose watch` up —
+`pytest -q` → 670/670 passed. `golden_master.py run` on `MultiDivergence` →
+`trades=55 netProfit=-1784.02 winRate=0.36 cagr=-71.32 sqn=-2.08`, byte-identical to the pre-change
+baseline recorded in every prior verified pass in this file / `0_tracker.md`. This addendum's own
+Deferred-fix item (F10's remaining piece — re-keying `kernel.py`'s rounding block onto
+`active_bracket`) is unaffected by this verification and stays open; see `0_fixes-queue.md`.
+
 ## 29. MarginSurge (Plan 23) — implemented, validation FAILED, kept as reference not shipped (2026-07-21)
 
 Plan 23 was explicit up front that a negative-expectancy edge should be killed by its own
@@ -695,3 +741,45 @@ only mid-implementation blockers.
   relying on them for entry-index tracking would have a live/backtest parity gap. Tracked instead
   via `self.is_open`/`self.index`/`self.vars` only, which both adapters keep consistent — a pattern
   worth reusing for any future strategy that needs "how long have I held this position" state.
+
+## 30. Plan 5.6 — auto-resume-on-restart default reaffirmed OFF (2026-07-24)
+
+Plan 5.6 (ENG-7) shipped the full capability 2026-07-18: `_seed_pnl_from_event_log` (engine) +
+`_tryResumeSession`/`RESUME_SESSIONS_ON_RESTART` (`server/src/services/reconciliation.js`) can
+resume an orphaned session's PnL/positions from the event log and exchange truth on restart instead
+of force-flattening it. The toggle has been live since then, defaulting OFF — an unset or `false`
+`RESUME_SESSIONS_ON_RESTART` reproduces the original stop+flatten fail-safe with zero code-path
+change.
+
+**Revisited 2026-07-24** while working through the tracker's remaining loose ends — asked
+explicitly whether to flip the default to auto-resume now that the capability has existed
+unflipped for six days. **Decision: keep flatten-on-restart as the default.** Rationale unchanged
+from the original 2026-07-18 call: an engine/server restart is not always a benign deploy — it can
+be a crash from an unknown or actively bad cause (OOM, a corrupted state write, an unhandled
+exception in the candle loop), and auto-resuming live trading into that unknown is a worse failure
+mode than a brief flatten-and-restart. The toggle exists and is tested for the operator who wants
+it in a specific deployment; the platform default stays conservative. No code change — this is a
+documentation-only close-out confirming the existing default is intentional, not an oversight.
+
+## 31. F10 fully closed — kernel.py rounding block re-keyed onto active_bracket (2026-07-24)
+
+Closes the last open piece of F10 (`0_fixes-queue.md`) / the #28 addendum chain. Investigated
+whether `strategy.active_bracket` can safely become the ROUNDING block's driving source
+(condition + value) in `core/kernel.py`, replacing the mutable `strategy.stop_loss`/
+`strategy.take_profit` tuple it previously keyed off.
+
+**Finding:** every write path — `route()`'s Paths 2/3/4/5 and `kernel.py`'s exec_algo branch —
+sets `active_bracket` and the tuple together, from the same source value, in the same call. The
+only asymmetry: an exec_algo slice carrying no SL/TP leaves `active_bracket.stop_loss` `None`
+while the tuple can still hold an already-rounded value from an earlier slice — safe to skip
+(re-rounding an already-tick-aligned price is a no-op), not a divergence that needs handling.
+
+**Shipped:** the rounding block now reads/writes `strategy.active_bracket.stop_loss`/`.take_profit`
+first, then mirrors the result onto the mutable tuple (still a live read surface for
+`LiveAdapter.execute_entry`'s fallback and other un-migrated call sites — retiring the tuple
+entirely stays separate, still-open work). New `engine/tests/test_kernel_rounding_active_bracket.py`
+(4 cases) directly exercises the rounding mechanics with seeded exchange rules. Verified: engine
+pytest 675 → 679/679, golden-master `MultiDivergence` byte-identical
+(`trades=55 netProfit=-1784.02 winRate=0.36 cagr=-71.32 sqn=-2.08`).
+
+**F10 is now fully closed** — no remaining scope in `0_fixes-queue.md` or Plan 6.

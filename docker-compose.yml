@@ -23,10 +23,16 @@ services:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    # F8 (0_fixes-queue.md): dev-only hardcoded password, same convention as
+    # timescaledb's own `POSTGRES_PASSWORD: enma_dev_password` below — not a
+    # secret, just auth-in-dev so the wire protocol/connection-string shape
+    # matches prod. Every consuming service still reads the single REDIS_URL
+    # env var (`redis://:<password>@redis:6379`) — see .env.example.
+    command: redis-server --requirepass enma_dev_redis_password
     volumes:
       - enma_redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "enma_dev_redis_password", "--no-auth-warning", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5

@@ -20,20 +20,39 @@ evaluate_and_route().
 
 As of phase (d1), the same value is also mirrored onto `s.active_bracket`
 (`None` for Path 1) — a persisted field, unlike the return value, which is
-a per-call transient. This is purely additive scaffolding for a future
-migration (see the plan file's Step 6.3 phase (d) scoping) — nothing reads
-`active_bracket` yet.
+a per-call transient. As of phase (d2-d4), this is the field every
+cross-candle/live reader (`kernel.check_exits()`, `reconciler.py`,
+`LiveAdapter`/`BacktestAdapter`) actually reads — `s.stop_loss`/
+`s.take_profit` are legacy same-call-frame plumbing kept for `kernel.py`'s
+own bookkeeping (see below), not a strategy-facing read surface anymore.
 
 DCA scale-in/out (A-014) is handled externally by evaluate_and_route():
 the strategy's adjust_trade_position() hook sets qty_to_adjust on the
 strategy object, which the adapter processes as a separate order. route()
 itself does not handle DCA — Path 5 covers the bracket refresh that follows.
+
+F10 follow-up (DECISIONS.md #28 addendum): route() is the sole writer of
+these fields from the *model/strategy* layer — the pre-Narang legacy
+strategy-facing mutators that used to also write them (`go_long`/`go_short`,
+`trail_stop`/`move_to_breakeven`, `liquidate`, the `plan()` shim) had zero
+reachable call sites and were removed. `kernel.py`'s exec_algo branch and
+its post-route rounding block still write `s.stop_loss`/`s.take_profit`/
+`s.active_bracket` directly — this is the engine's own bookkeeping on top
+of what route() just computed (slicing an already-routed entry; rounding an
+already-routed price to the exchange's tick size), not a strategy bypassing
+route(). **Re-keyed 2026-07-24**: the rounding block's driving
+condition/source value is now `s.active_bracket` (every write path sets it
+in lockstep with the mutable tuple, so this is behavior-preserving — see
+`0_fixes-queue.md` F10 for the full argument); the tuple is still kept in
+sync afterward since other call sites (`LiveAdapter.execute_entry`'s
+fallback read, DCA sizing, live cleanup nulling) haven't migrated off it.
+Retiring the tuple entirely is a separate, still-open piece of work.
 """
 from __future__ import annotations
 
 from .base import (
     ExecutionModel, OrderPlan, EntryFill, ExitFill,
-    Signal, TargetPortfolio, Target, RiskConstraints,
+    TargetPortfolio, RiskConstraints,
 )
 
 
@@ -165,39 +184,11 @@ class DefaultExecution(ExecutionModel):
         )
         return s.active_bracket
 
-    # ── Deprecated plan() shim ────────────────────────────────────────────────
-
-    def plan(self, s, sig: Signal, target: TargetPortfolio, rf: RiskConstraints) -> OrderPlan | None:
-        """Deprecated — delegates to legacy go_long/go_short for call sites that
-        have not yet been updated to the route()-based pipeline. Remove in Phase 6."""
-        if sig.direction > 0:
-            s.go_long()
-            order = s.buy
-        elif sig.direction < 0:
-            s.go_short()
-            order = s.sell
-        else:
-            return None
-        if order is None:
-            return None
-        qty, price = order
-        sl = s.stop_loss[1]   if s.stop_loss   else None
-        tp = s.take_profit[1] if s.take_profit else None
-        return OrderPlan(
-            direction=sig.direction,
-            qty=qty,
-            entry_price=price,
-            stop_loss=sl,
-            take_profit=tp,
-            order_type=getattr(s, "order_type", "market"),
-        )
-
-
 class BacktestExecution(DefaultExecution):
     """Backtest env: fills at next candle's open with adverse slippage.
 
     The shared entry_fill/exit_fill already model this (runner invokes them at
-    open_t). route() and plan() inherit from DefaultExecution unchanged.
+    open_t). route() inherits from DefaultExecution unchanged.
     """
 
 

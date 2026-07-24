@@ -40,7 +40,7 @@ engine/
 │   ├── pipeline.py           ← unified decision pipeline (evaluate(s) runs Alpha -> Risk -> Cost -> Portfolio -> Execution — see workspace/docs/core/MODELS.md)
 │   ├── kernel.py             ← ExecutionKernel/ExecutionAdapter — unifies backtest/live execution (F-024). `ExecutionAdapter` carries an abstract `is_live: bool` property (Plan 6 Step 6.4, ENG-5, 2026-07-20) — `check_exits()`/`evaluate_and_route()` no longer take `is_live` as a parameter, they read `self.adapter.is_live` once instead, closing off the class of bug where a caller could pass the wrong `is_live` value for the adapter it was actually driving. The internal `if is_live:`/`if not is_live:` checks (entry-candle-exit skip, simulated liquidation, gap-through-stop pricing, immediate-execute-vs-defer-to-`execute_pending()`) are unchanged in behavior/order — this was a parameter→adapter-property substitution, not a timing-model redesign; see the plan file's Step 6.4 section for why a deeper "kernel calls one polymorphic method, each adapter owns its own timing" redesign was deliberately not attempted this pass
 │   ├── market_data_feed.py   ← MarketDataFeed — warmup (TimescaleDB)/REST-fallback/HTF candle sourcing + in-memory candle-array append, extracted from `LiveBotManager` (Plan 6 Step 6.1, ENG-1) as a behavior-preserving move, golden-master-verified byte-identical
-│   ├── node_notifier.py      ← NodeNotifier — engine→Node stats/event PATCH + internal POST calls (`SERVER_URL`/`INTERNAL_API_KEY`/`_internal_headers()` live here too), extracted from `LiveBotManager` (Plan 6 Step 6.1, ENG-1). Step 6.5 (ENG-16) pooled-client half shipped 2026-07-20 — `get_client()`/`close_client()` lazy singleton (mirrors `services/binance_testnet.py`'s own client pattern), wired into `main.py`'s shutdown lifespan; the durable ordered/at-least-once Redis-stream channel (needs new Node-side consumer code too) is still open
+│   ├── node_notifier.py      ← NodeNotifier — engine→Node stats/event stream publish + internal POST calls (`SERVER_URL`/`INTERNAL_API_KEY`/`_internal_headers()` live here too), extracted from `LiveBotManager` (Plan 6 Step 6.1, ENG-1). Step 6.5 (ENG-16) fully shipped: `get_client()`/`close_client()` lazy httpx singleton (2026-07-20, mirrors `services/binance_testnet.py`'s own client pattern) for `call_internal()`; `notify()` publishes to a durable Redis Stream (`algo:events`, `XADD ... MAXLEN ~`, 2026-07-24) instead of a fire-and-forget PATCH — Node's `server/src/services/eventStreamConsumer.js` consumes it via a consumer group, ordered/at-least-once, applying through the same `processEngineStatsUpdate()` the old PATCH route used
 │   ├── session_registry.py   ← SessionRegistry — owns the live-session dict + per-session stop-event/task-list/order-semaphore + per-(session,symbol) state lock, extracted from `LiveBotManager` (Plan 6 Step 6.1, ENG-1); `LiveBotManager` exposes `sessions`/`_stop_signals`/`_tasks`/`_order_semaphores`/`_symbol_state_locks`/`_get_symbol_lock` as thin delegating properties/methods so every existing call site keeps working unchanged. Typing `sessions[id]`'s value (still a raw dict) is deliberately deferred — separate, larger scope, likely paired with Step 6.3's typed-contract work
 │   ├── exchange.py           ← Exchange ABC + BinanceFuturesTestnet/BinanceFuturesMainnet (Plan 6 Step 6.2, ENG-4) — every order/algo-order/position/account/trade-history/leverage/margin-type/listen-key call routes through `send_signed_request` (module-qualified — `import services.binance_testnet as _binance_testnet` — so tests that monkeypatch `services.binance_testnet.send_signed_request` actually take effect) using the INSTANCE's own `mode`, so a call site can't accidentally cross-wire testnet/mainnet via a stray literal. Deliberately excludes the kline WS (always mainnet-sourced per DECISIONS.md #24); `user_data_ws_url()` covers the mode-dependent listen-key WS instead. **Wired 2026-07-20, Step 6.2 fully closed**: `start_session` resolves one `session["exchange"] = BinanceFuturesTestnet()` per session; `reconciler.py`/`order_router.py`/`user_data_stream.py`/`live_bot_manager.py`'s own direct sites all route through it now instead of a hardcoded `mode="testnet"` literal. The 3 sites reached via `services/portfolio_risk.py`/`utils/symbols.py` wrapper functions (`compute_var_cvar`, `clamp_leverage`) now pass `mode=session["exchange"].mode` through those wrappers' existing `mode` param instead of a literal — no wrapper signature change needed
 │   ├── reconciler.py         ← Reconciler — exchange-truth reconciliation (`reconcile_exchange_state`, incl. naked-position force-close A-7), algo-order cancel/amend (`cancel_symbol_algo_orders`, `maybe_amend_exchange_sl`), session-stop close (`close_position_on_stop`), equity/risk computation (`compute_session_equity_and_margin`/`compute_open_risk_breakdown`), and Session Risk Governor breach application (`apply_governor_breach`) — extracted from `LiveBotManager` as one 943-line cluster (Plan 6 Step 6.1, ENG-1), golden-master-verified byte-identical. Constructor takes `(registry, notifier, manager)` — `manager` is a documented, not-yet-removed coupling for constructing `LiveAdapter` at the naked-position force-close call site; Step 6.4 will remove it via an adapter factory. `LiveBotManager` kept all 7 old method names as thin delegating wrappers, same facade pattern as `session_registry.py`. **Plan 6 Step 6.2 (2026-07-20)**: every method resolves the session's own `Exchange` via module-level `_resolve_exchange(session)` (falls back to `BinanceFuturesTestnet()`) instead of hardcoding `mode="testnet"` on each `send_signed_request` call — all 11 real call sites migrated
@@ -134,9 +134,14 @@ Every user strategy MUST extend `BaseStrategy`. This is the contract.
 Do not change this interface without a major version decision in DECISIONS.md.
 
 **Narang Black-Box architecture (current):** All new strategies must define `forecast()` and bind
-specific model instances. The legacy `should_long/go_long/should_short/go_short/update_position`
-hooks are deprecated no-ops — they still exist on `BaseStrategy` for backward compatibility but must
-NOT be defined on any new strategy.
+specific model instances. `should_long()`/`should_short()` still exist on `BaseStrategy` as
+deprecated no-op hooks (feeding `forecast()`'s own default implementation) but must NOT be defined
+on any new strategy — implement `forecast()` instead. `go_long()`/`go_short()`, `trail_stop()`,
+`move_to_breakeven()`, and `liquidate()` — the legacy strategy-facing SL/TP mutators these hooks
+used to pair with — were removed entirely (F10 follow-up, DECISIONS.md #28 addendum): they had zero
+reachable call sites once every seeded strategy was ported to `forecast()`/route(). `route()`
+(`core/models/execution.py`) is now the sole model-layer writer of `s.buy`/`s.sell`/`s.stop_loss`/
+`s.take_profit`; stop-tightening is the risk model's job via `RiskConstraints`, not a strategy call.
 
 ```python
 from engine.core.strategy import BaseStrategy
@@ -183,14 +188,16 @@ class MyStrategy(BaseStrategy):
     def on_close_position(self, order) -> None:
         pass
 
-    # DEPRECATED — legacy hooks (default no-ops; do not define on new strategies)
-    # should_long(), should_short(), go_long(), go_short(), update_position()
+    # DEPRECATED — legacy no-op hooks (do not define on new strategies)
+    # should_long(), should_short(), update_position()
+    # go_long()/go_short()/trail_stop()/move_to_breakeven()/liquidate() no
+    # longer exist on BaseStrategy at all (removed — see above).
 ```
 
 **Alpha boundary rules (enforced by `engine/tests/test_boundaries.py`):**
 - `forecast()` must NOT read `self.balance`, `self.equity`, `self.position`, `self.session_drawdown`, etc.
 - `forecast()` must NOT write `self.buy`, `self.sell`, `self.stop_loss`, `self.take_profit`, `self._close_at_open`, `self._pending_flip`
-- `forecast()` must NOT call `size_by_risk`, `size_by_notional`, `go_long`, `go_short`, `flip_position`, `liquidate`, `trail_stop`, `move_to_breakeven`, `update_position`
+- `forecast()` must NOT call `size_by_risk`, `size_by_notional`, `flip_position`, `update_position` — and cannot call `go_long`/`go_short`/`liquidate`/`trail_stop`/`move_to_breakeven` since they no longer exist on `BaseStrategy`
 
 **Available properties inside any strategy (from BaseStrategy):**
 - `self.candles` — numpy array of OHLCV for current timeframe
@@ -204,7 +211,6 @@ class MyStrategy(BaseStrategy):
 - `self.buy`, `self.sell` — set entry order: `self.buy = qty, price`
 - `self.stop_loss` — set stop loss: `self.stop_loss = qty, price`
 - `self.take_profit` — set take profit: `self.take_profit = qty, price`
-- `self.liquidate()` — close position at market price
 - `self.index` — candle iteration counter
 - `self.vars` — dict for custom variables
 - `self.risk_model` — pluggable `RiskModel` instance (default `DefaultRiskModel`)
@@ -218,7 +224,6 @@ class MyStrategy(BaseStrategy):
 - `self.size_by_notional(pct=None)` — legacy fixed-fraction notional sizing (qty = equity*pct/price).
 - `self.max_qty()` — largest qty the account's leverage allows (full equity as margin).
 - `self.atr_stop(direction, mult, period)` — ATR-based stop price. `self.rr_target(direction, stop_price, rr)` — risk:reward take-profit.
-- `self.trail_stop(atr_mult, period)` / `self.move_to_breakeven(buffer_pct)` — call inside `update_position()`; only ever tighten the stop, never loosen.
 - `self.flip_position(qty, stop_loss=None, take_profit=None)` — **atomic close-and-reverse** (DECISIONS.md #11). Call inside `update_position()` while a position is open; the engine closes the current leg and opens the opposite one as a single unit with the given SL/TP armed immediately. If the new leg can't be afforded or a live order fails, the flip degrades to close-only (flat). **Never** write `self.buy`/`self.sell` while a position is open — that legacy pattern corrupts the open position's exit plan and is superseded by this primitive.
 
 > Position object now carries `position.leverage`, `position.margin` (initial margin locked), and `position.liquidation_price`. `position.pnl_pct` is **return on margin (ROE)** so leverage is reflected.

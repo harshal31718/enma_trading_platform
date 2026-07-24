@@ -53,6 +53,22 @@ FUNDING_RATE = 0.0          # per-8h funding rate; 0.0 disables funding entirely
 FUNDING_HOURS = (0, 8, 16)  # UTC hours at which perpetual funding is charged
 
 
+def check_warmup_sufficient(sym: str, warmup_period: int, num_rows: int, min_warmup_candles: int) -> None:
+    """QNT-16: raise loudly when ``range(warmup_period, num_rows)`` would be
+    empty, instead of letting the simulation loop silently "complete" with
+    zero trades — indistinguishable from a strategy that legitimately found
+    no signals. Extracted as a pure function so the boundary condition is
+    directly unit-testable without spinning up the full simulation.
+    """
+    if warmup_period >= num_rows:
+        raise RuntimeError(
+            f"WARMUP_INSUFFICIENT: {sym} needs {warmup_period} candles of warmup "
+            f"(strategy.MIN_WARMUP_CANDLES={min_warmup_candles}) but only "
+            f"{num_rows} candles are available for the selected date range — "
+            f"widen the date range or lower the timeframe."
+        )
+
+
 def _next_funding_boundary(dt: datetime) -> datetime:
     """Next funding timestamp strictly after ``dt`` (00:00/08:00/16:00 UTC)."""
     base = dt.replace(minute=0, second=0, microsecond=0)
@@ -1212,6 +1228,7 @@ async def run_backtest_simulation(
             )
 
             warmup_period = max(strategy.MIN_WARMUP_CANDLES, min(50, len(rows) - 2))
+            check_warmup_sufficient(sym, warmup_period, len(rows), strategy.MIN_WARMUP_CANDLES)
             warmup_periods[sym] = warmup_period
             strategies[sym] = strategy
             kernels[sym] = kernel

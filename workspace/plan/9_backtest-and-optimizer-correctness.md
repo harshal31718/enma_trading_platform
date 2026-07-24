@@ -306,9 +306,23 @@ signals from the same data, verified mechanically, not by assertion.
   session's safety classifier per root CLAUDE.md Rule H's spirit) — relied instead on the
   division-identity proof above plus the full container suite showing zero regressions, which
   covers the same guarantee for every seeded strategy (none of which opt into this param).
-- **Warmup-insufficiency fail-loud (QNT-16) — deliberately deferred.** This step's own text ties
-  it to Plan 8 / ENG-8 coordination; not attempted here to avoid touching Plan 8's scope
-  unilaterally.
+- **Warmup-insufficiency fail-loud (QNT-16) — Shipped 2026-07-24.** Was deliberately deferred
+  pending Plan 8/ENG-8 coordination; Plan 8 shipped in full 2026-07-21, unblocking this. New
+  `check_warmup_sufficient(sym, warmup_period, num_rows, min_warmup_candles)`
+  (`services/backtest_runner.py`) — a pure, directly-unit-testable extraction — raises
+  `RuntimeError("WARMUP_INSUFFICIENT: ...")` when `warmup_period >= len(rows)`, the exact condition
+  that previously made `range(warmup_period, total_candles)` empty and let the simulation loop
+  "complete" with zero trades and no warning, indistinguishable from a strategy that legitimately
+  found no signals. The raise propagates through `routers/backtest.py`'s existing
+  `except Exception` handler, which already sets `backtestResults.status="failed"` +
+  `error=str(e)` for any raised exception (same path `STRATEGY_ERROR: prepare() failed` uses) — no
+  new error-surfacing plumbing needed. Fires only when the date range genuinely can't support the
+  strategy's declared warmup, so every existing passing backtest is unaffected by construction.
+  **Verified:** new `engine/tests/test_warmup_sufficient.py` (5 cases: sufficient candles passes,
+  exact boundary passes, `warmup==num_rows` raises, `warmup>num_rows` raises, error message names
+  the symbol + both counts). Container suite 670 → **675/675 passed**, golden-master `MultiDivergence`
+  byte-identical (`trades=55 netProfit=-1784.02 winRate=0.36 cagr=-71.32 sqn=-2.08`) — expected,
+  since no seeded strategy's default config/date-range combination trips the new check.
 
 ### 9.11 — Cost-gate resurrection: rewire, fix dimensions, wire-or-delete `magnitude` (M-1/M-2/M-3, added 2026-07-16) — **Step A Shipped 2026-07-17**
 - **Source:** Plan 21's five-model audit addendum (`21_live-algo-industry-standard-audit.md`
